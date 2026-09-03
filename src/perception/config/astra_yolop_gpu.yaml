@@ -45,6 +45,12 @@ perception:
     publisher_reliability: reliable
     rviz_publish_buffer_count: 2
     rviz_max_publish_rate_hz: 10.0
+    web_preview_enabled: true
+    web_preview_fps: 5.0
+    web_preview_width: 640
+    web_preview_height: 360
+    web_preview_jpeg_quality: 75
+    web_preview_topic: /camera/astra/image_preview/compressed
     show_opencv_cuda_window: false
     opencv_use_cuda_opengl: true
     opencv_window_width: 640

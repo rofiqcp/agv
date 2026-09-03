@@ -58,6 +58,7 @@
 #include <rcl_interfaces/msg/parameter_type.hpp>
 #include <rcl_interfaces/srv/set_parameters_atomically.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
@@ -209,6 +210,24 @@ QString jsonScalarInlineYaml(const QJsonValue &value) {
   return QString::fromUtf8(QJsonDocument(value.toObject()).toJson(QJsonDocument::Compact));
 }
 
+QString jsonScalarPreservingYamlType(const QJsonValue &value, QString originalScalar) {
+  originalScalar = originalScalar.trimmed();
+  if (!value.isDouble()) return jsonScalarInlineYaml(value);
+
+  // QJson stores every JSON number as double. ROS 2 YAML, however, distinguishes
+  // integer and floating-point parameter types. Keep a leaf that was written as
+  // 10.0 / 1e-3 in floating-point syntax even when the edited value is exactly
+  // integral; otherwise rclcpp rejects the YAML override as PARAMETER_INTEGER.
+  static const QRegularExpression floatSyntax(
+    QStringLiteral(R"(^[+-]?(?:\d+\.\d*|\d*\.\d+|\d+(?:[eE][+-]?\d+))(?:[eE][+-]?\d+)?$)"));
+  const bool originallyFloat = floatSyntax.match(originalScalar).hasMatch();
+  QString encoded = QString::number(value.toDouble(), 'g', 16);
+  if (originallyFloat && !encoded.contains('.') && !encoded.contains('e', Qt::CaseInsensitive)) {
+    encoded += QStringLiteral(".0");
+  }
+  return encoded;
+}
+
 bool patchExistingYamlScalar(const QString &filePath, const QString &yamlPath, const QJsonValue &value, QString *error) {
   QFile in(filePath);
   if (!in.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -251,7 +270,8 @@ bool patchExistingYamlScalar(const QString &filePath, const QString &yamlPath, c
     if (rest[j] == '#' && !quote) { hash = j; break; }
   }
   if (hash >= 0) comment = QStringLiteral(" ") + rest.mid(hash).trimmed();
-  lines[target] = prefix + QStringLiteral(" ") + jsonScalarInlineYaml(value) + comment;
+  const QString originalScalar = (hash >= 0 ? rest.left(hash) : rest).trimmed();
+  lines[target] = prefix + QStringLiteral(" ") + jsonScalarPreservingYamlType(value, originalScalar) + comment;
   const QByteArray candidate = lines.join('\n').toUtf8();
   try { YAML::Load(candidate.constData()); }
   catch (const std::exception &e) {
@@ -389,11 +409,25 @@ void flattenJson(const QString &prefix, const QJsonValue &value, QMap<QString, Q
   else out[prefix] = QString();
 }
 
-QString safeStem(QString value) {
-  value = value.trimmed().toLower();
-  value.replace(QRegularExpression(QStringLiteral("[^a-z0-9._-]+")), QStringLiteral("_"));
-  while (value.contains(QStringLiteral("__"))) value.replace(QStringLiteral("__"), QStringLiteral("_"));
-  return value.left(100).trimmed();
+QString recordingCsvStem(QString section) {
+  section = section.trimmed();
+  if (section.isEmpty()) return QStringLiteral("run");
+  const QRegularExpression sectionRx(QStringLiteral(R"(^(\d+(?:\.\d+)*)(?:\s+)?(.*)$)"));
+  const QRegularExpressionMatch match = sectionRx.match(section);
+  QString prefix;
+  QString title = section;
+  if (match.hasMatch()) {
+    prefix = match.captured(1);
+    title = match.captured(2).trimmed();
+  }
+  title.replace(QRegularExpression(QStringLiteral("\\s+")), QStringLiteral("_"));
+  title.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9_-]+")), QStringLiteral("_"));
+  while (title.contains(QStringLiteral("__"))) title.replace(QStringLiteral("__"), QStringLiteral("_"));
+  while (title.startsWith('_')) title.remove(0, 1);
+  while (title.endsWith('_')) title.chop(1);
+  const QString stem = prefix.isEmpty() ? title :
+    (title.isEmpty() ? prefix : prefix + QStringLiteral(".") + title);
+  return stem.isEmpty() ? QStringLiteral("run") : stem.left(140);
 }
 
 QJsonObject parseJsonOrKv(const QString &raw) {
@@ -415,6 +449,65 @@ QJsonObject parseJsonOrKv(const QString &raw) {
   }
   out["raw"] = raw;
   return out;
+}
+
+QJsonObject normalizePerceptionPerformance(QJsonObject map) {
+  const auto alias = [&map](const QString &target, const QStringList &sources) {
+    if (map.contains(target)) return;
+    for (const QString &source : sources) if (map.contains(source)) { map[target] = map.value(source); return; }
+  };
+  alias("fps", {"pipeline_fps", "pipeline_fps_ema"});
+  alias("mean_ms", {"pipeline_ms_per_frame", "pipeline_ms"});
+  alias("p95_ms", {"pipeline_p95_ms", "pipeline_ms_per_frame", "pipeline_ms"});
+  alias("capture_dropped", {"capture_dropped_total"});
+  alias("rviz_dropped", {"rviz_dropped_total"});
+  alias("raw_count", {"raw_detection_count", "detections"});
+  alias("metric_count", {"metric_candidate_count", "object_points"});
+  return map;
+}
+
+QJsonObject enrichObstacleMetrics(QJsonObject map) {
+  const QJsonArray detections = map.value("detections").toArray();
+  if (!map.contains("count")) map["count"] = detections.size();
+  double nearest = std::numeric_limits<double>::infinity();
+  double nearestLeft = std::numeric_limits<double>::quiet_NaN();
+  double nearestHomography = std::numeric_limits<double>::quiet_NaN();
+  double nearestScore = std::numeric_limits<double>::quiet_NaN();
+  int nearestClass = -1, nearestTrack = -1;
+  double confidenceSum = 0.0; int confidenceCount = 0;
+  for (const auto &entry : detections) {
+    const QJsonObject d = entry.toObject();
+    const double forward = d.value("forward_m").toDouble(std::numeric_limits<double>::quiet_NaN());
+    const double score = d.value("score").toDouble(std::numeric_limits<double>::quiet_NaN());
+    if (std::isfinite(score)) {confidenceSum += score; ++confidenceCount;}
+    if (std::isfinite(forward) && forward < nearest) {
+      nearest = forward; nearestLeft = d.value("left_m").toDouble(std::numeric_limits<double>::quiet_NaN());
+      nearestHomography = d.value("forward_homography_m").toDouble(forward);
+      nearestScore = score; nearestClass = d.value("class_id").toInt(-1); nearestTrack = d.value("track_id").toInt(-1);
+    }
+  }
+  if (std::isfinite(nearest)) {
+    map["nearest_forward_m"] = nearest; map["nearest_left_m"] = nearestLeft;
+    map["nearest_forward_homography_m"] = nearestHomography; map["nearest_score"] = nearestScore;
+    map["nearest_class_id"] = nearestClass; map["nearest_track_id"] = nearestTrack;
+  }
+  if (confidenceCount > 0) map["mean_confidence"] = confidenceSum / confidenceCount;
+  return map;
+}
+
+QJsonObject parseRawDetectionSummary(const QString &raw) {
+  QJsonObject map = parseJsonOrKv(raw);
+  QJsonArray detections; double confidenceSum = 0.0; int confidenceCount = 0;
+  const QRegularExpression cpu(QStringLiteral("d[0-9]+=cls:(-?[0-9]+),score:([-+]?[0-9]*\\.?[0-9]+)"));
+  auto matches = cpu.globalMatch(raw);
+  while (matches.hasNext()) {
+    const auto m = matches.next(); const int cls = m.captured(1).toInt(); const double score = m.captured(2).toDouble();
+    detections.append(QJsonObject{{"class_id", cls}, {"score", score}}); confidenceSum += score; ++confidenceCount;
+  }
+  if (!detections.isEmpty()) {map["detections"] = detections; map["count"] = detections.size();}
+  if (confidenceCount > 0) map["mean_confidence"] = confidenceSum / confidenceCount;
+  map["raw"] = raw;
+  return map;
 }
 
 QByteArray mimeTypeForPath(const QString &path) {
@@ -706,6 +799,8 @@ class WebRosBridge {
   QByteArray globalCostmapPng_;
   QByteArray localCostmapPng_;
   std::chrono::steady_clock::time_point lastCameraEncode_{};
+  std::chrono::steady_clock::time_point lastRawCameraSeen_{};
+  std::chrono::steady_clock::time_point lastCompressedCameraSeen_{};
   std::chrono::steady_clock::time_point lastGlobalCostmapEncode_{};
   std::chrono::steady_clock::time_point lastLocalCostmapEncode_{};
   std::vector<rclcpp::SubscriptionBase::SharedPtr> subscriptions_;
@@ -790,9 +885,16 @@ class WebRosBridge {
         {"/esc/foc/telemetry", "foc_telemetry"}, {"/esc/mux/active_source", "esc_mux"}};
     for (const auto &entry : strings) {
       const QString channel = QString::fromLatin1(entry.second);
-      subscribe<std_msgs::msg::String>(entry.first, stateQos, [this, channel](std_msgs::msg::String::ConstSharedPtr msg) {
+      const QString topic = QString::fromLatin1(entry.first);
+      const bool perceptionStream = topic.startsWith(QStringLiteral("/perception/")) ||
+                                    topic.startsWith(QStringLiteral("/yolop/"));
+      const rclcpp::QoS & stringQos = perceptionStream ? sensorQos : stateQos;
+      subscribe<std_msgs::msg::String>(entry.first, stringQos, [this, channel](std_msgs::msg::String::ConstSharedPtr msg) {
         const QString raw = QString::fromStdString(msg->data);
         if (channel == "goal_state") update(channel, QJsonObject{{"state", raw.trimmed().toUpper()}, {"raw", raw}});
+        else if (channel == "raw_detections") update(channel, parseRawDetectionSummary(raw));
+        else if (channel == "perception_performance") update(channel, normalizePerceptionPerformance(parseJsonOrKv(raw)));
+        else if (channel == "obstacle_metrics") update(channel, enrichObstacleMetrics(parseJsonOrKv(raw)));
         else update(channel, parseJsonOrKv(raw));
       });
     }
@@ -967,12 +1069,32 @@ class WebRosBridge {
       });
     }
 
+    subscribe<sensor_msgs::msg::CompressedImage>("/camera/astra/image_preview/compressed", sensorQos,
+      [this](sensor_msgs::msg::CompressedImage::ConstSharedPtr msg) {
+        if (!msg || msg->data.empty()) return;
+        const auto now = std::chrono::steady_clock::now();
+        {
+          std::lock_guard<std::mutex> lock(mediaMutex_);
+          cameraJpeg_ = QByteArray(reinterpret_cast<const char *>(msg->data.data()), static_cast<int>(msg->data.size()));
+        }
+        {
+          std::lock_guard<std::mutex> encodeLock(cameraEncodeMutex_);
+          lastCompressedCameraSeen_ = now;
+          lastCameraEncode_ = now;
+        }
+        update("camera_frame", QJsonObject{{"encoding", "jpeg"}, {"source", "preview_compressed"}, {"at_ms", nowMs()},
+                                            {"bytes", static_cast<double>(msg->data.size())}});
+      });
+
     auto cacheCamera = [this](sensor_msgs::msg::Image::ConstSharedPtr msg, const QString &source) {
       // Raw and annotated image subscriptions may execute concurrently in the
       // MultiThreadedExecutor. Serialize throttle/encode state to avoid racing
       // lastCameraEncode_ and producing duplicate JPEG work on the mini-PC.
       std::lock_guard<std::mutex> encodeLock(cameraEncodeMutex_);
       const auto now = std::chrono::steady_clock::now();
+      if (lastCompressedCameraSeen_.time_since_epoch().count() != 0 &&
+          std::chrono::duration<double>(now - lastCompressedCameraSeen_).count() < 1.0) return;
+      if (source == QStringLiteral("raw")) lastRawCameraSeen_ = now;
       const double elapsed = std::chrono::duration<double>(now - lastCameraEncode_).count();
       if (lastCameraEncode_.time_since_epoch().count() != 0 && elapsed < 1.0 / cameraJpegFps_) return;
       if (msg->width == 0 || msg->height == 0 || msg->step == 0) return;
@@ -1191,6 +1313,7 @@ class LocalHttpServer : public QObject {
   bool recording_{false};
   QString recordingSubsystem_;
   QString recordingId_;
+  QString recordingLabel_;
   QString recordingVariation_;
   QString recordingCondition_;
   QString recordingStartedIso_;
@@ -1347,7 +1470,7 @@ class LocalHttpServer : public QObject {
 
   QJsonObject recordingStatus() const {
     return QJsonObject{{"active", recording_}, {"subsystem", recordingSubsystem_}, {"id", recordingId_},
-                       {"variation", recordingVariation_}, {"condition", recordingCondition_},
+                       {"label", recordingLabel_}, {"variation", recordingVariation_}, {"condition", recordingCondition_},
                        {"started_at", recordingStartedIso_}, {"sample_rate_hz", recordingRateHz_},
                        {"samples", recordingRows_.size()},
                        {"report_root", QStringLiteral("/home/otomasi/ros/data")}};
@@ -1366,6 +1489,9 @@ class LocalHttpServer : public QObject {
     }
     recordingSubsystem_ = subsystem;
     recordingId_ = id;
+    recordingLabel_ = json.value("label").toString().trimmed();
+    if (recordingLabel_.isEmpty()) recordingLabel_ = json.value("section_label").toString().trimmed();
+    if (recordingLabel_.isEmpty()) recordingLabel_ = recordingId_;
     recordingVariation_ = json.value("variation").toString().trimmed();
     recordingCondition_ = json.value("condition").toString().trimmed();
     recordingRateHz_ = std::clamp(json.value("sample_rate_hz").toDouble(5.0), 1.0, 20.0);
@@ -1384,6 +1510,7 @@ class LocalHttpServer : public QObject {
     row["time_iso"] = QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
     row["subsystem"] = recordingSubsystem_;
     row["section_id"] = recordingId_;
+    row["section_label"] = recordingLabel_;
     row["variation"] = recordingVariation_;
     row["condition"] = recordingCondition_;
     const QJsonObject snap = bridge_->snapshot();
@@ -1413,22 +1540,6 @@ class LocalHttpServer : public QObject {
       return false;
     }
 
-    // Folder run mengikuti format yang diminta operator: 4.1.x_MMdd_HHmm.
-    const QString minuteStamp = QDateTime::currentDateTime().toString("MMdd_HHmm");
-    QString runStem = safeStem(recordingId_) + QStringLiteral("_") + minuteStamp;
-    if (runStem.startsWith('_')) runStem.remove(0, 1);
-    if (runStem.isEmpty()) runStem = QStringLiteral("run_") + minuteStamp;
-    QString runFolder = runStem;
-    int suffix = 2;
-    while (QDir(QDir(dataRoot).filePath(runFolder)).exists()) {
-      runFolder = runStem + QStringLiteral("_%1").arg(suffix++, 2, 10, QChar('0'));
-    }
-    const QString root = QDir(dataRoot).filePath(runFolder);
-    if (!QDir().mkpath(root)) {
-      if (message) *message = QStringLiteral("Gagal membuat folder run: ") + root;
-      return false;
-    }
-
     QSet<QString> all;
     for (const auto &row : recordingRows_) {
       for (auto it = row.cbegin(); it != row.cend(); ++it) all.insert(it.key());
@@ -1436,93 +1547,61 @@ class LocalHttpServer : public QObject {
     QStringList columns = all.values();
     std::sort(columns.begin(), columns.end());
     for (const QString &preferred : {QStringLiteral("condition"), QStringLiteral("variation"),
-                                      QStringLiteral("section_id"), QStringLiteral("subsystem"),
-                                      QStringLiteral("time_iso")}) columns.removeAll(preferred);
+                                      QStringLiteral("section_label"), QStringLiteral("section_id"),
+                                      QStringLiteral("subsystem"), QStringLiteral("time_iso")}) {
+      columns.removeAll(preferred);
+    }
     columns.prepend(QStringLiteral("condition"));
     columns.prepend(QStringLiteral("variation"));
+    columns.prepend(QStringLiteral("section_label"));
     columns.prepend(QStringLiteral("section_id"));
     columns.prepend(QStringLiteral("subsystem"));
     columns.prepend(QStringLiteral("time_iso"));
 
-    QByteArray raw;
+    QByteArray csv;
     QStringList escapedHeader;
-    for (const QString &c : columns) escapedHeader << csvEscape(c);
-    raw += escapedHeader.join(',').toUtf8() + '\n';
+    for (const QString &column : columns) escapedHeader << csvEscape(column);
+    csv += escapedHeader.join(',').toUtf8() + '\n';
     for (const auto &row : recordingRows_) {
       QStringList values;
-      for (const QString &c : columns) values << csvEscape(row.value(c));
-      raw += values.join(',').toUtf8() + '\n';
+      for (const QString &column : columns) values << csvEscape(row.value(column));
+      csv += values.join(',').toUtf8() + '\n';
     }
 
-    const QString primaryPath = QDir(root).filePath(runFolder + QStringLiteral(".csv"));
-    QSaveFile rawFile(primaryPath);
-    if (!rawFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+    const QString minuteStamp = QDateTime::currentDateTime().toString("MMdd_HHmm");
+    const QString baseStem = recordingCsvStem(recordingLabel_) + QStringLiteral("_") + minuteStamp;
+    QString fileName = baseStem + QStringLiteral(".csv");
+    int suffix = 2;
+    while (QFileInfo::exists(QDir(dataRoot).filePath(fileName))) {
+      fileName = baseStem + QStringLiteral("_%1.csv").arg(suffix++, 2, 10, QChar('0'));
+    }
+    const QString primaryPath = QDir(dataRoot).filePath(fileName);
+    QSaveFile csvFile(primaryPath);
+    if (!csvFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
       if (message) *message = QStringLiteral("Gagal membuka CSV: ") + primaryPath;
       return false;
     }
-    rawFile.write(raw);
-    if (!rawFile.commit()) {
+    csvFile.write(csv);
+    if (!csvFile.commit()) {
       if (message) *message = QStringLiteral("Gagal commit CSV: ") + primaryPath;
       return false;
     }
 
-    const QString summaryPath = QDir(root).filePath(runFolder + QStringLiteral("_summary.csv"));
-    QSaveFile summaryFile(summaryPath);
-    if (!summaryFile.open(QIODevice::WriteOnly | QIODevice::Text)) return false;
-    QByteArray summary = "\"metric\",\"last\",\"mean\",\"min\",\"max\",\"count\"\n";
-    for (const QString &column : columns) {
-      QVector<double> numbers;
-      QString last;
-      for (const auto &row : recordingRows_) {
-        const QString text = row.value(column);
-        if (!text.isEmpty()) last = text;
-        bool okNum = false;
-        const double number = text.toDouble(&okNum);
-        if (okNum && std::isfinite(number)) numbers.push_back(number);
-      }
-      if (numbers.isEmpty()) continue;
-      const double sum = std::accumulate(numbers.cbegin(), numbers.cend(), 0.0);
-      const auto mm = std::minmax_element(numbers.cbegin(), numbers.cend());
-      const QStringList cells = {
-        csvEscape(column), csvEscape(last), csvEscape(QString::number(sum / numbers.size(), 'g', 12)),
-        csvEscape(QString::number(*mm.first, 'g', 12)), csvEscape(QString::number(*mm.second, 'g', 12)),
-        csvEscape(QString::number(numbers.size()))};
-      summary += cells.join(',').toUtf8() + '\n';
+    // Browser download memakai buffer memory yang sama; tidak membuat summary,
+    // manifest, config JSON, atau folder run tambahan di /home/otomasi/ros/data.
+    lastDownloadCsv_ = csv;
+    lastDownloadName_ = fileName;
+    if (result) {
+      *result = QJsonObject{{"subsystem", recordingSubsystem_}, {"section_id", recordingId_},
+                           {"section_label", recordingLabel_}, {"sample_count", recordingRows_.size()},
+                           {"primary_csv", primaryPath}, {"raw_csv", primaryPath},
+                           {"report_root", dataRoot},
+                           {"download_url", QStringLiteral("/api/experiment/record/last.csv")},
+                           {"download_name", lastDownloadName_}};
     }
-    summaryFile.write(summary);
-    if (!summaryFile.commit()) return false;
-
-    const QString configPath = QDir(root).filePath(runFolder + QStringLiteral("_config.json"));
-    QSaveFile configFile(configPath);
-    if (configFile.open(QIODevice::WriteOnly)) {
-      configFile.write(QJsonDocument(loadConfigSnapshot()).toJson(QJsonDocument::Indented));
-      configFile.commit();
-    }
-
-    const QString manifestPath = QDir(root).filePath(runFolder + QStringLiteral("_manifest.json"));
-    QJsonObject manifest{{"subsystem", recordingSubsystem_}, {"domain_folder", domain},
-                         {"section_id", recordingId_}, {"variation", recordingVariation_},
-                         {"condition", recordingCondition_}, {"started_at", recordingStartedIso_},
-                         {"stopped_at", QDateTime::currentDateTime().toString(Qt::ISODateWithMs)},
-                         {"sample_rate_hz", recordingRateHz_}, {"sample_count", recordingRows_.size()},
-                         {"primary_csv", primaryPath}, {"summary_csv", summaryPath},
-                         {"config_snapshot", configPath}, {"run_folder", root}};
-    QSaveFile manifestFile(manifestPath);
-    if (!manifestFile.open(QIODevice::WriteOnly)) return false;
-    manifestFile.write(QJsonDocument(manifest).toJson(QJsonDocument::Indented));
-    if (!manifestFile.commit()) return false;
-
-    lastDownloadCsv_ = raw;
-    lastDownloadName_ = QFileInfo(primaryPath).fileName();
-    manifest["manifest"] = manifestPath;
-    manifest["report_root"] = root;
-    manifest["raw_csv"] = primaryPath;  // compatibility with existing Web UI
-    manifest["download_url"] = QStringLiteral("/api/experiment/record/last.csv");
-    manifest["download_name"] = lastDownloadName_;
-    if (result) *result = manifest;
     if (message) {
-      *message = QStringLiteral("CSV otomatis tersimpan di ") + primaryPath +
-                 QStringLiteral(" dan siap diunduh browser");
+      *message = QStringLiteral("CSV tersimpan: ") + primaryPath +
+                 QStringLiteral("; download browser siap");
     }
     return true;
   }

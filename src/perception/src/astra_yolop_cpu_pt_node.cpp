@@ -14,6 +14,7 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/msg/point_field.hpp>
@@ -28,9 +29,11 @@
 #include <torch/script.h>
 #include <torch/torch.h>
 #include <opencv2/imgproc.hpp>
+#include <opencv2/imgcodecs.hpp>
 #include <opencv2/videoio.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <chrono>
 #include <cctype>
@@ -94,11 +97,28 @@ struct Detection
 
 struct MetricObstacle
 {
+  int track_id{-1};
   int class_id{-1};
   float score{0.0F};
   float forward_m{0.0F};
   float left_m{0.0F};
   float width_m{0.0F};
+  int hits{0};
+  int missed_frames{0};
+  bool confirmed{false};
+};
+
+struct ObstacleTrack
+{
+  int track_id{-1};
+  int class_id{-1};
+  float score{0.0F};
+  float forward_m{0.0F};
+  float left_m{0.0F};
+  float width_m{0.0F};
+  int hits{0};
+  int missed{0};
+  bool confirmed{false};
 };
 
 float intersectionOverUnion(const Detection & a, const Detection & b)
@@ -174,6 +194,7 @@ public:
     publishHealth(false, "STARTUP");
     publishEmergency(true);
 
+    capture_thread_ = std::thread([this]() { captureLoop(); });
     const auto inference_period = std::chrono::duration<double>(1.0 / inference_fps_);
     inference_timer_ = create_wall_timer(
       std::chrono::duration_cast<std::chrono::nanoseconds>(inference_period),
@@ -192,6 +213,8 @@ public:
 
   ~AstraYolopCpuNode() override
   {
+    capture_stop_.store(true);
+    if (capture_thread_.joinable()) capture_thread_.join();
     if (capture_.isOpened()) capture_.release();
   }
 
@@ -218,6 +241,13 @@ private:
     declare_parameter<int>("max_detections", 300);
     declare_parameter<bool>("publish_annotated", true);
     declare_parameter<bool>("publish_raw_rgb", true);
+    declare_parameter<double>("rviz_max_publish_rate_hz", 10.0);
+    declare_parameter<bool>("web_preview_enabled", true);
+    declare_parameter<double>("web_preview_fps", 5.0);
+    declare_parameter<int>("web_preview_width", 640);
+    declare_parameter<int>("web_preview_height", 360);
+    declare_parameter<int>("web_preview_jpeg_quality", 75);
+    declare_parameter<std::string>("web_preview_topic", "/camera/astra/image_preview/compressed");
     declare_parameter<bool>("publish_drivable_mask", false);
     declare_parameter<bool>("publish_lane_mask", false);
     declare_parameter<bool>("publish_detections", false);
@@ -284,8 +314,17 @@ private:
     declare_parameter<bool>("accept_all_detected_classes_as_obstacles", false);
     declare_parameter<std::vector<int64_t>>("safety_obstacle_class_ids", {0, 2, 3});
     declare_parameter<bool>("require_drivable_contact", true);
+    declare_parameter<int>("drivable_contact_radius_px", 12);
+    declare_parameter<int>("drivable_contact_vertical_tolerance_px", 8);
     declare_parameter<int>("drivable_contact_min_samples", 3);
     declare_parameter<double>("drivable_contact_min_fraction", 0.20);
+    declare_parameter<double>("track_match_distance_m", 0.90);
+    declare_parameter<double>("track_ema_alpha", 0.45);
+    declare_parameter<int>("track_confirm_hits", 3);
+    declare_parameter<int>("track_max_missed_frames", 8);
+    declare_parameter<double>("obstacle_forward_min_m", 0.20);
+    declare_parameter<double>("obstacle_forward_max_m", 3.0);
+    declare_parameter<double>("minimum_obstacle_width_m", 0.20);
     declare_parameter<int>("points_per_box", 5);
     declare_parameter<int>("clearing_ray_count", 41);
     declare_parameter<double>("clearing_fov_deg", 100.0);
@@ -334,6 +373,13 @@ private:
     max_detections_ = get_parameter("max_detections").as_int();
     publish_annotated_ = get_parameter("publish_annotated").as_bool();
     publish_raw_ = get_parameter("publish_raw_rgb").as_bool();
+    visual_publish_rate_hz_ = get_parameter("rviz_max_publish_rate_hz").as_double();
+    web_preview_enabled_ = get_parameter("web_preview_enabled").as_bool();
+    web_preview_fps_ = get_parameter("web_preview_fps").as_double();
+    web_preview_width_ = get_parameter("web_preview_width").as_int();
+    web_preview_height_ = get_parameter("web_preview_height").as_int();
+    web_preview_jpeg_quality_ = get_parameter("web_preview_jpeg_quality").as_int();
+    web_preview_topic_ = get_parameter("web_preview_topic").as_string();
     publish_drivable_ = get_parameter("publish_drivable_mask").as_bool();
     publish_lane_ = get_parameter("publish_lane_mask").as_bool();
     publish_detections_ = get_parameter("publish_detections").as_bool();
@@ -402,8 +448,17 @@ private:
     accept_all_obstacles_ = get_parameter("accept_all_detected_classes_as_obstacles").as_bool();
     safety_classes_ = get_parameter("safety_obstacle_class_ids").as_integer_array();
     require_drivable_contact_ = get_parameter("require_drivable_contact").as_bool();
+    drivable_contact_radius_px_ = get_parameter("drivable_contact_radius_px").as_int();
+    drivable_contact_vertical_tolerance_px_ = get_parameter("drivable_contact_vertical_tolerance_px").as_int();
     drivable_contact_min_samples_ = get_parameter("drivable_contact_min_samples").as_int();
     drivable_contact_min_fraction_ = get_parameter("drivable_contact_min_fraction").as_double();
+    track_match_distance_m_ = get_parameter("track_match_distance_m").as_double();
+    track_ema_alpha_ = get_parameter("track_ema_alpha").as_double();
+    track_confirm_hits_ = get_parameter("track_confirm_hits").as_int();
+    track_max_missed_frames_ = get_parameter("track_max_missed_frames").as_int();
+    obstacle_forward_min_m_ = get_parameter("obstacle_forward_min_m").as_double();
+    obstacle_forward_max_m_ = get_parameter("obstacle_forward_max_m").as_double();
+    minimum_obstacle_width_m_ = get_parameter("minimum_obstacle_width_m").as_double();
     points_per_box_ = get_parameter("points_per_box").as_int();
     clearing_ray_count_ = get_parameter("clearing_ray_count").as_int();
     clearing_fov_rad_ = get_parameter("clearing_fov_deg").as_double() *
@@ -477,6 +532,23 @@ private:
       throw std::runtime_error("Parameter homography/ground metric CPU tidak valid");
     }
     lane_thresholds_.validate();
+    visual_publish_rate_hz_ = std::clamp(visual_publish_rate_hz_, 1.0, 30.0);
+    web_preview_fps_ = std::clamp(web_preview_fps_, 1.0, 12.0);
+    web_preview_width_ = std::clamp(web_preview_width_, 160, requested_width_);
+    web_preview_height_ = std::clamp(web_preview_height_, 90, requested_height_);
+    web_preview_jpeg_quality_ = std::clamp(web_preview_jpeg_quality_, 40, 95);
+    if (web_preview_topic_.empty()) web_preview_topic_ = "/camera/astra/image_preview/compressed";
+    drivable_contact_radius_px_ = std::clamp(drivable_contact_radius_px_, 0, 128);
+    drivable_contact_vertical_tolerance_px_ = std::clamp(drivable_contact_vertical_tolerance_px_, 0, 128);
+    drivable_contact_min_samples_ = std::clamp(drivable_contact_min_samples_, 1, 50);
+    drivable_contact_min_fraction_ = std::clamp(drivable_contact_min_fraction_, 0.0, 1.0);
+    track_match_distance_m_ = std::max(0.05, track_match_distance_m_);
+    track_ema_alpha_ = std::clamp(track_ema_alpha_, 0.01, 1.0);
+    track_confirm_hits_ = std::clamp(track_confirm_hits_, 1, 30);
+    track_max_missed_frames_ = std::clamp(track_max_missed_frames_, 0, 100);
+    obstacle_forward_min_m_ = std::max(0.0, obstacle_forward_min_m_);
+    obstacle_forward_max_m_ = std::min(max_forward_, std::max(obstacle_forward_min_m_ + 0.05, obstacle_forward_max_m_));
+    minimum_obstacle_width_m_ = std::clamp(minimum_obstacle_width_m_, 0.05, 3.0);
     points_per_box_ = std::clamp(points_per_box_, 1, 21);
     clearing_ray_count_ = std::clamp(clearing_ray_count_, 3, 181);
     cv::setNumThreads(cpu_threads_);
@@ -603,19 +675,23 @@ private:
 
   void createInterfaces()
   {
-    const auto image_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable();
+    // Citra besar bersifat latest-frame/best-effort agar preview tidak menahan inference.
+    const auto image_qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort();
+    // Metrik, state diagnostik, dan command tetap reliable; jangan ikut QoS citra.
+    const auto data_qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable();
     const auto cloud_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable();
     annotated_pub_ = create_publisher<sensor_msgs::msg::Image>(annotated_topic_, image_qos);
     raw_pub_ = create_publisher<sensor_msgs::msg::Image>(raw_topic_, image_qos);
     drivable_pub_ = create_publisher<sensor_msgs::msg::Image>(drivable_topic_, image_qos);
     lane_pub_ = create_publisher<sensor_msgs::msg::Image>(lane_topic_, image_qos);
     camera_info_pub_ = create_publisher<sensor_msgs::msg::CameraInfo>(camera_info_topic_, image_qos);
-    detections_pub_ = create_publisher<vision_msgs::msg::Detection2DArray>(detections_topic_, image_qos);
-    performance_pub_ = create_publisher<std_msgs::msg::String>(performance_topic_, image_qos);
-    lane_metrics_pub_ = create_publisher<std_msgs::msg::String>(lane_metrics_topic_, image_qos);
-    drivable_space_pub_ = create_publisher<std_msgs::msg::String>(drivable_space_topic_, image_qos);
-    obstacle_metrics_pub_ = create_publisher<std_msgs::msg::String>(obstacle_metrics_topic_, image_qos);
-    near_field_state_pub_ = create_publisher<std_msgs::msg::String>(near_field_state_topic_, image_qos);
+    compressed_preview_pub_ = create_publisher<sensor_msgs::msg::CompressedImage>(web_preview_topic_, image_qos);
+    detections_pub_ = create_publisher<vision_msgs::msg::Detection2DArray>(detections_topic_, data_qos);
+    performance_pub_ = create_publisher<std_msgs::msg::String>(performance_topic_, data_qos);
+    lane_metrics_pub_ = create_publisher<std_msgs::msg::String>(lane_metrics_topic_, data_qos);
+    drivable_space_pub_ = create_publisher<std_msgs::msg::String>(drivable_space_topic_, data_qos);
+    obstacle_metrics_pub_ = create_publisher<std_msgs::msg::String>(obstacle_metrics_topic_, data_qos);
+    near_field_state_pub_ = create_publisher<std_msgs::msg::String>(near_field_state_topic_, data_qos);
     connected_pub_ = create_publisher<std_msgs::msg::Bool>(camera_connected_topic_, stateQos());
     health_pub_ = create_publisher<std_msgs::msg::Bool>(camera_health_topic_, stateQos());
     health_state_pub_ = create_publisher<std_msgs::msg::String>(camera_health_state_topic_, stateQos());
@@ -625,12 +701,12 @@ private:
     boundary_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(drivable_boundary_topic_, cloud_qos);
     lane_state_pub_ = create_publisher<std_msgs::msg::String>(lane_state_topic_, stateQos());
     lane_control_state_pub_ = create_publisher<std_msgs::msg::String>(lane_control_state_topic_, stateQos());
-    raw_detection_pub_ = create_publisher<std_msgs::msg::String>(raw_detection_topic_, image_qos);
-    advisory_pub_ = create_publisher<geometry_msgs::msg::Twist>(safe_cmd_topic_, image_qos);
+    raw_detection_pub_ = create_publisher<std_msgs::msg::String>(raw_detection_topic_, data_qos);
+    advisory_pub_ = create_publisher<geometry_msgs::msg::Twist>(safe_cmd_topic_, data_qos);
     rclcpp::SubscriptionOptions nav_options;
     nav_options.callback_group = control_group_;
     nav_cmd_sub_ = create_subscription<geometry_msgs::msg::Twist>(
-      nav_cmd_topic_, image_qos,
+      nav_cmd_topic_, data_qos,
       [this](geometry_msgs::msg::Twist::SharedPtr message) {
         std::lock_guard<std::mutex> lock(state_mutex_);
         last_nav_cmd_ = *message;
@@ -932,15 +1008,21 @@ private:
   bool drivableContact(const Detection & d, const cv::Mat & drivable) const
   {
     if (!require_drivable_contact_) return true;
+    if (drivable.empty()) return false;
     const int bottom = std::clamp(static_cast<int>(std::lround(d.y2)), 0, drivable.rows - 1);
+    const int tol = std::max(0, drivable_contact_vertical_tolerance_px_);
+    const float box_width = std::max(1.0F, d.x2 - d.x1);
+    const float inset = std::min(static_cast<float>(drivable_contact_radius_px_), 0.45F * box_width);
+    const float left = d.x1 + inset;
+    const float right = d.x2 - inset;
     int road = 0;
     int total = 0;
-    for (int dy : {-8, -2, 2}) {
-      const int y = std::clamp(bottom + dy, 0, drivable.rows - 1);
+    const std::array<int, 3> ys{bottom - tol, bottom - tol / 2, bottom};
+    for (const int raw_y : ys) {
+      const int y = std::clamp(raw_y, 0, drivable.rows - 1);
       for (int sample = 0; sample < 5; ++sample) {
         const float alpha = sample * 0.25F;
-        const int x = std::clamp(
-          static_cast<int>(std::lround(d.x1 + alpha * (d.x2 - d.x1))), 0, drivable.cols - 1);
+        const int x = std::clamp(static_cast<int>(std::lround(left + alpha * (right - left))), 0, drivable.cols - 1);
         ++total;
         if (drivable.at<uint8_t>(y, x) > 0U) ++road;
       }
@@ -998,7 +1080,7 @@ private:
       float forward = 0.0F;
       float left = 0.0F;
       if (!projectPixel(center_x, d.y2, forward, left) ||
-        forward < min_forward_ || forward > max_forward_ || std::abs(left) > max_abs_left_)
+        forward < obstacle_forward_min_m_ || forward > obstacle_forward_max_m_ || std::abs(left) > max_abs_left_)
       {
         continue;
       }
@@ -1012,8 +1094,15 @@ private:
       {
         width = std::clamp(std::abs(left_edge - right_edge), 0.20F, 2.5F);
       }
+      if (width < minimum_obstacle_width_m_) continue;
       centers.emplace_back(forward, left);
-      metric_obstacles.push_back(MetricObstacle{d.class_id, d.score, forward, left, width});
+      MetricObstacle obstacle;
+      obstacle.class_id = d.class_id;
+      obstacle.score = d.score;
+      obstacle.forward_m = forward;
+      obstacle.left_m = left;
+      obstacle.width_m = width;
+      metric_obstacles.push_back(obstacle);
       if (forward <= emergency_distance_m_ &&
         std::abs(left) <= emergency_half_width_m_ + 0.5F * width)
       {
@@ -1024,6 +1113,66 @@ private:
         const float ratio = points_per_box_ <= 1 ? 0.5F :
           static_cast<float>(i) / static_cast<float>(points_per_box_ - 1);
         points.push_back({forward, left - half + ratio * 2.0F * half, 0.20F, d.score});
+      }
+    }
+    return points;
+  }
+
+  std::vector<MetricObstacle> updateObstacleTracks(const std::vector<MetricObstacle> & detections)
+  {
+    std::vector<bool> used(obstacle_tracks_.size(), false);
+    std::vector<MetricObstacle> confirmed;
+    confirmed.reserve(detections.size());
+    for (const auto & detection : detections) {
+      int best = -1;
+      double best_distance = std::numeric_limits<double>::infinity();
+      for (size_t i = 0; i < obstacle_tracks_.size(); ++i) {
+        if (used[i] || obstacle_tracks_[i].class_id != detection.class_id) continue;
+        const double distance = std::hypot(
+          obstacle_tracks_[i].forward_m - detection.forward_m,
+          obstacle_tracks_[i].left_m - detection.left_m);
+        if (distance < track_match_distance_m_ && distance < best_distance) {best = static_cast<int>(i); best_distance = distance;}
+      }
+      if (best < 0) {
+        obstacle_tracks_.push_back(ObstacleTrack{
+          next_track_id_++, detection.class_id, detection.score, detection.forward_m, detection.left_m,
+          detection.width_m, 1, 0, track_confirm_hits_ <= 1});
+        used.push_back(true);
+        best = static_cast<int>(obstacle_tracks_.size() - 1U);
+      } else {
+        auto & track = obstacle_tracks_[static_cast<size_t>(best)];
+        const float a = static_cast<float>(track_ema_alpha_);
+        track.forward_m = a * detection.forward_m + (1.0F - a) * track.forward_m;
+        track.left_m = a * detection.left_m + (1.0F - a) * track.left_m;
+        track.width_m = a * detection.width_m + (1.0F - a) * track.width_m;
+        track.score = a * detection.score + (1.0F - a) * track.score;
+        track.hits = std::min(track.hits + 1, 1000000);
+        track.missed = 0;
+        track.confirmed = track.confirmed || track.hits >= track_confirm_hits_;
+        used[static_cast<size_t>(best)] = true;
+      }
+      const auto & track = obstacle_tracks_[static_cast<size_t>(best)];
+      if (track.confirmed) {
+        MetricObstacle out = detection;
+        out.track_id = track.track_id; out.score = track.score; out.forward_m = track.forward_m;
+        out.left_m = track.left_m; out.width_m = track.width_m; out.hits = track.hits; out.confirmed = true;
+        confirmed.push_back(out);
+      }
+    }
+    for (size_t i = 0; i < obstacle_tracks_.size(); ++i) if (i >= used.size() || !used[i]) ++obstacle_tracks_[i].missed;
+    obstacle_tracks_.erase(std::remove_if(obstacle_tracks_.begin(), obstacle_tracks_.end(), [this](const auto & t) {return t.missed > track_max_missed_frames_;}), obstacle_tracks_.end());
+    // Missed tracks stay only in the association cache. They are never republished as active safety obstacles on slow CPU.
+    return confirmed;
+  }
+
+  std::vector<std::array<float, 4>> obstaclePoints(const std::vector<MetricObstacle> & obstacles) const
+  {
+    std::vector<std::array<float, 4>> points;
+    for (const auto & obstacle : obstacles) {
+      const float half = 0.5F * obstacle.width_m;
+      for (int i = 0; i < points_per_box_; ++i) {
+        const float ratio = points_per_box_ <= 1 ? 0.5F : static_cast<float>(i) / static_cast<float>(points_per_box_ - 1);
+        points.push_back({obstacle.forward_m, obstacle.left_m - half + ratio * 2.0F * half, 0.20F, obstacle.score});
       }
     }
     return points;
@@ -1258,8 +1407,11 @@ private:
     for (size_t i = 0; i < obstacles.size(); ++i) {
       if (i) json << ',';
       const auto & obstacle = obstacles[i];
-      json << "{\"class_id\":" << obstacle.class_id
+      json << "{\"track_id\":" << obstacle.track_id
+           << ",\"class_id\":" << obstacle.class_id
            << ",\"score\":" << obstacle.score
+           << ",\"hits\":" << obstacle.hits
+           << ",\"confirmed\":" << (obstacle.confirmed ? "true" : "false")
            << ",\"forward_homography_m\":" << obstacle.forward_m
            << ",\"forward_area_m\":null"
            << ",\"forward_m\":" << obstacle.forward_m
@@ -1404,21 +1556,80 @@ private:
     emergency_stop_ = emergency;
   }
 
+  void captureLoop()
+  {
+    while (rclcpp::ok() && !capture_stop_.load()) {
+      if (!openCamera()) {std::this_thread::sleep_for(50ms); continue;}
+      cv::Mat frame;
+      if (!capture_.read(frame) || frame.empty() || frame.type() != CV_8UC3) {
+        ++capture_dropped_total_;
+        capture_.release();
+        publishConnected(false); publishHealth(false, "FRAME_READ_FAILED_OR_NOT_BGR8"); publishEmergency(true);
+        continue;
+      }
+      if (flip_horizontal_) cv::flip(frame, frame, 1);
+      const auto steady_now = std::chrono::steady_clock::now();
+      const auto ros_stamp = now();
+      {
+        std::lock_guard<std::mutex> lock(frame_mutex_);
+        if (latest_frame_sequence_ > consumed_frame_sequence_) ++capture_overwrite_total_;
+        latest_frame_ = frame;
+        latest_frame_stamp_ = ros_stamp;
+        latest_frame_steady_ = steady_now;
+        ++latest_frame_sequence_;
+      }
+      ++capture_frames_total_;
+      if (last_capture_time_.time_since_epoch().count() != 0) {
+        const double dt = std::chrono::duration<double>(steady_now - last_capture_time_).count();
+        if (dt > 1.0e-6) {const double f = 1.0 / dt; const double old_fps = capture_fps_.load(); capture_fps_.store(old_fps <= 0.0 ? f : 0.12 * f + 0.88 * old_fps);}
+      }
+      last_capture_time_ = steady_now;
+      const double since_visual = last_raw_publish_time_.time_since_epoch().count() == 0 ? 1e9 :
+        std::chrono::duration<double>(steady_now - last_raw_publish_time_).count();
+      if (publish_raw_ && since_visual >= 1.0 / visual_publish_rate_hz_) {
+        publishImage(raw_pub_, ros_stamp, frame, "bgr8");
+        publishCameraInfo(ros_stamp, frame.cols, frame.rows);
+        last_raw_publish_time_ = steady_now;
+      }
+      const double since_preview = last_web_preview_publish_time_.time_since_epoch().count() == 0 ? 1e9 :
+        std::chrono::duration<double>(steady_now - last_web_preview_publish_time_).count();
+      if (web_preview_enabled_ && compressed_preview_pub_ &&
+        compressed_preview_pub_->get_subscription_count() > 0U && since_preview >= 1.0 / web_preview_fps_)
+      {
+        cv::Mat preview;
+        cv::resize(frame, preview, cv::Size(web_preview_width_, web_preview_height_), 0.0, 0.0, cv::INTER_AREA);
+        std::vector<uchar> jpeg;
+        if (cv::imencode(".jpg", preview, jpeg, {cv::IMWRITE_JPEG_QUALITY, web_preview_jpeg_quality_}) && !jpeg.empty()) {
+          sensor_msgs::msg::CompressedImage message;
+          message.header.stamp = ros_stamp;
+          message.header.frame_id = frame_id_;
+          message.format = "jpeg";
+          message.data.assign(jpeg.begin(), jpeg.end());
+          compressed_preview_pub_->publish(std::move(message));
+          ++web_preview_published_total_;
+        }
+        last_web_preview_publish_time_ = steady_now;
+      }
+    }
+  }
+
   void inferenceTick()
   {
-    if (!openCamera()) return;
     cv::Mat frame;
-    if (!capture_.read(frame) || frame.empty() || frame.type() != CV_8UC3) {
-      ++capture_dropped_total_;
-      capture_.release();
-      publishConnected(false);
-      publishHealth(false, "FRAME_READ_FAILED_OR_NOT_BGR8");
-      publishEmergency(true);
-      return;
+    rclcpp::Time stamp{0, 0, RCL_ROS_TIME};
+    std::chrono::steady_clock::time_point frame_steady{};
+    uint64_t sequence = 0U;
+    {
+      std::lock_guard<std::mutex> lock(frame_mutex_);
+      if (latest_frame_.empty() || latest_frame_sequence_ == consumed_frame_sequence_) return;
+      frame = latest_frame_.clone();
+      stamp = latest_frame_stamp_;
+      frame_steady = latest_frame_steady_;
+      sequence = latest_frame_sequence_;
+      consumed_frame_sequence_ = sequence;
     }
-    if (flip_horizontal_) cv::flip(frame, frame, 1);
-    const auto stamp = now();
     const auto started = std::chrono::steady_clock::now();
+    const double frame_age_ms = frame_steady.time_since_epoch().count() == 0 ? 0.0 : std::chrono::duration<double, std::milli>(started - frame_steady).count();
     try {
       prepareHomography(frame.cols, frame.rows);
       double mean_luma = 0.0;
@@ -1427,19 +1638,30 @@ private:
       double mean_gradient = 0.0;
       const bool image_healthy = cameraHealthy(
         frame, mean_luma, image_stddev, extreme_fraction, mean_gradient);
+      const auto preprocess_started = std::chrono::steady_clock::now();
       const cv::Mat input = letterbox(frame);
+      const auto inference_started = std::chrono::steady_clock::now();
+      const double preprocess_ms = std::chrono::duration<double, std::milli>(inference_started - preprocess_started).count();
       std::vector<cv::Mat> outputs = forwardTorch(input);
+      const auto decode_started = std::chrono::steady_clock::now();
+      const double inference_ms = std::chrono::duration<double, std::milli>(decode_started - inference_started).count();
       validateOutputs(outputs);
       auto detections = decodeDetections(outputs, frame.cols, frame.rows);
       cv::Mat drivable;
       cv::Mat lane;
       decodeMasks(outputs, frame.cols, frame.rows, drivable, lane);
+      const auto geometry_started = std::chrono::steady_clock::now();
+      const double decode_ms = std::chrono::duration<double, std::milli>(geometry_started - decode_started).count();
 
       bool emergency = false;
       std::vector<std::pair<float, float>> obstacle_centers;
       std::vector<MetricObstacle> metric_obstacles;
-      const auto object_points = projectObstacles(
-        detections, drivable, emergency, obstacle_centers, metric_obstacles);
+      projectObstacles(detections, drivable, emergency, obstacle_centers, metric_obstacles);
+      const size_t metric_candidate_count = metric_obstacles.size();
+      const auto confirmed_obstacles = updateObstacleTracks(metric_obstacles);
+      obstacle_centers.clear();
+      for (const auto & obstacle : confirmed_obstacles) obstacle_centers.emplace_back(obstacle.forward_m, obstacle.left_m);
+      const auto object_points = obstaclePoints(confirmed_obstacles);
       bool lane_valid = false;
       double left_clearance = 0.0;
       double right_clearance = 0.0;
@@ -1454,7 +1676,7 @@ private:
       object_pub_->publish(makeCloud(stamp, object_points));
       boundary_pub_->publish(makeCloud(stamp, boundary_points));
       publishClearingFan(stamp, obstacle_centers);
-      publishObstacleMetrics(stamp, metric_obstacles);
+      publishObstacleMetrics(stamp, confirmed_obstacles);
       publishDrivableSpace(stamp, lane_valid, valid_rows, boundary_points.size());
       publishNearFieldState(emergency, metric_obstacles, bottomDrivableFraction(drivable));
       publishLaneState(
@@ -1466,9 +1688,10 @@ private:
         mean_luma, image_stddev, extreme_fraction, mean_gradient);
       publishConnected(true);
       publishDetectionMessages(stamp, detections);
-      publishCameraInfo(stamp, frame.cols, frame.rows);
+      const auto publish_started = std::chrono::steady_clock::now();
+      const double geometry_ms = std::chrono::duration<double, std::milli>(publish_started - geometry_started).count();
 
-      if (publish_raw_) publishImage(raw_pub_, stamp, frame, "bgr8");
+      if (false && publish_raw_) publishImage(raw_pub_, stamp, frame, "bgr8");
       if (publish_drivable_) publishImage(drivable_pub_, stamp, drivable, "mono8");
       if (publish_lane_) publishImage(lane_pub_, stamp, lane, "mono8");
       if (publish_annotated_ && annotated_pub_->get_subscription_count() > 0U) {
@@ -1488,6 +1711,8 @@ private:
       }
 
       const auto finished = std::chrono::steady_clock::now();
+      const double publish_ms = std::chrono::duration<double, std::milli>(finished - publish_started).count();
+      const double postprocess_ms = decode_ms + geometry_ms + publish_ms;
       const double elapsed_ms = std::chrono::duration<double, std::milli>(finished - started).count();
       double instantaneous_fps = 1000.0 / std::max(1.0, elapsed_ms);
       if (last_inference_finished_.time_since_epoch().count() != 0) {
@@ -1529,14 +1754,26 @@ private:
            << ",\"pipeline_min_ms\":" << min_ms
            << ",\"pipeline_max_ms\":" << max_ms
            << ",\"pipeline_std_ms\":" << std_ms
+           << ",\"capture_fps\":" << capture_fps_.load()
+           << ",\"frame_age_ms\":" << frame_age_ms
+           << ",\"preprocess_ms\":" << preprocess_ms
+           << ",\"inference_ms\":" << inference_ms
+           << ",\"decode_ms\":" << decode_ms
+           << ",\"geometry_ms\":" << geometry_ms
+           << ",\"publish_ms\":" << publish_ms
+           << ",\"postprocess_ms\":" << postprocess_ms
            << ",\"target_fps\":" << inference_fps_
            << ",\"cpu_threads\":" << cpu_threads_
-           << ",\"capture_dropped_total\":" << capture_dropped_total_
+           << ",\"capture_dropped_total\":" << capture_dropped_total_.load()
+           << ",\"capture_overwrite_total\":" << capture_overwrite_total_.load()
+           << ",\"capture_frames_total\":" << capture_frames_total_.load()
            << ",\"rviz_published_total\":" << rviz_published_total_
            << ",\"rviz_dropped_total\":" << rviz_dropped_total_
+           << ",\"web_preview_published_total\":" << web_preview_published_total_.load()
+           << ",\"web_preview_fps_target\":" << web_preview_fps_
            << ",\"raw_detection_count\":" << detections.size()
-           << ",\"metric_candidate_count\":" << metric_obstacles.size()
-           << ",\"confirmed_obstacle_count\":" << metric_obstacles.size()
+           << ",\"metric_candidate_count\":" << metric_candidate_count
+           << ",\"confirmed_obstacle_count\":" << confirmed_obstacles.size()
            << ",\"object_points\":" << object_points.size()
            << ",\"camera_mean_luma\":" << mean_luma
            << ",\"camera_stddev\":" << image_stddev
@@ -1691,6 +1928,13 @@ private:
   int max_detections_{300};
   bool publish_annotated_{true};
   bool publish_raw_{true};
+  double visual_publish_rate_hz_{10.0};
+  bool web_preview_enabled_{true};
+  double web_preview_fps_{5.0};
+  int web_preview_width_{640};
+  int web_preview_height_{360};
+  int web_preview_jpeg_quality_{75};
+  std::string web_preview_topic_{"/camera/astra/image_preview/compressed"};
   bool publish_drivable_{false};
   bool publish_lane_{false};
   bool publish_detections_{false};
@@ -1731,8 +1975,19 @@ private:
   bool accept_all_obstacles_{false};
   std::vector<int64_t> safety_classes_;
   bool require_drivable_contact_{true};
+  int drivable_contact_radius_px_{12};
+  int drivable_contact_vertical_tolerance_px_{8};
   int drivable_contact_min_samples_{3};
   double drivable_contact_min_fraction_{0.20};
+  double track_match_distance_m_{0.90};
+  double track_ema_alpha_{0.45};
+  int track_confirm_hits_{3};
+  int track_max_missed_frames_{8};
+  int next_track_id_{1};
+  std::vector<ObstacleTrack> obstacle_tracks_;
+  double obstacle_forward_min_m_{0.20};
+  double obstacle_forward_max_m_{3.0};
+  double minimum_obstacle_width_m_{0.20};
   int points_per_box_{5};
   int clearing_ray_count_{41};
   double clearing_fov_rad_{1.7453};
@@ -1751,6 +2006,22 @@ private:
   double camera_fx_{910.0}, camera_fy_{910.0}, camera_cx_{640.0}, camera_cy_{360.0};
   std::vector<double> camera_distortion_;
 
+  std::mutex frame_mutex_;
+  cv::Mat latest_frame_;
+  rclcpp::Time latest_frame_stamp_{0, 0, RCL_ROS_TIME};
+  std::chrono::steady_clock::time_point latest_frame_steady_{};
+  uint64_t latest_frame_sequence_{0U};
+  uint64_t consumed_frame_sequence_{0U};
+  std::atomic_bool capture_stop_{false};
+  std::thread capture_thread_;
+  std::atomic<double> capture_fps_{0.0};
+  std::atomic<uint64_t> capture_frames_total_{0U};
+  std::atomic<uint64_t> capture_overwrite_total_{0U};
+  std::atomic<uint64_t> web_preview_published_total_{0U};
+  std::chrono::steady_clock::time_point last_capture_time_{};
+  std::chrono::steady_clock::time_point last_raw_publish_time_{};
+  std::chrono::steady_clock::time_point last_web_preview_publish_time_{};
+
   std::mutex state_mutex_;
   geometry_msgs::msg::Twist last_nav_cmd_;
   rclcpp::Time last_nav_cmd_time_{0, 0, RCL_ROS_TIME};
@@ -1766,7 +2037,7 @@ private:
   bool have_lane_{false};
   uint64_t control_sequence_{0U};
   double performance_fps_{0.0};
-  uint64_t capture_dropped_total_{0U};
+  std::atomic<uint64_t> capture_dropped_total_{0U};
   uint64_t rviz_published_total_{0U};
   uint64_t rviz_dropped_total_{0U};
   std::deque<double> timing_window_ms_;
@@ -1776,6 +2047,7 @@ private:
   rclcpp::TimerBase::SharedPtr inference_timer_, control_timer_;
   rclcpp::CallbackGroup::SharedPtr inference_group_, control_group_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr annotated_pub_, raw_pub_, drivable_pub_, lane_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr compressed_preview_pub_;
   rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_pub_;
   rclcpp::Publisher<vision_msgs::msg::Detection2DArray>::SharedPtr detections_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr performance_pub_, health_state_pub_;

@@ -114,6 +114,7 @@
                 <aside class="rviz-layer-panel" aria-label="Map layers">
                   <div class="layer-head"><b>Display Layers</b><span>map</span></div>
                   <label><input type="checkbox" id="layerMap" checked><i></i><span>Static Map</span><em id="mapLayerStatus">LIVE</em></label>
+                  <label><input type="checkbox" id="layerGrid" checked><i></i><span>Metric Grid</span></label>
                   <label><input type="checkbox" id="layerGlobalCostmap" checked><i></i><span>Global Costmap / Inflation</span><em id="globalCostmapStatus">WAIT</em></label>
                   <label><input type="checkbox" id="layerLocalCostmap" checked><i></i><span>Local Costmap / Inflation</span><em id="localCostmapStatus">WAIT</em></label>
                   <label><input type="checkbox" id="layerGlobalPath" checked><i></i><span>Global Path</span></label>
@@ -241,20 +242,20 @@
               </article>
 
               <article class="panel run-console">
-                <div class="panel-head"><div><span class="eyebrow">RUN CONTROL</span><h2>Identitas Run & CSV Evidence</h2></div><span class="status-chip waiting" id="recordChip">IDLE</span></div>
+                <div class="panel-head"><div><span class="eyebrow">RUN CONTROL</span><h2>Identitas Run & CSV Evidence</h2></div></div>
                 <div class="run-grid">
                   <label>Variation / Run<input id="runVariation" value="run-01" autocomplete="off"></label>
                   <label>Condition<input id="runCondition" value="nominal" autocomplete="off"></label>
                   <label>Sample rate<input id="runSampleRate" type="number" min="1" max="20" step="1" value="5"><small>Hz</small></label>
-                  <div class="record-actions"><button class="record-start" id="startCsvBtn">● START CSV</button><button class="record-stop" id="stopCsvBtn" disabled>■ STOP + AUTO SAVE</button></div>
+                  <div class="record-actions"><button class="record-toggle start" id="recordToggleBtn" data-active="false">● START</button></div>
                 </div>
-                <div class="record-footer"><span id="recordElapsed">00:00.0</span><span id="recordPath">Output: /home/otomasi/ros/data/{navigasi|presepsi|esc}</span><span id="recordMessage">STOP → save CSV server + download otomatis ke browser</span></div>
+                <div class="record-footer"><span id="recordElapsed">00:00.0</span><span id="recordPath">Output: /home/otomasi/ros/data/{navigasi|presepsi|esc}</span><span id="recordMessage">STOP → 1 CSV tersimpan + download otomatis ke browser</span></div>
               </article>
 
               <div class="lab-two-col">
                 <article class="panel tuning-editor">
                   <div class="panel-head"><div><span class="eyebrow">PARAMETER TUNING</span><h2>YAML Aktual</h2></div><button class="soft-btn" id="refreshExperimentConfig">Reload YAML</button></div>
-                  <div class="tuning-note" id="tuningNote">Nilai editable disimpan ke source YAML. Perubahan node Nav2/EKF umumnya berlaku setelah lifecycle reload/restart.</div>
+                  <div class="tuning-note" id="tuningNote">AUTO YAML aktif: perubahan field editable langsung ditulis atomik ke source YAML (+ backup). Parameter runtime Nav2/EKF yang tidak dinamis tetap memerlukan lifecycle reload/restart agar nilai baru berlaku.</div>
                   <div id="tuningFields" class="tuning-fields"><div class="empty-state">Pilih subpengujian.</div></div>
                 </article>
 
@@ -268,6 +269,24 @@
                   <div class="context-metrics" id="contextMetrics"></div>
                 </article>
               </div>
+
+              <article class="panel perception-engineering" id="perceptionEngineeringPanel" hidden>
+                <div class="panel-head"><div><span class="eyebrow">PERCEPTION COMMISSIONING</span><h2>Stability, Safety Funnel & Qualification</h2></div><span class="status-chip waiting" id="perceptionReadyState">NOT READY</span></div>
+                <div class="perception-perf-grid">
+                  <div><span>Capture FPS</span><b id="perCaptureFps">--</b></div><div><span>Pipeline FPS</span><b id="perPipelineFps">--</b></div><div><span>Mean total</span><b id="perMeanMs">--</b><small>ms</small></div><div><span>P95 total</span><b id="perP95Ms">--</b><small>ms</small></div>
+                  <div><span>Inference</span><b id="perInferenceMs">--</b><small>ms</small></div><div><span>Postprocess</span><b id="perPostMs">--</b><small>ms</small></div><div><span>Frame age</span><b id="perFrameAge">--</b><small>ms</small></div><div><span>Capture drop</span><b id="perDropped">--</b></div>
+                </div>
+                <div class="perception-engineering-grid">
+                  <section><span class="eyebrow">OBSTACLE SAFETY FUNNEL</span><div class="safety-funnel"><div><b id="funnelRaw">0</b><span>RAW</span></div><i>→</i><div><b id="funnelMetric">0</b><span>CLASS + CONF + DRIVABLE + METRIC</span></div><i>→</i><div><b id="funnelObject">0</b><span>OBJECT POINTS</span></div><i>→</i><div><b id="funnelPath">0</b><span>PATH RELEVANT</span></div><i>→</i><div><b id="funnelPlanning">0</b><span>PLANNING</span></div></div></section>
+                  <section><span class="eyebrow">AUTONOMOUS QUALIFICATION</span><div id="perceptionQualification" class="qualification-list"></div></section>
+                </div>
+                <section class="homography-assistant" id="homographyAssistant" hidden>
+                  <div class="homography-head"><div><span class="eyebrow">4.3 METRIC CALIBRATION ASSISTANT</span><b>Click-to-GT Homography Points</b></div><span id="homographyPointCount">0/4 POINTS</span></div>
+                  <div class="homography-controls"><label>GT Forward (m)<input id="calGtForward" type="number" step="0.05" value="1.0"></label><label>GT Left + / Right - (m)<input id="calGtLeft" type="number" step="0.05" value="0.0"></label><label class="capture-check"><input id="homographyCaptureMode" type="checkbox"> CAPTURE POINT</label><button class="soft-btn" id="homographyResetBtn">Reset 4 Points</button><button class="primary-btn" id="applyHomographyBtn" disabled>Apply 4-Point Homography YAML</button></div>
+                  <div id="homographyPointList" class="homography-points"><div class="empty-state">Pilih leaf 4.3 dan capture empat titik dengan ground truth fisik.</div></div>
+                  <p class="tuning-note">Wizard hanya menulis source/destination points ke YAML. Flag camera_metric_calibration_validated tetap tidak diaktifkan otomatis; validasi MAE/RMSE 4.3 wajib PASS dulu.</p>
+                </section>
+              </article>
 
               <article class="panel graph-workspace">
                 <div class="panel-head"><div><span class="eyebrow">LIVE / SUMMARY</span><h2>Grafik Pengujian</h2></div><div class="graph-controls"><button class="soft-btn active" id="graphLiveMode">LIVE</button><button class="soft-btn" id="graphClearBtn">Clear</button></div></div>

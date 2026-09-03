@@ -443,7 +443,7 @@ private:
         last_perception_time_ = now();
       });
     raw_detection_sub_ = create_subscription<std_msgs::msg::String>(
-      "/perception/raw_detections", rclcpp::QoS(rclcpp::KeepLast(1)).reliable(),
+      "/perception/raw_detections", rclcpp::QoS(rclcpp::KeepLast(1)).best_effort(),
       [this](std_msgs::msg::String::SharedPtr msg) {
         std::lock_guard<std::mutex> lock(mutex_);
         raw_detection_status_ = msg->data;

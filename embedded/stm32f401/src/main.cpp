@@ -10,6 +10,9 @@
 #include <string.h>
 #include <stdlib.h>
 
+// STM32F411 ROM bootloader support for firmware updates over the same USB connector.
+#include <stm32f4xx_hal.h>
+
 #include "Config.h"
 #include "Telemetry.h"
 #include "Theme.h"
@@ -50,6 +53,72 @@ static uint8_t serial1RxLen = 0;
 // Forward declarations used by page/safety helpers
 // ---------------------------------------------------------------------------
 static void sendDriveStop();
+static void enterSystemDfu();
+
+// ---------------------------------------------------------------------------
+// USB firmware-update helper
+// STM32F411 system-memory bootloader starts at 0x1FFF0000 and exposes USB DFU.
+// We reset first, then jump from .preinit_array before Arduino/HAL/USB startup,
+// avoiding stale USB/peripheral state during erase/program operations.
+// ---------------------------------------------------------------------------
+static constexpr uint32_t kSystemMemory = 0x1FFF0000UL;
+static constexpr uint32_t kDfuBootMagic = 0x44465531UL;  // "DFU1"
+__attribute__((section(".noinit"))) static volatile uint32_t gDfuBootMagic;
+
+static void earlySystemDfuCheck() {
+  if (gDfuBootMagic != kDfuBootMagic) return;
+  gDfuBootMagic = 0;
+
+  const uint32_t bootStack = *reinterpret_cast<volatile uint32_t*>(kSystemMemory);
+  const uint32_t bootReset = *reinterpret_cast<volatile uint32_t*>(kSystemMemory + 4UL);
+
+  // Sanity-check the ROM vectors before changing processor state.
+  if ((bootStack & 0x2FFE0000UL) != 0x20000000UL ||
+      (bootReset & 0xFFF00000UL) != 0x1FF00000UL) {
+    return;
+  }
+
+  __disable_irq();
+  SysTick->CTRL = 0;
+  SysTick->LOAD = 0;
+  SysTick->VAL = 0;
+  for (uint32_t i = 0; i < 8; ++i) {
+    NVIC->ICER[i] = 0xFFFFFFFFUL;
+    NVIC->ICPR[i] = 0xFFFFFFFFUL;
+  }
+
+  __HAL_RCC_SYSCFG_CLK_ENABLE();
+  __HAL_SYSCFG_REMAPMEMORY_SYSTEMFLASH();
+  SCB->VTOR = kSystemMemory;
+  __DSB();
+  __ISB();
+
+  using BootEntry = void (*)();
+  BootEntry boot = reinterpret_cast<BootEntry>(bootReset);
+  __set_MSP(bootStack);
+  __enable_irq();
+  boot();
+  while (true) { }
+}
+
+using PreinitFn = void (*)();
+__attribute__((used, section(".preinit_array")))
+static PreinitFn const gEarlyDfuHook = earlySystemDfuCheck;
+
+static void enterSystemDfu() {
+  // Finish acknowledgement and force a clean CDC disconnect before reset.
+  Serial.flush();
+  delay(40);
+  Serial.end();
+  Serial1.end();
+  delay(120);
+
+  gDfuBootMagic = kDfuBootMagic;
+  __DSB();
+  __ISB();
+  NVIC_SystemReset();
+  while (true) { }
+}
 
 // ---------------------------------------------------------------------------
 // Page helpers
@@ -335,6 +404,17 @@ static void handleSerialCommand(char* command) {
   if (!strcmp(command, "PING")) {
     printBoth("ACK:PONG");
     publishPage();
+    return;
+  }
+  if (!strcmp(command, "BOOT:DFU")) {
+    // Fail-safe: never leave a latched drive command active during firmware update.
+    if (activeDriveControl == CTRL_FORWARD || activeDriveControl == CTRL_REVERSE) {
+      sendDriveStop();
+      activeDriveControl = CTRL_NONE;
+    }
+    printBoth("ACK:DFU");
+    delay(80);
+    enterSystemDfu();
     return;
   }
   if (!strcmp(command, "GOTO:HOME")) { showPage(PAGE_HOME); return; }

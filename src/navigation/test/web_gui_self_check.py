@@ -27,7 +27,8 @@ for token in ("start_web_gui", "web_bind_address", "web_port", "127.0.0.1", "agv
 for token in ("start_web_gui", "web_bind_address", "web_port"):
     if token not in gui: fail(f"gui launch does not forward {token}")
 for endpoint in ("/api/events", "/api/state", "/api/health", "/api/camera.jpg", "/api/map.png",
-                 "/api/navigation/goal", "/api/navigation/cancel",
+                 "/api/global_costmap.png", "/api/local_costmap.png",
+                 "/api/experiment/record/last.csv", "/api/navigation/goal", "/api/navigation/cancel",
                  "/api/localization/initial-pose", "/api/steering/calibration-mode",
                  "/api/config/set", "/api/experiment/record/start",
                  "/api/experiment/record/stop", "/api/experiment/record/status"):
@@ -52,17 +53,33 @@ for token in ("BAB IV • Pengujian, Tuning & Evidence", "data-exp=\"navigation\
               "data-exp=\"perception\"", "data-exp=\"steering\"",
               "id=\"tuningFields\"", "id=\"experimentGraphs\"", "id=\"experimentTable\"",
               "id=\"expMapCanvas\"", "id=\"expCameraImage\"", "id=\"expEscCanvas\"",
-              "id=\"startCsvBtn\"", "id=\"stopCsvBtn\""):
+              "id=\"recordToggleBtn\""):
     if token not in html: fail(f"BAB IV web workbench missing {token}")
 for token in ("WEB_TUNING", "resolveMetricPath", "drawExperimentChart", "drawExperimentMap",
-              "drawExperimentEsc", "saveTuningField", "startWebRecording", "stopWebRecording"):
+              "drawExperimentEsc", "saveTuningField", "startWebRecording", "stopWebRecording", "setRecordingUi"):
     if token not in js: fail(f"BAB IV web behavior missing {token}")
 for token in ("setYamlValueAtomic", "patchExistingYamlScalar", "captureRecordingSample",
-              "saveRecordingFiles", "agv_web_reports", "foc_thesis", "bbox_calibration",
+              "saveRecordingFiles", "/home/otomasi/ros/data", "navigasi", "presepsi",
+              "download_url", "global_costmap_meta", "local_costmap_meta",
+              "foc_thesis", "bbox_calibration",
               "localization_cpp.yaml", "mppi_closed_loop.yaml"):
     if token not in cpp: fail(f"web tuning backend missing {token}")
+
+# RViz-like browser interaction: real Nav2 costmaps, pan/zoom, goal yaw drag and auto-save/download.
+for token in ("id=\"mapGoalTool\"", "id=\"mapPanTool\"", "id=\"layerGlobalCostmap\"",
+              "id=\"layerLocalCostmap\"", "id=\"layerGrid\"", "id=\"mapZoomLabel\""):
+    if token not in html: fail(f"RViz-like navigation control missing {token}")
+for token in ("loadCostmapImage", "zoomMap", "screenToWorld", "pointerdown", "pointermove",
+              "AUTO WRITE", "download_url"):
+    if token not in js: fail(f"RViz-like/autosave frontend behavior missing {token}")
+
 if "Content-Security-Policy" not in cpp:
     fail("HTTP response security headers missing")
+for forbidden in ("_summary.csv", "_manifest.json", "_config.json"):
+    if forbidden in cpp: fail(f"CSV-only recorder must not persist {forbidden}")
+for token in ("recordingCsvStem", "section_label", "lastDownloadCsv_", "recordToggleBtn"):
+    hay = cpp if token != "recordToggleBtn" else html
+    if token not in hay: fail(f"CSV-only recorder contract missing {token}")
 
 for token in ("cameraEncodeMutex_", "rosShutdownGuard", "Request body too large",
               "canonicalRoot", "declare_parameter<std::int64_t>(\"port\"",

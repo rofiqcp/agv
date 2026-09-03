@@ -31,3 +31,4 @@ compile_commands.json
 embedded/stm32f401/.pio
 embedded/stm32f401/.pio/build
 embedded/hoverboard-firmware-hack-FOC/.pio
+data/
