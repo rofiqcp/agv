@@ -518,11 +518,13 @@ def generate_launch_description() -> LaunchDescription:
             'start_ackermann': LaunchConfiguration('start_esc_ackermann'),
             'serial_device': LaunchConfiguration('esc_port'),
             'serial_enabled': LaunchConfiguration('esc_serial_enabled'),
-            # Direct teleop consumption is disabled here: every motion command must
-            # pass cmd_vel_router -> velocity_smoother before ESC/USART.
+            # Manual teleop is already rate-shaped in motor_teleop.cpp. Feed it
+            # directly to the C++ ESC mux so short joystick commands are not
+            # attenuated a second time by the Nav2 velocity_smoother. Autonomous
+            # commands still enter through /cmd_vel after router + smoother.
             'require_autonomy_gate': 'false',
-            'teleop_topic': '/cmd_vel/teleop_disabled_after_router',
-            'active_source_topic': '/esc/mux/active_source_internal',
+            'teleop_topic': '/cmd_vel/teleop',
+            'active_source_topic': '/esc/mux/active_source',
             'nav2_topic': '/cmd_vel',
         }.items(),
     )
@@ -677,7 +679,8 @@ def generate_launch_description() -> LaunchDescription:
             'autonomy_gate_topic': '/system/autonomy_motion_allowed',
             'global_estop_topic': '/safety/estop',
             'output_topic': '/cmd_vel/pre_smoother',
-            'source_topic': '/esc/mux/active_source',
+            # Keep router diagnostics separate from the actuator mux state.
+            'source_topic': '/navigation/cmd_mux/source',
             'use_sim_time': LaunchConfiguration('use_sim_time'),
         }])
 

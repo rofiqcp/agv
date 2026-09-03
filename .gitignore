@@ -27,3 +27,7 @@ compile_commands.json
 .DS_Store
 *~
 *.swp
+
+embedded/stm32f401/.pio
+embedded/stm32f401/.pio/build
+embedded/hoverboard-firmware-hack-FOC/.pio

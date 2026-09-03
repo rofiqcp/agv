@@ -66,7 +66,7 @@ target_include_directories(agv_web_gui PRIVATE gui include)
 ament_target_dependencies(
   agv_web_gui
   rclcpp rcl_interfaces action_msgs sensor_msgs std_msgs geometry_msgs nav_msgs
-  std_srvs ament_index_cpp)
+  std_srvs ament_index_cpp tf2_ros)
 target_link_libraries(agv_web_gui Qt5::Core Qt5::Gui Qt5::Network yaml-cpp)
 
 # GNSS / IMU driver C++.
