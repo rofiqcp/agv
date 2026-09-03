@@ -1,0 +1,16 @@
+Precision V9 Part 3 final validation
+UTC 2026-08-22T13:24:52Z
+PASS Python syntax
+PASS YAML parse: 21 files
+PASS package.xml parse
+PASS ekf_filter_node_odom: 15x15 process_noise_covariance valid
+PASS ekf_filter_node_map: 15x15 process_noise_covariance valid
+PASS EKF Humble config contract
+PASS trajectory safety contract
+PASS avoidance contract
+required_corridor=1.10m hard=0.90m immediate=0.65m
+PASS precision_part1_self_check
+PASS precision_part2_self_check
+PASS precision_part3_self_check
+NOTE ros2 unavailable in audit container
+NOTE colcon unavailable in audit container

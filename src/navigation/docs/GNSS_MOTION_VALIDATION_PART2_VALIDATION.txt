@@ -1,0 +1,41 @@
+GNSS MOTION VALIDATION PART 2 - VALIDATION
+==========================================
+Scope implemented:
+- local EKF odometry history using measurement stamps
+- interpolation of local pose/vx/vy/yaw-rate at GNSS measurement time
+- ENU antenna velocity -> calibrated map velocity
+- rotational GNSS antenna lever-arm velocity compensation
+- map velocity -> base_footprint velocity
+- horizontal covariance rotation ENU -> map -> base
+- wheel-vs-GNSS residual and motion slip diagnostic
+- NAV-PVT gSpeed vs velN/E consistency
+- COG vs Doppler vector-course consistency
+- COG vs multi-point position-fit consistency when fit is fresh
+- forward/straight/quality gates plus COG acquire/release hysteresis
+- GUI + CSV + rosbag observability
+- NO GNSS velocity or COG fusion into robot_localization in Part 2
+
+Static validation at packaging:
+  gnss_motion_validation_part2_self_check.py  PASS
+  gnss_motion_math_self_check.py              PASS
+  gnss_driver_v2_part1_self_check.py          PASS
+  gnss_ubx_fixture_self_check.py              PASS
+  precision_part1_self_check.py               PASS
+  precision_part2_self_check.py               PASS
+  precision_part3_self_check.py               PASS
+  ekf_humble_config_self_check.py             PASS
+  trajectory_safety_contract_self_check.py    PASS
+  avoidance_contract_self_check.py            PASS
+  Python parse (27 files)                     PASS
+  YAML parse (21 files)                       PASS
+  navigation/package.xml parse                PASS
+  localization_core.cpp brace balance         PASS
+  Part 2 EKF isolation                        PASS
+
+Important mathematical distinction verified:
+- gSpeed / velN/E / position-fit are antenna-motion quantities.
+- wheel comparison is performed against lever-arm-corrected base velocity.
+- position-fit-vs-Doppler and gSpeed-vs-vector consistency are compared at the antenna,
+  preventing false mismatch during turns.
+
+Hardware acceptance still requires ROS 2 Humble colcon build on Jetson and a real moving AGV. Keep enable_gnss_course_yaw_correction=false until velocity and COG qualification tests pass in recorded field data.

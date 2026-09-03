@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  LEGACY COMPATIBILITY FILE.
+
+  autonomous.launch.py TIDAK memaksa file ini. Konfigurasi lama menonaktifkan
+  builtin transports dan memaksa UDP-only; itu buruk untuk OccupancyGrid/costmap
+  besar di proses-proses pada host yang sama dan memperbesar risiko discovery /
+  lifecycle startup yang lambat.
+
+  File dipertahankan agar shell lama yang masih mempunyai
+  FASTRTPS_DEFAULT_PROFILES_FILE=.../fastdds_no_shm.xml tidak langsung rusak.
+  Builtin transports dibiarkan aktif (Fast DDS memilih transport defaultnya).
+-->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastrtps_profiles">
+    <participant profile_name="car_participant" is_default_profile="true">
+        <rtps>
+            <useBuiltinTransports>true</useBuiltinTransports>
+        </rtps>
+    </participant>
+</profiles>

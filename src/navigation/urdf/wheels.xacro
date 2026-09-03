@@ -1,0 +1,84 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!--
+    The legacy wheel STL axial direction is X. Rotating +90 degrees about Z
+    aligns its axle with robot +Y. The complete tire/rim/brake visual remains
+    inside the wheel link, so continuous-joint slider motion transforms every
+    visible wheel part. Nonuniform scaling preserves the current 0.070 m axial
+    by 0.290 m diameter contract.
+  -->
+  <xacro:macro name="wheel_link" params="prefix">
+    <link name="${prefix}_wheel_link">
+      <visual name="${prefix}_wheel_mesh">
+        <origin xyz="0 ${wheel_mesh_center_correction} 0"
+                rpy="0 0 1.57079632679"/>
+        <geometry>
+          <mesh filename="${wheel_mesh_uri}"
+                scale="${wheel_mesh_scale_axial} ${wheel_mesh_scale_radial_y} ${wheel_mesh_scale_radial_z}"/>
+        </geometry>
+        <material name="tire_black"/>
+      </visual>
+
+      <visual name="${prefix}_alloy_rim">
+        <origin rpy="1.57079632679 0 0"/>
+        <geometry><mesh filename="${rim_mesh_uri}"/></geometry>
+        <material name="rim_metal"/>
+      </visual>
+      <visual name="${prefix}_brake_disc">
+        <origin xyz="0 0.031 0" rpy="1.57079632679 0 0"/>
+        <geometry><cylinder radius="0.058" length="0.004"/></geometry>
+        <material name="brake_disc"/>
+      </visual>
+      <visual name="${prefix}_brake_caliper">
+        <origin xyz="0.050 0.034 0.015"/>
+        <geometry><box size="0.025 0.012 0.045"/></geometry>
+        <material name="brake_caliper"/>
+      </visual>
+      <visual name="${prefix}_hub_cap">
+        <origin rpy="1.57079632679 0 0"/>
+        <geometry><cylinder radius="0.020" length="0.064"/></geometry>
+        <material name="rim_dark"/>
+      </visual>
+      <visual name="${prefix}_lug_top">
+        <origin xyz="0 0.034 0.014" rpy="1.57079632679 0 0"/>
+        <geometry><cylinder radius="0.004" length="0.006"/></geometry>
+        <material name="metal_light"/>
+      </visual>
+      <visual name="${prefix}_lug_bottom_left">
+        <origin xyz="-0.013 0.034 -0.008" rpy="1.57079632679 0 0"/>
+        <geometry><cylinder radius="0.004" length="0.006"/></geometry>
+        <material name="metal_light"/>
+      </visual>
+      <visual name="${prefix}_lug_bottom_right">
+        <origin xyz="0.013 0.034 -0.008" rpy="1.57079632679 0 0"/>
+        <geometry><cylinder radius="0.004" length="0.006"/></geometry>
+        <material name="metal_light"/>
+      </visual>
+
+      <collision>
+        <origin rpy="1.57079632679 0 0"/>
+        <geometry>
+          <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+        </geometry>
+      </collision>
+
+      <inertial>
+        <mass value="${wheel_mass}"/>
+        <inertia
+            ixx="${wheel_mass * (3.0 * wheel_radius * wheel_radius + wheel_width * wheel_width) / 12.0}"
+            ixy="0"
+            ixz="0"
+            iyy="${wheel_mass * wheel_radius * wheel_radius / 2.0}"
+            iyz="0"
+            izz="${wheel_mass * (3.0 * wheel_radius * wheel_radius + wheel_width * wheel_width) / 12.0}"/>
+      </inertial>
+    </link>
+  </xacro:macro>
+
+  <xacro:wheel_link prefix="front_left"/>
+  <xacro:wheel_link prefix="front_right"/>
+  <xacro:wheel_link prefix="rear_left"/>
+  <xacro:wheel_link prefix="rear_right"/>
+
+</robot>

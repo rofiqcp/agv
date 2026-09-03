@@ -1,0 +1,343 @@
+# EKF for global field test: GNSS x/y + velocity + COG yaw + IMU gyro-Z
+# NO dependency on /odometry/filtered or local EKF.
+ekf_filter_node_global_test:
+  ros__parameters:
+    frequency: 10.0
+    sensor_timeout: 2.0
+    two_d_mode: true
+    transform_time_offset: 0.0
+    transform_timeout: 0.0
+    predict_to_current_time: false
+    print_diagnostics: false
+    dynamic_process_noise_covariance: false
+    debug: false
+    publish_tf: false
+    publish_acceleration: false
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base_footprint
+    world_frame: map
+
+    # GNSS position (x, y in map frame)
+    odom0: /global_test/gnss_map
+    odom0_config:
+    - true   # 0: x
+    - true   # 1: y
+    - false  # 2: z
+    - false  # 3: roll
+    - false  # 4: pitch
+    - false  # 5: yaw
+    - false  # 6: vx
+    - false  # 7: vy
+    - false  # 8: vz
+    - false  # 9: vroll
+    - false  # 10: vpitch
+    - false  # 11: vyaw
+    - false  # 12: ax
+    - false  # 13: ay
+    - false  # 14: az
+    odom0_queue_size: 8
+    odom0_nodelay: true
+    odom0_differential: false
+    odom0_relative: false
+    odom0_pose_rejection_threshold: 12.0
+
+    # GNSS velocity rotated by the test localizer into base_footprint.
+    # vx = body forward, vy = body lateral (diagnostic during walking test).
+    twist0: /global_test/base_velocity
+    twist0_config:
+    - false  # 0: x
+    - false  # 1: y
+    - false  # 2: z
+    - false  # 3: roll
+    - false  # 4: pitch
+    - false  # 5: yaw
+    - true   # 6: vx (body forward)
+    - true   # 7: vy (body lateral, diagnostic)
+    - false  # 8: vz
+    - false  # 9: vroll
+    - false  # 10: vpitch
+    - false  # 11: vyaw (NOT from twist; use IMU gyro-Z)
+    - false  # 12: ax
+    - false  # 13: ay
+    - false  # 14: az
+    twist0_queue_size: 12
+    twist0_nodelay: true
+    twist0_rejection_threshold: 10.0
+
+    # COG absolute yaw (only when valid/moving)
+    pose0: /global_test/cog_heading
+    pose0_config:
+    - false  # 0: x
+    - false  # 1: y
+    - false  # 2: z
+    - false  # 3: roll
+    - false  # 4: pitch
+    - true   # 5: yaw (COG absolute heading in map frame)
+    - false  # 6: vx
+    - false  # 7: vy
+    - false  # 8: vz
+    - false  # 9: vroll
+    - false  # 10: vpitch
+    - false  # 11: vyaw
+    - false  # 12: ax
+    - false  # 13: ay
+    - false  # 14: az
+    pose0_queue_size: 8
+    pose0_nodelay: true
+    pose0_differential: false
+    pose0_relative: false
+
+    # IMU angular_velocity.z for yaw-rate / continuity
+    imu0: /imu/data
+    imu0_config:
+    - false  # 0: x
+    - false  # 1: y
+    - false  # 2: z
+    - false  # 3: roll
+    - false  # 4: pitch
+    - false  # 5: yaw (NOT orientation, use COG instead)
+    - false  # 6: vx
+    - false  # 7: vy
+    - false  # 8: vz
+    - false  # 9: vroll
+    - false  # 10: vpitch
+    - true   # 11: vyaw (angular_velocity.z for continuity)
+    - false  # 12: ax
+    - false  # 13: ay
+    - false  # 14: az
+    imu0_queue_size: 30
+    imu0_nodelay: true
+    imu0_differential: false
+    imu0_relative: false
+    imu0_remove_gravitational_acceleration: false
+
+    # Process noise covariance (15x15 = 225 values)
+    process_noise_covariance:
+    - 0.05  # x
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.05  # y
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.06  # z
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.03  # roll
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.03  # pitch
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.06  # yaw
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.025  # vx
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.025  # vy
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.04  # vz
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.01  # vroll
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.01  # vpitch
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.02  # vyaw
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.01  # ax
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.01  # ay
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.015  # az
+
+    use_control: false

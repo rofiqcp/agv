@@ -1,0 +1,111 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- ================================================================ -->
+  <!-- DRIVETRAIN VISUALS — on chassis_link                              -->
+  <!-- Front+rear differentials, axle tubes, half-shafts, drive motor   -->
+  <!-- Chain drive to rear axle                                          -->
+  <!-- ================================================================ -->
+
+  <xacro:macro name="visual_drivetrain">
+
+    <!-- Front axle tube (full width) -->
+    <visual name="front_axle_tube">
+      <origin xyz="${front_axle_x} 0 0" rpy="1.5708 0 0"/>
+      <geometry><cylinder radius="0.014" length="${track_width + wheel_width}"/></geometry>
+      <material name="frame_silver"/>
+    </visual>
+
+    <!-- Rear axle tube -->
+    <visual name="rear_axle_tube">
+      <origin xyz="${rear_axle_x} 0 0" rpy="1.5708 0 0"/>
+      <geometry><cylinder radius="0.015" length="${track_width + wheel_width}"/></geometry>
+      <material name="frame_silver"/>
+    </visual>
+
+    <!-- Front differential -->
+    <visual name="front_diff">
+      <origin xyz="${front_axle_x} 0 0"/>
+      <geometry><sphere radius="0.038"/></geometry>
+      <material name="diff_dark"/>
+    </visual>
+
+    <!-- Rear differential -->
+    <visual name="rear_diff">
+      <origin xyz="${rear_axle_x} 0 0"/>
+      <geometry><sphere radius="0.045"/></geometry>
+      <material name="diff_dark"/>
+    </visual>
+    <visual name="rear_diff_cover">
+      <origin xyz="${rear_axle_x - 0.028} 0 0" rpy="0 1.5708 0"/>
+      <geometry><cylinder radius="0.038" length="0.015"/></geometry>
+      <material name="frame_metal"/>
+    </visual>
+
+    <!-- Wheel bearings (near each wheel hub) -->
+    <visual name="bearing_fl">
+      <origin xyz="${front_axle_x} ${half_track - 0.012} 0" rpy="1.5708 0 0"/>
+      <geometry><cylinder radius="0.022" length="0.025"/></geometry>
+      <material name="diff_dark"/>
+    </visual>
+    <visual name="bearing_fr">
+      <origin xyz="${front_axle_x} ${-half_track + 0.012} 0" rpy="1.5708 0 0"/>
+      <geometry><cylinder radius="0.022" length="0.025"/></geometry>
+      <material name="diff_dark"/>
+    </visual>
+    <visual name="bearing_rl">
+      <origin xyz="${rear_axle_x} ${half_track - 0.012} 0" rpy="1.5708 0 0"/>
+      <geometry><cylinder radius="0.022" length="0.025"/></geometry>
+      <material name="diff_dark"/>
+    </visual>
+    <visual name="bearing_rr">
+      <origin xyz="${rear_axle_x} ${-half_track + 0.012} 0" rpy="1.5708 0 0"/>
+      <geometry><cylinder radius="0.022" length="0.025"/></geometry>
+      <material name="diff_dark"/>
+    </visual>
+
+    <!-- Gearbox (center, under bridge hood) -->
+    <visual name="gearbox">
+      <origin xyz="0 0 ${frame_z + 0.020}"/>
+      <geometry><box size="0.120 0.090 0.060"/></geometry>
+      <material name="frame_metal"/>
+    </visual>
+
+    <!-- Drive motor (left of centre, pink) -->
+    <visual name="drive_motor">
+      <origin xyz="0 0.070 ${frame_z + 0.010}" rpy="1.5708 0 0"/>
+      <geometry><cylinder radius="0.035" length="0.080"/></geometry>
+      <material name="motor_pink"/>
+    </visual>
+
+    <!-- Motor sprocket (small) -->
+    <visual name="motor_sprocket">
+      <origin xyz="0 -0.070 ${frame_z + 0.010}" rpy="1.5708 0 0"/>
+      <geometry><cylinder radius="0.024" length="0.012"/></geometry>
+      <material name="diff_dark"/>
+    </visual>
+
+    <!-- Rear axle sprocket (large) -->
+    <visual name="rear_sprocket">
+      <origin xyz="${rear_axle_x} -0.070 ${frame_z + 0.010}" rpy="1.5708 0 0"/>
+      <geometry><cylinder radius="0.048" length="0.012"/></geometry>
+      <material name="diff_dark"/>
+    </visual>
+
+    <!-- Chain top run -->
+    <visual name="chain_top">
+      <origin xyz="${rear_axle_x/2} -0.070 ${frame_z + 0.050}" rpy="0 1.5708 0"/>
+      <geometry><cylinder radius="0.004" length="${-rear_axle_x}"/></geometry>
+      <material name="chain_black"/>
+    </visual>
+
+    <!-- Chain bottom run -->
+    <visual name="chain_bottom">
+      <origin xyz="${rear_axle_x/2} -0.070 ${frame_z - 0.025}" rpy="0 1.5708 0"/>
+      <geometry><cylinder radius="0.004" length="${-rear_axle_x}"/></geometry>
+      <material name="chain_black"/>
+    </visual>
+
+  </xacro:macro>
+
+</robot>

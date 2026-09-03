@@ -1,0 +1,54 @@
+STATIC / REGRESSION VALIDATION — 2026-08-23
+Project: GNSS + IMU + odometry + Ackermann outdoor, Prolific ESC migration
+
+PASS — YAML parse: 21 files
+PASS — XML/Xacro static parse: 16 files
+PASS — Python syntax compileall
+PASS — internal literal launch executable references resolve to package CMake targets: 31 pairs
+PASS — URDF package://navigation resource references exist
+PASS — map YAML image references exist
+PASS — obsolete FTDI runtime selector absent outside migration/audit documentation
+PASS — source/YAML fallback ownership: ESC=Prolific, GNSS=1a86/CH340, IMU=CP2102
+PASS — safe uncalibrated geometry consistency: Rmin=1.712159378317 m
+PASS — vehicle yaw cap: 0.292028888392 rad/s
+PASS — autonomous yaw cap: 0.175217333035 rad/s
+
+Python self-checks PASS:
+- avoidance_contract_self_check.py
+- ekf_humble_config_self_check.py
+- gnss_driver_v2_part1_self_check.py
+- gnss_global_fusion_part3_self_check.py
+- gnss_motion_math_self_check.py
+- gnss_motion_validation_part2_self_check.py
+- gnss_ubx_fixture_self_check.py
+- gui_cpp_migration_self_check.py (26/26)
+- humble_build_compat_self_check.py
+- precision_part1_self_check.py
+- precision_part2_self_check.py
+- precision_part3_self_check.py
+- project_consistency_self_check.py
+- steering_physical_part1_self_check.py
+- steering_physical_part2_self_check.py
+- steering_physical_part3_self_check.py
+- trajectory_safety_contract_self_check.py
+
+Standalone C++ self-checks compiled with:
+  g++ -std=c++17 -Wall -Wextra -Wpedantic -Werror
+and exited PASS:
+- gnss_global_fusion_math_self_check.cpp
+- steering_physical_lut_math_self_check.cpp
+- steering_physical_math_self_check.cpp
+- steering_physical_part3_math_self_check.cpp
+- perception_safety_core_self_check.cpp
+
+NOT EXECUTED IN AUDIT CONTAINER:
+- full ROS 2 Humble colcon build/link
+- Qt5 GUI build/link
+- actual xacro ROS expansion
+- live Prolific/STM serial handshake
+- live GNSS/IMU/ESC topics
+- RViz/Nav2 runtime
+- outdoor physical calibration / circle tests / GNSS fusion qualification
+
+Reason: audit container has no ROS 2/colcon/Qt development installation and no target hardware.
+Run target-side commands documented in PROJECT_AUDIT_GNSS_IMU_ACKERMANN_PROLIFIC_20260823.md.

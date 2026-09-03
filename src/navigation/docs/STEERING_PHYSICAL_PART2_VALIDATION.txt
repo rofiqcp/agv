@@ -1,0 +1,39 @@
+STEERING PHYSICAL CALIBRATION PART 2 — VALIDATION
+
+Implemented:
+- Multi-point physical LUT with separate LEFT->RIGHT and RIGHT->LEFT sweeps.
+- >=5 complete paired points required, center within +/-1 deg, >=75% endpoint coverage.
+- Strict monotonic validation for physical, command and feedback arrays.
+- Direction-aware piecewise command interpolation.
+- Direction-aware inverse feedback interpolation to physical wheel angle.
+- Three-point Part-1 fallback retained when LUT is OFF/invalid.
+- Part-1 re-apply explicitly disables stale LUT.
+- Center directional bias derived from the two sweep center commands.
+- Persistent GUI draft + CSV export + hysteresis summary.
+- Vehicle YAML stores point count and maximum CMD/FB hysteresis.
+- ROS GUI supports DOUBLE_ARRAY parameter live apply.
+- Runtime audit includes LUT arrays.
+
+Regression results:
+PASS avoidance_contract_self_check.py
+PASS ekf_humble_config_self_check.py
+PASS gnss_driver_v2_part1_self_check.py
+PASS gnss_global_fusion_part3_self_check.py
+PASS gnss_motion_math_self_check.py
+PASS gnss_motion_validation_part2_self_check.py
+PASS gnss_ubx_fixture_self_check.py
+PASS gui_cpp_migration_self_check.py (26/26)
+PASS humble_build_compat_self_check.py
+PASS precision_part1_self_check.py
+PASS precision_part2_self_check.py
+PASS precision_part3_self_check.py
+PASS steering_physical_part1_self_check.py
+PASS steering_physical_part2_self_check.py
+PASS trajectory_safety_contract_self_check.py
+PASS steering_physical_math_self_check.cpp with -Wall -Wextra -Wpedantic -Werror
+PASS steering_physical_lut_math_self_check.cpp with -Wall -Wextra -Wpedantic -Werror
+PASS 21 YAML parse
+PASS 31 Python syntax parse
+
+Hardware caveat:
+Final angles, hysteresis and LUT values must be measured on the real vehicle. Defaults remain non-authoritative and LUT stays OFF until GUI Apply.

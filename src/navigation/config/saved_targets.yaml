@@ -1,0 +1,9 @@
+# Named goal poses created from Map / Overview.
+# Add/Edit/Delete is handled by the GUI; no unverified target is shipped by default.
+targets:
+  Target 2:
+    frame_id: map
+    x: 69.762669
+    y: 168.315861
+    yaw_rad: 0.0
+    description: ''

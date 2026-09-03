@@ -1,0 +1,99 @@
+STAGE 3 VALIDATION REPORT
+Date: 2026-08-23
+Scope: Nav2 Ackermann outdoor, Smac Hybrid-A*, MPPI, velocity smoother, trajectory safety, Collision Monitor, production commissioning gate.
+
+Environment limitation
+- colcon: NOT FOUND in audit container
+- ros2: NOT FOUND in audit container
+- Therefore full ROS 2 / Qt5 colcon build must still be repeated on the target Jetson.
+
+Static parsing
+- Python syntax: 42 PASS
+- YAML parse: 22 PASS
+- XML/Xacro/URDF parse: 16 PASS
+
+Python regression
+- 20/20 navigation *self_check.py: PASS
+Python self-checks: 20 PASS
+avoidance_contract_self_check.py: PASS avoidance contract required_corridor=1.10m hard=0.90m immediate=0.65m 
+ekf_humble_config_self_check.py: PASS ekf_filter_node_map: 15x15 process_noise_covariance valid PASS EKF Humble config contract 
+gnss_driver_v2_part1_self_check.py: PASS gnss_driver_v2_part1_self_check 
+gnss_global_fusion_part3_self_check.py: PASS gnss_global_fusion_part3_self_check 
+gnss_motion_math_self_check.py: PASS gnss_motion_math_self_check 
+gnss_motion_validation_part2_self_check.py: PASS gnss_motion_validation_part2_self_check 
+gnss_ubx_fixture_self_check.py: PASS gnss_ubx_fixture_self_check 
+gui_cpp_migration_self_check.py: PASS C++ parentheses balanced PASS GUI C++ migration: 26/26 checks 
+humble_build_compat_self_check.py: PASS humble_build_compat_self_check 
+precision_part1_self_check.py: PASS precision_part1_self_check 
+precision_part2_self_check.py: PASS precision_part2_self_check 
+precision_part3_self_check.py: PASS precision_part3_self_check 
+project_consistency_self_check.py: serial: ESC=Prolific_Technology_Inc._USB-Serial_Controller | GNSS=1a86_USB_Serial | IMU=Silicon_Labs_CP2102 uncalibrated geometry: Rmin=1.712159 m | vehicle yaw cap=0.292029 rad/s | autonomous yaw cap=0.175217 rad/s 
+stage1_foundation_self_check.py: safe fallback steering: +/-28.000 deg safe fallback turning radius: 1.712159 m 
+stage2_localization_foundation_self_check.py: STAGE2 LOCALIZATION FOUNDATION SELF-CHECK: PASS 
+stage3_nav2_safety_self_check.py: PASS stage3_nav2_safety_self_check Rmin=1.712159m vx=0.300m/s wz=0.175217rad/s feedback=OPEN_LOOP 
+steering_physical_part1_self_check.py: PASS steering physical Part 1 contract 
+steering_physical_part2_self_check.py: PASS steering physical Part 2 LUT contract 
+steering_physical_part3_self_check.py: PASS steering physical Part 3 circle/geometry contract 
+trajectory_safety_contract_self_check.py: PASS trajectory safety contract 
+
+Standalone C++ regression (-std=c++17 -Wall -Wextra -Wpedantic -Werror)
+- gnss_global_fusion_math_self_check.cpp: PASS
+- stage2_gnss_integrity_math_self_check.cpp: PASS
+- steering_physical_lut_math_self_check.cpp: PASS
+- steering_physical_math_self_check.cpp: PASS
+- steering_physical_part3_math_self_check.cpp: PASS
+- perception_safety_core_self_check.cpp: PASS (compiled with perception/include)
+- Total: 6/6 PASS
+
+Stage 3 source contracts
+- Vehicle / Smac / MPPI / NavigationCore / TrajectorySafety minimum turning radius authority: PASS
+- MPPI yaw cap <= vx_max / Rmin: PASS
+- Velocity smoother yaw cap <= vx / Rmin: PASS
+- NavigationCore dynamic |omega| <= |v|/Rmin clamp: PASS
+- TrajectorySafety dynamic |omega| <= |v|/Rmin clamp after slowdown: PASS
+- GUI profile A/B/C propagates vx/wz/smoother/trajectory authority: PASS
+- Steering circle recalibration propagates Rmin to Nav2 + NavigationCore + TrajectorySafety: PASS
+- Stage3 YAML included in GUI configuration snapshots: PASS
+- Production gate is fail-closed by default: PASS
+- Commissioning mode is explicit and low-speed capped: PASS
+- Evidence path + SHA-256 audit trail: PASS
+- Evidence tamper detection: PASS
+- Legacy FTDI selector absent from active runtime source: PASS
+- Fixed /dev/ttyUSB<N> active runtime selector absent: PASS
+
+Baseline state
+STAGE-3 NAV2/SAFETY PREFLIGHT
+workspace: /mnt/data/stage3_work
+production_certified: False
+commissioning default: False
+smoother: OPEN_LOOP
+
+CONFIG SAFE, FIELD COMMISSIONING BELUM LENGKAP:
+ - steering physical belum certified
+ - circle geometry belum certified
+ - drive odometry belum certified
+ - IMU stationary belum certified
+ - GNSS velocity belum certified
+ - camera metric belum certified
+ - NavigationCore camera metric gate belum diaktifkan
+ - NavigationCore camera metric belum validated
+ - Collision Monitor production belum diaktifkan pada NavigationCore
+ - MPPI profile belum certified
+ - trajectory safety belum certified
+ - collision monitor belum certified
+ - fault injection belum certified
+
+Positive-path simulation (temporary copy, source baseline unchanged)
+- Stage 1 prerequisites simulated certified: PASS
+- IMU stationary + GNSS velocity simulated certified: PASS
+- Camera metric + NavigationCore camera/collision runtime gates simulated certified: PASS
+- Synthetic 100-row MPPI evidence within thresholds: PASS
+- TrajectorySafety evidence mark: PASS
+- Collision Monitor evidence mark: PASS
+- Fault-injection evidence mark: PASS
+- stage3_certify.py finalize: PASS
+- stage3_commissioning_check.py --require-ready: STAGE-3 PRODUCTION READY
+- Evidence file tampered after sign-off: detected; preflight returned CONFIG ERROR (PASS negative test)
+
+Important
+The final distributed YAML remains uncalibrated/fail-closed. No hardware calibration flag is fabricated by this audit.

@@ -1,0 +1,52 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- Front steering: yaw only around +Z. No roll/pitch/camber is applied. -->
+  <xacro:macro name="steering_knuckle" params="prefix">
+    <link name="${prefix}_steering_link">
+      <visual name="${prefix}_upright">
+        <geometry><cylinder radius="0.028" length="0.105"/></geometry>
+        <material name="frame_metal"/>
+      </visual>
+      <visual name="${prefix}_hub_carrier">
+        <origin rpy="1.57079632679 0 0"/>
+        <geometry><cylinder radius="0.040" length="0.055"/></geometry>
+        <material name="metal_light"/>
+      </visual>
+      <collision>
+        <geometry><cylinder radius="0.030" length="0.105"/></geometry>
+      </collision>
+      <inertial>
+        <mass value="${knuckle_mass}"/>
+        <inertia ixx="0.00055" ixy="0" ixz="0"
+                 iyy="0.00055" iyz="0" izz="0.00020"/>
+      </inertial>
+    </link>
+  </xacro:macro>
+
+  <xacro:steering_knuckle prefix="front_left"/>
+  <xacro:steering_knuckle prefix="front_right"/>
+
+  <joint name="front_left_steering_joint" type="revolute">
+    <parent link="base_link"/>
+    <child link="front_left_steering_link"/>
+    <origin xyz="${front_axle_x} ${half_track} ${wheel_center_z}"
+            rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="${-steering_limit}" upper="${steering_limit}"
+           effort="100" velocity="1.5"/>
+    <dynamics damping="0.15" friction="0.02"/>
+  </joint>
+
+  <joint name="front_right_steering_joint" type="revolute">
+    <parent link="base_link"/>
+    <child link="front_right_steering_link"/>
+    <origin xyz="${front_axle_x} ${-half_track} ${wheel_center_z}"
+            rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="${-steering_limit}" upper="${steering_limit}"
+           effort="100" velocity="1.5"/>
+    <dynamics damping="0.15" friction="0.02"/>
+  </joint>
+
+</robot>

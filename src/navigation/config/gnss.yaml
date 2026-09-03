@@ -1,0 +1,79 @@
+# Driver CUAV NEO 3 / u-blox NEO-M9N untuk autonomous ground vehicle.
+#
+# Urutan sumber posisi:
+# 1) UBX NAV-PVT (utama): epoch atomik berisi fixType/gnssFixOK/sat/pDOP/hAcc/sAcc.
+# 2) Jika receiver tetap hanya mengeluarkan NMEA setelah CFG-VALSET diulang,
+#    GGA boleh menjadi fallback TERVALIDASI dengan syarat jauh lebih ketat.
+#
+# Fallback bukan bypass safety: initializer tetap membutuhkan 10 fix kontinu,
+# spread/drift kecil, covariance usable, pose di dalam map, dan sel raster free.
+data_cuav_node:
+  ros__parameters:
+    port: auto
+    baudrate: 38400
+    auto_port_id_contains: 1a86_USB_Serial
+    auto_port_path_contains: usb-0:3.4:1.0
+    auto_baud: false
+    frame_id: gnss_link
+    velocity_frame_id: enu
+    publish_raw: false
+
+    velocity_stale_timeout: 1.0
+    # Receiver pada pengujian lapangan pernah berhenti 5-10 s lalu pulih sendiri. Jangan
+    # flap close/reopen pada jeda pendek; motion gate tetap memakai freshness
+    # ketat terpisah di LocalizationCore.
+    data_timeout_sec: 12.0
+    state_publish_period_sec: 1.0
+
+    # Protokol utama. NEO-M9N default UART 38400 menerima UBX tetapi output
+    # defaultnya NMEA; driver mengirim CFG-VALSET RAM untuk mengaktifkan NAV-PVT.
+    configure_ubx_nav_pvt_on_connect: true
+    # GNSS driver — receiver rate, measurement time, covariance, DOP, dan
+    # position-derived motion diagnostic. Semua konfigurasi receiver RAM-only.
+    configure_navigation_rate: true
+    navigation_rate_hz: 10.0
+    configure_dynamic_model: true
+    dynamic_model: automotive
+    poll_nav_cov: true
+    nav_cov_poll_rate_hz: 5.0
+    poll_nav_dop: true
+    nav_dop_poll_rate_hz: 2.0
+    # Tahan NAV-PVT maksimal 80 ms agar NAV-COV dengan iTOW sama dapat ikut.
+    cov_wait_timeout_sec: 0.08
+    # auto: UTC receiver bila fully-resolved dan clock host sinkron; fallback
+    # ke timeline iTOW-aligned. Gunakan arrival hanya untuk troubleshooting.
+    timestamp_mode: auto
+    utc_stamp_max_offset_sec: 10.0
+
+    # Multi-point finite-motion estimator. Hanya diagnostic pada Part 1; belum
+    # difusikan ke EKF karena noise posisi M9N dapat lebih besar dari perpindahan
+    # antar epoch pada kendaraan lambat.
+    position_fit_window_sec: 3.0
+    position_fit_min_samples: 5
+    position_fit_min_baseline_m: 1.0
+    position_fit_hacc_multiplier: 2.5
+
+    prefer_ubx_nav_pvt: true
+    require_ubx_nav_pvt_for_fix: true
+    ubx_preference_hold_sec: 2.0
+    ubx_config_retry_sec: 2.0
+    ubx_config_max_attempts: 3
+    accept_rmc_position_fallback: false
+
+    # Fallback GGA hanya setelah NAV-PVT tidak muncul cukup lama. Nilai ini lebih
+    # ketat daripada gate UBX karena GGA tidak mempunyai hAcc/sAcc langsung.
+    allow_validated_nmea_fallback: true
+    nmea_fallback_after_sec: 8.0
+    nmea_fallback_min_satellites: 8
+    nmea_fallback_max_hdop: 1.4
+
+    # Autonomous-grade gate. Fix yang lebih buruk tetap terlihat di diagnostic,
+    # tetapi tidak boleh mengaktifkan kendaraan.
+    accept_ubx_gnss_dr_fix: false
+    min_satellites: 8
+    max_dop: 2.0
+    require_dop_for_ubx_quality: true
+    max_hacc_m: 2.5
+    max_sacc_mps: 0.8
+    # /gnss/vel tidak difusi ke EKF; sAcc tidak boleh memblokir position fix.
+    require_speed_accuracy_for_quality: false

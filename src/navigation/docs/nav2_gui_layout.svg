@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#0c1015"/><stop offset="1" stop-color="#141b22"/></linearGradient>
+    <pattern id="grid" width="34" height="34" patternUnits="userSpaceOnUse"><path d="M34 0H0V34" fill="none" stroke="#273039" stroke-width="1"/></pattern>
+    <filter id="shadow"><feDropShadow dx="0" dy="5" stdDeviation="8" flood-color="#000" flood-opacity=".45"/></filter>
+  </defs>
+  <rect width="1600" height="900" fill="url(#bg)"/>
+  <rect x="18" y="18" width="450" height="864" rx="12" fill="#14191f" stroke="#333b44" filter="url(#shadow)"/>
+  <rect x="486" y="18" width="1096" height="864" rx="12" fill="#11171d" stroke="#333b44" filter="url(#shadow)"/>
+  <circle cx="65" cy="72" r="31" fill="#d8b033"/><text x="65" y="80" text-anchor="middle" font-family="sans-serif" font-weight="800" font-size="21" fill="#111">UNDIP</text>
+  <text x="110" y="59" font-family="sans-serif" font-weight="800" font-size="20" fill="#fff">Autonomous Vehicle Interface</text>
+  <text x="110" y="85" font-family="sans-serif" font-size="15" fill="#9fa9b4">Sekolah Vokasi • Universitas Diponegoro</text>
+  <rect x="38" y="122" width="52" height="42" rx="6" fill="#d8b033"/><text x="64" y="150" text-anchor="middle" font-family="sans-serif" font-size="24" font-weight="900" fill="#111">☰</text>
+  <rect x="100" y="122" width="132" height="42" rx="6" fill="#d8b033"/><text x="166" y="149" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="900" fill="#111">OVERVIEW</text>
+  <rect x="242" y="122" width="132" height="42" rx="6" fill="#42d392"/><text x="308" y="149" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="900" fill="#08120e">NAV2 MAP</text>
+  <text x="38" y="205" font-family="sans-serif" font-weight="800" font-size="16" fill="#fff">NAV2 MAP &amp; Ground Truth</text>
+  <text x="38" y="232" font-family="sans-serif" font-size="13" fill="#95a0ab">Parameter YAML map dan localization</text>
+  <rect x="38" y="258" width="410" height="580" rx="8" fill="#10151a" stroke="#303944"/>
+  <text x="58" y="294" font-family="sans-serif" font-weight="800" font-size="15" fill="#d8b033">Nav2 Map YAML</text>
+  <g font-family="sans-serif" font-size="14" fill="#d5d9de"><text x="58" y="335">Resolution</text><text x="58" y="382">Origin X / Y / Yaw</text><text x="58" y="429">OSM opacity &amp; offset</text><text x="58" y="476">Localization datum</text></g>
+  <g fill="#202832" stroke="#3a4653"><rect x="250" y="311" width="170" height="32" rx="4"/><rect x="250" y="358" width="170" height="32" rx="4"/><rect x="250" y="405" width="170" height="32" rx="4"/><rect x="250" y="452" width="170" height="32" rx="4"/></g>
+  <text x="510" y="57" font-family="sans-serif" font-weight="800" font-size="19" fill="#fff">⌖ NAV2 MAP &amp; Ground Truth</text>
+  <rect x="510" y="83" width="460" height="43" rx="7" fill="#d8b033"/><text x="740" y="110" text-anchor="middle" font-family="sans-serif" font-weight="900" font-size="14" fill="#111">NAV2 LIVE • MAP / URDF / A* / MPPI</text>
+  <rect x="980" y="83" width="400" height="43" rx="7" fill="#202832" stroke="#3a4653"/><text x="1180" y="110" text-anchor="middle" font-family="sans-serif" font-weight="700" font-size="14" fill="#c7cdd4">GROUND TRUTH • PGM / OSM / TARGET</text>
+  <g font-family="sans-serif" font-size="13" font-weight="700"><rect x="510" y="140" width="116" height="37" rx="5" fill="#202832"/><text x="568" y="164" text-anchor="middle" fill="#d7dce1">Geser / Zoom</text><rect x="636" y="140" width="132" height="37" rx="5" fill="#42d392"/><text x="702" y="164" text-anchor="middle" fill="#07130e">2D GOAL POSE</text><rect x="778" y="140" width="112" height="37" rx="5" fill="#202832"/><text x="834" y="164" text-anchor="middle" fill="#d7dce1">Initial Pose</text><rect x="900" y="140" width="108" height="37" rx="5" fill="#202832"/><text x="954" y="164" text-anchor="middle" fill="#d7dce1">Map Penuh</text><rect x="1018" y="140" width="106" height="37" rx="5" fill="#202832"/><text x="1071" y="164" text-anchor="middle" fill="#d7dce1">Fokus URDF</text><rect x="1134" y="140" width="120" height="37" rx="5" fill="#61222a"/><text x="1194" y="164" text-anchor="middle" fill="#fff">Batalkan Goal</text></g>
+  <text x="510" y="206" font-family="sans-serif" font-size="13" fill="#aeb6bf">Layer:  ☐ Global Costmap   ☐ Local Costmap   ☑ Footprint   ☑ Kandidat MPPI</text>
+  <rect x="510" y="226" width="1048" height="586" rx="8" fill="#151c22" stroke="#3a4653"/>
+  <rect x="510" y="226" width="1048" height="586" rx="8" fill="url(#grid)"/>
+  <path d="M560 710 C710 640 700 520 840 492 S1060 550 1230 390 S1430 305 1505 270" fill="none" stroke="#00ff55" stroke-width="7"/>
+  <path d="M760 560 C840 540 900 520 965 494 S1090 425 1160 388" fill="none" stroke="#ffb400" stroke-width="5"/>
+  <g fill="none" stroke="#4bc7ff" stroke-width="2" opacity=".55"><path d="M780 580 Q930 470 1120 420"/><path d="M780 580 Q960 520 1160 455"/><path d="M780 580 Q940 565 1130 520"/><path d="M780 580 Q900 430 1080 390"/><path d="M780 580 Q990 480 1190 405"/></g>
+  <g transform="translate(780 580) rotate(-18)"><rect x="-28" y="-18" width="56" height="36" rx="6" fill="#e6edf3" stroke="#42d392" stroke-width="4"/><circle cx="-18" cy="-21" r="5" fill="#333"/><circle cx="18" cy="-21" r="5" fill="#333"/><circle cx="-18" cy="21" r="5" fill="#333"/><circle cx="18" cy="21" r="5" fill="#333"/><path d="M25 0h30" stroke="#42d392" stroke-width="4"/><path d="M55 0l-10-7v14z" fill="#42d392"/></g>
+  <g transform="translate(1230 390)"><circle r="13" fill="#ff465d"/><path d="M0 0l38-28" stroke="#ff465d" stroke-width="5"/><path d="M38-28l-10 1 7 9z" fill="#ff465d"/></g>
+  <text x="535" y="256" font-family="sans-serif" font-size="13" font-weight="700" fill="#8d98a4">MAP /map • Fixed Frame: map</text>
+  <g font-family="sans-serif" font-size="13" font-weight="800"><rect x="525" y="757" width="150" height="35" rx="5" fill="#18362c"/><text x="600" y="780" text-anchor="middle" fill="#42d392">URDF KENDARAAN</text><rect x="685" y="757" width="145" height="35" rx="5" fill="#16361d"/><text x="757" y="780" text-anchor="middle" fill="#00ff55">A* GLOBAL PATH</text><rect x="840" y="757" width="150" height="35" rx="5" fill="#3b3117"/><text x="915" y="780" text-anchor="middle" fill="#ffb400">MPPI LOCAL PLAN</text><rect x="1000" y="757" width="170" height="35" rx="5" fill="#173342"/><text x="1085" y="780" text-anchor="middle" fill="#4bc7ff">MPPI CANDIDATES</text></g>
+  <rect x="510" y="826" width="1048" height="36" rx="6" fill="#202832"/><text x="530" y="849" font-family="sans-serif" font-size="14" font-weight="800" fill="#42d392">NAV2 READY</text><text x="660" y="849" font-family="sans-serif" font-size="14" fill="#cbd2d9">| A* 184 pts | MPPI plan 32 pts | candidates ON</text>
+</svg>

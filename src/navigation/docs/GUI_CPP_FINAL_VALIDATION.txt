@@ -1,0 +1,37 @@
+Native C++/Qt GUI final validation
+==================================
+Baseline: GNSS V2 Part 3 buildfix (ROS 2 Humble compatible)
+Runtime GUI: navigation/agv_gui (C++17 + Qt5 + rclcpp)
+Legacy runtime: gui/agv_gui.py removed
+
+Static/regression checks completed:
+- GUI migration self-check: 26/26 PASS
+- Legacy Python topic coverage: 82/82 retained in C++ bridge
+- Parameter specification coverage: 377 settings / 17 tabs retained
+- GNSS Driver V2 Part 1: PASS
+- GNSS Motion Validation Part 2: PASS
+- GNSS Global Fusion Part 3: PASS
+- EKF Humble 15x15 contract: PASS
+- Precision Part 1/2/3: PASS
+- Trajectory safety contract: PASS
+- Avoidance contract: PASS
+- Humble build compatibility self-check: PASS
+- Python launch/tool syntax: PASS
+- 21 YAML parse: PASS
+- GNSS C++ fusion math (-Wall -Wextra -Wpedantic -Werror): PASS
+- Perception safety core (-Wall -Wextra -Wpedantic -Werror): PASS
+
+Native dependencies expected on Ubuntu 22.04 / ROS 2 Humble:
+- qtbase5-dev
+- libyaml-cpp-dev
+- ROS packages declared in package.xml
+
+Recommended Jetson build:
+  cd ~/Sistem-Otomasi-Car/Car-MiniPC/ros
+  rm -rf build/navigation install/navigation log
+  rosdep install --from-paths src --ignore-src -r -y
+  colcon build --packages-select navigation --symlink-install --cmake-clean-cache --event-handlers console_direct+
+  source install/setup.bash
+  ros2 run navigation agv_gui
+
+Full Qt5/rclcpp compilation must be performed on the target ROS 2 Humble machine because this artifact environment does not contain Qt5/ROS Humble development headers.

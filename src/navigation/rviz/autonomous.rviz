@@ -1,0 +1,414 @@
+Panels:
+- Class: rviz_common/Displays
+  Name: Displays
+  Property Tree Widget:
+    Expanded:
+    - /Global Options1
+    - /Map1
+    - /Robot Model1
+    - /Global Path1
+    - /YOLOP Realtime1
+    Splitter Ratio: 0.5
+  Tree Height: 720
+- Class: rviz_common/Selection
+  Name: Selection
+- Class: rviz_common/Tool Properties
+  Name: Tool Properties
+- Class: rviz_common/Views
+  Name: Views
+Visualization Manager:
+  Class: ''
+  Displays:
+  - Class: rviz_default_plugins/Grid
+    Enabled: true
+    Name: Grid
+    Alpha: 0.35
+    Cell Size: 1
+    Color: 110; 110; 110
+    Plane: XY
+    Plane Cell Count: 30
+    Reference Frame: <Fixed Frame>
+    Value: true
+  - Class: rviz_default_plugins/Map
+    Enabled: true
+    Name: Map
+    Alpha: 0.88
+    Color Scheme: map
+    Draw Behind: true
+    Topic:
+      Depth: 1
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /map
+    Update Topic:
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /map_updates
+    Use Timestamp: false
+    Value: true
+  - Class: rviz_default_plugins/Map
+    Enabled: true
+    Name: Global Costmap (Inflation Ungu)
+    Alpha: 0.55
+    Color Scheme: costmap
+    Draw Behind: false
+    Topic:
+      Depth: 1
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /global_costmap/costmap
+    Update Topic:
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /global_costmap/costmap_updates
+    Use Timestamp: false
+    Value: true
+  - Class: rviz_default_plugins/Map
+    Enabled: true
+    Name: Local Costmap (Obstacle + Inflation)
+    Alpha: 0.68
+    Color Scheme: costmap
+    Draw Behind: false
+    Topic:
+      Depth: 1
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /local_costmap/costmap
+    Update Topic:
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /local_costmap/costmap_updates
+    Use Timestamp: false
+    Value: true
+  - Class: rviz_default_plugins/RobotModel
+    Enabled: true
+    Name: Robot Model
+    Alpha: 1
+    Collision Enabled: false
+    Description Source: Topic
+    Description Topic:
+      Depth: 1
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /robot_description
+    Visual Enabled: true
+    Value: true
+  - Class: rviz_default_plugins/Path
+    Enabled: true
+    Name: Global Path
+    Alpha: 1
+    Buffer Length: 1
+    Color: 0; 255; 70
+    Line Style: Lines
+    Line Width: 0.1
+    Pose Style: None
+    Topic:
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /plan
+    Value: true
+  - Class: rviz_default_plugins/Polygon
+    Enabled: true
+    Name: Robot Footprint
+    Topic:
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /local_costmap/published_footprint
+    Color: 255; 90; 0
+    Alpha: 1
+    Value: true
+  - Class: rviz_default_plugins/PointCloud2
+    Enabled: true
+    Name: PATH-Relevant Obstacle Points
+    Alpha: 1
+    Autocompute Intensity Bounds: true
+    Autocompute Value Bounds:
+      Max Value: 1
+      Min Value: 0
+      Value: true
+    Axis: Z
+    Channel Name: intensity
+    Color Transformer: Intensity
+    Decay Time: 0.8
+    Invert Rainbow: false
+    Max Color: 255; 255; 255
+    Min Color: 80; 80; 80
+    Position Transformer: XYZ
+    Queue Size: 1
+    Selectable: true
+    Size (Pixels): 8
+    Size (m): 0.10
+    Style: Spheres
+    Topic:
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Best Effort
+      Value: /perception/path_relevant_points
+    Use Fixed Frame: true
+    Use rainbow: true
+    Value: true
+  - Class: rviz_default_plugins/PointCloud2
+    Enabled: true
+    Name: Planning Obstacle Points
+    Alpha: 0.85
+    Autocompute Intensity Bounds: true
+    Autocompute Value Bounds:
+      Max Value: 1
+      Min Value: 0
+      Value: true
+    Axis: Z
+    Channel Name: intensity
+    Color Transformer: Intensity
+    Decay Time: 0.5
+    Invert Rainbow: false
+    Max Color: 255; 255; 255
+    Min Color: 80; 80; 80
+    Position Transformer: XYZ
+    Queue Size: 1
+    Selectable: true
+    Size (Pixels): 6
+    Size (m): 0.08
+    Style: Spheres
+    Topic:
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /perception/planning_relevant_points
+    Use Fixed Frame: true
+    Use rainbow: true
+    Value: true
+  - Class: rviz_default_plugins/PointCloud2
+    Enabled: true
+    Name: Drivable Boundary Guard
+    Alpha: 0.75
+    Autocompute Intensity Bounds: true
+    Autocompute Value Bounds:
+      Max Value: 1
+      Min Value: 0
+      Value: true
+    Axis: Z
+    Channel Name: intensity
+    Color Transformer: Intensity
+    Decay Time: 0.3
+    Invert Rainbow: false
+    Max Color: 255; 255; 255
+    Min Color: 80; 80; 80
+    Position Transformer: XYZ
+    Queue Size: 1
+    Selectable: true
+    Size (Pixels): 5
+    Size (m): 0.06
+    Style: Spheres
+    Topic:
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /perception/drivable_boundary_points
+    Use Fixed Frame: true
+    Use rainbow: true
+    Value: true
+  - Class: rviz_default_plugins/MarkerArray
+    Enabled: true
+    Name: MPPI Trajectories (Humble Native)
+    Topic:
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /trajectories
+    Value: true
+  - Class: rviz_default_plugins/Path
+    Enabled: true
+    Name: MPPI Transformed Global Plan
+    Alpha: 0.85
+    Buffer Length: 1
+    Color: 255; 180; 0
+    Line Style: Lines
+    Line Width: 0.06
+    Pose Style: None
+    Topic:
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /controller_server/transformed_global_plan
+    Value: true
+  - Class: rviz_default_plugins/MarkerArray
+    Enabled: true
+    Name: YOLOP Obstacles
+    Topic:
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Best Effort
+      Value: /perception/obstacle_markers
+    Value: true
+  - Class: rviz_default_plugins/MarkerArray
+    Enabled: true
+    Name: YOLOP Raw Calibration
+    Topic:
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /perception/raw_detection_markers
+    Value: true
+  - Class: rviz_default_plugins/MarkerArray
+    Enabled: true
+    Name: Lane Safety
+    Topic:
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Best Effort
+      Value: /perception/lane_safety_markers
+    Value: true
+  - Class: rviz_default_plugins/MarkerArray
+    Enabled: true
+    Name: Lane Control
+    Topic:
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Best Effort
+      Value: /perception/lane_control_markers
+    Value: true
+  - Class: rviz_default_plugins/Polygon
+    Enabled: true
+    Name: Collision Stop Zone
+    Topic:
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /collision_monitor/polygon_stop
+    Color: 255; 0; 0
+    Alpha: 0.55
+    Value: true
+  - Class: rviz_default_plugins/Polygon
+    Enabled: true
+    Name: Collision Slow Zone
+    Topic:
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /collision_monitor/polygon_slowdown
+    Color: 255; 200; 0
+    Alpha: 0.35
+    Value: true
+  - Class: rviz_default_plugins/TF
+    Enabled: false
+    Name: TF Debug
+    Frame Timeout: 15
+    Show Arrows: true
+    Show Axes: true
+    Show Names: true
+    Value: false
+  - Class: rviz_default_plugins/Image
+    Enabled: true
+    Name: YOLOP Realtime
+    Alpha: 1
+    Max Value: 255
+    Median window: 1
+    Min Value: 0
+    Normalize Range: false
+    Topic:
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Best Effort
+      Value: /camera/yolop/image_annotated
+    Value: true
+  - Class: rviz_default_plugins/Image
+    Enabled: false
+    Name: Astra Raw Camera Debug
+    Alpha: 1
+    Max Value: 255
+    Median window: 1
+    Min Value: 0
+    Normalize Range: false
+    Topic:
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Best Effort
+      Value: /camera/astra/image_raw
+    Value: false
+  - Class: rviz_default_plugins/Image
+    Enabled: false
+    Name: Lane Mask Debug
+    Alpha: 1
+    Max Value: 255
+    Median window: 1
+    Min Value: 0
+    Normalize Range: false
+    Topic:
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Best Effort
+      Value: /yolop/lane_mask
+    Value: false
+  Enabled: true
+  Global Options:
+    Background Color: 22; 24; 28
+    Fixed Frame: map
+    Frame Rate: 12
+  Name: root
+  Tools:
+  - Class: rviz_default_plugins/Interact
+    Hide Inactive Objects: true
+  - Class: rviz_default_plugins/MoveCamera
+  - Class: rviz_default_plugins/Select
+  - Class: rviz_default_plugins/FocusCamera
+  - Class: rviz_default_plugins/Measure
+  - Class: rviz_default_plugins/SetInitialPose
+    Topic:
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /initialpose
+  - Class: rviz_default_plugins/SetGoal
+    Topic:
+      Depth: 1
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /navigation/goal_request
+  Transformation:
+    Current:
+      Class: rviz_default_plugins/TF
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Name: Top Down
+      Scale: 18
+      Target Frame: map
+      X: 167.4931
+      Y: 94.9338
+      Angle: 0
+    Saved: null
+Window Geometry:
+  Height: 900
+  Width: 1600
+  X: 30
+  Y: 30

@@ -1,0 +1,43 @@
+MINI-PC NAV2 NO-CAMERA STATIC VALIDATION -- 2026-08-24
+PERCEPTION CPU/GPU SELECTION REVISION -- 2026-08-25
+
+SCOPE
+  navigation-only launch with perception package installed or absent
+  ESC command arbitration and longitudinal-speed-only fusion authority
+  IMU gyro/yaw freshness and initial-heading safety
+  GNSS x/y, Doppler vx, and COG yaw global-fusion contracts
+  Nav2 Ackermann geometry/config consistency
+
+PASS
+  navigation Python self-checks: 21/21
+  ESC runtime contract: 1/1
+  standalone C++17 math self-checks: 5/5
+  perception safety-core C++17 self-check: 1/1
+  Python syntax compile: PASS
+  XML parse: PASS
+  YAML parse: PASS
+  native GUI migration contract: 26/26
+  mini-PC navigation-only preflight configuration: PASS
+  selectable perception OFF/CPU/GPU static contract: PASS
+  CPU backend Python/launch/config syntax: PASS
+
+EXPECTED WAIT -- PHYSICAL EVIDENCE NOT PRESENT IN INPUT PROJECT
+  steering physical calibration
+  steering circle/effective wheelbase calibration
+  drive odometry calibration
+  IMU stationary calibration
+  GNSS Doppler velocity calibration/certification
+  GNSS COG heading calibration/certification
+  Stage-3 production certification
+
+NOT EXECUTED IN THIS AUDIT ENVIRONMENT
+  colcon build (ROS 2/colcon unavailable)
+  ROS graph/runtime launch validation
+  OpenCV-DNN ONNX numerical/runtime validation (model not included)
+  CUDA/TensorRT GPU build/runtime validation
+  serial hardware validation
+  vehicle motion/fault-injection acceptance
+
+RESULT
+  Source/config regression: PASS
+  Physical commissioning/production certification: WAIT

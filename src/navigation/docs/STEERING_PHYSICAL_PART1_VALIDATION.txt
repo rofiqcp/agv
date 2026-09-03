@@ -1,0 +1,12 @@
+STEERING PHYSICAL PART 1 VALIDATION
+===================================
+- protocol command and physical wheel angle are separate domains
+- physical calibration defaults OFF (no guessed wheel angle)
+- asymmetric LEFT/RIGHT physical endpoints supported
+- operational steering limited by smaller mechanical side
+- /esc/steering_actual becomes physical wheel angle after calibration
+- Ackermann odometry uses physical wheel angle after calibration
+- vehicle/nav2 temporary steering limits updated by GUI apply
+- serial_left_max_deg retained only as legacy fallback, not physical angle
+- rollback covers ESC + vehicle + navigation_core + nav2 YAML on runtime apply failure
+- existing navigation/GNSS/EKF/safety regression checks PASS

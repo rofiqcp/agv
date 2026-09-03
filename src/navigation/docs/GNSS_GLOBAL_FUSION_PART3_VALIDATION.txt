@@ -1,0 +1,42 @@
+DEPRECATED ARCHITECTURE NOTE
+Arsitektur aktif 2026-08-27: GNSS x/y + vx+vyaw, IMU absolute yaw, ESC optional untuk localization. File ini dipertahankan hanya sebagai histori validasi. Lihat MINIPC_NAV2_NO_CAMERA_COMMISSIONING.md.
+
+GNSS GLOBAL FUSION PART 3 VALIDATION
+====================================
+Expected static contracts:
+- Local EKF: /esc/odom vx + /imu/data gyro-Z only.
+- Global EKF: /odometry/gnss_map x/y + gated /gnss/base_velocity_fusion vx + /imu/data gyro-Z + gated /gnss/cog_heading_fusion yaw.
+- Global EKF publish_tf=false.
+- Part-3 fusion switches default OFF pending real-vehicle Part-2 qualification.
+- Raw /gnss/base_velocity and /gnss/vel are never wired directly into EKF.
+- COG legacy direct correction is not applied when global COG fusion is enabled.
+- map->odom position correction pairs GNSS pose with time-aligned local odom.
+- Fusion active states expire when measurements become stale.
+- GUI contains qualification-gated enable buttons and reports fused measurements.
+
+Run:
+  python3 test/gnss_global_fusion_part3_self_check.py
+  python3 test/gnss_motion_validation_part2_self_check.py
+  python3 test/ekf_humble_config_self_check.py
+  python3 test/gnss_motion_math_self_check.py
+
+Final hardware validation still requires ROS 2 Humble + robot_localization on Jetson and the real u-blox receiver/AGV.
+
+Validation result on packaging environment:
+- PASS avoidance contract
+- PASS ekf_filter_node_odom 15x15 covariance
+- PASS ekf_filter_node_map 15x15 covariance
+- PASS GNSS Driver V2 Part 1
+- PASS GNSS Global Fusion Part 3
+- PASS GNSS Motion Math Part 2
+- PASS GNSS Motion Validation Part 2
+- PASS UBX fixture
+- PASS Precision Part 1 regression
+- PASS Precision Part 2 regression
+- PASS Precision Part 3 regression
+- PASS Trajectory Safety contract
+- PASS standalone C++ GNSS Global Fusion math test (-Wall -Wextra -Werror)
+- PASS all Python syntax
+- PASS all YAML syntax
+- PASS package.xml parse
+- PASS C++ lexical bracket/string balance for navigation/src/*.cpp

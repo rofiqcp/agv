@@ -1,0 +1,201 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- Camera Astra Pro. The long body lies across Y and lenses face +X. -->
+  <link name="camera_link">
+    <visual name="camera_body">
+      <geometry><mesh filename="${camera_body_mesh_uri}"/></geometry>
+      <material name="camera_black"/>
+    </visual>
+    <visual name="camera_front_glass">
+      <origin xyz="0.0207 0 0"/>
+      <geometry><box size="0.0015 0.112 0.034"/></geometry>
+      <material name="screen_dark"/>
+    </visual>
+    <visual name="camera_left_lens">
+      <origin xyz="0.022 0.034 0" rpy="0 1.57079632679 0"/>
+      <geometry><cylinder radius="0.013" length="0.008"/></geometry>
+      <material name="lens_blue"/>
+    </visual>
+    <visual name="camera_right_lens">
+      <origin xyz="0.022 -0.034 0" rpy="0 1.57079632679 0"/>
+      <geometry><cylinder radius="0.013" length="0.008"/></geometry>
+      <material name="lens_blue"/>
+    </visual>
+    <visual name="camera_center_lens">
+      <origin xyz="0.022 0 0" rpy="0 1.57079632679 0"/>
+      <geometry><cylinder radius="0.007" length="0.008"/></geometry>
+      <material name="lens_blue"/>
+    </visual>
+    <visual name="camera_status_led">
+      <origin xyz="0.022 -0.052 0.013" rpy="0 1.57079632679 0"/>
+      <geometry><cylinder radius="0.0025" length="0.003"/></geometry>
+      <material name="status_green"/>
+    </visual>
+    <visual name="camera_brand_strip">
+      <origin xyz="0.022 0 -0.017"/>
+      <geometry><box size="0.001 0.038 0.004"/></geometry>
+      <material name="label_white"/>
+    </visual>
+    <visual name="camera_mount">
+      <origin xyz="-0.005 0 -0.030"/>
+      <geometry><box size="0.045 0.055 0.012"/></geometry>
+      <material name="frame_metal"/>
+    </visual>
+    <collision>
+      <geometry><box size="0.040 0.135 0.050"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="${camera_mass}"/>
+      <inertia ixx="0.00060" ixy="0" ixz="0"
+               iyy="0.00012" iyz="0" izz="0.00062"/>
+    </inertial>
+  </link>
+
+  <!-- Visual IMU mount. Functional imu_link remains externally owned by
+       default to avoid duplicate TF in the supplied project. -->
+  <link name="imu_mount_link">
+    <visual name="imu_case">
+      <geometry><mesh filename="${imu_case_mesh_uri}"/></geometry>
+      <material name="imu_black"/>
+    </visual>
+    <visual name="imu_top">
+      <origin xyz="0 0 0.014"/>
+      <geometry><box size="0.026 0.022 0.005"/></geometry>
+      <material name="frame_metal"/>
+    </visual>
+    <visual name="imu_connector">
+      <origin xyz="-0.026 0 0"/>
+      <geometry><box size="0.010 0.022 0.012"/></geometry>
+      <material name="connector_green"/>
+    </visual>
+    <visual name="imu_status_led">
+      <origin xyz="0.014 0.010 0.016"/>
+      <geometry><sphere radius="0.0025"/></geometry>
+      <material name="status_green"/>
+    </visual>
+    <collision>
+      <geometry><box size="0.050 0.040 0.025"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="${imu_mass}"/>
+      <inertia ixx="0.000020" ixy="0" ixz="0"
+               iyy="0.000026" iyz="0" izz="0.000034"/>
+    </inertial>
+  </link>
+
+  <!-- Visual GNSS mount. -->
+  <link name="gnss_mount_link">
+    <visual name="gnss_base">
+      <origin xyz="0 0 -0.008"/>
+      <geometry><cylinder radius="${gnss_base_radius}" length="0.016"/></geometry>
+      <material name="gnss_black"/>
+    </visual>
+    <visual name="gnss_dome">
+      <origin xyz="0 0 0"/>
+      <geometry><mesh filename="${gnss_dome_mesh_uri}"/></geometry>
+      <material name="gnss_black"/>
+    </visual>
+    <visual name="gnss_top_badge">
+      <origin xyz="0 0 0.0205"/>
+      <geometry><cylinder radius="0.012" length="0.001"/></geometry>
+      <material name="label_white"/>
+    </visual>
+    <visual name="gnss_post">
+      <origin xyz="0 0 -0.026"/>
+      <geometry><cylinder radius="0.008" length="0.020"/></geometry>
+      <material name="frame_metal"/>
+    </visual>
+    <collision>
+      <geometry><cylinder radius="${gnss_base_radius}" length="0.050"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="${gnss_mass}"/>
+      <inertia ixx="0.000060" ixy="0" ixz="0"
+               iyy="0.000060" iyz="0" izz="0.000120"/>
+    </inertial>
+  </link>
+
+  <!-- HMI 4.3 inch. The joint is the physical casing center; its +X/+Y edges
+       are exactly 0.300 m and 0.220 m from base_link. -->
+  <link name="hmi_link">
+    <visual name="hmi_case">
+      <origin xyz="0 ${hmi_visual_offset_y} 0"/>
+      <geometry><mesh filename="${hmi_case_mesh_uri}"/></geometry>
+      <material name="hmi_pink"/>
+    </visual>
+    <visual name="hmi_screen">
+      <origin xyz="0 ${hmi_visual_offset_y} 0.0035"/>
+      <geometry><box size="0.088 0.054 0.001"/></geometry>
+      <material name="screen_dark"/>
+    </visual>
+    <visual name="hmi_screen_glass">
+      <origin xyz="0 ${hmi_visual_offset_y} 0.0042"/>
+      <geometry><box size="0.082 0.048 0.0008"/></geometry>
+      <material name="lens_blue"/>
+    </visual>
+    <visual name="hmi_status_led">
+      <origin xyz="0.047 ${hmi_visual_offset_y - 0.027} 0.0045"/>
+      <geometry><sphere radius="0.002"/></geometry>
+      <material name="status_green"/>
+    </visual>
+    <collision>
+      <origin xyz="0 ${hmi_visual_offset_y} 0"/>
+      <geometry>
+        <box size="${hmi_case_length} ${hmi_case_width} ${hmi_case_thickness}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 ${hmi_visual_offset_y} 0"/>
+      <mass value="${hmi_mass}"/>
+      <inertia ixx="0.00017" ixy="0" ixz="0"
+               iyy="0.00036" iyz="0" izz="0.00052"/>
+    </inertial>
+  </link>
+
+  <!-- Optional functional frames. Keep false unless external publishers with
+       the same child frame have been removed and verified. -->
+  <xacro:if value="$(arg publish_functional_sensor_frames)">
+    <link name="imu_link"/>
+    <joint name="imu_mount_to_imu_frame" type="fixed">
+      <parent link="imu_mount_link"/>
+      <child link="imu_link"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+    </joint>
+
+    <link name="gnss_link"/>
+    <joint name="gnss_mount_to_gnss_frame" type="fixed">
+      <parent link="gnss_mount_link"/>
+      <child link="gnss_link"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+    </joint>
+  </xacro:if>
+
+  <xacro:if value="$(arg publish_camera_optical_frame)">
+    <link name="camera_color_optical_frame"/>
+    <joint name="camera_color_optical_joint" type="fixed">
+      <parent link="camera_link"/>
+      <child link="camera_color_optical_frame"/>
+      <origin xyz="0 0 0" rpy="-1.57079632679 0 -1.57079632679"/>
+    </joint>
+
+    <!-- A1 publishes depth and IR messages with these frame ids. The exact
+         RGB/depth baseline should be replaced by a measured Astra calibration;
+         identity translation keeps the TF tree complete for the depth obstacle
+         bridge and is preferable to silently dropping every point. -->
+    <link name="camera_depth_optical_frame"/>
+    <joint name="camera_depth_optical_joint" type="fixed">
+      <parent link="camera_link"/>
+      <child link="camera_depth_optical_frame"/>
+      <origin xyz="0 0 0" rpy="-1.57079632679 0 -1.57079632679"/>
+    </joint>
+
+    <link name="camera_ir_optical_frame"/>
+    <joint name="camera_ir_optical_joint" type="fixed">
+      <parent link="camera_link"/>
+      <child link="camera_ir_optical_frame"/>
+      <origin xyz="0 0 0" rpy="-1.57079632679 0 -1.57079632679"/>
+    </joint>
+  </xacro:if>
+
+</robot>

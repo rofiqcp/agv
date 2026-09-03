@@ -1,0 +1,79 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- Ground projection / REP-105 planar base. EKF publishes
+       odom -> base_footprint at z=0; physical base_link is 0.350 m above it. -->
+  <joint name="base_footprint_to_base_link" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 ${base_link_height}" rpy="0 0 0"/>
+  </joint>
+
+  <joint name="base_to_chassis" type="fixed">
+    <parent link="base_link"/>
+    <child link="chassis_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Front wheel spin is a child of the yaw-only steering knuckle. -->
+  <joint name="front_left_wheel_joint" type="continuous">
+    <parent link="front_left_steering_link"/>
+    <child link="front_left_wheel_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <dynamics damping="0.02" friction="0.01"/>
+  </joint>
+
+  <joint name="front_right_wheel_joint" type="continuous">
+    <parent link="front_right_steering_link"/>
+    <child link="front_right_wheel_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <dynamics damping="0.02" friction="0.01"/>
+  </joint>
+
+  <!-- Rear wheels stay straight and only spin around Y. -->
+  <joint name="rear_left_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="rear_left_wheel_link"/>
+    <origin xyz="${rear_axle_x} ${half_track} ${wheel_center_z}"
+            rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <dynamics damping="0.02" friction="0.01"/>
+  </joint>
+
+  <joint name="rear_right_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="rear_right_wheel_link"/>
+    <origin xyz="${rear_axle_x} ${-half_track} ${wheel_center_z}"
+            rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <dynamics damping="0.02" friction="0.01"/>
+  </joint>
+
+  <!-- Exact component coordinates relative to base_link. -->
+  <joint name="camera_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="camera_link"/>
+    <origin xyz="${camera_x} ${camera_y} ${camera_z}" rpy="0 0 0"/>
+  </joint>
+
+  <joint name="imu_mount_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="imu_mount_link"/>
+    <origin xyz="${imu_x} ${imu_y} ${imu_z}" rpy="0 0 0"/>
+  </joint>
+
+  <joint name="gnss_mount_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="gnss_mount_link"/>
+    <origin xyz="${gnss_x} ${gnss_y} ${gnss_z}" rpy="0 0 0"/>
+  </joint>
+
+  <joint name="hmi_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="hmi_link"/>
+    <origin xyz="${hmi_x} ${hmi_y} ${hmi_z}" rpy="0 0 0"/>
+  </joint>
+
+</robot>

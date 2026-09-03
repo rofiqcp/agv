@@ -1,0 +1,57 @@
+# Parameter IMU serial Yahboom/WitMotion protokol 0x55.
+# Covariance dibuat konservatif agar EKF tidak terlalu percaya IMU murah.
+data_imu_node:
+  ros__parameters:
+    port: auto
+    baudrate: 9600
+    frame_id: imu_link
+    poll_interval_ms: 5
+    # Pada 9600 baud, 10 Hz memberi margin aman untuk ACC+GYRO+ANGLE+MAG.
+    publish_rate_hz: 10
+    # Reconnect bila port tetap open tetapi tidak ada byte sensor.
+    data_timeout_sec: 6.0
+    orientation_packet_timeout_sec: 8.0
+    orientation_publish_timeout_sec: 0.50
+    publish_raw: false
+    debug: false
+
+    # REP-103: putaran fisik CCW harus menaikkan yaw dan gyro-Z. Baseline tidak
+    # menebak tanda mounting; ubah yaw_sign hanya setelah uji putar fisik, dan
+    # selalu ubah quaternion yaw serta gyro-Z bersama-sama.
+    publish_orientation: true
+    invert_roll: false
+    invert_pitch: false
+    invert_yaw: false
+    yaw_sign: 1.0
+    roll_offset_rad: 0.0
+    pitch_offset_rad: 0.0
+    # Offset pemasangan/heading dalam radian. Kalibrasikan hanya setelah tanda
+    # rotasi benar; jangan mencampur koreksi tanda dan offset 90 derajat.
+    yaw_offset_rad: 0.0
+    # Deklinasi timur positif dikurangkan dari bearing magnetik agar yaw true-ENU.
+    magnetic_declination_radians: 0.0
+
+    # Bias satuan SI: accel m/s^2 dan gyro rad/s. Isi setelah kalibrasi diam.
+    accel_bias: [0.0, 0.0, 0.0]
+    gyro_bias: [0.0, 0.0, 0.0]
+
+    # Stage 2 persistent stationary-calibration evidence. This flag is a hard
+    # autonomy interlock and must only be set by a measured stationary capture.
+    stationary_calibration_valid: false
+    stationary_calibration_saved_at: ''
+    stationary_calibration_sample_count: 0
+    stationary_calibration_duration_sec: 0.0
+    stationary_calibration_gyro_z_std_rps: 0.0
+    stationary_calibration_accel_norm_error_mps2: 0.0
+
+    # Minimum evidence/quality limits used by the native C++ calibration GUI.
+    stationary_calibration_min_samples: 80
+    stationary_calibration_min_duration_sec: 8.0
+    stationary_calibration_max_gyro_z_std_rps: 0.03
+    stationary_calibration_max_accel_norm_error_mps2: 0.75
+
+    # Variance diagonal [x, y, z], bukan standard deviation.
+    orientation_covariance: [0.02, 0.02, 0.05]
+    angular_velocity_covariance: [0.01, 0.01, 0.02]
+    linear_acceleration_covariance: [0.25, 0.25, 0.36]
+    mag_scale_tesla_per_lsb: 1.0e-7

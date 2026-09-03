@@ -1,0 +1,32 @@
+STEERING PHYSICAL PART 3 VALIDATION
+===================================
+
+Implemented:
+- physical wheelbase separated from effective kinematic wheelbase
+- corrected inner-wheel Ackermann circle equation
+- left/right circle trial qualification
+- effective wheelbase LEFT/RIGHT + balanced effective wheelbase
+- measured left/right center turning radius
+- certified minimum turning radius = worst side + configurable safety margin
+- fit RMSE gate
+- minimum 2 high-steering trials per direction
+- Nav2 Smac + MPPI minimum radius propagation
+- NavigationCore / ESC / perception effective wheelbase propagation
+- kinematic yaw-rate ceiling v_max / R_min propagation
+- Part 1 theoretical radius no longer overwrites valid Part 3 certification
+- Part 2 LUT remains fallback-safe and unchanged
+
+Regression results:
+PASS steering physical Part 1
+PASS steering physical Part 2 LUT
+PASS steering physical Part 3 circle/geometry
+PASS GUI C++ migration 26/26
+PASS GNSS Part 1 / Part 2 / Part 3
+PASS EKF Humble config
+PASS trajectory safety
+PASS avoidance
+PASS all Python parse
+PASS all YAML parse
+PASS all standalone *_math_self_check.cpp with -Wall -Wextra -Wpedantic -Werror
+
+Final ROS 2 Humble + Qt5 colcon build still must be run on the Jetson target.

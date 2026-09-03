@@ -1,0 +1,167 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!--
+    v1.6.1 keeps the field-photo lower-chassis and restores the legacy wheel.
+
+    chassis_link owns only the simple collision and the 40 kg rigid-body
+    inertia. All realistic geometry is carried by fixed, massless child links.
+    Every visual child link has exactly one material. This layout is deliberate:
+    it avoids the RViz behaviour that can apply the first material of a
+    multi-material link (wood) to the complete chassis.
+  -->
+
+  <xacro:macro name="rigid_visual_mesh"
+               params="link_name joint_name visual_name mesh_uri material_name">
+    <link name="${link_name}">
+      <visual name="${visual_name}">
+        <geometry><mesh filename="${mesh_uri}"/></geometry>
+        <material name="${material_name}"/>
+      </visual>
+    </link>
+    <joint name="${joint_name}" type="fixed">
+      <parent link="chassis_link"/>
+      <child link="${link_name}"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+
+  <xacro:macro name="payload_visual_mesh"
+               params="prefix x mesh_uri material_name">
+    <link name="${prefix}_visual_link">
+      <visual name="${prefix}_visual">
+        <geometry><mesh filename="${mesh_uri}"/></geometry>
+        <material name="${material_name}"/>
+      </visual>
+    </link>
+    <joint name="${prefix}_visual_joint" type="fixed">
+      <parent link="chassis_link"/>
+      <child link="${prefix}_visual_link"/>
+      <origin xyz="${x} ${cargo_jug_y} ${cargo_floor_top_z}" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+
+  <link name="chassis_link">
+    <collision name="main_body_collision">
+      <origin xyz="${body_center_x} 0 ${body_center_z}"/>
+      <geometry>
+        <box size="${body_length} ${body_width} ${body_height}"/>
+      </geometry>
+    </collision>
+    <collision name="cargo_bed_floor_collision">
+      <origin xyz="${rack_center_x} 0 ${cargo_floor_center_z}"/>
+      <geometry>
+        <box size="${rack_length} ${cargo_floor_width} ${cargo_floor_thickness}"/>
+      </geometry>
+    </collision>
+
+    <!-- Approximation for the complete 40 kg rigid chassis/rack/enclosure. -->
+    <inertial>
+      <origin xyz="-0.030 0 -0.080"/>
+      <mass value="${chassis_mass}"/>
+      <inertia
+          ixx="${chassis_mass * (rack_outer_width * rack_outer_width + body_height * body_height) / 12.0}"
+          ixy="0"
+          ixz="0"
+          iyy="${chassis_mass * (vehicle_length * vehicle_length + body_height * body_height) / 12.0}"
+          iyz="0"
+          izz="${chassis_mass * (vehicle_length * vehicle_length + rack_outer_width * rack_outer_width) / 12.0}"/>
+    </inertial>
+  </link>
+
+  <!-- Plywood cabinet and rear bed floor. -->
+  <xacro:rigid_visual_mesh
+      link_name="chassis_wood_visual_link"
+      joint_name="chassis_wood_visual_joint"
+      visual_name="field_photo_plywood_box"
+      mesh_uri="${chassis_wood_mesh_uri}"
+      material_name="wood_panel"/>
+  <xacro:rigid_visual_mesh
+      link_name="chassis_wood_grain_visual_link"
+      joint_name="chassis_wood_grain_visual_joint"
+      visual_name="field_photo_plywood_grain"
+      mesh_uri="${chassis_wood_grain_mesh_uri}"
+      material_name="wood_grain_dark"/>
+
+  <!-- Burnt plywood edges, five ventilation apertures on each side panel,
+       lower frame, drivetrain, rubber mat, bumper, and black suspension arms.
+       The box front panel remains fully closed. -->
+  <xacro:rigid_visual_mesh
+      link_name="chassis_black_visual_link"
+      joint_name="chassis_black_visual_joint"
+      visual_name="black_frame_and_side_vents"
+      mesh_uri="${chassis_black_mesh_uri}"
+      material_name="frame_black"/>
+
+  <!-- Rectangular galvanized rails match the exposed field-photo frame. -->
+  <xacro:rigid_visual_mesh
+      link_name="chassis_galvanized_visual_link"
+      joint_name="chassis_galvanized_visual_joint"
+      visual_name="galvanized_cargo_and_body_rails"
+      mesh_uri="${chassis_galvanized_mesh_uri}"
+      material_name="galvanized_steel"/>
+
+  <!-- Axles, damper shafts, and propeller shaft. -->
+  <xacro:rigid_visual_mesh
+      link_name="chassis_silver_visual_link"
+      joint_name="chassis_silver_visual_joint"
+      visual_name="silver_drivetrain"
+      mesh_uri="${chassis_silver_mesh_uri}"
+      material_name="metal_light"/>
+
+  <!-- Exactly two front coilovers and one rear mono-shock spring. -->
+  <xacro:rigid_visual_mesh
+      link_name="chassis_spring_visual_link"
+      joint_name="chassis_spring_visual_joint"
+      visual_name="two_front_and_one_rear_coil_springs"
+      mesh_uri="${chassis_spring_mesh_uri}"
+      material_name="spring_metal"/>
+
+  <!-- Rear chain/sprockets and brake caliper from the latest rear photos. -->
+  <xacro:rigid_visual_mesh
+      link_name="chassis_chain_visual_link"
+      joint_name="chassis_chain_visual_joint"
+      visual_name="rear_chain_and_sprockets"
+      mesh_uri="${chassis_chain_mesh_uri}"
+      material_name="metal_dark"/>
+  <xacro:rigid_visual_mesh
+      link_name="chassis_caliper_visual_link"
+      joint_name="chassis_caliper_visual_joint"
+      visual_name="rear_brake_caliper"
+      mesh_uri="${chassis_caliper_mesh_uri}"
+      material_name="brake_caliper"/>
+
+  <!-- Hinges, fasteners, latch, and exposed mounting plates. -->
+  <xacro:rigid_visual_mesh
+      link_name="chassis_hardware_visual_link"
+      joint_name="chassis_hardware_visual_joint"
+      visual_name="plywood_hardware"
+      mesh_uri="${chassis_hardware_mesh_uri}"
+      material_name="fastener_metal"/>
+
+  <!-- Exactly two 19 L visual payloads. Fixed visual links do not add mass. -->
+  <xacro:payload_visual_mesh
+      prefix="front_jug_body"
+      x="${cargo_jug_front_x}"
+      mesh_uri="${jug_mesh_uri}"
+      material_name="water_blue"/>
+  <xacro:payload_visual_mesh
+      prefix="rear_jug_body"
+      x="${cargo_jug_rear_x}"
+      mesh_uri="${jug_mesh_uri}"
+      material_name="water_blue"/>
+  <xacro:payload_visual_mesh
+      prefix="front_jug_detail"
+      x="${cargo_jug_front_x}"
+      mesh_uri="${jug_detail_mesh_uri}"
+      material_name="jug_cap_blue"/>
+  <xacro:payload_visual_mesh
+      prefix="rear_jug_detail"
+      x="${cargo_jug_rear_x}"
+      mesh_uri="${jug_detail_mesh_uri}"
+      material_name="jug_cap_blue"/>
+
+  <!-- chassis_straps.stl is intentionally not instantiated: the orange strap
+       visual crossed the two galons and looked like a bar piercing the payload. -->
+
+</robot>

@@ -1,0 +1,44 @@
+GNSS DRIVER V2 PART 1 - STATIC VALIDATION
+========================================
+
+Scope:
+- Full NAV-PVT motion/time parsing
+- RAM-only 5 Hz receiver-rate configuration
+- NAV-COV/NAV-DOP polling by iTOW
+- Direct velE/velN/velD output
+- UTC/iTOW measurement timestamp discipline
+- Multi-point position-derived velocity diagnostic
+- GUI/CSV/rosbag observability
+- NO new GNSS velocity/yaw EKF fusion in Part 1
+
+Expected test commands from workspace src/:
+  python navigation/test/gnss_driver_v2_part1_self_check.py
+  python navigation/test/gnss_ubx_fixture_self_check.py
+  python navigation/test/precision_part1_self_check.py
+  python navigation/test/precision_part2_self_check.py
+  python navigation/test/precision_part3_self_check.py
+  python navigation/test/ekf_humble_config_self_check.py
+  python navigation/test/trajectory_safety_contract_self_check.py
+  python navigation/test/avoidance_contract_self_check.py
+
+Static validation result at packaging:
+  Python parse: PASS
+  YAML parse: PASS
+  GNSS Driver V2 self-check: PASS
+  UBX protocol fixture check: PASS
+  Part 1 regression: PASS
+  Part 2 regression: PASS
+  Part 3 regression: PASS
+  EKF Humble contract: PASS
+  Trajectory safety contract: PASS
+  Avoidance contract: PASS
+  C++ gnss_node.cpp syntax check with ROS/serial API stubs: PASS
+
+Additional hardening verified:
+- invalidLlh (NAV-PVT flags3 bit 0) rejects autonomous quality.
+- UTC timestamp path works with normal ROS wall-time numeric epochs; sim/non-wall clocks fall back safely.
+- iTOW fallback is shifted/clamped so sensor stamps never lead current ROS time.
+- headVeh/magnetic/differential/carrier/correction-age fields are diagnostic only and cannot silently become yaw state.
+
+Limit:
+This environment does not provide a real ROS 2 Humble/colcon installation or the physical NEO-M9N, so final package build, UBX ACK/rate behaviour, and hardware timestamp latency must still be verified on the Jetson.

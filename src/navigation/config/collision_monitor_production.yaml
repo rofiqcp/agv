@@ -1,0 +1,48 @@
+# Collision Monitor Humble PRODUCTION gate. Default tetap OFF sampai kamera metric
+# tersertifikasi dari GUI. Saat ON, node menjadi satu-satunya stage yang meneruskan
+# pre-collision command NavigationCore ke /cmd_vel.
+collision_monitor:
+  ros__parameters:
+    use_sim_time: false
+    base_frame_id: base_footprint
+    odom_frame_id: odom
+    cmd_vel_in_topic: /cmd_vel/nav2_pre_collision
+    cmd_vel_out_topic: /cmd_vel/autonomy_pre_smoother
+    transform_tolerance: 0.3
+    source_timeout: 1.0
+    # PointCloud YOLOPv2 sudah berada pada base_footprint saat frame diproses.
+    # Jangan time-shift source ke pose "now": pada Humble ini memaksa lookup
+    # odom->base beberapa ms di masa depan pernah memicu extrapolation ERROR.
+    base_shift_correction: false
+    stop_pub_timeout: 1.0
+    state_topic: /collision_monitor/state
+    polygons:
+    - PolygonStop
+    - PolygonSlow
+    PolygonStop:
+      type: polygon
+      # Humble expects one polygon string, not a flat YAML double array.
+      points: '[[2.2, 0.75], [2.2, -0.75], [0.1, -0.75], [0.1, 0.75]]'
+      action_type: stop
+      max_points: 3
+      visualize: true
+      polygon_pub_topic: polygon_stop
+      enabled: true
+    PolygonSlow:
+      type: polygon
+      points: '[[3.5, 1.1], [3.5, -1.1], [0.1, -1.1], [0.1, 1.1]]'
+      action_type: slowdown
+      max_points: 3
+      slowdown_ratio: 0.25
+      visualize: true
+      polygon_pub_topic: polygon_slowdown
+      enabled: true
+    observation_sources:
+    - object_points
+    object_points:
+      type: pointcloud
+      topic: /perception/path_relevant_points
+      min_height: -0.1
+      max_height: 0.6
+      source_timeout: 0.75
+      enabled: true

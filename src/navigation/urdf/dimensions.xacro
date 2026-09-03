@@ -1,0 +1,166 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- All lengths are meters; all angles are radians. REP-103: +X forward, +Y left, +Z up. -->
+
+  <!-- Vehicle envelope and Ackermann geometry. -->
+  <xacro:property name="vehicle_length" value="1.000"/>
+  <xacro:property name="front_edge_x" value="0.500"/>
+  <xacro:property name="rear_edge_x" value="-0.500"/>
+  <xacro:property name="wheelbase" value="0.700"/>
+  <xacro:property name="front_axle_x" value="0.350"/>
+  <xacro:property name="rear_axle_x" value="-0.350"/>
+  <xacro:property name="track_width" value="0.480"/>
+  <xacro:property name="half_track" value="${track_width / 2.0}"/>
+  <xacro:property name="total_width" value="0.550"/>
+  <xacro:property name="wheel_width" value="${total_width - track_width}"/>
+  <xacro:property name="wheel_diameter" value="0.290"/>
+  <xacro:property name="wheel_radius" value="${wheel_diameter / 2.0}"/>
+  <xacro:property name="base_link_height" value="0.350"/>
+  <xacro:property name="wheel_center_z" value="${wheel_radius - base_link_height}"/>
+  <xacro:property name="rear_rack_overhang" value="${rear_axle_x - rear_edge_x}"/>
+  <!-- Keep the URDF joint limit consistent with the controller's configured
+       +/-80 deg steering envelope. 80 deg = 1.3962634016 rad. -->
+  <xacro:property name="steering_limit" value="1.3962634016"/>
+
+  <!-- Active vertical implementation. User target top is 0.70 m from ground. -->
+  <xacro:property name="vehicle_top_from_ground" value="0.700"/>
+  <xacro:property name="body_and_rack_height" value="0.300"/>
+  <xacro:property name="body_top_z" value="${vehicle_top_from_ground - base_link_height}"/>
+  <xacro:property name="body_bottom_z" value="${body_top_z - body_and_rack_height}"/>
+  <xacro:property name="body_center_z" value="${(body_top_z + body_bottom_z) / 2.0}"/>
+  <xacro:property name="requested_tire_to_body_clearance" value="0.110"/>
+  <xacro:property name="implemented_tire_to_body_clearance"
+                  value="${body_bottom_z + base_link_height - wheel_diameter}"/>
+  <!-- Historical, inactive comparison only; the user reconfirmed 110 mm. -->
+  <xacro:property name="alternate_top_height_for_140mm_clearance"
+                  value="${wheel_diameter + 0.140 + body_and_rack_height}"/>
+
+  <!-- Main wooden enclosure: front 400 mm of the 1000 mm vehicle. -->
+  <xacro:property name="body_front_x" value="0.500"/>
+  <xacro:property name="body_rear_x" value="0.100"/>
+  <xacro:property name="body_length" value="${body_front_x - body_rear_x}"/>
+  <xacro:property name="body_center_x" value="${(body_front_x + body_rear_x) / 2.0}"/>
+  <xacro:property name="body_width" value="0.550"/>
+  <xacro:property name="body_height" value="${body_and_rack_height}"/>
+  <xacro:property name="body_lid_thickness" value="0.012"/>
+  <xacro:property name="front_panel_vent_count" value="0"/>
+  <xacro:property name="side_vent_count_per_side" value="5"/>
+  <xacro:property name="side_vent_total_count" value="10"/>
+  <xacro:property name="side_vent_width" value="0.026"/>
+  <xacro:property name="side_vent_height" value="0.210"/>
+
+  <!-- Rear iron cargo bed: rear 600 mm of the vehicle. -->
+  <xacro:property name="rack_front_x" value="0.100"/>
+  <xacro:property name="rack_length" value="0.600"/>
+  <xacro:property name="rack_center_x" value="${(rack_front_x + rear_edge_x) / 2.0}"/>
+  <xacro:property name="rack_outer_width" value="0.450"/>
+  <xacro:property name="rack_rail_y" value="${rack_outer_width / 2.0 - 0.0125}"/>
+  <xacro:property name="rack_beam_z" value="${body_bottom_z + 0.0125}"/>
+  <xacro:property name="cargo_floor_thickness" value="0.012"/>
+  <xacro:property name="cargo_floor_width" value="${rack_outer_width - 0.030}"/>
+  <xacro:property name="cargo_floor_center_z" value="${body_bottom_z + cargo_floor_thickness / 2.0}"/>
+  <xacro:property name="cargo_floor_top_z" value="${cargo_floor_center_z + cargo_floor_thickness / 2.0}"/>
+  <xacro:property name="cargo_top_rail_thickness" value="0.018"/>
+  <xacro:property name="cargo_top_rail_z" value="${body_top_z - cargo_top_rail_thickness / 2.0}"/>
+  <xacro:property name="cargo_rail_height"
+                  value="${cargo_top_rail_z - cargo_top_rail_thickness / 2.0 - cargo_floor_top_z}"/>
+  <xacro:property name="cargo_post_center_z"
+                  value="${(cargo_floor_top_z + cargo_top_rail_z - cargo_top_rail_thickness / 2.0) / 2.0}"/>
+
+  <!-- Component XY targets are physical farthest edges from base_link. Joint origins are derived centers. -->
+  <xacro:property name="camera_target_front_x" value="0.490"/>
+  <xacro:property name="camera_front_extent" value="0.026"/>
+  <xacro:property name="camera_x" value="${camera_target_front_x - camera_front_extent}"/>
+  <xacro:property name="camera_y" value="0.000"/>
+  <xacro:property name="camera_z" value="${body_top_z + 0.036}"/>
+
+  <xacro:property name="imu_target_front_x" value="0.360"/>
+  <xacro:property name="imu_front_extent" value="0.025"/>
+  <xacro:property name="imu_x" value="${imu_target_front_x - imu_front_extent}"/>
+  <xacro:property name="imu_y" value="0.000"/>
+  <xacro:property name="imu_z" value="${body_top_z + 0.0125}"/>
+
+  <xacro:property name="gnss_target_front_x" value="0.200"/>
+  <xacro:property name="gnss_base_radius" value="0.035"/>
+  <xacro:property name="gnss_x" value="${gnss_target_front_x - gnss_base_radius}"/>
+  <xacro:property name="gnss_y" value="0.000"/>
+  <xacro:property name="gnss_z" value="${body_top_z + 0.036}"/>
+
+  <xacro:property name="hmi_case_length" value="0.110"/>
+  <xacro:property name="hmi_case_width" value="0.075"/>
+  <xacro:property name="hmi_case_thickness" value="0.006"/>
+  <xacro:property name="hmi_target_front_x" value="0.300"/>
+  <xacro:property name="hmi_target_left_y" value="0.220"/>
+  <xacro:property name="hmi_x" value="${hmi_target_front_x - hmi_case_length / 2.0}"/>
+  <xacro:property name="hmi_y" value="${hmi_target_left_y - hmi_case_width / 2.0}"/>
+  <xacro:property name="hmi_z" value="${body_top_z + hmi_case_thickness / 2.0}"/>
+  <xacro:property name="hmi_visual_offset_y" value="0.000"/>
+  <xacro:property name="hmi_visual_center_y" value="${hmi_y + hmi_visual_offset_y}"/>
+
+  <!-- Visual-only payload. -->
+  <xacro:property name="cargo_jug_radius" value="0.100"/>
+  <xacro:property name="cargo_jug_height" value="0.490"/>
+  <xacro:property name="cargo_jug_body_height" value="${cargo_jug_height - 0.120}"/>
+  <xacro:property name="cargo_jug_front_x" value="-0.050"/>
+  <xacro:property name="cargo_jug_rear_x" value="-0.350"/>
+  <xacro:property name="cargo_jug_y" value="0.000"/>
+
+  <!-- Lower frame and drivetrain. -->
+  <xacro:property name="lower_frame_length" value="0.800"/>
+  <xacro:property name="lower_frame_center_x" value="0.000"/>
+  <xacro:property name="lower_frame_rail_y" value="0.150"/>
+  <xacro:property name="lower_frame_z" value="-0.175"/>
+  <xacro:property name="frame_tube_width" value="0.025"/>
+  <xacro:property name="frame_tube_height" value="0.030"/>
+  <xacro:property name="drivetrain_z" value="${wheel_center_z + 0.015}"/>
+
+  <!-- Deterministic visual mesh URIs. -->
+  <xacro:property name="visual_mesh_dir" value="package://navigation/urdf/meshes"/>
+  <xacro:property name="jug_mesh_uri" value="${visual_mesh_dir}/water_jug_19l.stl"/>
+  <xacro:property name="jug_handle_mesh_uri" value="${visual_mesh_dir}/water_jug_handle.stl"/>
+  <xacro:property name="coil_spring_mesh_uri" value="${visual_mesh_dir}/coil_spring.stl"/>
+  <xacro:property name="rim_mesh_uri" value="${visual_mesh_dir}/atv_rim.stl"/>
+  <xacro:property name="camera_body_mesh_uri" value="${visual_mesh_dir}/camera_astra_pro.stl"/>
+  <xacro:property name="imu_case_mesh_uri" value="${visual_mesh_dir}/imu_case.stl"/>
+  <xacro:property name="hmi_case_mesh_uri" value="${visual_mesh_dir}/hmi_case.stl"/>
+  <xacro:property name="gnss_dome_mesh_uri" value="${visual_mesh_dir}/gnss_dome.stl"/>
+  <xacro:property name="wood_lid_mesh_uri" value="${visual_mesh_dir}/wood_lid.stl"/>
+  <xacro:property name="chassis_wood_mesh_uri" value="${visual_mesh_dir}/chassis_wood.stl"/>
+  <xacro:property name="chassis_wood_grain_mesh_uri" value="${visual_mesh_dir}/chassis_wood_grain.stl"/>
+  <xacro:property name="chassis_black_mesh_uri" value="${visual_mesh_dir}/chassis_black.stl"/>
+  <xacro:property name="chassis_galvanized_mesh_uri" value="${visual_mesh_dir}/chassis_galvanized.stl"/>
+  <xacro:property name="chassis_silver_mesh_uri" value="${visual_mesh_dir}/chassis_silver.stl"/>
+  <xacro:property name="chassis_spring_mesh_uri" value="${visual_mesh_dir}/chassis_spring.stl"/>
+  <xacro:property name="chassis_chain_mesh_uri" value="${visual_mesh_dir}/chassis_chain.stl"/>
+  <xacro:property name="chassis_caliper_mesh_uri" value="${visual_mesh_dir}/chassis_caliper.stl"/>
+  <xacro:property name="chassis_hardware_mesh_uri" value="${visual_mesh_dir}/chassis_hardware.stl"/>
+  <xacro:property name="jug_detail_mesh_uri" value="${visual_mesh_dir}/water_jug_detail.stl"/>
+  <xacro:property name="chassis_strap_mesh_uri" value="${visual_mesh_dir}/chassis_straps.stl"/>
+
+  <!--
+    Restore the proven legacy wheel visual because its asymmetric tread makes
+    rotation visible in joint_state_publisher_gui. The visual remains attached
+    to each wheel link and is scaled to the current 70 x 290 x 290 mm contract.
+  -->
+  <xacro:property name="wheel_mesh_uri" value="package://navigation/urdf/meshes/wheel.stl"/>
+  <xacro:property name="wheel_mesh_raw_axial" value="39.0"/>
+  <xacro:property name="wheel_mesh_raw_radial_y" value="109.98579406738281"/>
+  <xacro:property name="wheel_mesh_raw_radial_z" value="109.95682525634766"/>
+  <xacro:property name="wheel_mesh_raw_center_x" value="-0.13379669189453125"/>
+  <xacro:property name="wheel_mesh_scale_axial" value="${wheel_width / wheel_mesh_raw_axial}"/>
+  <xacro:property name="wheel_mesh_scale_radial_y" value="${wheel_diameter / wheel_mesh_raw_radial_y}"/>
+  <xacro:property name="wheel_mesh_scale_radial_z" value="${wheel_diameter / wheel_mesh_raw_radial_z}"/>
+  <xacro:property name="wheel_mesh_center_correction" value="${-wheel_mesh_raw_center_x * wheel_mesh_scale_axial}"/>
+
+  <!-- Preserve the previous nominal mass budget; payload remains visual-only. -->
+  <xacro:property name="chassis_mass" value="40.0"/>
+  <xacro:property name="wheel_mass" value="2.0"/>
+  <xacro:property name="knuckle_mass" value="0.5"/>
+  <xacro:property name="camera_mass" value="0.35"/>
+  <xacro:property name="imu_mass" value="0.10"/>
+  <xacro:property name="gnss_mass" value="0.20"/>
+  <xacro:property name="hmi_mass" value="0.35"/>
+  <xacro:property name="total_mass" value="50.0"/>
+
+</robot>

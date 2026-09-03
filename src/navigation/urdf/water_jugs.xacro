@@ -1,0 +1,64 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- ================================================================ -->
+  <!-- 3 x AQUA 19L WATER JUGS in cargo box                            -->
+  <!-- Layout: row of 3 jugs along x-axis                               -->
+  <!--   jug_fc: front-centre (x=-0.080)                               -->
+  <!--   jug_rl: rear-left   (x=-0.280)                                -->
+  <!--   jug_rr: rear-right  (x=-0.480)                                -->
+  <!-- Each: diameter=0.200m, height=0.490m, on cargo floor z=0.270   -->
+  <!-- ================================================================ -->
+
+  <xacro:macro name="water_jug" params="prefix">
+    <link name="${prefix}_jug_link">
+
+      <!-- Main cylinder body -->
+      <visual name="${prefix}_body">
+        <geometry>
+          <cylinder radius="${jug_radius}" length="${jug_height}"/>
+        </geometry>
+        <material name="jug_blue"/>
+      </visual>
+
+      <!-- Shoulder (tapers to neck) -->
+      <visual name="${prefix}_shoulder">
+        <origin xyz="0 0 ${jug_height/2 - 0.035}" rpy="0 0 0"/>
+        <geometry><sphere radius="${jug_radius * 0.88}"/></geometry>
+        <material name="jug_blue"/>
+      </visual>
+
+      <!-- Neck -->
+      <visual name="${prefix}_neck">
+        <origin xyz="0 0 ${jug_height/2 + 0.050}" rpy="0 0 0"/>
+        <geometry><cylinder radius="0.036" length="0.095"/></geometry>
+        <material name="jug_blue"/>
+      </visual>
+
+      <!-- Cap -->
+      <visual name="${prefix}_cap">
+        <origin xyz="0 0 ${jug_height/2 + 0.100}" rpy="0 0 0"/>
+        <geometry><cylinder radius="0.042" length="0.016"/></geometry>
+        <material name="jug_cap"/>
+      </visual>
+
+      <collision>
+        <geometry>
+          <cylinder radius="${jug_radius}" length="${jug_height}"/>
+        </geometry>
+      </collision>
+
+      <inertial>
+        <mass value="${jug_mass}"/>
+        <inertia ixx="0.040" ixy="0" ixz="0" iyy="0.040" iyz="0" izz="0.020"/>
+      </inertial>
+
+    </link>
+  </xacro:macro>
+
+  <!-- 3 jugs: front-centre, rear-left, rear-right -->
+  <xacro:water_jug prefix="jug_fc"/>
+  <xacro:water_jug prefix="jug_rl"/>
+  <xacro:water_jug prefix="jug_rr"/>
+
+</robot>

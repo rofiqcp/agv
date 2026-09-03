@@ -1,0 +1,29 @@
+# ROS 2 / colcon generated output
+/build/
+/install/
+/log/
+
+# Large ML model binaries
+/models/*.pt
+/models/*.pth
+/models/*.onnx
+/models/*.engine
+/models/*.plan
+
+# Python cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# C/C++ and CMake transient files
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+*~
+*.swp

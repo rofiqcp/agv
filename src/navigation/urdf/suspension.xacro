@@ -1,0 +1,164 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- ================================================================ -->
+  <!-- SUSPENSION VISUALS — on chassis_link                              -->
+  <!-- Front: double wishbone (upper+lower arms) + coilover strut       -->
+  <!-- Rear:  trailing arm + coilover                                    -->
+  <!-- All arms inside wheel wells (inner y-face < half_track - w/2)    -->
+  <!-- ================================================================ -->
+
+  <xacro:macro name="visual_suspension">
+
+    <!-- ====== FRONT LEFT ====== -->
+    <visual name="fl_lower_arm">
+      <origin xyz="${front_axle_x} ${frame_rail_y + 0.050} 0.010"/>
+      <geometry><box size="0.020 0.100 0.016"/></geometry>
+      <material name="suspension_silver"/>
+    </visual>
+    <visual name="fl_upper_arm">
+      <origin xyz="${front_axle_x} ${frame_rail_y + 0.050} 0.095"/>
+      <geometry><box size="0.016 0.095 0.012"/></geometry>
+      <material name="suspension_silver"/>
+    </visual>
+    <visual name="fl_ball_joint">
+      <origin xyz="${front_axle_x} ${half_track - wheel_width/2 - 0.025} 0.050"/>
+      <geometry><sphere radius="0.014"/></geometry>
+      <material name="diff_dark"/>
+    </visual>
+    <!-- Coilover strut (spring + damper) -->
+    <visual name="fl_damper">
+      <origin xyz="${front_axle_x - 0.015} ${frame_rail_y + 0.060} 0.125" rpy="0.25 0 0"/>
+      <geometry><cylinder radius="0.012" length="0.180"/></geometry>
+      <material name="diff_dark"/>
+    </visual>
+    <visual name="fl_spring_1">
+      <origin xyz="${front_axle_x - 0.015} ${frame_rail_y + 0.060} 0.055" rpy="0.25 0 0"/>
+      <geometry><cylinder radius="0.022" length="0.008"/></geometry>
+      <material name="suspension_cyan"/>
+    </visual>
+    <visual name="fl_spring_2">
+      <origin xyz="${front_axle_x - 0.015} ${frame_rail_y + 0.055} 0.085" rpy="0.25 0 0"/>
+      <geometry><cylinder radius="0.022" length="0.008"/></geometry>
+      <material name="suspension_cyan"/>
+    </visual>
+    <visual name="fl_spring_3">
+      <origin xyz="${front_axle_x - 0.015} ${frame_rail_y + 0.050} 0.115" rpy="0.25 0 0"/>
+      <geometry><cylinder radius="0.022" length="0.008"/></geometry>
+      <material name="suspension_cyan"/>
+    </visual>
+    <visual name="fl_spring_4">
+      <origin xyz="${front_axle_x - 0.015} ${frame_rail_y + 0.045} 0.145" rpy="0.25 0 0"/>
+      <geometry><cylinder radius="0.022" length="0.008"/></geometry>
+      <material name="suspension_cyan"/>
+    </visual>
+
+    <!-- ====== FRONT RIGHT (mirrored) ====== -->
+    <visual name="fr_lower_arm">
+      <origin xyz="${front_axle_x} ${-frame_rail_y - 0.050} 0.010"/>
+      <geometry><box size="0.020 0.100 0.016"/></geometry>
+      <material name="suspension_silver"/>
+    </visual>
+    <visual name="fr_upper_arm">
+      <origin xyz="${front_axle_x} ${-frame_rail_y - 0.050} 0.095"/>
+      <geometry><box size="0.016 0.095 0.012"/></geometry>
+      <material name="suspension_silver"/>
+    </visual>
+    <visual name="fr_ball_joint">
+      <origin xyz="${front_axle_x} ${-half_track + wheel_width/2 + 0.025} 0.050"/>
+      <geometry><sphere radius="0.014"/></geometry>
+      <material name="diff_dark"/>
+    </visual>
+    <visual name="fr_damper">
+      <origin xyz="${front_axle_x - 0.015} ${-frame_rail_y - 0.060} 0.125" rpy="-0.25 0 0"/>
+      <geometry><cylinder radius="0.012" length="0.180"/></geometry>
+      <material name="diff_dark"/>
+    </visual>
+    <visual name="fr_spring_1">
+      <origin xyz="${front_axle_x - 0.015} ${-frame_rail_y - 0.060} 0.055" rpy="-0.25 0 0"/>
+      <geometry><cylinder radius="0.022" length="0.008"/></geometry>
+      <material name="suspension_cyan"/>
+    </visual>
+    <visual name="fr_spring_2">
+      <origin xyz="${front_axle_x - 0.015} ${-frame_rail_y - 0.055} 0.085" rpy="-0.25 0 0"/>
+      <geometry><cylinder radius="0.022" length="0.008"/></geometry>
+      <material name="suspension_cyan"/>
+    </visual>
+    <visual name="fr_spring_3">
+      <origin xyz="${front_axle_x - 0.015} ${-frame_rail_y - 0.050} 0.115" rpy="-0.25 0 0"/>
+      <geometry><cylinder radius="0.022" length="0.008"/></geometry>
+      <material name="suspension_cyan"/>
+    </visual>
+    <visual name="fr_spring_4">
+      <origin xyz="${front_axle_x - 0.015} ${-frame_rail_y - 0.045} 0.145" rpy="-0.25 0 0"/>
+      <geometry><cylinder radius="0.022" length="0.008"/></geometry>
+      <material name="suspension_cyan"/>
+    </visual>
+
+    <!-- ====== REAR LEFT ====== -->
+    <visual name="rl_trailing_arm">
+      <origin xyz="${rear_axle_x} ${frame_rail_y + 0.050} 0.015"/>
+      <geometry><box size="0.022 0.100 0.018"/></geometry>
+      <material name="suspension_silver"/>
+    </visual>
+    <visual name="rl_ball_joint">
+      <origin xyz="${rear_axle_x} ${half_track - wheel_width/2 - 0.025} 0.045"/>
+      <geometry><sphere radius="0.014"/></geometry>
+      <material name="diff_dark"/>
+    </visual>
+    <visual name="rl_damper">
+      <origin xyz="${rear_axle_x + 0.025} ${frame_rail_y + 0.060} 0.125" rpy="0.25 0 0"/>
+      <geometry><cylinder radius="0.012" length="0.180"/></geometry>
+      <material name="diff_dark"/>
+    </visual>
+    <visual name="rl_spring_1">
+      <origin xyz="${rear_axle_x + 0.025} ${frame_rail_y + 0.060} 0.055" rpy="0.25 0 0"/>
+      <geometry><cylinder radius="0.022" length="0.008"/></geometry>
+      <material name="suspension_cyan"/>
+    </visual>
+    <visual name="rl_spring_2">
+      <origin xyz="${rear_axle_x + 0.025} ${frame_rail_y + 0.055} 0.085" rpy="0.25 0 0"/>
+      <geometry><cylinder radius="0.022" length="0.008"/></geometry>
+      <material name="suspension_cyan"/>
+    </visual>
+    <visual name="rl_spring_3">
+      <origin xyz="${rear_axle_x + 0.025} ${frame_rail_y + 0.050} 0.115" rpy="0.25 0 0"/>
+      <geometry><cylinder radius="0.022" length="0.008"/></geometry>
+      <material name="suspension_cyan"/>
+    </visual>
+
+    <!-- ====== REAR RIGHT (mirrored) ====== -->
+    <visual name="rr_trailing_arm">
+      <origin xyz="${rear_axle_x} ${-frame_rail_y - 0.050} 0.015"/>
+      <geometry><box size="0.022 0.100 0.018"/></geometry>
+      <material name="suspension_silver"/>
+    </visual>
+    <visual name="rr_ball_joint">
+      <origin xyz="${rear_axle_x} ${-half_track + wheel_width/2 + 0.025} 0.045"/>
+      <geometry><sphere radius="0.014"/></geometry>
+      <material name="diff_dark"/>
+    </visual>
+    <visual name="rr_damper">
+      <origin xyz="${rear_axle_x + 0.025} ${-frame_rail_y - 0.060} 0.125" rpy="-0.25 0 0"/>
+      <geometry><cylinder radius="0.012" length="0.180"/></geometry>
+      <material name="diff_dark"/>
+    </visual>
+    <visual name="rr_spring_1">
+      <origin xyz="${rear_axle_x + 0.025} ${-frame_rail_y - 0.060} 0.055" rpy="-0.25 0 0"/>
+      <geometry><cylinder radius="0.022" length="0.008"/></geometry>
+      <material name="suspension_cyan"/>
+    </visual>
+    <visual name="rr_spring_2">
+      <origin xyz="${rear_axle_x + 0.025} ${-frame_rail_y - 0.055} 0.085" rpy="-0.25 0 0"/>
+      <geometry><cylinder radius="0.022" length="0.008"/></geometry>
+      <material name="suspension_cyan"/>
+    </visual>
+    <visual name="rr_spring_3">
+      <origin xyz="${rear_axle_x + 0.025} ${-frame_rail_y - 0.050} 0.115" rpy="-0.25 0 0"/>
+      <geometry><cylinder radius="0.022" length="0.008"/></geometry>
+      <material name="suspension_cyan"/>
+    </visual>
+
+  </xacro:macro>
+
+</robot>

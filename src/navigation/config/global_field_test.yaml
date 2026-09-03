@@ -1,0 +1,37 @@
+# Parameters for global_field_test_localizer only.
+# Production localization_cpp.yaml remains unchanged.
+global_field_test_localizer:
+  ros__parameters:
+    use_sim_time: false
+
+    # Same reference/convention as production localization_cpp.yaml
+    reference_latitude: -7.050964918716
+    reference_longitude: 110.435059847106
+    reference_map_x_m: 167.493142
+    reference_map_y_m: 94.933756
+    map_yaw_from_enu_rad: 0.0
+    map_calibration_x_m: 0.0
+    map_calibration_y_m: 0.0
+    map_calibration_yaw_rad: 0.0
+    gnss_antenna_x_m: 0.165
+    gnss_antenna_y_m: 0.0
+
+    # Independent test COG gate: no /odometry/filtered and no /esc/odom dependency.
+    enable_cog_fusion: true
+    cog_min_ground_speed_mps: 0.25
+    cog_max_sacc_mps: 0.50
+    cog_max_heading_accuracy_rad: 0.3490658504
+    cog_max_imu_gyro_z_rps: 0.12
+    cog_velocity_course_max_rad: 0.1745329252
+    quality_timeout_sec: 0.8
+    velocity_timeout_sec: 1.0
+    imu_timeout_sec: 0.75
+
+    # GNSS quality gate used before publishing COG.
+    # TEMPORARY LOWERED FOR INDOOR CODE TEST — NOT FOR REAL AUTONOMOUS
+    min_satellites: 4
+    max_dop: 20.0
+    max_hacc_m: 60.0
+
+    # Diagnostic only by default. Do not claim IMU orientation is map-aligned.
+    use_imu_orientation_seed: false
