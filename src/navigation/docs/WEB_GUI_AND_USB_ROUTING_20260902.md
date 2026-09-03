@@ -10,20 +10,26 @@
 
 ## USB routing on the current mini-PC
 
-GNSS and ESC are both CH340 `1a86:7523` and expose the same `ID_SERIAL=1a86_USB_Serial`.
-Therefore `/dev/serial/by-id` cannot distinguish them safely. Automatic routing is based on physical USB topology:
+Current USB-UART identities are distinct and are the primary automatic selectors:
 
-| Device | Runtime selector | observed tty |
-|---|---|---|
-| IMU | `usb-0:3.1:1.0` | `/dev/ttyUSB0` |
-| GNSS | `usb-0:3.4:1.0` | `/dev/ttyUSB1` |
-| ESC | `usb-0:1.1:1.0` | `/dev/ttyUSB2` |
+| Device | Primary `/dev/serial/by-id` selector | Fallback `/dev/serial/by-path` | observed tty |
+|---|---|---|---|
+| IMU | `Silicon_Labs_CP2102` (`10c4:ea60`) | `usb-0:3.1:1.0` | `/dev/ttyUSB0` |
+| GNSS | `1a86_USB_Serial` (`1a86:7523`) | `usb-0:3.4:1.0` | `/dev/ttyUSB1` |
+| ESC | `Prolific_Technology_Inc._USB-Serial_Controller` (`067b:2303`) | `usb-0:1.1:1.0` | `/dev/ttyUSB2` |
 
-The `ttyUSB` numbers are diagnostic only and are never the automatic authority. If a device is moved to another physical socket, the corresponding node fails closed until the YAML selector is deliberately updated or an explicit launch `port` is provided.
+`ttyUSB` numbers are diagnostic only. Every driver resolves a unique stable by-id first, so kernel renumbering or moving the adapter to another USB socket does not swap devices. The configured physical by-path is used only when the by-id selector is unavailable or ambiguous. If neither selector resolves exactly one device, auto-routing fails closed instead of guessing another serial port. GNSS still requires an NMEA/UBX protocol probe, IMU requires a valid WIT `0x55` checksum stream, and ESC is not considered ready until fresh firmware ACK/ready flags are received.
 
 ## ESC no-motion diagnosis
 
-The old source still expected a Prolific adapter, so the serial worker could never open the current CH340 ESC. The revised ESC node first selects `/dev/serial/by-path/*usb-0:1.1:1.0*`, then requires fresh firmware ACK and ready flags. The browser ESC page shows serial state, ACK, firmware readiness, command source, target command, E-STOP and feedback.
+The ESC UART is a Prolific PL2303 (`067b:2303`). The revised ESC node first resolves its unique `/dev/serial/by-id` entry and only falls back to the configured physical path when identity matching is unavailable or ambiguous. The browser ESC page shows serial state, active path, ACK, firmware readiness, command source, target command, E-STOP and feedback.
+
+Read-only USB identity validation can be run before launch:
+
+```bash
+cd ~/ros
+python3 src/navigation/tools/serial_usb_preflight.py --workspace ~/ros
+```
 
 Recommended validation after launch:
 

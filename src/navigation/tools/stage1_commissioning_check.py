@@ -60,26 +60,30 @@ def main() -> int:
     imu = load_params(nav / "config/imu.yaml", "data_imu_node")
     esc = load_params(esc_dir / "config/ackermann.yaml", "esc_ackermann")
 
-    selectors: Dict[str, str] = {
-        "ESC": str(esc.get("serial_auto_path_contains", "")),
-        "GNSS": str(gnss.get("auto_port_path_contains", "")),
-        "IMU": str(imu.get("auto_port_path_contains", "")),
+    selectors: Dict[str, Tuple[str, str]] = {
+        "ESC": (str(esc.get("serial_auto_id_contains", "")), str(esc.get("serial_auto_path_contains", ""))),
+        "GNSS": (str(gnss.get("auto_port_id_contains", "")), str(gnss.get("auto_port_path_contains", ""))),
+        "IMU": (str(imu.get("auto_port_id_contains", "")), str(imu.get("auto_port_path_contains", ""))),
     }
 
-    print("=== STAGE-1 HARDWARE ROUTING (/dev/serial/by-path) ===")
+    print("=== STAGE-1 HARDWARE ROUTING (by-id primary, by-path fallback) ===")
     found: Dict[str, Tuple[Path, str] | None] = {}
     identity_ok = True
-    for name, selector in selectors.items():
-        matches = find_serial(selector, by_path=True)
+    for name, (id_selector, path_selector) in selectors.items():
+        matches = find_serial(id_selector, by_path=False)
+        source = "by-id"
+        if len(matches) != 1:
+            matches = find_serial(path_selector, by_path=True)
+            source = "by-path-fallback"
         if len(matches) != 1:
             identity_ok = False
             found[name] = None
-            print(f"{name:4s}: FAIL selector={selector!r} matches={len(matches)}")
+            print(f"{name:4s}: FAIL id={id_selector!r} path={path_selector!r} matches={len(matches)}")
             for p in matches:
                 print(f"      - {p} -> {resolved(p)}")
         else:
             found[name] = (matches[0], resolved(matches[0]))
-            print(f"{name:4s}: PASS {matches[0]} -> {found[name][1]}")
+            print(f"{name:4s}: PASS [{source}] {matches[0]} -> {found[name][1]}")
 
     resolved_nodes = [v[1] for v in found.values() if v is not None]
     if len(resolved_nodes) != len(set(resolved_nodes)):
@@ -115,7 +119,7 @@ def main() -> int:
     if not circle_ok:
         print("  3. GUI Odom/Circle: minimal 2 trial kiri + 2 kanan, lalu Apply Part 3.")
     if not identity_ok:
-        print("  0. Benahi /dev/serial/by-path / posisi USB; jangan pakai ttyUSB index tetap.")
+        print("  0. Benahi USB identity/by-id atau fallback by-path; jangan pakai ttyUSB index tetap.")
     return 3
 
 

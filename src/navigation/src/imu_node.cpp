@@ -199,28 +199,33 @@ ImuNode::~ImuNode()
 // Fungsi: Mendeteksi port IMU dengan prioritas symlink persisten lalu fallback USB/ACM.
 std::vector<std::string> ImuNode::detectPort()
 {
-  std::vector<std::string> candidates;
-
-  if (!auto_port_path_contains_.empty()) {
-    for (const auto & p : globPattern("/dev/serial/by-path/*")) {
-      if (p.find(auto_port_path_contains_) != std::string::npos) candidates.push_back(p);
-    }
-    if (candidates.size() == 1U) return candidates;
-    if (candidates.size() > 1U) return {};
-  }
-
-  auto by_id = globPattern("/dev/serial/by-id/*");
-  // Hardware IMU tetap mempunyai USB identity unik sebagai fallback aman.
+  // 1) Stable USB identity is primary. CP2102 exposes a unique by-id on this
+  // vehicle, so moving the cable or kernel ttyUSB renumbering cannot swap it.
   if (!auto_port_id_contains_.empty()) {
-    for (const auto & p : by_id) {
-      if (p.find(auto_port_id_contains_) != std::string::npos) candidates.push_back(p);
+    std::vector<std::string> matches;
+    for (const auto & p : globPattern("/dev/serial/by-id/*")) {
+      if (p.find(auto_port_id_contains_) != std::string::npos) matches.push_back(p);
     }
-    if (candidates.size() == 1U) return candidates;
-    return {};
+    if (matches.size() == 1U) return matches;
   }
 
-  // Fallback generik hanya bila kedua filter sengaja dikosongkan dari YAML.
-  candidates = std::move(by_id);
+  // 2) Keep physical topology only as a deterministic fallback for systems
+  // where by-id is absent/duplicated. A selected port must still pass the WIT
+  // 0x55 checksum probe before it is accepted as the IMU.
+  if (!auto_port_path_contains_.empty()) {
+    std::vector<std::string> matches;
+    for (const auto & p : globPattern("/dev/serial/by-path/*")) {
+      if (p.find(auto_port_path_contains_) != std::string::npos) matches.push_back(p);
+    }
+    if (matches.size() == 1U) return matches;
+  }
+
+  // Configured selectors that are unresolved/ambiguous fail closed. Hot-plug
+  // retry will re-run detection; never guess another ttyUSB device.
+  if (!auto_port_id_contains_.empty() || !auto_port_path_contains_.empty()) return {};
+
+  // Generic fallback is opt-in only by clearing both selectors.
+  std::vector<std::string> candidates = globPattern("/dev/serial/by-id/*");
   if (candidates.empty()) {
     auto usb = globPattern("/dev/ttyUSB*");
     auto acm = globPattern("/dev/ttyACM*");

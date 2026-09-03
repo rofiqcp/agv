@@ -5,6 +5,7 @@ data_imu_node:
     baudrate: 9600
     auto_baud: false
     baud_probe_sec: 0.5
+    # Primary selector: stable USB identity (CP2102 10c4:ea60).
     auto_port_id_contains: Silicon_Labs_CP2102
     auto_port_path_contains: usb-0:3.1:1.0
     frame_id: imu_link

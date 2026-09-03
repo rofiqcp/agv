@@ -45,18 +45,18 @@ if float(ack.get("serial_tx_rate_hz", 0.0)) != float(ack.get("command_rate_hz", 
     fail("ROS command and STM transmit rates must match")
 if int(ack.get("serial_baud", 0)) != 115200:
     fail("STM protocol baud must remain 115200")
-if "1a86_USB_Serial" not in str(ack.get("serial_auto_id_contains", "")):
-    fail("ESC CH340 identity fallback is invalid")
-if "usb-0:1.1:1.0" not in str(ack.get("serial_auto_path_contains", "")):
-    fail("ESC physical USB-path selector is invalid")
-if 'directory_iterator("/dev/serial/by-path"' not in source:
-    fail("ESC must prefer /dev/serial/by-path before ambiguous by-id")
-if "Never fall back to a now-unique CH340 by-id" not in source:
-    fail("ESC must fail closed when configured physical CH340 socket disappears")
+if "Prolific_Technology_Inc._USB-Serial_Controller" not in str(ack.get("serial_auto_id_contains", "")):
+    fail("ESC PL2303 by-id selector is invalid")
+if not str(ack.get("serial_auto_path_contains", "")).strip():
+    fail("ESC must retain a non-empty physical by-path fallback")
+if source.find('directory_iterator("/dev/serial/by-id"') > source.find('directory_iterator("/dev/serial/by-path"'):
+    fail("ESC must evaluate unique by-id before physical by-path fallback")
+if "configured selectors cannot resolve" not in source:
+    fail("ESC auto-routing must fail closed when identity/path are unresolved")
 if "no unique serial candidate" not in source:
-    fail("ESC must expose a clear diagnostic when physical by-path is unresolved")
+    fail("ESC must expose a clear diagnostic when serial identity is unresolved")
 if "errno == EAGAIN || errno == EWOULDBLOCK" not in source or "would_block_retries" not in source:
-    fail("ESC nonblocking CH340 TX must tolerate bounded transient EAGAIN")
+    fail("ESC nonblocking USB-UART TX must tolerate bounded transient EAGAIN")
 if "serial_active_path_" not in source or '<< " path="' not in source:
     fail("ESC status must report the active physical serial path")
 if float(shared.get("speed_max", -1.0)) != float(ack.get("speed_max", -2.0)):

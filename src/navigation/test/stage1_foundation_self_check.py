@@ -29,20 +29,24 @@ esc = load_params(ESC / "config/ackermann.yaml", "esc_ackermann")
 gnss = load_params(NAV / "config/gnss.yaml", "data_cuav_node")
 imu = load_params(NAV / "config/imu.yaml", "data_imu_node")
 
-# 1) Hardware routing must be deterministic. GNSS + ESC are identical CH340
-# adapters, therefore physical /dev/serial/by-path selectors are authoritative.
+# 1) Hardware routing must be deterministic and portable. Stable USB by-id
+# identities are primary; physical by-path values are only fail-closed fallbacks.
+identities = {
+    "ESC": esc["serial_auto_id_contains"],
+    "GNSS": gnss["auto_port_id_contains"],
+    "IMU": imu["auto_port_id_contains"],
+}
+require(identities["ESC"] == "Prolific_Technology_Inc._USB-Serial_Controller", "ESC PL2303 identity changed")
+require(identities["GNSS"] == "1a86_USB_Serial", "GNSS CH340 identity changed")
+require(identities["IMU"] == "Silicon_Labs_CP2102", "IMU CP2102 identity changed")
+require(len(set(identities.values())) == len(identities), "serial by-id selectors overlap")
 selectors = {
     "ESC": esc["serial_auto_path_contains"],
     "GNSS": gnss["auto_port_path_contains"],
     "IMU": imu["auto_port_path_contains"],
 }
-require(selectors["ESC"] == "usb-0:1.1:1.0", "ESC physical path changed unexpectedly")
-require(selectors["GNSS"] == "usb-0:3.4:1.0", "GNSS physical path changed unexpectedly")
-require(selectors["IMU"] == "usb-0:3.1:1.0", "IMU physical path changed unexpectedly")
-require(len(set(selectors.values())) == len(selectors), "serial physical-path selectors overlap")
-require(esc["serial_auto_id_contains"] == "1a86_USB_Serial", "ESC CH340 identity fallback changed")
-require(gnss["auto_port_id_contains"] == "1a86_USB_Serial", "GNSS CH340 identity fallback changed")
-require(imu["auto_port_id_contains"] == "Silicon_Labs_CP2102", "IMU identity changed")
+require(all(str(v).strip() for v in selectors.values()), "serial by-path fallback must be non-empty")
+require(len(set(selectors.values())) == len(selectors), "serial physical-path fallbacks overlap")
 
 # 2) Calibration state must be explicit, but this regression test must remain
 # valid both before and after real field commissioning.
@@ -118,9 +122,9 @@ require("std::abs(steering_physical_operational_limit_deg_)" in esc_cpp,
 gnss_cpp = (NAV / "src/gnss_node.cpp").read_text(encoding="utf-8")
 imu_cpp = (NAV / "src/imu_node.cpp").read_text(encoding="utf-8")
 for label, source, token in (
-    ("ESC", esc_cpp, "result.size() == 1U"),
-    ("GNSS", gnss_cpp, "out.size() == 1U"),
-    ("IMU", imu_cpp, "candidates.size() == 1U"),
+    ("ESC", esc_cpp, "matches.size() == 1U"),
+    ("GNSS", gnss_cpp, "matches.size() == 1U"),
+    ("IMU", imu_cpp, "matches.size() == 1U"),
 ):
     require(token in source, f"{label} identity matching must fail closed when ambiguous")
 

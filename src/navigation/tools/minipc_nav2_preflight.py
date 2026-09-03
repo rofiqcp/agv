@@ -160,16 +160,20 @@ def main() -> int:
             waits.append(f"kalibrasi {name} belum PASS")
 
     selectors = {
-        # GNSS and ESC are identical CH340 adapters in the deployed mini-PC.
-        # Physical USB topology is authoritative; IMU also has a by-path selector
-        # while retaining its unique CP2102 by-id as an explicit fallback.
-        "ESC": ("by-path", str(esc.get("serial_auto_path_contains", ""))),
-        "GNSS": ("by-path", str(gnss.get("auto_port_path_contains", ""))),
-        "IMU": ("by-path", str(imu.get("auto_port_path_contains", ""))),
+        # Stable USB identities are primary. Current hardware is distinct:
+        # GNSS=CH340, IMU=CP2102, ESC=PL2303. by-path is fallback only.
+        "ESC": (str(esc.get("serial_auto_id_contains", "")), str(esc.get("serial_auto_path_contains", ""))),
+        "GNSS": (str(gnss.get("auto_port_id_contains", "")), str(gnss.get("auto_port_path_contains", ""))),
+        "IMU": (str(imu.get("auto_port_id_contains", "")), str(imu.get("auto_port_path_contains", ""))),
     }
     hardware_rows: list[tuple[str, str, str, list[Path]]] = []
-    for name, (kind, selector) in selectors.items():
-        hardware_rows.append((name, kind, selector, one_serial(selector, by_path=(kind == "by-path"))))
+    for name, (id_selector, path_selector) in selectors.items():
+        matches = one_serial(id_selector, by_path=False)
+        kind, selector = "by-id", id_selector
+        if len(matches) != 1:
+            matches = one_serial(path_selector, by_path=True)
+            kind, selector = "by-path-fallback", path_selector
+        hardware_rows.append((name, kind, selector, matches))
 
     print("MINI-PC AGV PREFLIGHT")
     print(f"workspace: {workspace}")

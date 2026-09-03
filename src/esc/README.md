@@ -72,12 +72,13 @@ source install/setup.bash
 Standalone ESC runtime:
 
 ```bash
-# Default Mini-PC: ESC dipilih fail-closed berdasarkan physical USB topology.
-# ESC CH340 berada pada USB path ...usb-0:1.1:1.0 sehingga perubahan ttyUSB tidak mengubah identitas.
+# Default Mini-PC: ESC PL2303 dipilih dari stable /dev/serial/by-id.
+# by-path ...usb-0:1.1:1.0 hanya fallback jika by-id unavailable/ambiguous.
+# Nomor /dev/ttyUSBx tidak pernah menjadi authority otomatis.
 ros2 launch esc esc.launch.py
 
 # Override hanya untuk commissioning/debug yang disengaja:
-# ros2 launch esc esc.launch.py serial_device:=/dev/serial/by-path/<ESC_PATH>
+# ros2 launch esc esc.launch.py serial_device:=/dev/serial/by-id/<ESC_ID>
 ```
 
 Full autonomous runtime remains through `navigation/launch/autonomous.launch.py`.

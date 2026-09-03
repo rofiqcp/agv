@@ -114,9 +114,10 @@ GnssNode::GnssNode(const rclcpp::NodeOptions & options)
   port_ = this->declare_parameter<std::string>("port", "auto");
   auto_port_id_contains_ = this->declare_parameter<std::string>(
     "auto_port_id_contains", "1a86_USB_Serial");
-  // GNSS dan ESC lapangan sama-sama memakai CH340 1a86:7523 dengan ID_SERIAL
-  // identik. by-path menjadi selector utama agar frame UBX tidak pernah dikirim
-  // ke ESC hanya karena nomor ttyUSB berubah.
+  // CUAV NEO-3 pada deployment ini memakai CH340 1a86:7523. USB by-id adalah
+  // selector utama karena stabil terhadap renumber ttyUSB dan perpindahan slot.
+  // by-path dipertahankan hanya sebagai fallback fail-closed bila by-id hilang
+  // atau menjadi ambigu; stream tetap wajib lolos probe NMEA/UBX sebelum diterima.
   auto_port_path_contains_ = this->declare_parameter<std::string>(
     "auto_port_path_contains", "usb-0:3.4:1.0");
   // ROS 2 menyimpan parameter INTEGER sebagai int64_t. Gunakan tipe itu secara
@@ -279,44 +280,43 @@ std::vector<std::string> GnssNode::candidatePorts()
 {
   if (!isAutoPort()) return {port_};
 
-  std::vector<std::string> out;
-
-  // Physical USB topology is authoritative when configured. This is required
-  // on the current mini-PC because GNSS and ESC expose the SAME CH340
-  // ID_VENDOR/ID_MODEL/ID_SERIAL. /dev/serial/by-path remains stable when the
-  // kernel renumbers ttyUSB0/1/2. If the physical socket changes we fail
-  // closed; the operator may override `port:=...` deliberately.
-  if (!auto_port_path_contains_.empty()) {
-    for (const auto & p : globPattern("/dev/serial/by-path/*")) {
-      if (p.find(auto_port_path_contains_) != std::string::npos) out.push_back(p);
-    }
-    // Do NOT fall back to CH340 by-id when this configured physical socket is
-    // absent: the remaining CH340 may be the ESC. Explicit `port:=...` is the
-    // only deliberate override for moved hardware.
-    if (out.size() == 1U) return out;
-    return {};
-  }
-
-  auto by_id = globPattern("/dev/serial/by-id/*");
+  // 1) Stable USB identity is authoritative when it resolves uniquely. This
+  // survives ttyUSB renumbering and moving the adapter to another hub/socket.
   if (!auto_port_id_contains_.empty()) {
-    for (const auto & p : by_id) {
-      if (p.find(auto_port_id_contains_) != std::string::npos) out.push_back(p);
+    std::vector<std::string> matches;
+    for (const auto & p : globPattern("/dev/serial/by-id/*")) {
+      if (p.find(auto_port_id_contains_) != std::string::npos) matches.push_back(p);
     }
-    if (out.size() == 1U) return out;
-    return {};
+    if (matches.size() == 1U) return matches;
   }
 
-  out = std::move(by_id);
+  // 2) Physical topology is a deterministic fallback for adapters whose by-id
+  // is unavailable or duplicated. It is never used when a unique by-id exists.
+  if (!auto_port_path_contains_.empty()) {
+    std::vector<std::string> matches;
+    for (const auto & p : globPattern("/dev/serial/by-path/*")) {
+      if (p.find(auto_port_path_contains_) != std::string::npos) matches.push_back(p);
+    }
+    if (matches.size() == 1U) return matches;
+  }
+
+  // A configured identity/path that cannot be resolved uniquely must fail
+  // closed. Do not scan arbitrary serial ports and risk sending UBX CFG frames
+  // to the IMU or ESC. Hot-plug retry will re-evaluate these selectors.
+  if (!auto_port_id_contains_.empty() || !auto_port_path_contains_.empty()) return {};
+
+  // Generic discovery is only allowed when the operator deliberately disables
+  // both selectors. The subsequent protocol probe still has to see NMEA/UBX.
+  std::vector<std::string> out = globPattern("/dev/serial/by-id/*");
   auto acm = globPattern("/dev/ttyACM*");
   auto usb = globPattern("/dev/ttyUSB*");
   out.insert(out.end(), acm.begin(), acm.end());
   out.insert(out.end(), usb.begin(), usb.end());
 
-  // Deduplicate by realpath
   std::vector<std::string> deduped;
   std::vector<std::string> seen;
   for (const auto & p : out) {
-    std::string r = resolvePath(p);
+    const std::string r = resolvePath(p);
     if (std::find(seen.begin(), seen.end(), r) == seen.end()) {
       seen.push_back(r);
       deduped.push_back(p);

@@ -84,7 +84,8 @@ esc_ackermann:
     steering_center_bias_from_left_deg: 0.0
     steering_center_bias_from_right_deg: 0.0
     steering_calibration_apply_token: V8.2:1787392646867559142
-    serial_auto_id_contains: 1a86_USB_Serial
+    # Primary selector: stable USB identity (PL2303 067b:2303).
+    serial_auto_id_contains: Prolific_Technology_Inc._USB-Serial_Controller
     serial_auto_path_contains: usb-0:1.1:1.0
     serial_baud: 115200
     serial_tx_rate_hz: 50.0

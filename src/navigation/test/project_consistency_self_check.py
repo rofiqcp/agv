@@ -27,24 +27,26 @@ esc = load(WS/'esc/config/ackermann.yaml')['esc_ackermann']['ros__parameters']
 gnss = load(ROOT/'config/gnss.yaml')['data_cuav_node']['ros__parameters']
 imu = load(ROOT/'config/imu.yaml')['data_imu_node']['ros__parameters']
 
-# Current deployment has two identical CH340 adapters (GNSS + ESC), so USB
-# identity is intentionally NOT unique. Physical by-path selectors must be unique.
+# Current deployment uses three distinct USB-UART families. Stable by-id
+# identity is primary; physical by-path remains only a deterministic fallback.
 expected_ids = {
-    'ESC': (esc['serial_auto_id_contains'], '1a86_USB_Serial'),
+    'ESC': (esc['serial_auto_id_contains'], 'Prolific_Technology_Inc._USB-Serial_Controller'),
     'GNSS': (gnss['auto_port_id_contains'], '1a86_USB_Serial'),
     'IMU': (imu['auto_port_id_contains'], 'Silicon_Labs_CP2102'),
 }
 for name, (actual, wanted) in expected_ids.items():
     if wanted not in str(actual): fail(f'{name} serial id selector {actual!r} does not contain {wanted!r}')
+if len({str(x[0]) for x in expected_ids.values()}) != 3:
+    fail('serial by-id selectors are not unique')
 expected_paths = {
-    'ESC': (esc['serial_auto_path_contains'], 'usb-0:1.1:1.0'),
-    'GNSS': (gnss['auto_port_path_contains'], 'usb-0:3.4:1.0'),
-    'IMU': (imu['auto_port_path_contains'], 'usb-0:3.1:1.0'),
+    'ESC': str(esc['serial_auto_path_contains']),
+    'GNSS': str(gnss['auto_port_path_contains']),
+    'IMU': str(imu['auto_port_path_contains']),
 }
-for name, (actual, wanted) in expected_paths.items():
-    if wanted not in str(actual): fail(f'{name} serial path selector {actual!r} does not contain {wanted!r}')
-if len({str(x[0]) for x in expected_paths.values()}) != 3:
-    fail('serial physical-path selectors are not unique')
+if any(not value.strip() for value in expected_paths.values()):
+    fail('serial physical-path fallback is empty')
+if len(set(expected_paths.values())) != 3:
+    fail('serial physical-path fallbacks are not unique')
 
 all_text = '\n'.join(
     p.read_text(errors='ignore') for p in WS.rglob('*')
@@ -63,15 +65,16 @@ esc_cpp = (WS/'esc/src/ackermann_controller_server.cpp').read_text()
 for text, token, name in [
     (gnss_cpp, '"auto_port_id_contains", "1a86_USB_Serial"', 'GNSS'),
     (imu_cpp, '"auto_port_id_contains", "Silicon_Labs_CP2102"', 'IMU'),
-    (esc_cpp, '"serial_auto_id_contains", "1a86_USB_Serial"', 'ESC'),
-    (esc_cpp, '"serial_auto_path_contains", "usb-0:1.1:1.0"', 'ESC path'),
+    (esc_cpp, '"serial_auto_id_contains", "Prolific_Technology_Inc._USB-Serial_Controller"', 'ESC'),
 ]:
     if token not in text: fail(f'{name} source fallback does not match YAML')
 
-if 'Do NOT fall back to CH340 by-id' not in gnss_cpp:
-    fail('GNSS must fail closed when configured physical CH340 socket disappears')
-if 'Never fall back to a now-unique CH340 by-id' not in esc_cpp:
-    fail('ESC must fail closed when configured physical CH340 socket disappears')
+if gnss_cpp.find('globPattern("/dev/serial/by-id/*")') > gnss_cpp.find('globPattern("/dev/serial/by-path/*")'):
+    fail('GNSS must prefer by-id before by-path fallback')
+if imu_cpp.find('globPattern("/dev/serial/by-id/*")') > imu_cpp.find('globPattern("/dev/serial/by-path/*")'):
+    fail('IMU must prefer by-id before by-path fallback')
+if esc_cpp.find('directory_iterator("/dev/serial/by-id"') > esc_cpp.find('directory_iterator("/dev/serial/by-path"'):
+    fail('ESC must prefer by-id before by-path fallback')
 
 # Geometry must be self-consistent even before physical commissioning.
 L = float(vehicle['effective_wheelbase_m'])

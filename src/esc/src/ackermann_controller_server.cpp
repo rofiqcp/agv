@@ -274,9 +274,10 @@ private:
     // intentionally disabled. Disabled never means READY; it only suppresses open/retry.
     declare_parameter<bool>("serial_enabled", true);
     declare_parameter<std::string>("serial_device", "auto");
-    declare_parameter<std::string>("serial_auto_id_contains", "1a86_USB_Serial");
-    // Current hardware: ESC and GNSS are identical CH340 adapters. Select the
-    // ESC by physical USB topology first; never guess from ttyUSB number.
+    declare_parameter<std::string>(
+      "serial_auto_id_contains", "Prolific_Technology_Inc._USB-Serial_Controller");
+    // Current ESC UART is a Prolific PL2303 (067b:2303). Unique by-id is the
+    // primary selector; physical topology is only a deterministic fallback.
     declare_parameter<std::string>("serial_auto_path_contains", "usb-0:1.1:1.0");
     declare_parameter<int>("serial_baud", 115200);
     declare_parameter<double>("serial_tx_rate_hz", 50.0);
@@ -1333,47 +1334,40 @@ private:
       return {serial_device_};
     }
 
-    std::vector<std::string> result;
     std::error_code ec;
 
-    // The deployed GNSS and ESC are both CH340 1a86:7523 and report the same
-    // ID_SERIAL. Physical USB topology is therefore the only automatic selector
-    // that can distinguish them without transmitting motor frames to GNSS.
-    if (!serial_auto_path_contains_.empty()) {
-      if (fs::exists("/dev/serial/by-path", ec)) {
-        for (const auto & entry : fs::directory_iterator("/dev/serial/by-path", ec)) {
-          const std::string path = entry.path().string();
-          if (path.find(serial_auto_path_contains_) != std::string::npos) result.push_back(path);
-        }
-        std::sort(result.begin(), result.end());
-      }
-      // Never fall back to a now-unique CH340 by-id if the ESC physical socket
-      // is missing: that single CH340 could be the GNSS. Explicit serial_device
-      // is the only intentional override when moving USB hardware.
-      if (result.size() == 1U) return result;
-      return {};
-    }
-
-    if (fs::exists("/dev/serial/by-id", ec)) {
+    // 1) Stable USB identity is authoritative when unique. The deployed ESC
+    // adapter is Prolific PL2303 (067b:2303), distinct from GNSS CH340 and IMU
+    // CP2102, so this remains correct across ttyUSB renumbering and port moves.
+    if (!serial_auto_id_contains_.empty() && fs::exists("/dev/serial/by-id", ec)) {
+      std::vector<std::string> matches;
       for (const auto & entry : fs::directory_iterator("/dev/serial/by-id", ec)) {
         const std::string path = entry.path().string();
-        if (serial_auto_id_contains_.empty() ||
-            path.find(serial_auto_id_contains_) != std::string::npos) {
-          result.push_back(path);
-        }
+        if (path.find(serial_auto_id_contains_) != std::string::npos) matches.push_back(path);
       }
-      std::sort(result.begin(), result.end());
+      std::sort(matches.begin(), matches.end());
+      if (matches.size() == 1U) return matches;
     }
 
-    // Fail closed when by-id is ambiguous. On this vehicle it normally is
-    // ambiguous because GNSS and ESC are identical CH340 devices; by-path above
-    // must resolve the ESC first. Explicit `serial_device:=...` remains the
-    // deliberate commissioning override.
-    if (!serial_auto_id_contains_.empty()) {
-      if (result.size() == 1U) return result;
-      return {};
+    // 2) Physical USB topology is only a fallback if by-id is unavailable or
+    // ambiguous. This preserves deterministic operation on clone adapters while
+    // never overriding a unique USB identity.
+    if (!serial_auto_path_contains_.empty() && fs::exists("/dev/serial/by-path", ec)) {
+      std::vector<std::string> matches;
+      for (const auto & entry : fs::directory_iterator("/dev/serial/by-path", ec)) {
+        const std::string path = entry.path().string();
+        if (path.find(serial_auto_path_contains_) != std::string::npos) matches.push_back(path);
+      }
+      std::sort(matches.begin(), matches.end());
+      if (matches.size() == 1U) return matches;
     }
 
+    // Actuator routing must fail closed if configured selectors cannot resolve
+    // exactly one device. Never send STM command frames to arbitrary ttyUSBs.
+    if (!serial_auto_id_contains_.empty() || !serial_auto_path_contains_.empty()) return {};
+
+    // Generic discovery is explicit opt-in only (both selectors cleared).
+    std::vector<std::string> result;
     for (const char * prefix : {"/dev/ttyUSB", "/dev/ttyACM"}) {
       for (int i = 0; i < 16; ++i) {
         const std::string path = std::string(prefix) + std::to_string(i);
@@ -1382,6 +1376,7 @@ private:
     }
     return result;
   }
+
 
   int openSerial(std::string & active_path)
   {
@@ -1392,8 +1387,8 @@ private:
       // /esc/ready dan ROS Web tetap OFFLINE sampai perangkat benar-benar muncul.
       RCLCPP_WARN_ONCE(
         get_logger(),
-        "[ESC] no unique serial candidate; expected /dev/serial/by-path/*%s* (GNSS/ESC CH340 by-id is ambiguous)",
-        serial_auto_path_contains_.c_str());
+        "[ESC] no unique serial candidate; expected by-id '*%s*' or fallback by-path '*%s*'",
+        serial_auto_id_contains_.c_str(), serial_auto_path_contains_.c_str());
       return -1;
     }
 
@@ -1468,8 +1463,8 @@ private:
       }
       if (n < 0 && errno == EINTR) continue;
       if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) && would_block_retries++ < 20) {
-        // O_NONBLOCK avoids a stuck actuator thread. A CH340 may transiently
-        // report EAGAIN under USB scheduling pressure; retry for <=2 ms before
+        // O_NONBLOCK avoids a stuck actuator thread. A USB-UART adapter may
+        // transiently report EAGAIN under USB scheduling pressure; retry for <=2 ms before
         // reconnecting instead of dropping a valid link immediately.
         std::this_thread::sleep_for(100us);
         continue;
@@ -1979,7 +1974,7 @@ private:
   std::string serial_active_path_;
   bool serial_enabled_{true};
   std::string serial_device_{"auto"};
-  std::string serial_auto_id_contains_{"1a86_USB_Serial"};
+  std::string serial_auto_id_contains_{"Prolific_Technology_Inc._USB-Serial_Controller"};
   std::string serial_auto_path_contains_{"usb-0:1.1:1.0"};
   int serial_baud_{115200};
   double serial_tx_rate_hz_{50.0};

@@ -232,6 +232,7 @@ install(
     tools/nav2_gui_flow_check.sh
     tools/rosbag_regression.py
     tools/runtime_profile.py
+    tools/serial_usb_preflight.py
     tools/stage1_commissioning_check.py
     tools/stage2_commissioning_check.py
     tools/stage2_motion_csv_analyzer.py
