@@ -30,6 +30,36 @@ enum VehicleMode : uint8_t { MODE_AUTO = 0, MODE_MANUAL };
 enum VehicleState : uint8_t { STATE_STANDBY = 0, STATE_RUNNING, STATE_STOPPED, STATE_FAULT };
 enum GpsFixState : uint8_t { GPS_LOST = 0, GPS_NO_FIX, GPS_2D_FIX, GPS_3D_FIX, GPS_DEGRADED };
 
+enum CameraSubPage : uint8_t {
+  CAM_VIEW = 0,
+  CAM_DETECT,
+  CAM_DRIVE,
+  CAM_STATUS,
+  CAM_NONE = 255
+};
+
+enum WaypointAction : uint8_t {
+  WP_ACTION_NONE = 0,
+  WP_PREV,
+  WP_NEXT,
+  WP_SAVE,
+  WP_GO,
+  WP_STOP
+};
+
+enum NavigationStatus : uint8_t {
+  NAV_IDLE = 0,
+  NAV_SELECTED,
+  NAV_QUEUED,
+  NAV_NAVIGATING,
+  NAV_ARRIVED,
+  NAV_STOPPED,
+  NAV_FAILED
+};
+
+static const uint8_t HMI_WAYPOINT_COUNT = 4;
+static const uint8_t HMI_WAYPOINT_NAME_LEN = 20;
+
 enum ControlAction : uint8_t {
   CTRL_NONE = 0,
   CTRL_FORWARD,
@@ -87,6 +117,31 @@ static const int HOME_MODE_Y = 34;
 static const int HOME_STATE_Y = 110;
 static const int HOME_SIDE_H = 70;
 
+// CAMERA submenu. Four 72x27 tabs remain comfortably finger-touchable.
+static const int CAM_TAB_Y = 34;
+static const int CAM_TAB_H = 30;
+static const int CAM_TAB_W = 72;
+static const int CAM_TAB_GAP = 5;
+static const int CAM_TAB_X0 = 8;
+static const int CAM_CONTENT_Y = 68;
+static const int CAM_CONTENT_H = 112;
+
+// GPS waypoint controls. The action row is 34 px tall for fingertip use.
+static const int GPS_WP_Y = 140;
+static const int GPS_WP_H = 36;
+static const int GPS_WP_PREV_X = 12;
+static const int GPS_WP_PREV_W = 34;
+static const int GPS_WP_NAME_X = 49;
+static const int GPS_WP_NAME_W = 74;
+static const int GPS_WP_NEXT_X = 126;
+static const int GPS_WP_NEXT_W = 34;
+static const int GPS_WP_SAVE_X = 163;
+static const int GPS_WP_SAVE_W = 48;
+static const int GPS_WP_GO_X = 214;
+static const int GPS_WP_GO_W = 44;
+static const int GPS_WP_STOP_X = 261;
+static const int GPS_WP_STOP_W = 47;
+
 // CAMERA / GPS full card.
 static const int FULL_CARD_X = 6;
 static const int FULL_CARD_Y = 34;
@@ -123,15 +178,17 @@ static const int MANUAL_SPEED_DEFAULT = 20;
 static const int MANUAL_SPEED_MIN = 10;
 static const int MANUAL_SPEED_MAX = 50;
 static const int MANUAL_SPEED_STEP = 10;
-static const float STEER_MIN_DEG = -30.0f;
-static const float STEER_MAX_DEG =  30.0f;
+static const float STEER_MIN_DEG = -90.0f;
+static const float STEER_MAX_DEG =  90.0f;
 
-// One-tap steering presets. Tune these to the real Ackermann/mechanical
-// steering range after measuring the vehicle. LEFT/RIGHT are latched targets;
-// CENTER always commands 0 degrees.
-static const float STEER_LEFT_PRESET_DEG  = -15.0f;
-static const float STEER_RIGHT_PRESET_DEG =  15.0f;
+// One-tap steering presets use the STM steering command domain: -90..+90 deg.
+// Physical wheel angle remains a separate calibrated quantity in ROS/ESC.
+// LEFT/RIGHT are latched full-scale targets; CENTER commands 0 degrees.
+static const float STEER_LEFT_PRESET_DEG  = -90.0f;
+static const float STEER_RIGHT_PRESET_DEG =  90.0f;
 
+// Touch threshold from the original working HMI. TFT_eSPI performs the
+// pressure validation/debounce internally through getTouch().
 static const uint16_t TOUCH_THRESHOLD = 600;
 
 // Splash timing.

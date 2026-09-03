@@ -101,7 +101,7 @@ ExperimentParameterPanel::ExperimentParameterPanel(QWidget *parent) : QWidget(pa
   scroll_->setWidget(container_);
   layout->addWidget(scroll_, 1);
   currentSubsystem_ = QStringLiteral("navigation");
-  currentLeafId_ = QStringLiteral("4.1.1");
+  currentLeafId_ = QStringLiteral("N0.1");
 }
 
 void ExperimentParameterPanel::buildFor(const QString &subsystem, const QString &leafId,
@@ -119,16 +119,24 @@ const QMap<QString, std::shared_ptr<YamlStore>> &stores) {
   auto *runGroup = newGroup(QStringLiteral("Identitas Run"));
   // Group: Ground Truth
   auto *gtGroup = newGroup(QStringLiteral("Ground Truth"));
-  // Group: Parameter / YAML
+  // Group: Parameter / YAML. Staged tuning leaves can request additional
+  // named subgroups (P/Q/R, timing, rejection, safety, etc.) so the left
+  // workbench follows the commissioning order instead of showing one flat list.
   auto *yamlGroup = newGroup(QStringLiteral("Parameter / YAML"));
+  QMap<QString,QGroupBox*> stagedGroups;
   for (const ExperimentParameterField &f : fields) {
     QWidget *target = yamlGroup;
     if (f.key == QStringLiteral("sample_rate") || f.key == QStringLiteral("duration"))
-    target = acqGroup;
+      target = acqGroup;
     else if (f.key == QStringLiteral("variation") || f.key == QStringLiteral("condition"))
-    target = runGroup;
+      target = runGroup;
     else if (f.key.startsWith(QStringLiteral("gt_")))
-    target = gtGroup;
+      target = gtGroup;
+    else if (!f.group.trimmed().isEmpty()) {
+      const QString name=f.group.trimmed();
+      if(!stagedGroups.contains(name)) stagedGroups[name]=newGroup(name);
+      target=stagedGroups[name];
+    }
     addField(target, f);
   }
   containerLayout_->addStretch(1);

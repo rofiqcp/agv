@@ -38,7 +38,7 @@ Untuk memakai smoother langsung (bypass final NavigationCore/CollisionMonitor), 
 
 - `speed_max: 1.00` m/s
 - `yaw_max_deg_s: 80.0`
-- `serial_left_max_deg: 80.0` logical/protocol steering limit (physical wheel angle must be calibrated separately)
+- `serial_left_max_deg: 90.0` logical/protocol steering limit (physical wheel angle must be calibrated separately)
 - `serial_right_max_rpm: 300.0`
 
 Mapping drive: `1.0 m/s -> 300 RPM`, `0.5 -> 150 RPM`, `-1.0 -> -300 RPM`.

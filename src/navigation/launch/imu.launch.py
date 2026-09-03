@@ -51,6 +51,7 @@ def generate_launch_description():
     node = Node(
         package='navigation', executable='imu_node', name='data_imu_node',
         output='screen', emulate_tty=True,
+        respawn=True, respawn_delay=2.0,
         parameters=[params_file, {
             'port': LaunchConfiguration('port'),
             'baudrate': ParameterValue(LaunchConfiguration('baudrate'), value_type=int),

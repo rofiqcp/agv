@@ -24,10 +24,15 @@
 #include "ActuatorPage.h"
 #include "TouchButtons.h"
 
+#ifndef HMI_LEGACY_UART
+#define HMI_LEGACY_UART 0
+#endif
+
 TFT_eSPI tft = TFT_eSPI();
 VehicleTelemetry gTelemetry = defaultTelemetry();
 
 static PageId currentPage = PAGE_SPLASH;
+static CameraSubPage currentCameraTab = CAM_VIEW;
 static bool splashComplete = false;
 static uint8_t splashProgress = 0;
 static bool splashReadyText = false;
@@ -46,13 +51,17 @@ static ControlAction activeSteerControl = CTRL_NONE;   // LEFT / RIGHT / CENTER 
 
 static char serialRx[128];
 static uint8_t serialRxLen = 0;
+#if HMI_LEGACY_UART
 static char serial1Rx[128];
 static uint8_t serial1RxLen = 0;
+#endif
 
 // ---------------------------------------------------------------------------
 // Forward declarations used by page/safety helpers
 // ---------------------------------------------------------------------------
 static void sendDriveStop();
+static void publishControlState();
+static void publishCameraTab();
 static void enterSystemDfu();
 
 // ---------------------------------------------------------------------------
@@ -110,7 +119,9 @@ static void enterSystemDfu() {
   Serial.flush();
   delay(40);
   Serial.end();
+#if HMI_LEGACY_UART
   Serial1.end();
+#endif
   delay(120);
 
   gDfuBootMagic = kDfuBootMagic;
@@ -136,14 +147,49 @@ static const char* pageName(PageId page) {
 
 static void printBoth(const char* line) {
   Serial.println(line);
+#if HMI_LEGACY_UART
   Serial1.println(line);
+#endif
 }
 
 static void publishPage() {
   Serial.print(F("PAGE:"));
   Serial.println(pageName(currentPage));
+#if HMI_LEGACY_UART
   Serial1.print(F("PAGE:"));
   Serial1.println(pageName(currentPage));
+#endif
+}
+
+static const char* driveControlName() {
+  if (activeDriveControl == CTRL_FORWARD) return "FWD";
+  if (activeDriveControl == CTRL_REVERSE) return "REV";
+  return "STOP";
+}
+
+static const char* steerControlName() {
+  if (activeSteerControl == CTRL_LEFT) return "LEFT";
+  if (activeSteerControl == CTRL_RIGHT) return "RIGHT";
+  if (activeSteerControl == CTRL_CENTER) return "CENTER";
+  return "NONE";
+}
+
+static void publishCameraTab() {
+  char line[32];
+  snprintf(line, sizeof(line), "CAMTAB:%s", cameraTabName(currentCameraTab));
+  printBoth(line);
+}
+
+static void publishControlState() {
+  char line[40];
+  snprintf(line, sizeof(line), "MODE:%s", gTelemetry.mode == MODE_MANUAL ? "MANUAL" : "AUTO");
+  printBoth(line);
+  snprintf(line, sizeof(line), "CTRL:DRIVE:%s", driveControlName());
+  printBoth(line);
+  snprintf(line, sizeof(line), "CTRL:STEER:%s", steerControlName());
+  printBoth(line);
+  snprintf(line, sizeof(line), "CTRL:SPEED:%u", gTelemetry.manualSpeedPct);
+  printBoth(line);
 }
 
 static void drawCurrentPage(bool fullDraw = true) {
@@ -153,8 +199,8 @@ static void drawCurrentPage(bool fullDraw = true) {
       else updateHomePage(gTelemetry);
       break;
     case PAGE_CAMERA:
-      if (fullDraw) drawCameraPage(gTelemetry);
-      else updateCameraPage(gTelemetry);
+      if (fullDraw) drawCameraPage(gTelemetry, currentCameraTab);
+      else updateCameraPage(gTelemetry, currentCameraTab);
       break;
     case PAGE_GPS:
       if (fullDraw) drawGpsPage(gTelemetry);
@@ -248,6 +294,43 @@ static void setManualSpeed(int value) {
   uiDirty = true;
 }
 
+static void handleWaypointTap(WaypointAction action) {
+  if (action == WP_ACTION_NONE) return;
+  const uint8_t selected = gTelemetry.selectedWaypoint < HMI_WAYPOINT_COUNT ?
+    gTelemetry.selectedWaypoint : 0;
+
+  if (action == WP_PREV || action == WP_NEXT) {
+    int next = selected;
+    if (action == WP_PREV) next = (next + HMI_WAYPOINT_COUNT - 1) % HMI_WAYPOINT_COUNT;
+    else next = (next + 1) % HMI_WAYPOINT_COUNT;
+    gTelemetry.selectedWaypoint = static_cast<uint8_t>(next);
+    char line[32];
+    snprintf(line, sizeof(line), "CMD:WP:SELECT:%u", gTelemetry.selectedWaypoint);
+    printBoth(line);
+    updateGpsPage(gTelemetry);
+    return;
+  }
+
+  char line[32];
+  if (action == WP_SAVE) {
+    if (!waypointSaveEnabled(gTelemetry)) {
+      printBoth("ERR:WP_SAVE_GPS_NOT_READY");
+      return;
+    }
+    snprintf(line, sizeof(line), "CMD:WP:SAVE:%u", selected);
+    printBoth(line);
+  } else if (action == WP_GO) {
+    if (!waypointGoEnabled(gTelemetry)) {
+      printBoth("ERR:WP_GO_REQUIRES_SAVED_AUTO_READY");
+      return;
+    }
+    snprintf(line, sizeof(line), "CMD:WP:GO:%u", selected);
+    printBoth(line);
+  } else if (action == WP_STOP) {
+    printBoth("CMD:NAV:STOP");
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Touch behavior
 // ---------------------------------------------------------------------------
@@ -338,12 +421,36 @@ static void handleTouch() {
   // All controls are edge-triggered: one PRESS = one latched command.
   // RELEASE does not cancel/repeat motion commands.
   if (ev.type == TouchEvent::PRESS) {
+    if (ev.modeToggle && currentPage == PAGE_HOME) {
+      const bool toManual = gTelemetry.mode != MODE_MANUAL;
+      gTelemetry.mode = toManual ? MODE_MANUAL : MODE_AUTO;
+      if (!toManual) {
+        if (activeDriveControl == CTRL_FORWARD || activeDriveControl == CTRL_REVERSE) sendDriveStop();
+        activeDriveControl = CTRL_NONE;
+        activeSteerControl = CTRL_NONE;
+      }
+      printBoth(toManual ? "CMD:MODE:MANUAL" : "CMD:MODE:AUTO");
+      updateHomePage(gTelemetry);
+      publishControlState();
+      return;
+    }
     if (ev.home) {
       showPage(PAGE_HOME);
       return;
     }
     if (ev.navPage != PAGE_SPLASH) {
       showPage(ev.navPage);
+      return;
+    }
+    if (currentPage == PAGE_CAMERA && ev.cameraTab != CAM_NONE) {
+      currentCameraTab = ev.cameraTab;
+      // Tab change is an explicit user action: one full draw is OK here.
+      drawCameraPage(gTelemetry, currentCameraTab);
+      publishCameraTab();
+      return;
+    }
+    if (currentPage == PAGE_GPS && ev.waypointAction != WP_ACTION_NONE) {
+      handleWaypointTap(ev.waypointAction);
       return;
     }
     if (currentPage == PAGE_ACTUATOR && ev.control != CTRL_NONE) {
@@ -395,15 +502,22 @@ static void parseVehicleState(const char* s) {
 static void handleSerialCommand(char* command) {
   while (*command == ' ' || *command == '\t') command++;
   if (!*command) return;
+  // ROS intentionally repeats a complete state heartbeat. Snapshot the visible
+  // telemetry so an identical heartbeat does not trigger any TFT transaction.
+  const VehicleTelemetry telemetryBefore = gTelemetry;
 
   // Navigation / health commands
   if (!strcmp(command, "GET:STATE")) {
     publishPage();
+    publishControlState();
+    publishCameraTab();
     return;
   }
   if (!strcmp(command, "PING")) {
     printBoth("ACK:PONG");
     publishPage();
+    publishControlState();
+    publishCameraTab();
     return;
   }
   if (!strcmp(command, "BOOT:DFU")) {
@@ -428,7 +542,82 @@ static void handleSerialCommand(char* command) {
   if (!strcmp(command, "GOTO:AUTO")) { showPage(PAGE_ACTUATOR); return; }
   if (!strcmp(command, "GOTO:INFO")) { showPage(PAGE_HOME); return; }
 
-  if (!strncmp(command, "SYS:", 4)) {
+  // ROS/Web mirror commands. These change visual/control state without echoing a
+  // new actuator CMD back to ROS, preventing SCADA feedback loops.
+  if (!strncmp(command, "REMOTE:CAMTAB:", 14)) {
+    const char* tab = command + 14;
+    if (eqIgnoreCase(tab, "VIEW")) currentCameraTab = CAM_VIEW;
+    else if (eqIgnoreCase(tab, "DETECT")) currentCameraTab = CAM_DETECT;
+    else if (eqIgnoreCase(tab, "DRIVE")) currentCameraTab = CAM_DRIVE;
+    else if (eqIgnoreCase(tab, "STATUS")) currentCameraTab = CAM_STATUS;
+    else return;
+    if (currentPage == PAGE_CAMERA) updateCameraPage(gTelemetry, currentCameraTab);
+    publishCameraTab();
+    return;
+  }
+  if (!strncmp(command, "REMOTE:DRIVE:", 13)) {
+    const char* action = command + 13;
+    if (eqIgnoreCase(action, "STOP")) {
+      activeDriveControl = CTRL_NONE;
+      gTelemetry.state = STATE_STOPPED;
+    } else if (gTelemetry.mode == MODE_MANUAL && gTelemetry.escReady &&
+               (eqIgnoreCase(action, "FWD") || eqIgnoreCase(action, "REV"))) {
+      activeDriveControl = eqIgnoreCase(action, "FWD") ? CTRL_FORWARD : CTRL_REVERSE;
+      gTelemetry.state = STATE_RUNNING;
+    } else {
+      printBoth("ERR:REMOTE_DRIVE_LOCKED");
+      return;
+    }
+    if (currentPage == PAGE_ACTUATOR) updateActuatorPage(gTelemetry, activeDriveControl, activeSteerControl);
+    publishControlState();
+    return;
+  }
+  if (!strncmp(command, "REMOTE:STEER:", 13)) {
+    const char* action = command + 13;
+    if (!(gTelemetry.mode == MODE_MANUAL && gTelemetry.escReady && gTelemetry.encoderReady)) {
+      printBoth("ERR:REMOTE_STEER_LOCKED");
+      return;
+    }
+    if (eqIgnoreCase(action, "LEFT")) activeSteerControl = CTRL_LEFT;
+    else if (eqIgnoreCase(action, "RIGHT")) activeSteerControl = CTRL_RIGHT;
+    else if (eqIgnoreCase(action, "CENTER")) activeSteerControl = CTRL_CENTER;
+    else return;
+    if (currentPage == PAGE_ACTUATOR) updateActuatorPage(gTelemetry, activeDriveControl, activeSteerControl);
+    publishControlState();
+    return;
+  }
+  if (!strncmp(command, "REMOTE:SPEED:", 13)) {
+    gTelemetry.manualSpeedPct = (uint8_t)constrain(atoi(command + 13), MANUAL_SPEED_MIN, MANUAL_SPEED_MAX);
+    if (currentPage == PAGE_ACTUATOR) updateActuatorPage(gTelemetry, activeDriveControl, activeSteerControl);
+    publishControlState();
+    return;
+  }
+
+  if (!strncmp(command, "FPS:", 4)) {
+    gTelemetry.cameraFps = max(0.0f, (float)atof(command + 4));
+  } else if (!strncmp(command, "WPSEL:", 6)) {
+    gTelemetry.selectedWaypoint = (uint8_t)constrain(atoi(command + 6), 0, HMI_WAYPOINT_COUNT - 1);
+  } else if (!strncmp(command, "TARGET:", 7)) {
+    snprintf(gTelemetry.activeTarget, sizeof(gTelemetry.activeTarget), "%s", command + 7);
+  } else if (!strncmp(command, "NAV:", 4)) {
+    const char* state = command + 4;
+    if (eqIgnoreCase(state, "SELECTED")) gTelemetry.navigationStatus = NAV_SELECTED;
+    else if (eqIgnoreCase(state, "QUEUED") || eqIgnoreCase(state, "SENDING")) gTelemetry.navigationStatus = NAV_QUEUED;
+    else if (eqIgnoreCase(state, "NAVIGATING") || eqIgnoreCase(state, "ACTIVE")) gTelemetry.navigationStatus = NAV_NAVIGATING;
+    else if (eqIgnoreCase(state, "ARRIVED") || eqIgnoreCase(state, "SUCCEEDED")) gTelemetry.navigationStatus = NAV_ARRIVED;
+    else if (eqIgnoreCase(state, "STOPPED") || eqIgnoreCase(state, "CANCELED")) gTelemetry.navigationStatus = NAV_STOPPED;
+    else if (eqIgnoreCase(state, "FAILED") || eqIgnoreCase(state, "ABORTED") || eqIgnoreCase(state, "REJECTED")) gTelemetry.navigationStatus = NAV_FAILED;
+    else gTelemetry.navigationStatus = NAV_IDLE;
+  } else if (!strncmp(command, "WP", 2) && command[2] >= '0' && command[2] <= '3' && command[3] == ':') {
+    const uint8_t index = (uint8_t)(command[2] - '0');
+    char* payload = command + 4;
+    char* colon = strchr(payload, ':');
+    if (colon != nullptr) {
+      *colon = '\0';
+      gTelemetry.waypointSaved[index] = parseBool(payload);
+      snprintf(gTelemetry.waypointName[index], HMI_WAYPOINT_NAME_LEN, "%s", colon + 1);
+    }
+  } else if (!strncmp(command, "SYS:", 4)) {
     parseSystemStatus(command + 4);
     if (gTelemetry.systemStatus != SYS_READY &&
         (activeDriveControl == CTRL_FORWARD || activeDriveControl == CTRL_REVERSE)) {
@@ -513,12 +702,16 @@ static void handleSerialCommand(char* command) {
   } else {
     Serial.print(F("ERR:UNKNOWN_COMMAND:"));
     Serial.println(command);
+#if HMI_LEGACY_UART
     Serial1.print(F("ERR:UNKNOWN_COMMAND:"));
     Serial1.println(command);
+#endif
     return;
   }
 
-  uiDirty = true;
+  if (memcmp(&telemetryBefore, &gTelemetry, sizeof(VehicleTelemetry)) != 0) {
+    uiDirty = true;
+  }
 }
 
 static void pollSerialStream(Stream& io, char* rx, uint8_t& rxLen) {
@@ -541,7 +734,9 @@ static void pollSerialStream(Stream& io, char* rx, uint8_t& rxLen) {
 
 static void pollSerialGui() {
   pollSerialStream(Serial, serialRx, serialRxLen);
+#if HMI_LEGACY_UART
   pollSerialStream(Serial1, serial1Rx, serial1RxLen);
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -614,6 +809,7 @@ static void updateDemoTelemetry() {
   gTelemetry.imuReady = true;
   gTelemetry.cameraReady = true;
   gTelemetry.perceptionReady = true;
+  gTelemetry.cameraFps = 8.0f;
   snprintf(gTelemetry.detectedObject, sizeof(gTelemetry.detectedObject), "%s", "PERSON");
   gTelemetry.objectDistanceM = 3.24f;
   gTelemetry.drivableAreaClear = true;
@@ -635,7 +831,9 @@ void setup() {
   digitalWrite(PC13, HIGH);
 
   Serial.begin(115200);
+#if HMI_LEGACY_UART
   Serial1.begin(115200);
+#endif
   delay(50);
   Serial.println(F("ADV HMI visual precise TAP control — boot"));
 
@@ -644,6 +842,8 @@ void setup() {
 }
 
 void loop() {
+  // Original scheduling order: consume serial first, then touch once per loop.
+  // ROS telemetry remains full-rate in RAM; TFT painting is intentionally slower.
   pollSerialGui();
 
   if (!splashComplete) {
@@ -655,9 +855,11 @@ void loop() {
     updateDemoTelemetry();
 #endif
 
-    // Telemetry redraw is throttled and only redraws top/content areas, not the
-    // entire screen/bottom navigation, reducing flicker and SPI load.
-    if (uiDirty && millis() - lastUiRefreshMs >= 80) {
+    // Display refresh is decoupled from the 10 Hz ROS telemetry stream. Page
+    // update functions also cache formatted values, so unchanged pixels are not
+    // touched. This prevents the visible erase/redraw flashing of dynamic text.
+    static const uint32_t DISPLAY_REFRESH_MS = 500;
+    if (uiDirty && !touchWasDown && millis() - lastUiRefreshMs >= DISPLAY_REFRESH_MS) {
       lastUiRefreshMs = millis();
       uiDirty = false;
       drawCurrentPage(false);

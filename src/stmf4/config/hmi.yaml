@@ -1,0 +1,18 @@
+stmf4_hmi_bridge:
+  ros__parameters:
+    serial_device: /dev/serial/by-id/usb-STMicroelectronics_BLACKPILL_F411CE_CDC_in_FS_Mode_338133833134-if00
+    serial_baud: 115200
+    reconnect_sec: 0.50
+    telemetry_rate_hz: 10.0
+    command_rate_hz: 30.0
+    heartbeat_sec: 1.0
+    manual_speed_max_mps: 1.0
+    manual_speed_min_pct: 10
+    manual_speed_max_pct: 50
+    manual_speed_default_pct: 20
+    hmi_steer_full_scale_deg: 90.0
+    teleop_yaw_max_deg_s: 80.0
+    invert_hmi_steering: false
+    default_mode: AUTO
+    waypoint_file: /home/otomasi/ros/data/hmi_waypoints.tsv
+    waypoint_pose_timeout_sec: 2.5

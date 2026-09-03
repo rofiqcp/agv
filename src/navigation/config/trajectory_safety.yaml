@@ -17,6 +17,7 @@ trajectory_safety_supervisor:
     camera_connected_topic: /perception/camera_connected
     camera_health_topic: /perception/camera_healthy
     emergency_stop_topic: /perception/emergency_stop
+    perception_performance_topic: /perception/performance
     state_topic: /navigation/trajectory_safety_state
     control_rate_hz: 20.0
     status_log_period_sec: 1.0
@@ -27,13 +28,23 @@ trajectory_safety_supervisor:
     obstacle_timeout_sec: 0.9
     lane_timeout_sec: 0.75
     drivable_timeout_sec: 0.75
+    perception_performance_timeout_sec: 2.0
+
+    # Launch overrides metric_obstacle_safety_enabled from physical calibration state.
+    metric_obstacle_safety_enabled: false
+    latency_compensation_enabled: true
+    perception_latency_fallback_sec: 1.0
+    latency_safety_margin_sec: 0.15
+    latency_distance_margin_m: 0.25
+    braking_deceleration_mps2: 1.0
+    max_dynamic_stop_distance_m: 2.5
     vehicle_width_m: 0.6
     trajectory_lateral_margin_m: 0.25
     planning_lateral_margin_m: 0.65
     planning_min_forward_m: 0.15
     planning_max_abs_lateral_m: 2.6
     path_horizon_m: 4.0
-    command_collision_horizon_m: 0.9
+    command_collision_horizon_m: 2.5
     command_collision_sample_step_m: 0.05
     command_collision_lateral_margin_m: 0.2
     immediate_command_hard_stop_m: 0.65

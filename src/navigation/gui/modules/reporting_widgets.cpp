@@ -140,7 +140,13 @@ class ReportPlotWidget : public QWidget {
                        Qt::AlignCenter | Qt::TextWordWrap, message);
       return;
     }
-    if (std::abs(maxX - minX) < 1.0e-9) {
+    const bool timeAxis = xLabel_.contains(QStringLiteral("Time [s]"), Qt::CaseInsensitive);
+    if (timeAxis) {
+      // Keep elapsed-time labels steady and human-readable.  The viewport starts
+      // at t=0 and expands only in 10 s blocks; ticks are whole seconds (1/2/5/10...).
+      minX = 0.0;
+      maxX = std::max(10.0, std::ceil(std::max(0.0, maxX) / 10.0) * 10.0);
+    } else if (std::abs(maxX - minX) < 1.0e-9) {
       minX -= 1.0;
       maxX += 1.0;
     }
@@ -148,24 +154,57 @@ class ReportPlotWidget : public QWidget {
       minY -= 1.0;
       maxY += 1.0;
     }
-    const double yMargin = 0.08 * (maxY - minY);
+    double yMargin = 0.08 * (maxY - minY);
     minY -= yMargin;
     maxY += yMargin;
+    const bool equalMetricAxes = !connectPoints_ &&
+      xLabel_.contains(QStringLiteral("[m]")) && yLabel_.contains(QStringLiteral("[m]"));
+    if (equalMetricAxes) {
+      // Preserve 1 metre == 1 metre on both axes; do not stretch a GNSS cloud.
+      const double cx = 0.5 * (minX + maxX), cy = 0.5 * (minY + maxY);
+      double sx = std::max(1.0e-6, maxX - minX), sy = std::max(1.0e-6, maxY - minY);
+      const double requiredRatio = plot.width() / std::max(1.0, plot.height());
+      if (sx / sy < requiredRatio) sx = sy * requiredRatio;
+      else sy = sx / requiredRatio;
+      sx *= 1.10; sy *= 1.10;
+      minX = cx - sx / 2.0; maxX = cx + sx / 2.0;
+      minY = cy - sy / 2.0; maxY = cy + sy / 2.0;
+    }
     painter.setFont(QFont(painter.font().family(), 8));
-    for (int tick = 0;
-    tick <= 5;
-    ++tick) {
+    // Y grid stays at 5 divisions.
+    for (int tick = 0; tick <= 5; ++tick) {
       const double ratio = tick / 5.0;
-      const double x = plot.left() + ratio * plot.width();
       const double y = plot.bottom() - ratio * plot.height();
       painter.setPen(QPen(QColor(QStringLiteral("#292e36")), 1, Qt::DashLine));
-      painter.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()));
       painter.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y));
       painter.setPen(QColor(kMuted));
-      painter.drawText(QRectF(x - 35, plot.bottom() + 5, 70, 18), Qt::AlignHCenter,
-      QString::number(minX + ratio * (maxX - minX), 'g', 4));
       painter.drawText(QRectF(2, y - 9, 56, 18), Qt::AlignRight | Qt::AlignVCenter,
-      QString::number(minY + ratio * (maxY - minY), 'g', 4));
+        QString::number(minY + ratio * (maxY - minY), 'g', 4));
+    }
+    if (timeAxis) {
+      const double horizon = maxX;
+      const double step = horizon <= 10.0 ? 1.0 : horizon <= 20.0 ? 2.0 :
+                          horizon <= 50.0 ? 5.0 : horizon <= 100.0 ? 10.0 :
+                          horizon <= 300.0 ? 30.0 : 60.0;
+      for (double value = 0.0; value <= horizon + 1.0e-9; value += step) {
+        const double ratio = value / horizon;
+        const double x = plot.left() + ratio * plot.width();
+        painter.setPen(QPen(QColor(QStringLiteral("#292e36")), 1, Qt::DashLine));
+        painter.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()));
+        painter.setPen(QColor(kMuted));
+        painter.drawText(QRectF(x - 28, plot.bottom() + 5, 56, 18), Qt::AlignHCenter,
+          QString::number(qRound64(value)));
+      }
+    } else {
+      for (int tick = 0; tick <= 5; ++tick) {
+        const double ratio = tick / 5.0;
+        const double x = plot.left() + ratio * plot.width();
+        painter.setPen(QPen(QColor(QStringLiteral("#292e36")), 1, Qt::DashLine));
+        painter.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()));
+        painter.setPen(QColor(kMuted));
+        painter.drawText(QRectF(x - 35, plot.bottom() + 5, 70, 18), Qt::AlignHCenter,
+          QString::number(minX + ratio * (maxX - minX), 'g', 4));
+      }
     }
     painter.setPen(QColor(kMuted));
     painter.drawText(QRectF(plot.left(), height() - 28, plot.width(), 18), Qt::AlignCenter, xLabel_);

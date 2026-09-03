@@ -46,6 +46,7 @@ int main()
   // Mixer harus mempertahankan arah maju, membatasi speed recenter, dan finite.
   MixerConfig mixer;
   const auto cmd = mixRecenterCommand(0.30, 0.0, 0.50, 0.0, false, mixer);
+  (void)cmd;  // Tetap dianggap used saat assert dihapus oleh NDEBUG pada Release build.
   assert(cmd.linear_x > 0.0 && cmd.linear_x <= mixer.recenter_speed_mps + 1.0e-9);
   assert(std::isfinite(cmd.angular_z));
   assert(cmd.angular_z > 0.0);

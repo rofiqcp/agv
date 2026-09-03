@@ -79,3 +79,165 @@ html{font-size:16px}body{font-size:14px;line-height:1.45}
 .record-toggle.stop{border-color:rgba(255,101,119,.52);background:rgba(255,101,119,.14);color:#ff9aa6;animation:pulseRec 1s infinite}
 .record-toggle.stop:hover{background:rgba(255,101,119,.22)}
 @media(max-width:720px){.record-actions{min-width:0}.record-toggle{height:42px;font-size:11px}}
+
+/* STM32F411 TFT HMI bidirectional SCADA mirror */
+.hmi-scada-panel{margin-top:15px}.hmi-state-strip{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}.hmi-state-strip>div{border:1px solid var(--border);background:#081315;border-radius:10px;padding:10px}.hmi-state-strip span{display:block;font-size:9px;color:var(--muted)}.hmi-state-strip b{display:block;margin-top:3px;font:800 12px ui-monospace}.hmi-mode-row{display:flex;gap:8px;margin:12px 0}.hmi-mode-btn{min-width:105px;min-height:42px;border:1px solid var(--border2);border-radius:10px;background:#0c191c;color:var(--muted);font-weight:850;cursor:pointer}.hmi-mode-btn.active{border-color:var(--green);background:rgba(54,230,161,.12);color:var(--green)}
+.hmi-control-grid{width:min(430px,100%);margin:10px auto;display:grid;grid-template-columns:repeat(3,minmax(76px,1fr));gap:10px}.hmi-control-grid>button{min-height:64px;border-radius:12px;border:1px solid var(--border2);background:#102126;color:var(--text);font-size:21px;font-weight:900;cursor:pointer;touch-action:manipulation}.hmi-control-grid>button small{display:block;margin-top:5px;font-size:9px;color:var(--muted);letter-spacing:.8px}.hmi-control-grid>button:hover:not(:disabled),.hmi-control-grid>button.active{border-color:var(--cyan);background:rgba(85,214,232,.11);color:var(--cyan)}.hmi-control-grid>button.stop{border-color:rgba(255,101,119,.5);color:var(--red)}.hmi-control-grid>button:disabled,.hmi-speed-row button:disabled{opacity:.32;cursor:not-allowed}.hmi-speed-row{display:flex;align-items:center;justify-content:center;gap:12px;margin-top:12px}.hmi-speed-row>span{font-size:10px;color:var(--muted)}.hmi-speed-row>div{display:flex;gap:7px;flex-wrap:wrap}.hmi-speed-row button{min-width:58px;min-height:40px;border:1px solid var(--border);border-radius:9px;background:#0b191c;color:var(--muted);font-weight:800;cursor:pointer}.hmi-speed-row button.active{border-color:var(--green);color:var(--green);background:rgba(54,230,161,.1)}.light .hmi-state-strip>div,.light .hmi-mode-btn,.light .hmi-control-grid>button,.light .hmi-speed-row button{background:#f7fbfa}
+@media(max-width:820px){.hmi-state-strip{grid-template-columns:repeat(3,1fr)}.hmi-control-grid>button{min-height:68px}.hmi-mode-row{flex-wrap:wrap}}
+@media(max-width:520px){.hmi-state-strip{grid-template-columns:repeat(2,1fr)}.hmi-control-grid{gap:8px}.hmi-control-grid>button{min-height:70px;font-size:23px}.hmi-speed-row{align-items:flex-start;flex-direction:column}.hmi-speed-row button{min-width:62px;min-height:44px}}
+
+/* HMI CAMERA tabs + waypoint navigation mirror */
+.hmi-camera-mirror{display:flex;align-items:center;gap:9px;margin-top:10px;padding:9px 10px;border:1px solid var(--border);border-radius:10px;background:#081315}.hmi-camera-mirror>span{font-size:9px;color:var(--muted);font-weight:800;letter-spacing:.8px}.hmi-camera-mirror>b{min-width:58px;color:var(--cyan);font:900 11px ui-monospace}.hmi-camera-mirror>div{display:flex;gap:6px;margin-left:auto;flex-wrap:wrap}.hmi-camera-mirror button{min-height:38px;min-width:64px;padding:0 10px;border-radius:8px;border:1px solid var(--border2);background:#0d1d21;color:var(--muted);font-size:9px;font-weight:850;cursor:pointer;touch-action:manipulation}.hmi-camera-mirror button.active,.hmi-camera-mirror button:hover{border-color:var(--cyan);color:var(--cyan);background:rgba(85,214,232,.1)}
+.hmi-waypoint-panel{margin:14px 0}.hmi-waypoint-toolbar{display:grid;grid-template-columns:minmax(130px,1fr) minmax(180px,1.5fr) auto auto auto;gap:9px;align-items:center}.hmi-waypoint-toolbar select,.hmi-waypoint-toolbar input{min-height:44px;border:1px solid var(--border2);border-radius:9px;background:#0a181b;color:var(--text);padding:0 11px;font:750 12px ui-sans-serif}.hmi-waypoint-toolbar button{min-height:44px}.hmi-waypoint-state{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}.hmi-waypoint-state>div{border:1px solid var(--border);border-radius:9px;background:#081315;padding:9px}.hmi-waypoint-state span{display:block;color:var(--muted);font-size:9px}.hmi-waypoint-state b{display:block;margin-top:3px;font:850 12px ui-monospace}.hmi-waypoint-list{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:10px}.hmi-waypoint-list>div{border:1px solid var(--border);border-radius:9px;background:#091619;padding:9px}.hmi-waypoint-list>div.saved{border-color:rgba(54,230,161,.35)}.hmi-waypoint-list b{display:block;font-size:11px}.hmi-waypoint-list span{display:block;color:var(--muted);font-size:9px;margin-top:3px}.light .hmi-camera-mirror,.light .hmi-waypoint-toolbar select,.light .hmi-waypoint-toolbar input,.light .hmi-waypoint-state>div,.light .hmi-waypoint-list>div{background:#f7fbfa}
+@media(max-width:900px){.hmi-waypoint-toolbar{grid-template-columns:1fr 1fr 1fr}.hmi-waypoint-list{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:620px){.hmi-camera-mirror{align-items:flex-start;flex-direction:column}.hmi-camera-mirror>div{margin-left:0;width:100%}.hmi-camera-mirror button{flex:1;min-height:44px}.hmi-waypoint-toolbar{grid-template-columns:1fr 1fr}.hmi-waypoint-toolbar select,.hmi-waypoint-toolbar input{grid-column:span 2}.hmi-waypoint-toolbar .danger-btn{grid-column:span 2}.hmi-waypoint-state{grid-template-columns:1fr}.hmi-waypoint-list{grid-template-columns:1fr 1fr}}
+
+/* Staged tuning groups + runtime apply status */
+.tuning-subgroup{grid-column:1/-1;border:1px solid rgba(229,185,79,.16);border-radius:10px;padding:8px;background:rgba(229,185,79,.025);display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.tuning-subgroup-title{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;padding:2px 2px 6px;border-bottom:1px solid rgba(229,185,79,.12)}.tuning-subgroup-title b{font-size:8px;letter-spacing:.5px;color:var(--gold);text-transform:uppercase}.tuning-subgroup-title span{font-size:6px;color:var(--dim)}.tuning-badges{display:flex;gap:4px;align-items:center;flex-wrap:wrap;justify-content:flex-end}.runtime-badge{font-style:normal;font-size:6px;border:1px solid var(--border);border-radius:999px;padding:2px 5px;color:var(--dim)}.runtime-badge.active{color:var(--green);border-color:rgba(54,230,161,.35);background:rgba(54,230,161,.08)}.runtime-badge.pending{color:var(--gold);border-color:rgba(229,185,79,.35);background:rgba(229,185,79,.07)}.runtime-badge.error{color:#ff8f9b;border-color:rgba(255,101,119,.4);background:rgba(255,101,119,.08)}.chart-axis-labels{display:flex;justify-content:space-between;gap:8px;padding:2px 4px 4px;color:#6f8d91;font:7px ui-monospace}.param-save.saved{background:rgba(54,230,161,.18);box-shadow:inset 0 0 0 1px rgba(54,230,161,.18)}
+@media(max-width:720px){.tuning-subgroup{grid-template-columns:1fr}}
+
+/* ==============================================================
+   ADV Control Shell V4 — 4 primary domains + contextual sidebar
+   ============================================================== */
+:root{--sidebar:252px;--sidebar-collapsed:78px}
+body.sidebar-collapsed{--sidebar:var(--sidebar-collapsed)}
+.app-shell{transition:grid-template-columns .2s ease}
+.sidebar{transition:width .2s ease,transform .2s ease;padding:0 14px 18px}
+.brand{position:relative;height:82px;min-height:82px;padding:0 5px;display:flex;align-items:center;border-bottom:1px solid var(--border);margin-bottom:12px}
+.brand-copy{min-width:0;transition:opacity .15s ease}
+.brand-mark{border:0;outline:0;flex:0 0 auto}
+.sidebar-collapse{margin-left:auto;width:30px;height:30px;border:1px solid var(--border);border-radius:9px;background:#0b181b;color:var(--muted);cursor:pointer;font-size:20px;line-height:1;display:grid;place-items:center;flex:0 0 auto}
+.sidebar-collapse:hover{border-color:var(--border2);color:var(--green)}
+.sidebar-context-head{margin:0 5px 12px;padding:10px 10px 12px;border-bottom:1px solid var(--border)}
+.sidebar-context-head span{display:block;color:var(--green);font-size:8px;font-weight:850;letter-spacing:1.5px}
+.sidebar-context-head b{display:block;margin-top:3px;font-size:14px}
+#contextNav{gap:6px}
+#contextNav .nav-item{min-height:48px;border:1px solid transparent}
+#contextNav .nav-item.active{border-color:rgba(54,230,161,.16)}
+body.sidebar-collapsed{--sidebar:70px}
+body.sidebar-collapsed .sidebar{padding:0 14px 18px}
+body.sidebar-collapsed .brand{justify-content:center;padding:0;margin:0;border-bottom:1px solid var(--border)}
+body.sidebar-collapsed .brand-copy,
+body.sidebar-collapsed .sidebar-context-head,
+body.sidebar-collapsed #contextNav,
+body.sidebar-collapsed .sidebar-bottom,
+body.sidebar-collapsed .sidebar-collapse{display:none!important}
+body.sidebar-collapsed .brand-mark{width:42px;height:42px;cursor:pointer}
+body.sidebar-collapsed .brand-mark:hover{transform:translateY(-1px);box-shadow:0 0 34px rgba(54,230,161,.28)}
+body.sidebar-collapsed .brand-mark:focus-visible{box-shadow:0 0 0 2px #071011,0 0 0 4px var(--green)}
+
+.topbar{height:82px;min-height:82px;padding:0 24px;gap:18px}
+.page-heading{flex:0 0 190px;margin-right:0;min-width:0}
+.page-heading h1{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.top-domain-tabs{flex:1;min-width:340px;display:flex;justify-content:center;gap:6px;padding:5px;border:1px solid var(--border);background:rgba(8,18,20,.72);border-radius:13px}
+.top-domain{min-height:38px;min-width:92px;padding:0 14px;border:1px solid transparent;border-radius:9px;background:transparent;color:#7f979b;font-size:11px;font-weight:780;cursor:pointer;transition:.16s}
+.top-domain:hover{color:#cfe2df;background:rgba(255,255,255,.025)}
+.top-domain.active{color:var(--green);border-color:rgba(54,230,161,.28);background:linear-gradient(180deg,rgba(54,230,161,.12),rgba(49,168,255,.045));box-shadow:inset 0 0 0 1px rgba(54,230,161,.035)}
+.top-status{flex:0 0 auto}
+.runtime-pill{min-width:88px;justify-content:flex-start}
+.legacy-domain-switch[hidden]{display:none!important}
+
+/* Workbench is now simply Tuning, scoped by the active top domain. */
+.lab-hero{margin-bottom:14px}
+.chapter-group span{color:#b9d6d1}
+.chapter-list .experiment-item span{font-size:10px;min-width:38px;display:inline-block}
+.chapter-list .experiment-item b{font-weight:650;color:#dbeae7}
+
+/* Make HMI command-domain limits explicit. */
+.hmi-control-grid>button[data-hmi-control="LEFT"] small::after{content:"  −90°";color:var(--cyan)}
+.hmi-control-grid>button[data-hmi-control="RIGHT"] small::after{content:"  +90°";color:var(--cyan)}
+.hmi-control-grid>button[data-hmi-control="CENTER"] small::after{content:" command";color:var(--dim)}
+
+.light .sidebar-collapse,.light .top-domain-tabs{background:#f7fbfa}
+.light .top-domain.active{background:rgba(24,185,125,.10)}
+
+@media(max-width:1260px){
+  .topbar{gap:10px;padding-inline:16px}.page-heading{flex-basis:150px}.top-domain-tabs{min-width:300px}.top-domain{min-width:76px;padding-inline:10px}.runtime-pill{min-width:72px;padding-inline:8px}.runtime-pill span{display:none}
+}
+@media(max-width:980px){
+  .topbar{height:auto;min-height:78px;flex-wrap:wrap;padding-top:8px;padding-bottom:8px}.page-heading{flex:1 1 150px}.top-domain-tabs{order:3;flex:1 0 100%;min-width:0}.top-domain{flex:1;min-width:0}.top-status{margin-left:auto}
+}
+@media(max-width:820px){
+  body.sidebar-collapsed{--sidebar:230px}.sidebar-collapse{display:none}.sidebar-context-head{display:block!important}.brand-copy{display:block!important}.sidebar-bottom{display:block!important}.sidebar-bottom>*{display:flex!important}body.sidebar-collapsed #contextNav{display:flex!important}#contextNav .nav-item b{display:block!important}#contextNav .nav-item{justify-content:flex-start!important}
+  .topbar{position:sticky}.page-heading{display:none}.top-domain-tabs{order:2;flex:1 0 100%}.top-status{order:1}.mobile-only{order:0}
+}
+@media(max-width:560px){
+  .topbar{gap:7px}.top-domain-tabs{padding:4px;gap:3px}.top-domain{font-size:9px;min-height:36px;padding:0 6px}.runtime-pill{min-width:0}.top-status{gap:5px}.icon-button{width:32px;height:32px}
+}
+
+
+/* OBSTACLE_CALIBRATION_WIZARD_V1 */
+.obstacle-cal-wizard{margin-top:14px;border:1px solid rgba(49,168,255,.22);border-radius:14px;padding:14px;background:linear-gradient(180deg,rgba(6,20,24,.84),rgba(5,14,17,.9))}
+.obstacle-cal-wizard[hidden]{display:none!important}.obcal-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;margin-bottom:12px}.obcal-head b{font-size:14px;display:block;margin-top:3px}.obcal-head p{font-size:9px;color:var(--muted);margin:5px 0 0;line-height:1.5}
+.obcal-top-grid{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(230px,.58fr) minmax(250px,.68fr);gap:10px}.obcal-preview,.obcal-input,.obcal-progress-panel,.obcal-table-wrap,.obcal-chart-wrap{border:1px solid var(--border);border-radius:11px;background:#071214;padding:10px}.obcal-preview-title,.obcal-subhead{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px}.obcal-preview-title b,.obcal-subhead b{font-size:10px}.obcal-preview-title span,.obcal-subhead span{font-size:8px;color:var(--muted)}
+.obcal-camera{height:330px;position:relative;overflow:hidden;border-radius:9px;background:#020606;border:1px solid var(--border)}.obcal-camera img,.obcal-camera canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}.obcal-camera img{display:none}.obcal-camera canvas{pointer-events:none}.obcal-live-metrics{display:grid;grid-template-columns:repeat(6,1fr);gap:5px;margin-top:7px}.obcal-live-metrics span{font-size:7px;color:var(--dim);border:1px solid var(--border);border-radius:7px;padding:6px;background:#081618}.obcal-live-metrics b{display:block;color:var(--text);font:800 9px ui-monospace;margin-top:2px}
+.obcal-input{display:flex;flex-direction:column;gap:9px}.obcal-input label{font-size:8px;color:var(--muted)}.obcal-input select{width:100%;height:38px;margin-top:5px;background:#081619;border:1px solid var(--border2);border-radius:8px;color:var(--text);padding:0 9px}.obcal-input select option:disabled{color:#52666a}.obcal-rule{border:1px solid rgba(49,168,255,.2);background:rgba(49,168,255,.06);border-radius:8px;padding:9px;font-size:8px;line-height:1.5;color:#9eb5b6}.obcal-capture{min-height:42px}.obcal-input button:disabled,.obcal-actions button:disabled{opacity:.42;cursor:not-allowed}
+.obcal-progress{display:grid;gap:6px;margin-top:9px}.obcal-progress-row{display:grid;grid-template-columns:52px 1fr 1fr 86px;gap:6px;align-items:center;border:1px solid var(--border);border-radius:8px;padding:7px}.obcal-progress-row.locked{border-color:rgba(54,230,161,.35);background:rgba(54,230,161,.04)}.obcal-progress-row.active{border-color:rgba(49,168,255,.5)}.obcal-progress-row b{font-size:9px}.obcal-progress-row span{font-size:8px;color:var(--muted);text-align:center}.obcal-progress-row em{font:800 7px ui-monospace;font-style:normal;text-align:right}.obcal-progress-row .done{color:var(--green)}.obcal-progress-row .wait{color:var(--amber)}.obcal-progress-bar{height:7px;border-radius:999px;background:#102126;overflow:hidden;margin-top:10px}.obcal-progress-bar i{height:100%;width:0;display:block;background:linear-gradient(90deg,var(--green),var(--blue));transition:width .2s}.obcal-progress-panel small{display:block;margin-top:6px;color:var(--muted);font-size:8px}
+.obcal-bottom-grid{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(320px,.75fr);gap:10px;margin-top:10px}.obcal-table-wrap{min-width:0}.obcal-table th,.obcal-table td{font-size:8px;white-space:nowrap}.obcal-chart-wrap canvas{width:100%;height:280px;display:block;background:#050d0f;border:1px solid var(--border);border-radius:8px}.obcal-actions{display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap}.obcal-result{margin-right:auto;min-width:260px;border:1px solid var(--border);border-radius:9px;padding:9px 11px;background:#071315}.obcal-result b{display:block;font-size:11px;margin-top:2px}.obcal-result small{display:block;color:var(--muted);font-size:8px;margin-top:3px;line-height:1.4}
+@media(max-width:1200px){.obcal-top-grid{grid-template-columns:1fr 1fr}.obcal-progress-panel{grid-column:1/-1}.obcal-bottom-grid{grid-template-columns:1fr}.obcal-camera{height:290px}}
+@media(max-width:760px){.obcal-top-grid{grid-template-columns:1fr}.obcal-progress-panel{grid-column:auto}.obcal-live-metrics{grid-template-columns:repeat(3,1fr)}.obcal-progress-row{grid-template-columns:46px 1fr 1fr 72px}.obcal-actions button{flex:1 1 42%}.obcal-result{width:100%;margin-right:0}.obcal-camera{height:250px}}
+
+/* Steering command-domain clarity */
+.steering-domain-strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) auto;gap:8px;align-items:stretch;margin:-2px 0 14px}
+.steering-domain-strip>div{min-width:0;border:1px solid var(--border);border-radius:10px;padding:10px 11px;background:#081315}
+.steering-domain-strip span,.steering-domain-strip small{display:block;color:var(--muted)}
+.steering-domain-strip span{font-size:9px;text-transform:uppercase;letter-spacing:.55px}.steering-domain-strip b{display:block;margin:3px 0 2px;font:850 15px ui-monospace;color:var(--cyan)}.steering-domain-strip small{font:7.5px/1.35 ui-monospace;overflow-wrap:anywhere;color:var(--dim)}
+.steering-domain-strip>button{align-self:stretch;min-width:132px}
+.light .steering-domain-strip>div{background:#f7fbfa}
+@media(max-width:980px){.steering-domain-strip{grid-template-columns:repeat(2,minmax(0,1fr))}.steering-domain-strip>button{min-height:46px}}
+@media(max-width:560px){.steering-domain-strip{grid-template-columns:1fr}.steering-domain-strip>button{width:100%}}
+
+/* Direct domain tuning navigation: one sidebar only, no nested chapter browser. */
+#page-experiments .chapter-browser{display:none!important}
+#page-experiments .workbench-grid{display:block!important}
+#page-experiments .workbench-main{width:100%;max-width:none}
+.sidebar-tuning-head{margin:13px 5px 4px;padding:10px 7px 6px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;color:var(--green)}
+.sidebar-tuning-head span{font-size:9px;font-weight:900;letter-spacing:1.5px}
+.sidebar-tuning-head small{font:8px ui-monospace;color:var(--dim)}
+.sidebar-tuning-group{padding:9px 10px 4px;color:var(--gold);font-size:8px;font-weight:850;letter-spacing:.7px;text-transform:uppercase}
+.nav-item.tuning-nav{align-items:flex-start;gap:8px;padding:8px 9px;min-height:0}
+.nav-item.tuning-nav>span{width:31px;min-width:31px;padding-top:1px;color:var(--green);font:800 9px ui-monospace;text-align:left}
+.nav-item.tuning-nav>div{min-width:0;flex:1}
+.nav-item.tuning-nav b{font-size:10px;line-height:1.28;font-weight:650;white-space:normal}
+.nav-item.tuning-nav small{display:block;margin-top:3px;color:var(--dim);font-size:7.5px;line-height:1.3}
+.nav-item.tuning-nav.active{background:linear-gradient(90deg,rgba(54,230,161,.14),rgba(49,168,255,.04));box-shadow:inset 2px 0 var(--green)}
+body.sidebar-collapsed .sidebar-tuning-head,body.sidebar-collapsed .sidebar-tuning-group,body.sidebar-collapsed .tuning-nav>div{display:none}
+body.sidebar-collapsed .nav-item.tuning-nav>span{width:100%;min-width:0;text-align:center;font-size:8px}
+
+/* Domain sidebar final: Nav2/Live/Runtime first, tuning leaves immediately below. */
+@media(min-width:821px){:root{--sidebar:292px}}
+.context-summary{position:absolute;inset:0;padding:16px;overflow:auto;background:radial-gradient(circle at 85% 10%,rgba(49,168,255,.08),transparent 34%),#050b0d}
+.context-summary-head{display:flex;align-items:end;justify-content:space-between;gap:12px;padding-bottom:12px;border-bottom:1px solid var(--border)}
+.context-summary-head span{color:var(--green);font-size:9px;font-weight:850;letter-spacing:.7px;text-transform:uppercase}.context-summary-head b{font-size:12px}
+.context-summary-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-top:13px}.context-summary-grid>div{min-height:84px;border:1px solid var(--border);border-radius:11px;background:#081517;padding:12px}.context-summary-grid span{display:block;color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.6px}.context-summary-grid b{display:block;margin-top:7px;font:850 18px ui-monospace;color:var(--text)}.context-summary-grid small{color:var(--dim);font-size:8px}.light .context-summary{background:#eef5f3}.light .context-summary-grid>div{background:#f8fbfa}
+@media(max-width:620px){.context-summary-grid{grid-template-columns:repeat(2,1fr)}}
+
+
+/* ==============================================================
+   COLLAPSED SIDEBAR V2 — logo only in topbar, no empty left rail
+   ============================================================== */
+@media(min-width:821px){
+  body.sidebar-collapsed{--sidebar:0px}
+  body.sidebar-collapsed .app-shell{grid-template-columns:1fr}
+  body.sidebar-collapsed .main-shell{grid-column:1}
+  body.sidebar-collapsed .sidebar{
+    top:0;left:0;bottom:auto;width:82px;height:82px;padding:0;
+    overflow:hidden;border-right:0;border-bottom:1px solid var(--border);
+    background:rgba(6,11,13,.88);backdrop-filter:blur(16px);z-index:25;
+  }
+  body.sidebar-collapsed .brand{
+    width:82px;height:82px;min-height:82px;margin:0;padding:0;
+    display:grid;place-items:center;border:0;
+  }
+  body.sidebar-collapsed .brand-mark{
+    width:52px;height:52px;border-radius:13px;cursor:pointer;
+  }
+  body.sidebar-collapsed .brand-copy,
+  body.sidebar-collapsed .sidebar-collapse,
+  body.sidebar-collapsed .sidebar-context-head,
+  body.sidebar-collapsed #contextNav,
+  body.sidebar-collapsed .sidebar-bottom{display:none!important}
+  body.sidebar-collapsed .topbar{padding-left:106px}
+  body.sidebar-collapsed .content,
+  body.sidebar-collapsed .footer{margin-left:0}
+}

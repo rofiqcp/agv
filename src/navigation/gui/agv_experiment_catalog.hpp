@@ -26,12 +26,13 @@ struct ExperimentParameterField {
   QString lockedValue;        // for locked fields
   bool isGroundTruth = false; // yellow styling
   bool locked = false;        // read-only + locked label
+  QString group;              // optional staged subgroup inside the tuning leaf
   // Compact constructor for initializer-list init (trailing defaults)
   ExperimentParameterField(QString k = {}, QString lbl = {}, QString knd = {},
     QString yf = {}, QString yp = {}, QString ph = {}, QString lv = {},
-    bool gt = false, bool lck = false)
+    bool gt = false, bool lck = false, QString grp = {})
   : key(k), label(lbl), kind(knd), yamlFileKey(yf), yamlPath(yp),
-    placeholder(ph), lockedValue(lv), isGroundTruth(gt), locked(lck) {}
+    placeholder(ph), lockedValue(lv), isGroundTruth(gt), locked(lck), group(grp) {}
 };
 
 // Optional per-graph rendering spec (for multi-series or scatter graphs).
@@ -40,8 +41,11 @@ struct ExperimentGraphSpec {
   QStringList series;         // for time_series: keys into liveSeries
   QString xSeries;            // for scatter: telemetry key for X
   QString ySeries;            // for scatter: telemetry key for Y
-  ExperimentGraphSpec(QString t = {}, QStringList s = {}, QString x = {}, QString y = {})
-  : type(t), series(s), xSeries(x), ySeries(y) {}
+  QString xLabel;             // optional display label; time-series defaults Time [s]
+  QString yLabel;             // optional engineering-unit label
+  ExperimentGraphSpec(QString t = {}, QStringList s = {}, QString x = {}, QString y = {},
+    QString xl = {}, QString yl = {})
+  : type(t), series(s), xSeries(x), ySeries(y), xLabel(xl), yLabel(yl) {}
 };
 
 struct ExperimentSpec {
@@ -97,7 +101,552 @@ inline QVector<ExperimentSpec> buildExperimentCatalog(const QString &subsystem) 
     out << spec;
   };
   // clang-format off
-  /* ------------------------- NAVIGASI ------------------------- */
+  // STAGED AUTONOMOUS COMMISSIONING WORKBENCH (N0..N17).
+  // This is intentionally broader than the thesis chapter.  The order follows
+  // physical dependencies: timing -> geometry -> actuators -> sensors -> EKF ->
+  // localization -> planning -> control -> safety -> end-to-end certification.
+  if (subsystem == QStringLiteral("navigation")) {
+    auto F=[](const QString&key,const QString&label,const QString&kind,const QString&file,const QString&path,
+              const QString&placeholder,const QString&group=QString(),bool locked=false){
+      return ExperimentParameterField(key,label,kind,file,path,placeholder,QString(),false,locked,group);
+    };
+    auto RO=[&](const QString&key,const QString&label,const QString&file,const QString&path,const QString&group=QString()){
+      return F(key,label,QStringLiteral("yaml_readonly"),file,path,QString(),group,false);
+    };
+    auto LOCK=[&](const QString&key,const QString&label,const QString&file,const QString&path,const QString&group){
+      return F(key,label,QStringLiteral("yaml_readonly"),file,path,QString(),group,true);
+    };
+    auto P=[&](std::initializer_list<ExperimentParameterField> extras){
+      QVector<ExperimentParameterField> v;
+      v << ExperimentParameterField(QStringLiteral("sample_rate"),QStringLiteral("Sample Rate CSV (Hz)"),QStringLiteral("float"),{}, {},QStringLiteral("10.0"))
+        << ExperimentParameterField(QStringLiteral("duration"),QStringLiteral("Durasi Run (s)"),QStringLiteral("float"),{}, {},QStringLiteral("30.0"))
+        << ExperimentParameterField(QStringLiteral("variation"),QStringLiteral("Variasi / Run"),QStringLiteral("string"),{}, {},QStringLiteral("set-1"))
+        << ExperimentParameterField(QStringLiteral("condition"),QStringLiteral("Kondisi / Skenario"),QStringLiteral("string"),{}, {},QStringLiteral("normal"));
+      for(const auto&e:extras)v<<e;
+      return v;
+    };
+
+    // N0 — timing/readiness must PASS before any estimator tuning.
+    add("navigation",QStringLiteral("N0"),QStringLiteral("N0 System, Topic & Timing"),"N0.1",
+      QStringLiteral("N0.1 Runtime Rate, Age, dan Sinkronisasi"),
+      {"Rate topic utama terhadap Time [s]","Message age terhadap Time [s]","Inter-arrival time sensor terhadap Time [s]"},
+      {{"Variasi","Mean Rate GNSS","Mean Rate IMU","Mean Rate ESC","Mean Rate EKF Local","Mean Rate EKF Global","Max Age GNSS","Max Age IMU","Max Age ESC"}},
+      {{"Rate GNSS","derived.rate_gnss_hz"},{"Rate IMU","derived.rate_imu_hz"},{"Rate ESC","derived.rate_esc_hz"},{"Rate EKF Local","derived.rate_ekf_local_hz"},{"Rate EKF Global","derived.rate_ekf_global_hz"},
+       {"Age GNSS","derived.age_gnss_s"},{"Age IMU","derived.age_imu_s"},{"Age ESC","derived.age_esc_s"},{"Age EKF Local","derived.age_ekf_local_s"},{"Age EKF Global","derived.age_ekf_global_s"},
+       {"dt GNSS","derived.dt_gnss_s"},{"dt IMU","derived.dt_imu_s"},{"dt ESC","derived.dt_esc_s"}},
+      P({RO("gnss_rate_cfg","GNSS navigation_rate_hz","gnss","data_cuav_node.ros__parameters.navigation_rate_hz","Target Rate"),
+         RO("imu_rate_cfg","IMU publish_rate_hz","imu","data_imu_node.ros__parameters.publish_rate_hz","Target Rate"),
+         RO("esc_rate_cfg","ESC command_rate_hz","esc","esc_ackermann.ros__parameters.command_rate_hz","Target Rate"),
+         RO("local_ekf_rate_cfg","Local EKF frequency","ekf","ekf_filter_node_odom.ros__parameters.frequency","Target Rate"),
+         RO("global_ekf_rate_cfg","Global EKF frequency","ekf","ekf_filter_node_map.ros__parameters.frequency","Target Rate")}),
+      {{"time_series",{"Rate GNSS","Rate IMU","Rate ESC","Rate EKF Local","Rate EKF Global"},{},{},"Time [s]","Rate [Hz]"},
+       {"time_series",{"Age GNSS","Age IMU","Age ESC","Age EKF Local","Age EKF Global"},{},{},"Time [s]","Message age [s]"},
+       {"time_series",{"dt GNSS","dt IMU","dt ESC"},{},{},"Time [s]","Inter-arrival Δt [s]"}});
+
+    // N1 — physical dimensions are measurement authority, not free tuning knobs.
+    add("navigation",QStringLiteral("N1"),QStringLiteral("N1 Vehicle Geometry Authority"),"N1.1",
+      QStringLiteral("N1.1 Dimensi Fisik dan Batas Kinematik"),{},
+      {{"Parameter","Nilai","Status / Sumber"}}, {},
+      P({LOCK("wheelbase","Wheelbase fisik (m)","vehicle","vehicle.ros__parameters.wheelbase_m","MEASURED / LOCKED"),
+         LOCK("track_width","Track width (m)","vehicle","vehicle.ros__parameters.track_width_m","MEASURED / LOCKED"),
+         LOCK("vehicle_width","Total vehicle width (m)","vehicle","vehicle.ros__parameters.total_width_m","MEASURED / LOCKED"),
+         LOCK("vehicle_length","Vehicle length (m)","vehicle","vehicle.ros__parameters.vehicle_length_m","MEASURED / LOCKED"),
+         LOCK("wheel_radius","Wheel radius (m)","vehicle","vehicle.ros__parameters.wheel_radius_m","MEASURED / LOCKED"),
+         LOCK("footprint","Nav2 footprint","vehicle","vehicle.ros__parameters.footprint","MEASURED / LOCKED"),
+         RO("max_fwd","Max forward speed (m/s)","vehicle","vehicle.ros__parameters.max_forward_speed_mps","SAFETY CEILING"),
+         RO("max_rev","Max reverse speed (m/s)","vehicle","vehicle.ros__parameters.max_reverse_speed_mps","SAFETY CEILING") }));
+
+    // N2 — steering calibration before planner/controller geometry.
+    add("navigation",QStringLiteral("N2"),QStringLiteral("N2 Steering & Ackermann Calibration"),"N2.1",
+      QStringLiteral("N2.1 Linearitas, Center, Hysteresis dan Step Steering"),
+      {"Steering target vs feedback terhadap Time [s]","Linearitas target vs feedback"},
+      {{"Variasi","Mean Steer target","Mean Steer actual","RMSE Steering error","Max Steering error"},{"Parameter","Nilai YAML","Fungsi"}},
+      {{"Steer target","esc_steer_target"},{"Steer actual","esc_steer_actual"},{"Steering error","derived.steering_error_rad"}},
+      P({F("center","Feedback center (deg)","float","esc","esc_ackermann.ros__parameters.steering_feedback_center_deg","0","Center Calibration"),
+         F("straight_deadband","Straight deadband (deg)","float","esc","esc_ackermann.ros__parameters.steering_straight_deadband_deg","1.0","Center Calibration"),
+         F("physical_left","Physical left limit (deg)","float","esc","esc_ackermann.ros__parameters.steering_physical_left_limit_deg","-30","Physical Limits"),
+         F("physical_right","Physical right limit (deg)","float","esc","esc_ackermann.ros__parameters.steering_physical_right_limit_deg","30","Physical Limits"),
+         F("operational","Operational limit (deg)","float","esc","esc_ackermann.ros__parameters.steering_physical_operational_limit_deg","28","Physical Limits"),
+         F("lut_enabled","Physical LUT enabled","bool","esc","esc_ackermann.ros__parameters.steering_physical_lut_enabled","false","Hysteresis / LUT"),
+         RO("lut_physical","LUT physical points","esc","esc_ackermann.ros__parameters.steering_lut_physical_deg","Hysteresis / LUT")}),
+      {{"time_series",{"Steer target","Steer actual"},{},{},"Time [s]","Steering [rad]"},
+       {"scatter",{},"esc_steer_target","esc_steer_actual","Target steering [rad]","Feedback steering [rad]"}});
+
+    add("navigation",QStringLiteral("N2"),QStringLiteral("N2 Steering & Ackermann Calibration"),"N2.2",
+      QStringLiteral("N2.2 Circle Test, Effective Wheelbase dan Minimum Turning Radius"),
+      {"Steering actual selama circle test","Yaw-rate kinematic vs actual selama circle test"},
+      {{"Variasi","Steering test","Radius aktual [m]","Effective wheelbase [m]","RMSE fit [m]"},{"Parameter","Nilai final","Status"}},
+      {{"Steer actual","esc_steer_actual"},{"Yaw-rate kinematic","esc_kinematic_yaw_rate"},{"Yaw-rate actual","esc_yaw_rate"}},
+      P({F("gt_radius","GT Radius circle (m)","float",{}, {},"2.0",{},false),
+         RO("effective_wb","Effective wheelbase (m)","vehicle","vehicle.ros__parameters.effective_wheelbase_m","CALIBRATION RESULT"),
+         LOCK("rmin","Minimum turning radius (m)","vehicle","vehicle.ros__parameters.minimum_turning_radius_m","CALIBRATION AUTHORITY"),
+         RO("circle_valid","Circle calibration valid","vehicle","vehicle.ros__parameters.steering_circle_calibration_valid","CERTIFICATION")}),
+      {{"time_series",{"Steer actual"},{},{},"Time [s]","Steering [rad]"},
+       {"time_series",{"Yaw-rate kinematic","Yaw-rate actual"},{},{},"Time [s]","Yaw-rate [rad/s]"}});
+
+    // N3 — longitudinal scale before fusion.
+    add("navigation",QStringLiteral("N3"),QStringLiteral("N3 Drive Odometry Calibration"),"N3.1",
+      QStringLiteral("N3.1 RPM, Velocity dan Distance Scale"),
+      {"Velocity command/ESC/GNSS terhadap Time [s]","Yaw-rate odometry terhadap Time [s]"},
+      {{"Variasi","GT distance [m]","Odom distance [m]","Error distance [m]","Scale candidate"},{"Variasi","RMSE Velocity error","Mean V ESC","Mean V GNSS"}},
+      {{"V target","esc_drive_target"},{"V ESC","esc_odom.v"},{"V GNSS","gnss_base_vel_fusion.vx"},{"Velocity error","derived.velocity_error_mps"},{"Yaw-rate ESC","esc_odom.w"}},
+      P({F("gt_distance","GT Distance (m)","float",{}, {},"10.0",{},false),
+         F("odom_scale","Drive odometry scale","float","vehicle","vehicle.ros__parameters.drive_odometry_calibration_scale","1.0","Linear Calibration"),
+         RO("odom_valid","Drive odometry calibration valid","vehicle","vehicle.ros__parameters.drive_odometry_calibration_valid","Certification"),
+         F("r_v_base","R ESC vx base variance","float","esc","esc_ackermann.ros__parameters.odom_v_variance_base","0.03","Measurement Covariance R"),
+         F("r_v_gain","R ESC vx RPM-error gain","float","esc","esc_ackermann.ros__parameters.odom_v_variance_rpm_error_gain","0.2","Measurement Covariance R")}),
+      {{"time_series",{"V target","V ESC","V GNSS"},{},{},"Time [s]","Velocity [m/s]"},
+       {"time_series",{"Yaw-rate ESC"},{},{},"Time [s]","Yaw-rate [rad/s]"}});
+
+    // N4 — IMU calibration and dynamic consistency.
+    add("navigation",QStringLiteral("N4"),QStringLiteral("N4 IMU Calibration"),"N4.1",
+      QStringLiteral("N4.1 Bias, Noise, Orientation dan Covariance IMU"),
+      {"Gyro XYZ terhadap Time [s]","Acceleration XYZ terhadap Time [s]","Roll-Pitch-Yaw terhadap Time [s]","Gyro-Z stationary zoom terhadap Time [s]"},
+      {{"Variasi","Mean Gyro X","Mean Gyro Y","Mean Gyro Z","Std Gyro Z"},{"Variasi","Mean Roll","Mean Pitch","Mean Yaw","Std Yaw"}},
+      {{"Gyro X","imu.gx"},{"Gyro Y","imu.gy"},{"Gyro Z","imu.gz"},{"Accel X","imu.ax"},{"Accel Y","imu.ay"},{"Accel Z","imu.az"},
+       {"Roll","imu.roll_rad"},{"Pitch","imu.pitch_rad"},{"Yaw","imu.yaw_rad"}},
+      P({F("yaw_offset","Yaw offset (rad)","float","imu","data_imu_node.ros__parameters.yaw_offset_rad","0.0","Orientation Calibration"),
+         F("gyro_bias_z","Gyro bias Z","float","imu","data_imu_node.ros__parameters.gyro_bias.2","0.0","Stationary Bias"),
+         F("r_imu_yaw","R IMU yaw variance","float","imu","data_imu_node.ros__parameters.orientation_covariance.2","0.05","Measurement Covariance R"),
+         F("r_imu_w","R IMU gyro-Z variance","float","imu","data_imu_node.ros__parameters.angular_velocity_covariance.2","0.02","Measurement Covariance R"),
+         F("gyro_timeout","Gyro packet timeout (s)","float","imu","data_imu_node.ros__parameters.gyro_packet_timeout_sec","0.35","Timing")}),
+      {{"time_series",{"Gyro X","Gyro Y","Gyro Z"},{},{},"Time [s]","Angular velocity [rad/s]"},
+       {"time_series",{"Accel X","Accel Y","Accel Z"},{},{},"Time [s]","Acceleration [m/s²]"},
+       {"time_series",{"Roll","Pitch","Yaw"},{},{},"Time [s]","Orientation [rad]"},
+       {"time_series",{"Gyro Z"},{},{},"Time [s]","Gyro-Z [rad/s]"}});
+
+    add("navigation",QStringLiteral("N4"),QStringLiteral("N4 IMU Calibration"),"N4.2",
+      QStringLiteral("N4.2 Dynamic Yaw Consistency IMU vs Ackermann"),
+      {"IMU gyro-Z vs kinematic yaw-rate","Heading IMU during maneuver"},
+      {{"Variasi","RMSE yaw-rate","Mean Gyro Z","Mean Yaw-rate kinematic","Max residual"}},
+      {{"IMU wz","imu.gz"},{"Ackermann wz","esc_kinematic_yaw_rate"},{"Yaw IMU","imu.yaw_rad"}}, P({}),
+      {{"time_series",{"IMU wz","Ackermann wz"},{},{},"Time [s]","Yaw-rate [rad/s]"},
+       {"time_series",{"Yaw IMU"},{},{},"Time [s]","Yaw [rad]"}});
+
+    // N5 — GNSS quality first, motion/COG second.
+    add("navigation",QStringLiteral("N5"),QStringLiteral("N5 GNSS Qualification"),"N5.1",
+      QStringLiteral("N5.1 Quality, DOP, Position Stability dan Timing"),
+      {"Sebaran posisi GNSS statis ΔEast-ΔNorth","HDOP, VDOP dan DOP terhadap Time [s]","Horizontal accuracy hAcc terhadap Time [s]","Jumlah satelit terhadap Time [s]"},
+      {{"Variasi","Mean Satelit","Mean DOP","Mean HDOP","Mean VDOP","Mean hAcc","Mean Rate GNSS","Max Age GNSS"},{"Variasi","Std East [m]","Std North [m]","2D RMS [m]","R95 [m]","Samples"}},
+      {{"Satelit","gnss_quality.sat"},{"DOP","gnss_quality.dop"},{"HDOP","gnss_quality.hdop"},{"VDOP","gnss_quality.vdop"},{"hAcc","gnss_quality.hacc_m"},
+       {"Rate GNSS","derived.rate_gnss_hz"},{"Age GNSS","derived.age_gnss_s"}},
+      P({F("nav_rate","Navigation rate (Hz)","float","gnss","data_cuav_node.ros__parameters.navigation_rate_hz","10","Receiver Timing"),
+         F("min_sat","Minimum satellites","int","gnss","data_cuav_node.ros__parameters.min_satellites","8","Quality Gate"),
+         F("max_dop","Maximum DOP","float","gnss","data_cuav_node.ros__parameters.max_dop","2.0","Quality Gate"),
+         F("max_hacc","Maximum hAcc (m)","float","gnss","data_cuav_node.ros__parameters.max_hacc_m","2.5","Quality Gate"),
+         F("max_sacc","Maximum sAcc (m/s)","float","gnss","data_cuav_node.ros__parameters.max_sacc_mps","0.8","Quality Gate"),
+         F("fit_window","Position fit window (s)","float","gnss","data_cuav_node.ros__parameters.position_fit_window_sec","3.0","Motion Fit")}),
+      {{"scatter",{},"gnss_fix.lon","gnss_fix.lat","ΔEast [m]","ΔNorth [m]"},
+       {"time_series",{"HDOP","VDOP","DOP"},{},{},"Time [s]","DOP [-]"},
+       {"time_series",{"hAcc"},{},{},"Time [s]","Horizontal accuracy [m]"},
+       {"time_series",{"Satelit"},{},{},"Time [s]","Satellites [-]"}});
+
+    add("navigation",QStringLiteral("N5"),QStringLiteral("N5 GNSS Qualification"),"N5.2",
+      QStringLiteral("N5.2 Velocity, COG, Synchronization dan Fusion Qualification"),
+      {"GNSS velocity vs wheel velocity","COG yaw terhadap Time [s]","GNSS velocity covariance"},
+      {{"Variasi","RMSE V GNSS-vs-ESC","Mean V GNSS","Mean V ESC","Mean COG variance"},{"Parameter","Nilai","Gate"}},
+      {{"V GNSS","gnss_base_vel_fusion.vx"},{"V ESC","esc_odom.v"},{"COG yaw","gnss_cog_fusion.yaw_rad"},{"R GNSS vx","gnss_base_vel_fusion.cov_x"},{"R COG yaw","gnss_cog_fusion.yaw_variance"}},
+      P({F("sync_gap","GNSS sync max gap (s)","float","localization","localization_core.ros__parameters.gnss_sync_max_gap_sec","0.3","Synchronization"),
+         F("speed_consistency","Wheel/GNSS speed residual max (m/s)","float","localization","localization_core.ros__parameters.gnss_speed_consistency_max_mps","0.2","Velocity Qualification"),
+         F("cog_min_speed","COG min forward speed (m/s)","float","localization","localization_core.ros__parameters.cog_min_forward_speed_mps","0.35","COG Qualification"),
+         F("cog_max_sacc","COG max sAcc (m/s)","float","localization","localization_core.ros__parameters.cog_max_sacc_mps","0.3","COG Qualification"),
+         F("r_gnss_v_min","R GNSS vx min variance","float","localization","localization_core.ros__parameters.gnss_velocity_fusion_min_variance","0.0025","Measurement Covariance R"),
+         F("r_gnss_v_max","R GNSS vx max variance","float","localization","localization_core.ros__parameters.gnss_velocity_fusion_max_variance","0.25","Measurement Covariance R"),
+         F("r_cog_min","R COG yaw min variance","float","localization","localization_core.ros__parameters.gnss_cog_fusion_min_variance_rad2","0.001218","Measurement Covariance R"),
+         F("r_cog_max","R COG yaw max variance","float","localization","localization_core.ros__parameters.gnss_cog_fusion_max_variance_rad2","0.274","Measurement Covariance R")}),
+      {{"time_series",{"V GNSS","V ESC"},{},{},"Time [s]","Velocity [m/s]"},
+       {"time_series",{"COG yaw"},{},{},"Time [s]","Yaw [rad]"},
+       {"time_series",{"R GNSS vx"},{},{},"Time [s]","Variance [(m/s)^2]"}});
+
+    // N6 — map reference / lever arm / alignment.
+    add("navigation",QStringLiteral("N6"),QStringLiteral("N6 TF & Map Alignment"),"N6.1",
+      QStringLiteral("N6.1 ENU Reference, Lever Arm dan Multi-point Map Calibration"),
+      {"GNSS map trajectory","Global EKF map trajectory"},
+      {{"Variasi","Mean GNSS map X","Mean GNSS map Y","Mean Global X","Mean Global Y"},{"Parameter","Nilai","Peran"}},
+      {{"GNSS map X","gnss_map_odom.x"},{"GNSS map Y","gnss_map_odom.y"},{"Global X","ekf_global.x"},{"Global Y","ekf_global.y"}},
+      P({F("reference_lat","Reference latitude","float","localization","localization_core.ros__parameters.reference_latitude","-7.0","Map Reference"),
+         F("reference_lon","Reference longitude","float","localization","localization_core.ros__parameters.reference_longitude","110.0","Map Reference"),
+         F("reference_x","Reference map X (m)","float","localization","localization_core.ros__parameters.reference_map_x_m","0","Map Reference"),
+         F("reference_y","Reference map Y (m)","float","localization","localization_core.ros__parameters.reference_map_y_m","0","Map Reference"),
+         F("map_yaw","Map yaw from ENU (rad)","float","localization","localization_core.ros__parameters.map_yaw_from_enu_rad","0","Map Reference"),
+         F("antenna_x","GNSS antenna X lever arm (m)","float","localization","localization_core.ros__parameters.gnss_antenna_x_m","0.165","Lever Arm"),
+         F("antenna_y","GNSS antenna Y lever arm (m)","float","localization","localization_core.ros__parameters.gnss_antenna_y_m","0","Lever Arm"),
+         F("cal_rmse","Map calibration max RMSE (m)","float","localization","localization_core.ros__parameters.map_calibration_max_rmse_m","3.0","Multi-point Calibration")}),
+      {{"scatter",{},"gnss_map_odom.x","gnss_map_odom.y","Map X [m]","Map Y [m]"},
+       {"scatter",{},"ekf_global.x","ekf_global.y","Map X [m]","Map Y [m]"}});
+
+    // N7 — LOCAL EKF CORE. P/Q/R/K/residuals are deliberately explicit.
+    add("navigation",QStringLiteral("N7"),QStringLiteral("N7 Local EKF — Core Tuning"),"N7.1",
+      QStringLiteral("N7.1 Fusion Architecture, Timing, Queue dan Rejection"),
+      {"Local EKF velocity sources","Local EKF yaw-rate sources","Local EKF output age"},
+      {{"Variasi","Frequency","Sensor timeout","Reject ESC","Reject GNSS","RMSE Residual vx ESC","RMSE Residual vx GNSS"},{"Source","Config state","Role"}},
+      {{"ESC vx","esc_odom.v"},{"GNSS vx","gnss_base_vel_fusion.vx"},{"EKF vx","ekf_local.v"},{"ESC wz","esc_odom.w"},{"IMU wz","imu.gz"},{"EKF wz","ekf_local.w"},{"EKF age","derived.age_ekf_local_s"},
+       {"Residual vx ESC","derived.ekf_local_res_vx_esc"},{"Residual vx GNSS","derived.ekf_local_res_vx_gnss"}},
+      P({F("frequency","Frequency [Hz]","float","ekf","ekf_filter_node_odom.ros__parameters.frequency","10","Timing"),
+         F("sensor_timeout","Sensor timeout [s]","float","ekf","ekf_filter_node_odom.ros__parameters.sensor_timeout","0.25","Timing"),
+         F("predict","Predict to current time","bool","ekf","ekf_filter_node_odom.ros__parameters.predict_to_current_time","true","Timing"),
+         F("queue_esc","ESC queue size","int","ekf","ekf_filter_node_odom.ros__parameters.odom0_queue_size","30","Buffer / Queue"),
+         F("queue_imu","IMU queue size","int","ekf","ekf_filter_node_odom.ros__parameters.imu0_queue_size","50","Buffer / Queue"),
+         F("queue_gnss","GNSS vx queue size","int","ekf","ekf_filter_node_odom.ros__parameters.twist0_queue_size","20","Buffer / Queue"),
+         F("reject_esc","ESC twist rejection threshold","float","ekf","ekf_filter_node_odom.ros__parameters.odom0_twist_rejection_threshold","5","Rejection Gate"),
+         F("reject_gnss","GNSS vx rejection threshold","float","ekf","ekf_filter_node_odom.ros__parameters.twist0_rejection_threshold","10","Rejection Gate"),
+         LOCK("esc_cfg","ESC fusion matrix [vx,wz]","ekf","ekf_filter_node_odom.ros__parameters.odom0_config","ARCHITECTURE — LOCKED"),
+         LOCK("imu_cfg","IMU fusion matrix [yaw,wz]","ekf","ekf_filter_node_odom.ros__parameters.imu0_config","ARCHITECTURE — LOCKED"),
+         LOCK("gnss_cfg","GNSS fusion matrix [vx]","ekf","ekf_filter_node_odom.ros__parameters.twist0_config","ARCHITECTURE — LOCKED")}),
+      {{"time_series",{"ESC vx","GNSS vx","EKF vx"},{},{},"Time [s]","Velocity [m/s]"},
+       {"time_series",{"ESC wz","IMU wz","EKF wz"},{},{},"Time [s]","Yaw-rate [rad/s]"},
+       {"time_series",{"EKF age"},{},{},"Time [s]","State age [s]"}});
+
+    add("navigation",QStringLiteral("N7"),QStringLiteral("N7 Local EKF — Core Tuning"),"N7.2",
+      QStringLiteral("N7.2 P-Q-R Local: State Uncertainty, Process Noise, Measurement Trust"),
+      {"Local P position sigma","Local P velocity sigma","Local P yaw/yaw-rate sigma","Local R velocity variance"},
+      {{"Variasi","Qx","Qy","Qyaw","Qvx","Qwz","Mean sigma X","Mean sigma Y","Mean sigma Yaw","Mean sigma Vx","Mean sigma Wz"},
+       {"Variasi","R ESC vx","R GNSS vx","R IMU yaw","R ESC wz","R IMU wz"}},
+      {{"sigma X","derived.ekf_local_sigma_x"},{"sigma Y","derived.ekf_local_sigma_y"},{"sigma Yaw","derived.ekf_local_sigma_yaw"},{"sigma Vx","derived.ekf_local_sigma_vx"},{"sigma Wz","derived.ekf_local_sigma_w"},
+       {"R ESC vx","esc_odom.var_v"},{"R GNSS vx","gnss_base_vel_fusion.cov_x"},{"R IMU yaw","imu.var_yaw"},{"R ESC wz","esc_odom.var_w"},{"R IMU wz","imu.var_gz"}},
+      P({F("qx","Qx","float","ekf","ekf_filter_node_odom.ros__parameters.process_noise_covariance.0","0.05","Q — Process Noise"),
+         F("qy","Qy","float","ekf","ekf_filter_node_odom.ros__parameters.process_noise_covariance.16","0.05","Q — Process Noise"),
+         F("qyaw","Qyaw","float","ekf","ekf_filter_node_odom.ros__parameters.process_noise_covariance.80","0.06","Q — Process Noise"),
+         F("qvx","Qvx","float","ekf","ekf_filter_node_odom.ros__parameters.process_noise_covariance.96","0.025","Q — Process Noise"),
+         F("qwz","Qwz","float","ekf","ekf_filter_node_odom.ros__parameters.process_noise_covariance.176","0.02","Q — Process Noise"),
+         F("r_esc_v","R ESC vx base","float","esc","esc_ackermann.ros__parameters.odom_v_variance_base","0.03","R — Measurement Noise"),
+         F("r_esc_w","R ESC yaw-rate base","float","esc","esc_ackermann.ros__parameters.odom_yaw_rate_variance_base","0.05","R — Measurement Noise"),
+         F("r_imu_yaw","R IMU yaw","float","imu","data_imu_node.ros__parameters.orientation_covariance.2","0.05","R — Measurement Noise"),
+         F("r_imu_w","R IMU gyro-Z","float","imu","data_imu_node.ros__parameters.angular_velocity_covariance.2","0.02","R — Measurement Noise"),
+         F("r_gnss_v_min","R GNSS vx min","float","localization","localization_core.ros__parameters.gnss_velocity_fusion_min_variance","0.0025","R — Measurement Noise"),
+         F("r_gnss_v_max","R GNSS vx max","float","localization","localization_core.ros__parameters.gnss_velocity_fusion_max_variance","0.25","R — Measurement Noise")}),
+      {{"time_series",{"sigma X","sigma Y"},{},{},"Time [s]","σ position [m]"},
+       {"time_series",{"sigma Vx"},{},{},"Time [s]","σ velocity [m/s]"},
+       {"time_series",{"sigma Yaw","sigma Wz"},{},{},"Time [s]","σ angular state"},
+       {"time_series",{"R ESC vx","R GNSS vx"},{},{},"Time [s]","Velocity variance [(m/s)^2]"}});
+
+    add("navigation",QStringLiteral("N7"),QStringLiteral("N7 Local EKF — Core Tuning"),"N7.3",
+      QStringLiteral("N7.3 Kalman Authority, Residual, NIS Proxy dan Drift Analyzer Local"),
+      {"K_eff Local velocity","K_eff Local yaw/yaw-rate","Local velocity residual","Local angular residual","Local NIS diagnostic proxy","Local P growth / drift uncertainty"},
+      {{"Variasi","Mean K vx ESC","Mean K vx GNSS","Mean K yaw IMU","Mean K wz ESC","Mean K wz IMU","P95 NIS vx ESC","P95 NIS vx GNSS"},
+       {"Variasi","RMSE Residual vx ESC","RMSE Residual vx GNSS","RMSE Residual yaw IMU","RMSE Residual wz ESC","RMSE Residual wz IMU","Max P growth X","Max P growth Y"}},
+      {{"K vx ESC","derived.ekf_local_k_vx_esc"},{"K vx GNSS","derived.ekf_local_k_vx_gnss"},{"K yaw IMU","derived.ekf_local_k_yaw_imu"},{"K wz ESC","derived.ekf_local_k_w_esc"},{"K wz IMU","derived.ekf_local_k_w_imu"},
+       {"Residual vx ESC","derived.ekf_local_res_vx_esc"},{"Residual vx GNSS","derived.ekf_local_res_vx_gnss"},{"Residual yaw IMU","derived.ekf_local_res_yaw_imu"},{"Residual wz ESC","derived.ekf_local_res_w_esc"},{"Residual wz IMU","derived.ekf_local_res_w_imu"},
+       {"NIS vx ESC","derived.ekf_local_nis_vx_esc"},{"NIS vx GNSS","derived.ekf_local_nis_vx_gnss"},{"NIS yaw IMU","derived.ekf_local_nis_yaw_imu"},{"NIS wz ESC","derived.ekf_local_nis_w_esc"},{"NIS wz IMU","derived.ekf_local_nis_w_imu"},
+       {"P growth X","derived.ekf_local_p_growth_x"},{"P growth Y","derived.ekf_local_p_growth_y"},{"P growth Yaw","derived.ekf_local_p_growth_yaw"},{"P growth Vx","derived.ekf_local_p_growth_vx"},{"P growth Wz","derived.ekf_local_p_growth_w"}}, P({}),
+      {{"time_series",{"K vx ESC","K vx GNSS"},{},{},"Time [s]","K_eff [0..1]"},
+       {"time_series",{"K yaw IMU","K wz ESC","K wz IMU"},{},{},"Time [s]","K_eff [0..1]"},
+       {"time_series",{"Residual vx ESC","Residual vx GNSS"},{},{},"Time [s]","Velocity residual [m/s]"},
+       {"time_series",{"Residual yaw IMU","Residual wz ESC","Residual wz IMU"},{},{},"Time [s]","Angular residual"},
+       {"time_series",{"NIS vx ESC","NIS vx GNSS","NIS yaw IMU","NIS wz ESC","NIS wz IMU"},{},{},"Time [s]","NIS proxy [-]"},
+       {"time_series",{"P growth X","P growth Y","P growth Yaw","P growth Vx","P growth Wz"},{},{},"Time [s]","dP/dt"}});
+
+    add("navigation",QStringLiteral("N7"),QStringLiteral("N7 Local EKF — Core Tuning"),"N7.4",
+      QStringLiteral("N7.4 Final Validation Local EKF"),
+      {"Final local velocity fusion","Final local yaw-rate fusion","Final local covariance"},
+      {{"Variasi","RMSE Residual vx ESC","RMSE Residual vx GNSS","RMSE Residual wz ESC","RMSE Residual wz IMU","Mean sigma X","Mean sigma Y","Max P growth X","Max P growth Y"}},
+      {{"ESC vx","esc_odom.v"},{"GNSS vx","gnss_base_vel_fusion.vx"},{"EKF vx","ekf_local.v"},{"ESC wz","esc_odom.w"},{"IMU wz","imu.gz"},{"EKF wz","ekf_local.w"},{"sigma X","derived.ekf_local_sigma_x"},{"sigma Y","derived.ekf_local_sigma_y"},{"P growth X","derived.ekf_local_p_growth_x"},{"P growth Y","derived.ekf_local_p_growth_y"}},
+      P({RO("frequency","Final Frequency","ekf","ekf_filter_node_odom.ros__parameters.frequency","FROZEN CONFIG"),RO("timeout","Final sensor timeout","ekf","ekf_filter_node_odom.ros__parameters.sensor_timeout","FROZEN CONFIG"),RO("qvx","Final Qvx","ekf","ekf_filter_node_odom.ros__parameters.process_noise_covariance.96","FROZEN CONFIG"),RO("qwz","Final Qwz","ekf","ekf_filter_node_odom.ros__parameters.process_noise_covariance.176","FROZEN CONFIG")}),
+      {{"time_series",{"ESC vx","GNSS vx","EKF vx"},{},{},"Time [s]","Velocity [m/s]"},
+       {"time_series",{"ESC wz","IMU wz","EKF wz"},{},{},"Time [s]","Yaw-rate [rad/s]"},
+       {"time_series",{"sigma X","sigma Y"},{},{},"Time [s]","σ position [m]"}});
+
+    // N8 — GLOBAL EKF CORE.
+    add("navigation",QStringLiteral("N8"),QStringLiteral("N8 Global EKF — Core Tuning"),"N8.1",
+      QStringLiteral("N8.1 Fusion Architecture, Timing, Queue dan Rejection"),
+      {"Global GNSS position vs EKF","Global velocity fusion","Global heading sources"},
+      {{"Variasi","Frequency","Sensor timeout","Pose reject","Twist reject","RMSE Residual x GNSS","RMSE Residual y GNSS"}},
+      {{"GNSS X","gnss_map_odom.x"},{"GNSS Y","gnss_map_odom.y"},{"Global X","ekf_global.x"},{"Global Y","ekf_global.y"},{"GNSS vx","gnss_base_vel_fusion.vx"},{"Global vx","ekf_global.v"},{"COG yaw","gnss_cog_fusion.yaw_rad"},{"Global yaw","ekf_global.yaw"}},
+      P({F("frequency","Frequency [Hz]","float","ekf","ekf_filter_node_map.ros__parameters.frequency","10","Timing"),
+         F("sensor_timeout","Sensor timeout [s]","float","ekf","ekf_filter_node_map.ros__parameters.sensor_timeout","2.0","Timing"),
+         F("predict","Predict to current time","bool","ekf","ekf_filter_node_map.ros__parameters.predict_to_current_time","false","Timing"),
+         F("pose_reject","GNSS pose rejection threshold","float","ekf","ekf_filter_node_map.ros__parameters.odom0_pose_rejection_threshold","12","Rejection Gate"),
+         F("twist_reject","GNSS vx rejection threshold","float","ekf","ekf_filter_node_map.ros__parameters.twist0_rejection_threshold","10","Rejection Gate"),
+         F("queue_xy","GNSS XY queue","int","ekf","ekf_filter_node_map.ros__parameters.odom0_queue_size","8","Buffer / Queue"),
+         F("queue_v","GNSS vx queue","int","ekf","ekf_filter_node_map.ros__parameters.twist0_queue_size","12","Buffer / Queue"),
+         F("queue_cog","COG queue","int","ekf","ekf_filter_node_map.ros__parameters.pose0_queue_size","10","Buffer / Queue"),
+         F("queue_imu","IMU queue","int","ekf","ekf_filter_node_map.ros__parameters.imu0_queue_size","30","Buffer / Queue"),
+         LOCK("xy_cfg","GNSS map fusion [x,y]","ekf","ekf_filter_node_map.ros__parameters.odom0_config","ARCHITECTURE — LOCKED"),
+         LOCK("v_cfg","GNSS velocity fusion [vx]","ekf","ekf_filter_node_map.ros__parameters.twist0_config","ARCHITECTURE — LOCKED"),
+         LOCK("cog_cfg","COG fusion [yaw]","ekf","ekf_filter_node_map.ros__parameters.pose0_config","ARCHITECTURE — LOCKED"),
+         LOCK("imu_cfg","IMU fusion [wz only]","ekf","ekf_filter_node_map.ros__parameters.imu0_config","ARCHITECTURE — LOCKED")}),
+      {{"scatter",{},"gnss_map_odom.x","gnss_map_odom.y","Map X [m]","Map Y [m]"},
+       {"time_series",{"GNSS vx","Global vx"},{},{},"Time [s]","Velocity [m/s]"},
+       {"time_series",{"COG yaw","Global yaw"},{},{},"Time [s]","Yaw [rad]"}});
+
+    add("navigation",QStringLiteral("N8"),QStringLiteral("N8 Global EKF — Core Tuning"),"N8.2",
+      QStringLiteral("N8.2 P-Q-R Global: Position, Velocity, Heading Trust"),
+      {"Global P position sigma","Global P dynamics sigma","Global R position variance","Global R heading/velocity variance"},
+      {{"Variasi","Qx","Qy","Qyaw","Qvx","Qwz","Mean sigma X","Mean sigma Y","Mean sigma Yaw"},
+       {"Variasi","R GNSS X","R GNSS Y","R GNSS vx","R COG yaw","R IMU wz"}},
+      {{"sigma X","derived.ekf_global_sigma_x"},{"sigma Y","derived.ekf_global_sigma_y"},{"sigma Yaw","derived.ekf_global_sigma_yaw"},{"sigma Vx","derived.ekf_global_sigma_vx"},{"sigma Wz","derived.ekf_global_sigma_w"},
+       {"R GNSS X","gnss_map_odom.var_x"},{"R GNSS Y","gnss_map_odom.var_y"},{"R GNSS vx","gnss_base_vel_fusion.cov_x"},{"R COG yaw","gnss_cog_fusion.yaw_variance"},{"R IMU wz","imu.var_gz"}},
+      P({F("qx","Qx","float","ekf","ekf_filter_node_map.ros__parameters.process_noise_covariance.0","0.05","Q — Process Noise"),
+         F("qy","Qy","float","ekf","ekf_filter_node_map.ros__parameters.process_noise_covariance.16","0.05","Q — Process Noise"),
+         F("qyaw","Qyaw","float","ekf","ekf_filter_node_map.ros__parameters.process_noise_covariance.80","0.06","Q — Process Noise"),
+         F("qvx","Qvx","float","ekf","ekf_filter_node_map.ros__parameters.process_noise_covariance.96","0.025","Q — Process Noise"),
+         F("qwz","Qwz","float","ekf","ekf_filter_node_map.ros__parameters.process_noise_covariance.176","0.02","Q — Process Noise"),
+         F("r_gnss_v_min","R GNSS vx min","float","localization","localization_core.ros__parameters.gnss_velocity_fusion_min_variance","0.0025","R — Measurement Noise"),
+         F("r_gnss_v_max","R GNSS vx max","float","localization","localization_core.ros__parameters.gnss_velocity_fusion_max_variance","0.25","R — Measurement Noise"),
+         F("r_cog_min","R COG yaw min","float","localization","localization_core.ros__parameters.gnss_cog_fusion_min_variance_rad2","0.001218","R — Measurement Noise"),
+         F("r_cog_max","R COG yaw max","float","localization","localization_core.ros__parameters.gnss_cog_fusion_max_variance_rad2","0.274","R — Measurement Noise"),
+         F("r_imu_w","R IMU gyro-Z","float","imu","data_imu_node.ros__parameters.angular_velocity_covariance.2","0.02","R — Measurement Noise")}),
+      {{"time_series",{"sigma X","sigma Y"},{},{},"Time [s]","σ position [m]"},
+       {"time_series",{"sigma Yaw","sigma Vx","sigma Wz"},{},{},"Time [s]","σ state"},
+       {"time_series",{"R GNSS X","R GNSS Y"},{},{},"Time [s]","Position variance [m²]"},
+       {"time_series",{"R GNSS vx","R COG yaw","R IMU wz"},{},{},"Time [s]","Measurement variance"}});
+
+    add("navigation",QStringLiteral("N8"),QStringLiteral("N8 Global EKF — Core Tuning"),"N8.3",
+      QStringLiteral("N8.3 Kalman Authority, Residual, NIS Proxy dan Drift Analyzer Global"),
+      {"K_eff Global position","K_eff Global velocity/heading","Global position residual","Global velocity/heading residual","Global NIS diagnostic proxy","Global P growth"},
+      {{"Variasi","Mean K x GNSS","Mean K y GNSS","Mean K vx GNSS","Mean K yaw COG","Mean K wz IMU","P95 NIS x GNSS","P95 NIS y GNSS"},
+       {"Variasi","RMSE Residual x GNSS","RMSE Residual y GNSS","RMSE Residual vx GNSS","RMSE Residual yaw COG","Max P growth X","Max P growth Y"}},
+      {{"K x GNSS","derived.ekf_global_k_x_gnss"},{"K y GNSS","derived.ekf_global_k_y_gnss"},{"K vx GNSS","derived.ekf_global_k_vx_gnss"},{"K yaw COG","derived.ekf_global_k_yaw_cog"},{"K wz IMU","derived.ekf_global_k_w_imu"},
+       {"Residual x GNSS","derived.ekf_global_res_x_gnss"},{"Residual y GNSS","derived.ekf_global_res_y_gnss"},{"Residual vx GNSS","derived.ekf_global_res_vx_gnss"},{"Residual yaw COG","derived.ekf_global_res_yaw_cog"},{"Residual wz IMU","derived.ekf_global_res_w_imu"},
+       {"NIS x GNSS","derived.ekf_global_nis_x_gnss"},{"NIS y GNSS","derived.ekf_global_nis_y_gnss"},{"NIS vx GNSS","derived.ekf_global_nis_vx_gnss"},{"NIS yaw COG","derived.ekf_global_nis_yaw_cog"},{"NIS wz IMU","derived.ekf_global_nis_w_imu"},
+       {"P growth X","derived.ekf_global_p_growth_x"},{"P growth Y","derived.ekf_global_p_growth_y"},{"P growth Yaw","derived.ekf_global_p_growth_yaw"},{"P growth Vx","derived.ekf_global_p_growth_vx"},{"P growth Wz","derived.ekf_global_p_growth_w"}}, P({}),
+      {{"time_series",{"K x GNSS","K y GNSS"},{},{},"Time [s]","K_eff [0..1]"},
+       {"time_series",{"K vx GNSS","K yaw COG","K wz IMU"},{},{},"Time [s]","K_eff [0..1]"},
+       {"time_series",{"Residual x GNSS","Residual y GNSS"},{},{},"Time [s]","Position residual [m]"},
+       {"time_series",{"Residual vx GNSS","Residual yaw COG","Residual wz IMU"},{},{},"Time [s]","Residual"},
+       {"time_series",{"NIS x GNSS","NIS y GNSS","NIS vx GNSS","NIS yaw COG","NIS wz IMU"},{},{},"Time [s]","NIS proxy [-]"},
+       {"time_series",{"P growth X","P growth Y","P growth Yaw","P growth Vx","P growth Wz"},{},{},"Time [s]","dP/dt"}});
+
+    add("navigation",QStringLiteral("N8"),QStringLiteral("N8 Global EKF — Core Tuning"),"N8.4",
+      QStringLiteral("N8.4 Final Validation Global EKF"),
+      {"Final raw GNSS vs global EKF trajectory","Final COG vs Global yaw","Final global covariance"},
+      {{"Variasi","RMSE Residual x GNSS","RMSE Residual y GNSS","RMSE Residual yaw COG","Mean sigma X","Mean sigma Y","Mean sigma Yaw","Max P growth X","Max P growth Y"}},
+      {{"COG yaw","gnss_cog_fusion.yaw_rad"},{"Global yaw","ekf_global.yaw"},{"sigma X","derived.ekf_global_sigma_x"},{"sigma Y","derived.ekf_global_sigma_y"},{"sigma Yaw","derived.ekf_global_sigma_yaw"}},
+      P({RO("frequency","Final Frequency","ekf","ekf_filter_node_map.ros__parameters.frequency","FROZEN CONFIG"),RO("timeout","Final sensor timeout","ekf","ekf_filter_node_map.ros__parameters.sensor_timeout","FROZEN CONFIG"),RO("qx","Final Qx","ekf","ekf_filter_node_map.ros__parameters.process_noise_covariance.0","FROZEN CONFIG"),RO("qy","Final Qy","ekf","ekf_filter_node_map.ros__parameters.process_noise_covariance.16","FROZEN CONFIG")}),
+      {{"scatter",{},"ekf_global.x","ekf_global.y","Map X [m]","Map Y [m]"},
+       {"time_series",{"COG yaw","Global yaw"},{},{},"Time [s]","Yaw [rad]"},
+       {"time_series",{"sigma X","sigma Y","sigma Yaw"},{},{},"Time [s]","σ state"}});
+
+    // N9 — custom global correction layer.
+    add("navigation",QStringLiteral("N9"),QStringLiteral("N9 LocalizationCore & map→odom"),"N9.1",
+      QStringLiteral("N9.1 Quality Gate, Startup dan Fusion Qualification"),
+      {"Global EKF trajectory during localization gating","GNSS quality during localization"},
+      {{"Variasi","Mean Satelit","Mean DOP","Mean hAcc","Mean Global X","Mean Global Y"}},
+      {{"Satelit","gnss_quality.sat"},{"DOP","gnss_quality.dop"},{"hAcc","gnss_quality.hacc_m"},{"Global X","ekf_global.x"},{"Global Y","ekf_global.y"}},
+      P({F("startup_gnss","Startup GNSS samples","int","localization","localization_core.ros__parameters.startup_gnss_samples","5","Startup"),
+         F("strict_sat","Strict minimum satellites","int","localization","localization_core.ros__parameters.strict_min_satellites","8","Strict Quality"),
+         F("strict_dop","Strict maximum DOP","float","localization","localization_core.ros__parameters.strict_max_dop","2.0","Strict Quality"),
+         F("strict_hacc","Strict maximum hAcc (m)","float","localization","localization_core.ros__parameters.strict_max_hacc_m","3.0","Strict Quality"),
+         F("hold_sec","Strict quality hold (s)","float","localization","localization_core.ros__parameters.strict_quality_hold_sec","1.5","Strict Quality")}),
+      {{"scatter",{},"ekf_global.x","ekf_global.y","Map X [m]","Map Y [m]"},
+       {"time_series",{"Satelit","DOP","hAcc"},{},{},"Time [s]","GNSS quality"}});
+
+    add("navigation",QStringLiteral("N9"),QStringLiteral("N9 LocalizationCore & map→odom"),"N9.2",
+      QStringLiteral("N9.2 map→odom Correction Position dan Yaw"),
+      {"Raw GNSS/global EKF/final map X","Raw GNSS/global EKF/final map Y","Global yaw and final localization yaw"},
+      {{"Variasi","Correction alpha stationary","Correction alpha moving","Max correction [m]","Yaw correction alpha","Max yaw step"}},
+      {{"GNSS X","gnss_map_odom.x"},{"Global X","ekf_global.x"},{"Final map X","localization_state.map_x"},{"GNSS Y","gnss_map_odom.y"},{"Global Y","ekf_global.y"},{"Final map Y","localization_state.map_y"},{"Global yaw","ekf_global.yaw"},{"Final yaw","localization_state.yaw"}},
+      P({F("alpha_stationary","Strict correction alpha stationary","float","localization","localization_core.ros__parameters.strict_correction_alpha","0.08","Position Correction"),
+         F("alpha_moving","Strict correction alpha moving","float","localization","localization_core.ros__parameters.strict_moving_correction_alpha","0.01","Position Correction"),
+         F("max_corr","Strict max correction (m)","float","localization","localization_core.ros__parameters.strict_max_correction_m","0.08","Position Correction"),
+         F("yaw_alpha","Global EKF yaw correction alpha","float","localization","localization_core.ros__parameters.global_ekf_yaw_correction_alpha","0.05","Yaw Correction"),
+         F("yaw_step","Global EKF yaw max step (rad)","float","localization","localization_core.ros__parameters.global_ekf_yaw_max_step_rad","0.0087266","Yaw Correction"),
+         F("yaw_innovation","Global EKF yaw max innovation (rad)","float","localization","localization_core.ros__parameters.global_ekf_yaw_max_innovation_rad","0.7854","Yaw Correction")}),
+      {{"time_series",{"GNSS X","Global X","Final map X"},{},{},"Time [s]","Map X [m]"},
+       {"time_series",{"GNSS Y","Global Y","Final map Y"},{},{},"Time [s]","Map Y [m]"},
+       {"time_series",{"Global yaw","Final yaw"},{},{},"Time [s]","Yaw [rad]"}});
+
+    // N10 — costmap before planner/controller tuning.
+    add("navigation",QStringLiteral("N10"),QStringLiteral("N10 Costmap"),"N10.1",
+      QStringLiteral("N10.1 Global Costmap Geometry & Inflation"),{},
+      {{"Parameter","Nilai","Kategori"}}, {},
+      P({LOCK("footprint","Footprint","nav2","global_costmap.global_costmap.ros__parameters.footprint","GEOMETRY AUTHORITY"),
+         F("padding","Footprint padding (m)","float","nav2","global_costmap.global_costmap.ros__parameters.footprint_padding","0.03","Global Costmap"),
+         F("resolution","Resolution (m/cell)","float","nav2","global_costmap.global_costmap.ros__parameters.resolution","0.1","Global Costmap"),
+         F("inflation","Inflation radius (m)","float","nav2","global_costmap.global_costmap.ros__parameters.inflation_layer.inflation_radius","0.8","Inflation"),
+         F("scaling","Cost scaling factor","float","nav2","global_costmap.global_costmap.ros__parameters.inflation_layer.cost_scaling_factor","2.5","Inflation"),
+         F("transform_tol","Transform tolerance (s)","float","nav2","global_costmap.global_costmap.ros__parameters.transform_tolerance","0.3","Timing") }));
+
+    add("navigation",QStringLiteral("N10"),QStringLiteral("N10 Costmap"),"N10.2",
+      QStringLiteral("N10.2 Local Costmap Obstacle, Drivable Boundary & Inflation"),{},
+      {{"Parameter","Nilai","Kategori"}}, {},
+      P({F("update_rate","Update frequency (Hz)","float","nav2","local_costmap.local_costmap.ros__parameters.update_frequency","8","Timing"),
+         F("width","Window width (m)","float","nav2","local_costmap.local_costmap.ros__parameters.width","8","Geometry"),
+         F("height","Window height (m)","float","nav2","local_costmap.local_costmap.ros__parameters.height","8","Geometry"),
+         F("resolution","Resolution (m/cell)","float","nav2","local_costmap.local_costmap.ros__parameters.resolution","0.1","Geometry"),
+         F("inflation","Inflation radius (m)","float","nav2","local_costmap.local_costmap.ros__parameters.inflation_layer.inflation_radius","0.45","Inflation"),
+         F("scaling","Cost scaling factor","float","nav2","local_costmap.local_costmap.ros__parameters.inflation_layer.cost_scaling_factor","3.0","Inflation"),
+         F("obstacle_range","Obstacle max range (m)","float","nav2","local_costmap.local_costmap.ros__parameters.obstacle_layer.yolop_points.obstacle_max_range","4.0","Obstacle Layer"),
+         F("persistence","Observation persistence (s)","float","nav2","local_costmap.local_costmap.ros__parameters.obstacle_layer.yolop_points.observation_persistence","0.25","Obstacle Layer") }));
+
+    // N11 — Smac. Rmin locked to N2 physical calibration.
+    add("navigation",QStringLiteral("N11"),QStringLiteral("N11 Smac Hybrid-A*"),"N11.1",
+      QStringLiteral("N11.1 Search Resolution, Penalty dan Analytic Expansion"),
+      {"Planning time against runs","Path length against runs"},
+      {{"Variasi","Planning time","Path length","Angle bins","Downsampling factor","Cost penalty","Non-straight penalty"}},
+      {{"Planning time","nav_path.planning_latency_ms"},{"Path length","nav_path.length_m"}},
+      P({LOCK("rmin","Minimum turning radius (m)","nav2","planner_server.ros__parameters.GridBased.minimum_turning_radius","PHYSICAL AUTHORITY — N2"),
+         F("downsample","Downsample costmap","bool","nav2","planner_server.ros__parameters.GridBased.downsample_costmap","true","Search Resolution"),
+         F("factor","Downsampling factor","int","nav2","planner_server.ros__parameters.GridBased.downsampling_factor","2","Search Resolution"),
+         F("bins","Angle quantization bins","int","nav2","planner_server.ros__parameters.GridBased.angle_quantization_bins","48","Search Resolution"),
+         F("max_time","Maximum planning time (s)","float","nav2","planner_server.ros__parameters.GridBased.max_planning_time","2.5","Computational Limit"),
+         F("cost_penalty","Cost penalty","float","nav2","planner_server.ros__parameters.GridBased.cost_penalty","2.2","Path Cost"),
+         F("nonstraight","Non-straight penalty","float","nav2","planner_server.ros__parameters.GridBased.non_straight_penalty","1.2","Path Cost"),
+         F("reverse","Reverse penalty","float","nav2","planner_server.ros__parameters.GridBased.reverse_penalty","3.0","Path Cost"),
+         F("analytic_ratio","Analytic expansion ratio","float","nav2","planner_server.ros__parameters.GridBased.analytic_expansion_ratio","3.5","Analytic Expansion"),
+         F("analytic_max","Analytic expansion max length (m)","float","nav2","planner_server.ros__parameters.GridBased.analytic_expansion_max_length","8.0","Analytic Expansion")}),
+      {{"time_series",{"Planning time"},{},{},"Time [s]","Planning latency [ms]"},
+       {"time_series",{"Path length"},{},{},"Time [s]","Path length [m]"}});
+
+    add("navigation",QStringLiteral("N11"),QStringLiteral("N11 Smac Hybrid-A*"),"N11.2",
+      QStringLiteral("N11.2 Smoother dan Final Global Path Quality"),
+      {"Global path length","Global path heading variation"},
+      {{"Variasi","Path length","Planning time","Smoother w_smooth","Smoother w_data"}},
+      {{"Path length","nav_path.length_m"},{"Heading variation","nav_path.heading_variation_rad"}},
+      P({F("smooth_path","Smooth path","bool","nav2","planner_server.ros__parameters.GridBased.smooth_path","true","Path Smoother"),
+         F("w_smooth","Smoother w_smooth","float","nav2","planner_server.ros__parameters.GridBased.smoother.w_smooth","0.3","Path Smoother"),
+         F("w_data","Smoother w_data","float","nav2","planner_server.ros__parameters.GridBased.smoother.w_data","0.2","Path Smoother"),
+         F("iterations","Smoother max iterations","int","nav2","planner_server.ros__parameters.GridBased.smoother.max_iterations","200","Path Smoother")}),
+      {{"time_series",{"Path length"},{},{},"Time [s]","Path length [m]"},
+       {"time_series",{"Heading variation"},{},{},"Time [s]","Heading variation [rad]"}});
+
+    // N12 — MPPI local controller.
+    add("navigation",QStringLiteral("N12"),QStringLiteral("N12 MPPI Ackermann Controller"),"N12.1",
+      QStringLiteral("N12.1 Horizon, Sampling dan Computational Load"),
+      {"CTE against Time [s]","Velocity tracking against Time [s]","Steering tracking against Time [s]"},
+      {{"Variasi","Controller frequency","model_dt","time_steps","batch_size","CTE RMSE","RMSE V","RMSE Steering"}},
+      {{"CTE","derived.cte_m"},{"V command","cmd_nav.linear_x"},{"V actual","esc_drive_actual"},{"Steer target","esc_steer_target"},{"Steer actual","esc_steer_actual"}},
+      P({F("frequency","Controller frequency (Hz)","float","nav2","controller_server.ros__parameters.controller_frequency","8","Timing"),
+         F("dt","model_dt (s)","float","nav2","controller_server.ros__parameters.FollowPath.model_dt","0.125","Horizon"),
+         F("steps","time_steps","int","nav2","controller_server.ros__parameters.FollowPath.time_steps","32","Horizon"),
+         F("batch","batch_size","int","nav2","controller_server.ros__parameters.FollowPath.batch_size","1000","Sampling"),
+         F("iterations","iteration_count","int","nav2","controller_server.ros__parameters.FollowPath.iteration_count","1","Sampling"),
+         F("vx_std","vx_std","float","nav2","controller_server.ros__parameters.FollowPath.vx_std","0.1","Sampling"),
+         F("wz_std","wz_std","float","nav2","controller_server.ros__parameters.FollowPath.wz_std","0.25","Sampling"),
+         F("temperature","temperature","float","nav2","controller_server.ros__parameters.FollowPath.temperature","0.3","Optimization"),
+         F("gamma","gamma","float","nav2","controller_server.ros__parameters.FollowPath.gamma","0.015","Optimization"),
+         LOCK("rmin","Ackermann minimum turning radius","nav2","controller_server.ros__parameters.FollowPath.AckermannConstraints.min_turning_r","PHYSICAL AUTHORITY — N2")}),
+      {{"time_series",{"CTE"},{},{},"Time [s]","Cross-track error [m]"},
+       {"time_series",{"V command","V actual"},{},{},"Time [s]","Velocity [m/s]"},
+       {"time_series",{"Steer target","Steer actual"},{},{},"Time [s]","Steering [rad]"}});
+
+    add("navigation",QStringLiteral("N12"),QStringLiteral("N12 MPPI Ackermann Controller"),"N12.2",
+      QStringLiteral("N12.2 Critic Weights dan Kinematic Constraints"),
+      {"CTE after critic tuning","Heading error after critic tuning"},
+      {{"Variasi","PathAlign","PathFollow","PathAngle","Cost","Goal","PreferForward","CTE RMSE","Heading RMSE"}},
+      {{"CTE","derived.cte_m"},{"Heading error","derived.path_heading_error_rad"}},
+      P({F("path_align","PathAlignCritic weight","float","nav2","controller_server.ros__parameters.FollowPath.PathAlignCritic.cost_weight","8","Critic Weights"),
+         F("path_follow","PathFollowCritic weight","float","nav2","controller_server.ros__parameters.FollowPath.PathFollowCritic.cost_weight","4","Critic Weights"),
+         F("path_angle","PathAngleCritic weight","float","nav2","controller_server.ros__parameters.FollowPath.PathAngleCritic.cost_weight","3","Critic Weights"),
+         F("cost","CostCritic weight","float","nav2","controller_server.ros__parameters.FollowPath.CostCritic.cost_weight","6","Critic Weights"),
+         F("goal","GoalCritic weight","float","nav2","controller_server.ros__parameters.FollowPath.GoalCritic.cost_weight","5","Critic Weights"),
+         F("goal_angle","GoalAngleCritic weight","float","nav2","controller_server.ros__parameters.FollowPath.GoalAngleCritic.cost_weight","3","Critic Weights"),
+         F("forward","PreferForwardCritic weight","float","nav2","controller_server.ros__parameters.FollowPath.PreferForwardCritic.cost_weight","7","Critic Weights"),
+         F("deadband","VelocityDeadbandCritic weight","float","nav2","controller_server.ros__parameters.FollowPath.VelocityDeadbandCritic.cost_weight","35","Critic Weights"),
+         F("vx_max","vx_max (m/s)","float","nav2","controller_server.ros__parameters.FollowPath.vx_max","0.5","Kinematic Constraints"),
+         F("wz_max","wz_max (rad/s)","float","nav2","controller_server.ros__parameters.FollowPath.wz_max","0.292","Kinematic Constraints"),
+         F("ax_max","ax_max (m/s²)","float","nav2","controller_server.ros__parameters.FollowPath.ax_max","0.75","Kinematic Constraints")}),
+      {{"time_series",{"CTE"},{},{},"Time [s]","Cross-track error [m]"},
+       {"time_series",{"Heading error"},{},{},"Time [s]","Heading error [rad]"}});
+
+    add("navigation",QStringLiteral("N12"),QStringLiteral("N12 MPPI Ackermann Controller"),"N12.3",
+      QStringLiteral("N12.3 Final MPPI Closed-loop Validation"),
+      {"Final CTE","Final velocity command vs actual","Final steering command vs actual"},
+      {{"Variasi","CTE RMSE","Max CTE","RMSE V","RMSE Steering","RMSE Yaw","Time-to-goal"}},
+      {{"CTE","derived.cte_m"},{"V command","cmd_final.linear_x"},{"V actual","esc_drive_actual"},{"Steer target","esc_steer_target"},{"Steer actual","esc_steer_actual"}}, P({}),
+      {{"time_series",{"CTE"},{},{},"Time [s]","Cross-track error [m]"},
+       {"time_series",{"V command","V actual"},{},{},"Time [s]","Velocity [m/s]"},
+       {"time_series",{"Steer target","Steer actual"},{},{},"Time [s]","Steering [rad]"}});
+
+    // N13 — command shaping and mux.
+    add("navigation",QStringLiteral("N13"),QStringLiteral("N13 Velocity Smoother & Command Chain"),"N13.1",
+      QStringLiteral("N13.1 Velocity Smoother Accel/Decel, Deadband dan Feedback"),
+      {"Raw Nav2 vs final velocity vs actual","Raw Nav2 vs final yaw command"},
+      {{"Variasi","Smoothing frequency","Max accel vx","Max decel vx","Deadband vx","RMSE V","Stop error"}},
+      {{"Nav raw vx","cmd_nav.linear_x"},{"Integrated vx","cmd_autonomy_integrated.linear_x"},{"Final vx","cmd_final.linear_x"},{"Actual vx","esc_drive_actual"},{"Nav raw wz","cmd_nav.angular_z"},{"Final wz","cmd_final.angular_z"}},
+      P({F("frequency","Smoothing frequency (Hz)","float","nav2","velocity_smoother.ros__parameters.smoothing_frequency","20","Smoother"),
+         F("feedback","Feedback mode","string","nav2","velocity_smoother.ros__parameters.feedback","OPEN_LOOP","Smoother"),
+         F("accel","Max accel vx (m/s²)","float","nav2","velocity_smoother.ros__parameters.max_accel.0","0.18","Smoother"),
+         F("decel","Max decel vx (m/s²)","float","nav2","velocity_smoother.ros__parameters.max_decel.0","-0.28","Smoother"),
+         F("deadband","Deadband vx (m/s)","float","nav2","velocity_smoother.ros__parameters.deadband_velocity.0","0.03","Smoother"),
+         F("timeout","Velocity timeout (s)","float","nav2","velocity_smoother.ros__parameters.velocity_timeout","0.4","Smoother")}),
+      {{"time_series",{"Nav raw vx","Integrated vx","Final vx","Actual vx"},{},{},"Time [s]","Velocity [m/s]"},
+       {"time_series",{"Nav raw wz","Final wz"},{},{},"Time [s]","Yaw command [rad/s]"}});
+
+    add("navigation",QStringLiteral("N13"),QStringLiteral("N13 Velocity Smoother & Command Chain"),"N13.2",
+      QStringLiteral("N13.2 NavigationCore Deadband, Timeout dan Authority"),
+      {"Command stages linear","Command stages angular"},
+      {{"Variasi","Linear deadband","Angular deadband","Autonomy timeout","Mean Actual speed","RMSE V"}},
+      {{"Nav raw vx","cmd_nav.linear_x"},{"Integrated vx","cmd_autonomy_integrated.linear_x"},{"Pre-collision vx","cmd_pre_collision.linear_x"},{"Final vx","cmd_final.linear_x"},{"Actuator vx","cmd_actuator.linear_x"},
+       {"Nav raw wz","cmd_nav.angular_z"},{"Integrated wz","cmd_autonomy_integrated.angular_z"},{"Final wz","cmd_final.angular_z"},{"Actuator wz","cmd_actuator.angular_z"}},
+      P({F("autonomy_timeout","Autonomy timeout (s)","float","navigation_core","navigation_core.ros__parameters.autonomy_timeout_sec","0.6","Command Timing"),
+         F("linear_deadband","Linear deadband (m/s)","float","navigation_core","navigation_core.ros__parameters.linear_deadband_mps","0.08","Command Deadband"),
+         F("angular_deadband","Angular deadband (rad/s)","float","navigation_core","navigation_core.ros__parameters.angular_deadband_rps","0.02","Command Deadband"),
+         F("min_yaw_speed","Minimum speed for yaw (m/s)","float","navigation_core","navigation_core.ros__parameters.min_speed_for_yaw_mps","0.08","Command Deadband")}),
+      {{"time_series",{"Nav raw vx","Integrated vx","Pre-collision vx","Final vx","Actuator vx"},{},{},"Time [s]","Linear velocity [m/s]"},
+       {"time_series",{"Nav raw wz","Integrated wz","Final wz","Actuator wz"},{},{},"Time [s]","Angular velocity [rad/s]"}});
+
+    // N14 — safety after nominal control works.
+    add("navigation",QStringLiteral("N14"),QStringLiteral("N14 Trajectory & Collision Safety"),"N14.1",
+      QStringLiteral("N14.1 Trajectory Safety Slow/Stop/Avoidance"),
+      {"Safety speed scale and final velocity","Command velocity through safety"},
+      {{"Variasi","Hard stop distance","Slow distance","Minimum slow scale","Avoidance speed","Mean Actual speed"}},
+      {{"Speed scale","trajectory_safety_state.speed_scale"},{"Nav vx","cmd_nav.linear_x"},{"Safe vx","cmd_autonomy_integrated.linear_x"},{"Actual vx","esc_drive_actual"}},
+      P({F("hard_stop","Hard-stop path distance (m)","float","trajectory_safety","trajectory_safety_supervisor.ros__parameters.hard_stop_path_distance_m","0.9","Longitudinal Safety"),
+         F("slow","Slow path distance (m)","float","trajectory_safety","trajectory_safety_supervisor.ros__parameters.slow_path_distance_m","2.2","Longitudinal Safety"),
+         F("min_scale","Minimum slow speed scale","float","trajectory_safety","trajectory_safety_supervisor.ros__parameters.minimum_slow_speed_scale","0.35","Longitudinal Safety"),
+         F("collision_horizon","Command collision horizon (m)","float","trajectory_safety","trajectory_safety_supervisor.ros__parameters.command_collision_horizon_m","2.5","Collision Projection"),
+         F("lateral_margin","Command collision lateral margin (m)","float","trajectory_safety","trajectory_safety_supervisor.ros__parameters.command_collision_lateral_margin_m","0.2","Collision Projection"),
+         F("avoid_speed","Avoidance speed (m/s)","float","trajectory_safety","trajectory_safety_supervisor.ros__parameters.avoidance_speed_mps","0.18","Avoidance")}),
+      {{"time_series",{"Speed scale"},{},{},"Time [s]","Speed scale [-]"},
+       {"time_series",{"Nav vx","Safe vx","Actual vx"},{},{},"Time [s]","Velocity [m/s]"}});
+
+    add("navigation",QStringLiteral("N14"),QStringLiteral("N14 Trajectory & Collision Safety"),"N14.2",
+      QStringLiteral("N14.2 Collision Monitor Polygon Stop/Slow"),
+      {"Final command before/after collision monitor"},
+      {{"Parameter","Nilai","Safety role"}},
+      {{"Pre-collision vx","cmd_pre_collision.linear_x"},{"Final vx","cmd_final.linear_x"}},
+      P({F("source_timeout","Collision source timeout (s)","float","collision","collision_monitor.ros__parameters.source_timeout","1.0","Collision Monitor"),
+         F("stop_timeout","Stop publish timeout (s)","float","collision","collision_monitor.ros__parameters.stop_pub_timeout","1.0","Collision Monitor"),
+         F("slow_ratio","Slowdown ratio","float","collision","collision_monitor.ros__parameters.PolygonSlow.slowdown_ratio","0.25","Collision Monitor"),
+         RO("stop_polygon","Stop polygon","collision","collision_monitor.ros__parameters.PolygonStop.points","Geometry"),
+         RO("slow_polygon","Slow polygon","collision","collision_monitor.ros__parameters.PolygonSlow.points","Geometry")}),
+      {{"time_series",{"Pre-collision vx","Final vx"},{},{},"Time [s]","Velocity [m/s]"}});
+
+    // N15 — termination semantics.
+    add("navigation",QStringLiteral("N15"),QStringLiteral("N15 Goal, Progress & Failure"),"N15.1",
+      QStringLiteral("N15.1 Goal Checker, Progress Checker dan Failure Tolerance"),
+      {"Endpoint error during approach","Goal yaw error during approach"},
+      {{"Variasi","XY tolerance","Yaw tolerance","Movement radius","Movement allowance","Endpoint error","Time-to-goal","Success"}},
+      {{"Endpoint error","derived.endpoint_error_m"},{"Goal yaw error","derived.goal_yaw_error_rad"}},
+      P({F("xy_tol","XY goal tolerance (m)","float","nav2","controller_server.ros__parameters.goal_checker.xy_goal_tolerance","0.75","Goal Checker"),
+         F("yaw_tol","Yaw goal tolerance (rad)","float","nav2","controller_server.ros__parameters.goal_checker.yaw_goal_tolerance","0.5236","Goal Checker"),
+         F("movement_radius","Required movement radius (m)","float","nav2","controller_server.ros__parameters.progress_checker.required_movement_radius","0.2","Progress Checker"),
+         F("movement_time","Movement time allowance (s)","float","nav2","controller_server.ros__parameters.progress_checker.movement_time_allowance","30","Progress Checker"),
+         F("failure_tolerance","Controller failure tolerance (s)","float","nav2","controller_server.ros__parameters.failure_tolerance","0.5","Failure Handling")}),
+      {{"time_series",{"Endpoint error"},{},{},"Time [s]","Endpoint error [m]"},
+       {"time_series",{"Goal yaw error"},{},{},"Time [s]","Yaw error [rad]"}});
+
+    // N16 — end-to-end only after previous stages are stable.
+    add("navigation",QStringLiteral("N16"),QStringLiteral("N16 Autonomous End-to-End"),"N16.1",
+      QStringLiteral("N16.1 Full Autonomous Route Validation"),
+      {"Actual global trajectory","Cross-track error","Velocity command vs actual","Steering target vs actual"},
+      {{"Variasi","Success","CTE RMSE","Max CTE","Heading RMSE","Endpoint error","Time-to-goal","RMSE V","RMSE Steering"}},
+      {{"Global X","localization_state.map_x"},{"Global Y","localization_state.map_y"},{"CTE","derived.cte_m"},{"V command","cmd_final.linear_x"},{"V actual","esc_drive_actual"},{"Steer target","esc_steer_target"},{"Steer actual","esc_steer_actual"}}, P({}),
+      {{"scatter",{},"localization_state.map_x","localization_state.map_y","Map X [m]","Map Y [m]"},
+       {"time_series",{"CTE"},{},{},"Time [s]","Cross-track error [m]"},
+       {"time_series",{"V command","V actual"},{},{},"Time [s]","Velocity [m/s]"},
+       {"time_series",{"Steer target","Steer actual"},{},{},"Time [s]","Steering [rad]"}});
+
+    // N17 — frozen snapshot; no free tuning after certification.
+    add("navigation",QStringLiteral("N17"),QStringLiteral("N17 Final Certified Configuration"),"N17.1",
+      QStringLiteral("N17.1 Snapshot Konfigurasi Autonomous Terbaik"),{},
+      {{"Subsystem","Parameter utama","Nilai final / Status"}}, {},
+      P({RO("steering_valid","Steering calibration valid","vehicle","vehicle.ros__parameters.steering_calibration_valid","Certification"),
+         RO("circle_valid","Circle calibration valid","vehicle","vehicle.ros__parameters.steering_circle_calibration_valid","Certification"),
+         RO("odom_valid","Drive odometry valid","vehicle","vehicle.ros__parameters.drive_odometry_calibration_valid","Certification"),
+         RO("local_qvx","Local Qvx","ekf","ekf_filter_node_odom.ros__parameters.process_noise_covariance.96","EKF Local"),
+         RO("local_qwz","Local Qwz","ekf","ekf_filter_node_odom.ros__parameters.process_noise_covariance.176","EKF Local"),
+         RO("global_qx","Global Qx","ekf","ekf_filter_node_map.ros__parameters.process_noise_covariance.0","EKF Global"),
+         RO("global_qy","Global Qy","ekf","ekf_filter_node_map.ros__parameters.process_noise_covariance.16","EKF Global"),
+         RO("smac_rmin","Smac Rmin","nav2","planner_server.ros__parameters.GridBased.minimum_turning_radius","Planning"),
+         RO("mppi_rmin","MPPI Rmin","nav2","controller_server.ros__parameters.FollowPath.AckermannConstraints.min_turning_r","Control"),
+         RO("stage3","Stage3 production certified","navigation_core","navigation_core.ros__parameters.stage3_production_certified","Certification") }));
+
+    return out;
+  }
+
+  /* ------------------------- NAVIGASI (legacy, unreachable for navigation) ------------------------- */
   add("navigation", QStringLiteral("4.1"), QStringLiteral("4.1 Pengujian Sensor"), "4.1.1",
   QStringLiteral("4.1.1 Pengujian GNSS"),
   {

@@ -59,6 +59,9 @@ if "errno == EAGAIN || errno == EWOULDBLOCK" not in source or "would_block_retri
     fail("ESC nonblocking USB-UART TX must tolerate bounded transient EAGAIN")
 if "serial_active_path_" not in source or '<< " path="' not in source:
     fail("ESC status must report the active physical serial path")
+for token in ("TIOCEXCL", "safe_stop_requested_", "SAFE SHUTDOWN", "rclcpp::on_shutdown", "Never tcdrain()"):
+    if token not in source:
+        fail(f"ESC Ctrl+C/USB safe-shutdown contract missing: {token}")
 if float(shared.get("speed_max", -1.0)) != float(ack.get("speed_max", -2.0)):
     fail("shared teleop and actuator speed limits disagree")
 

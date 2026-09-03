@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import signal
 import time
+import fcntl
 import math
 import subprocess
 from pathlib import Path
@@ -87,6 +88,78 @@ def _validate_ekf_params(path: str) -> None:
                         f'Q[{row},{col}]={a} != Q[{col},{row}]={b}')
 
 
+
+_AUTONOMOUS_LOCK_FD = None
+
+def _acquire_single_autonomous_lock() -> None:
+    """Fail closed if another patched autonomous launch already owns this user session."""
+    global _AUTONOMOUS_LOCK_FD
+    if _AUTONOMOUS_LOCK_FD is not None:
+        return
+    lock_path = Path(f'/tmp/agv_autonomous_{os.getuid()}.lock')
+    fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        try:
+            owner = os.read(fd, 64).decode(errors='ignore').strip() or 'unknown'
+        except OSError:
+            owner = 'unknown'
+        os.close(fd)
+        raise RuntimeError(
+            f'Autonomous launch already active (owner PID {owner}). '
+            'Do not start a second stack: it can contend for ESC/GNSS/IMU USB devices.')
+    os.ftruncate(fd, 0)
+    os.write(fd, f'{os.getpid()}\n'.encode())
+    os.lseek(fd, 0, os.SEEK_SET)
+    _AUTONOMOUS_LOCK_FD = fd
+
+
+def _other_autonomous_launch_pids() -> list[int]:
+    """Detect pre-lock/legacy autonomous launch processes without killing them."""
+    uid = os.getuid()
+    current = os.getpid()
+    ancestors = {current}
+    pid = current
+    for _ in range(16):
+        try:
+            ppid = int(Path(f'/proc/{pid}/stat').read_text().split()[3])
+        except (OSError, ValueError, IndexError):
+            break
+        if ppid <= 1 or ppid in ancestors:
+            break
+        ancestors.add(ppid)
+        pid = ppid
+    found = []
+    for proc in Path('/proc').iterdir():
+        if not proc.name.isdigit():
+            continue
+        proc_pid = int(proc.name)
+        if proc_pid in ancestors:
+            continue
+        try:
+            if proc.stat().st_uid != uid:
+                continue
+            cmd = (proc / 'cmdline').read_bytes().replace(b'\0', b' ').decode(errors='ignore')
+        except (OSError, PermissionError):
+            continue
+        if 'ros2 launch navigation autonomous.launch.py' in cmd:
+            found.append(proc_pid)
+    return sorted(found)
+
+
+def _guard_single_autonomous_instance() -> None:
+    """Prevent duplicate stacks, including legacy/detached launches predating the lock."""
+    if os.environ.get('AGV_ALLOW_PARALLEL_AUTONOMOUS', '0').strip().lower() in {'1', 'true', 'yes'}:
+        return
+    others = _other_autonomous_launch_pids()
+    if others:
+        raise RuntimeError(
+            'Another autonomous.launch.py is already running: PID(s) ' +
+            ', '.join(map(str, others)) +
+            '. Stop the existing stack cleanly before starting another; USB ownership is fail-closed.')
+    _acquire_single_autonomous_lock()
+
 def _keyboard_evdev_readable() -> bool:
     # Hanya node keyboard nyata. Generic /dev/input/event* dapat menunjuk joystick
     # yang readable dan sebelumnya membuat launch menyalakan keyboard node walau
@@ -133,7 +206,7 @@ def _cleanup_stale_workspace_runtime(nav_share: str, esc_share: str, astra_share
         'lifecycle_manager_map', 'lifecycle_manager_smoother', 'lifecycle_manager_navigation',
         'ekf_filter_node_odom', 'ekf_filter_node_map', 'localization_core',
         'navigation_core', 'mppi_closed_loop_supervisor', 'perception',
-        'esc_ackermann', 'motor_teleop',
+        'esc_ackermann', 'motor_teleop', 'stmf4_hmi_bridge',
         'data_imu_node', 'data_cuav_node', 'robot_state_publisher', 'rviz2_autonomous',
     )
 
@@ -329,9 +402,12 @@ def _validate_operator_mode(context):
 
 
 def generate_launch_description() -> LaunchDescription:
+    _guard_single_autonomous_instance()
     nav_share = get_package_share_directory('navigation')
     nav_config_dir = _active_config_dir(nav_share)
     esc_share = get_package_share_directory('esc')
+    stmf4_share = get_package_share_directory('stmf4')
+    stmf4_config_dir = _active_package_config_dir(stmf4_share, 'stmf4', 'AGV_STMF4_CONFIG_DIR')
     # Perception/TensorRT is optional for the mini-PC navigation-only profile.
     # Do not resolve it as a hard launch dependency when the package was skipped.
     astra_share = _optional_package_share('perception')
@@ -369,6 +445,7 @@ def generate_launch_description() -> LaunchDescription:
     bt_xml = os.path.join(nav_share, 'behavior_trees', 'ackermann_navigate_to_pose.xml')
     rviz_file = os.path.join(nav_share, 'rviz', 'autonomous.rviz')
     xacro_file = os.path.join(nav_share, 'urdf', 'agv.urdf.xacro')
+    hmi_params = os.path.join(stmf4_config_dir, 'hmi.yaml')
     perception_config_dir = _active_package_config_dir(
         astra_share, "perception", "AGV_PERCEPTION_CONFIG_DIR") if astra_share else ''
     camera_params = os.path.join(perception_config_dir, 'astra_yolop_gpu.yaml') if astra_share else ''
@@ -432,6 +509,8 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('enable_joystick', default_value='true'),
         DeclareLaunchArgument('enable_keyboard', default_value='true'),
         DeclareLaunchArgument('start_esc_ackermann', default_value='true'),
+        DeclareLaunchArgument('start_hmi', default_value='true'),
+        DeclareLaunchArgument('hmi_port', default_value='/dev/serial/by-id/usb-STMicroelectronics_BLACKPILL_F411CE_CDC_in_FS_Mode_338133833134-if00'),
         DeclareLaunchArgument('esc_port', default_value='auto'),
         DeclareLaunchArgument('esc_serial_enabled', default_value='true'),
         DeclareLaunchArgument('start_gnss', default_value='true'),
@@ -506,6 +585,16 @@ def generate_launch_description() -> LaunchDescription:
                           'use_sim_time': LaunchConfiguration('use_sim_time')}.items(),
     )
 
+    hmi_bridge = Node(
+        package='stmf4', executable='stmf4_hmi_bridge', name='stmf4_hmi_bridge', output='screen',
+        condition=IfCondition(LaunchConfiguration('start_hmi')),
+        respawn=True, respawn_delay=2.0,
+        parameters=[hmi_params, {
+            'serial_device': LaunchConfiguration('hmi_port'),
+            'use_sim_time': ParameterValue(LaunchConfiguration('use_sim_time'), value_type=bool),
+        }],
+    )
+
     # ESC package now has exactly two runtime nodes: motor_teleop + esc_ackermann.
     # esc_ackermann owns arbitration, Ackermann conversion and the STM UART.
     esc_runtime = IncludeLaunchDescription(
@@ -531,12 +620,14 @@ def generate_launch_description() -> LaunchDescription:
 
     local_ekf = Node(
         package='robot_localization', executable='ekf_node', name='ekf_filter_node_odom',
-        output='screen', parameters=[ekf_params, {'use_sim_time': LaunchConfiguration('use_sim_time')}],
+        output='screen', respawn=True, respawn_delay=2.0,
+        parameters=[ekf_params, {'use_sim_time': LaunchConfiguration('use_sim_time')}],
         remappings=[('odometry/filtered', '/odometry/filtered'), ('set_pose', '/ekf_local/set_pose')],
     )
     global_ekf = Node(
         package='robot_localization', executable='ekf_node', name='ekf_filter_node_map',
-        output='screen', parameters=[ekf_params, {'use_sim_time': LaunchConfiguration('use_sim_time')}],
+        output='screen', respawn=True, respawn_delay=2.0,
+        parameters=[ekf_params, {'use_sim_time': LaunchConfiguration('use_sim_time')}],
         remappings=[('odometry/filtered', '/odometry/filtered_map'), ('set_pose', '/ekf_global/set_pose')],
     )
     localization_core = Node(
@@ -581,15 +672,17 @@ def generate_launch_description() -> LaunchDescription:
         LaunchConfiguration('perception_mode'), "' == 'gpu' and not ",
         str(perception_gpu_executable_available), ")",
     ])
-    # Metric projection is a physical calibration. Camera images/inference may be
-    # tested before it passes, but perception must not own autonomous commands.
-    perception_safety_enabled = PythonExpression([
+    # Perception guard selalu hidup ketika model inference aktif. Sebelum homography
+    # metriks tervalidasi ia hanya boleh melakukan camera-health + image near-field STOP.
+    # Full obstacle/path SLOW/AVOID tetap terkunci oleh kalibrasi metriks.
+    perception_safety_enabled = perception_enabled
+    perception_metric_safety_enabled = PythonExpression([
         "(", perception_enabled, ") and '",
         LaunchConfiguration('camera_metric_calibration_validated'), "' == 'true'",
     ])
     lane_enabled = PythonExpression([
         "'", LaunchConfiguration('enable_lane_safety'), "' == 'true' and (",
-        perception_safety_enabled, ")",
+        perception_metric_safety_enabled, ")",
     ])
     common_perception_parameters = {
         'rgb_device': LaunchConfiguration('rgb_device'),
@@ -693,7 +786,7 @@ def generate_launch_description() -> LaunchDescription:
     collision_enabled = PythonExpression([
         "'", LaunchConfiguration('enable_collision_monitor'), "' == 'true' and '",
         LaunchConfiguration('camera_metric_calibration_validated'), "' == 'true' and (",
-        perception_safety_enabled, ")",
+        perception_metric_safety_enabled, ")",
     ])
     collision = Node(
         package='nav2_collision_monitor', executable='collision_monitor', name='collision_monitor',
@@ -749,6 +842,8 @@ def generate_launch_description() -> LaunchDescription:
         condition=IfCondition(perception_safety_enabled),
         respawn=True, respawn_delay=2.0,
         parameters=[trajectory_safety_params, {
+            'metric_obstacle_safety_enabled': ParameterValue(
+                LaunchConfiguration('camera_metric_calibration_validated'), value_type=bool),
             'lane_safety_enabled': ParameterValue(lane_enabled, value_type=bool),
             'use_sim_time': LaunchConfiguration('use_sim_time'),
         }],
@@ -879,7 +974,7 @@ def generate_launch_description() -> LaunchDescription:
         LogInfo(
             condition=IfCondition(camera_only_enabled),
             msg='[AGV] PERCEPTION OFF: camera-only aktif; raw/preview kamera jalan, model/inference OFF.'),
-        robot_state, joint_state_visualizer, gnss, imu, esc_runtime,
+        robot_state, joint_state_visualizer, gnss, imu, hmi_bridge, esc_runtime,
         local_ekf, global_ekf, localization_core,
         camera_only, perception_cpu, perception_gpu,
         map_server, lifecycle_map, controller, planner, behavior, cmd_vel_router, smoother, collision, navigator,

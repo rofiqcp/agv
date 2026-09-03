@@ -42,6 +42,7 @@ find_package(builtin_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(nav2_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(rviz_common REQUIRED)
@@ -65,7 +66,7 @@ add_executable(agv_web_gui web/web_server.cpp)
 target_include_directories(agv_web_gui PRIVATE gui include)
 ament_target_dependencies(
   agv_web_gui
-  rclcpp rcl_interfaces action_msgs sensor_msgs std_msgs geometry_msgs nav_msgs
+  rclcpp rcl_interfaces action_msgs sensor_msgs std_msgs geometry_msgs nav_msgs visualization_msgs
   std_srvs ament_index_cpp tf2_ros)
 target_link_libraries(agv_web_gui Qt5::Core Qt5::Gui Qt5::Network yaml-cpp)
 

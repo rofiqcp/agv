@@ -11,7 +11,7 @@
 
     # Legacy STM protocol span. This is NOT assumed to be a physical wheel angle.
     # esc_ackermann owns protocol<->physical calibration before sending this value.
-    serial_left_max_deg: 80.0
+    serial_left_max_deg: 90.0
     serial_right_max_rpm: 300.0
 
 motor_teleop:

@@ -113,6 +113,10 @@ class MainWindow:public QMainWindow{
   QMap<QString,ExperimentWorkspacePage*>experimentPages_;
   QMap<QString,QVariantMap>runtimeExpected_;
   QMap<QString,QVariantMap>runtimeResults_;
+  QSet<QString>pendingRestartNodes_;
+  QTimer*runtimeApplyTimer_{nullptr};
+  bool runtimeRestartInFlight_{false};
+  bool runtimeVerifyInteractive_{true};
   void ensureGuiYaml(){
     QString p=files_.value("gui");
     QDir().mkpath(QFileInfo(p).absolutePath());
@@ -162,7 +166,7 @@ class MainWindow:public QMainWindow{
     auto*nav=new QHBoxLayout();
     auto*menu=new QPushButton(QStringLiteral("☰"));
     menu->setObjectName(QStringLiteral("floatingMenuButton"));
-    menu->setToolTip(QStringLiteral("Buka menu pengujian BAB IV: Navigasi, Persepsi, dan ESC"));
+    menu->setToolTip(QStringLiteral("Buka menu tuning & commissioning: Navigasi, Persepsi, dan ESC"));
     menu->setFixedSize(44,40);
     auto*overviewBtn=new QPushButton(QStringLiteral("OVERVIEW"));
     overviewBtn->setObjectName(QStringLiteral("floatingMenuButton"));
@@ -203,7 +207,12 @@ class MainWindow:public QMainWindow{
     connect(experimentParamPanel_, &ExperimentParameterPanel::yamlParameterCommitted, this,
       [this](const QString &fileKey, const QString &path, const QVariant &) {
         const QSet<QString> changed{fileKey + QStringLiteral("|") + path};
-        saveLabel_->setText(QStringLiteral("YAML tersimpan ✓ • %1:%2").arg(fileKey, path));
+        try{ syncVehicleAuthority(); }catch(const std::exception&e){
+          saveLabel_->setText(QStringLiteral("YAML tersimpan, tetapi vehicle authority sync gagal: ")+QString::fromUtf8(e.what()));
+          return;
+        }
+        for(auto*f:forms_)f->reloadValues();
+        saveLabel_->setText(QStringLiteral("YAML tersimpan ✓ • %1:%2 • menyiapkan runtime apply").arg(fileKey, path));
         const bool live = stores_.contains(QStringLiteral("gui"))
           ? stores_[QStringLiteral("gui")]->get(QStringLiteral("runtime.live_apply_yaml"), true).toBool() : true;
         if (live) liveApplyChanges(changed);
@@ -244,9 +253,9 @@ class MainWindow:public QMainWindow{
     menuLayout_=new QVBoxLayout(menuPopup_);
     menuLayout_->setContentsMargins(12,12,12,12);
     menuLayout_->setSpacing(8);
-    auto*menuTitle=new QLabel(QStringLiteral("Pengujian BAB IV"));
+    auto*menuTitle=new QLabel(QStringLiteral("Tuning & Commissioning Autonomous"));
     menuTitle->setObjectName(QStringLiteral("floatingMenuTitle"));
-    auto*menuHelp=new QLabel(QStringLiteral("Pilih subsistem, lalu buka subbab 4.1, 4.2, dan seterusnya. Klik subpengujian untuk membuka workspace yang terintegrasi ROS/YAML."));
+    auto*menuHelp=new QLabel(QStringLiteral("Navigasi disusun bertahap N0 → N17 dari timing, geometri, sensor, EKF, localization, planning, MPPI, safety hingga end-to-end. Perubahan YAML diterapkan ke runtime lalu diverifikasi."));
     menuHelp->setObjectName(QStringLiteral("floatingMenuHelp"));
     menuHelp->setWordWrap(true);
     menuLayout_->addWidget(menuTitle);
@@ -274,7 +283,7 @@ class MainWindow:public QMainWindow{
           group=new QTreeWidgetItem(tree);
           group->setText(0,spec.groupTitle);
           group->setData(0,Qt::UserRole,QStringLiteral("group:" )+subsystem+QStringLiteral(":")+spec.groupId);
-          group->setExpanded(spec.groupId==QStringLiteral("4.1"));
+          group->setExpanded((subsystem==QStringLiteral("navigation")&&spec.groupId==QStringLiteral("N0"))||(subsystem!=QStringLiteral("navigation")&&spec.groupId==QStringLiteral("4.1")));
         }
         auto*leaf=new QTreeWidgetItem(group);
         const QString counts=QStringLiteral("%1 tabel • %2 grafik")
@@ -348,6 +357,10 @@ class MainWindow:public QMainWindow{
     connect(autosave_,&QTimer::timeout,this,[this](){
       saveAll();
     });
+    runtimeApplyTimer_=new QTimer(this);
+    runtimeApplyTimer_->setSingleShot(true);
+    runtimeApplyTimer_->setInterval(450);
+    connect(runtimeApplyTimer_,&QTimer::timeout,this,[this](){applyPendingRestarts();});
     restoreFloatingMenuSelection();
     responsiveSplit();
   }
@@ -566,14 +579,14 @@ class MainWindow:public QMainWindow{
   }
   void restoreFloatingMenuSelection(){
     QString subsystem=QStringLiteral("navigation");
-    QString leaf=QStringLiteral("4.1.1");
+    QString leaf=QStringLiteral("N0.1");
     if(stores_.contains(QStringLiteral("gui"))){
       subsystem=stores_[QStringLiteral("gui")]->get(QStringLiteral("navigation_menu.active_subsystem"),subsystem).toString();
       leaf=stores_[QStringLiteral("gui")]->get(QStringLiteral("navigation_menu.active_leaf"),leaf).toString();
     }
     if(!menuTrees_.contains(subsystem)||experimentTabIndex(subsystem)<0){
       subsystem=QStringLiteral("navigation");
-      leaf=QStringLiteral("4.1.1");
+      leaf=QStringLiteral("N0.1");
     }
     bool validLeaf=false;
     for(const ExperimentSpec&spec:buildExperimentCatalog(subsystem)){
@@ -581,7 +594,7 @@ class MainWindow:public QMainWindow{
     }
     if(!validLeaf){
       const auto specs=buildExperimentCatalog(subsystem);
-      leaf=specs.isEmpty()?QStringLiteral("4.1.1"):specs.first().id;
+      leaf=specs.isEmpty()?QStringLiteral("N0.1"):specs.first().id;
     }
     selectExperimentLeaf(subsystem,leaf,false);
   }
@@ -731,11 +744,119 @@ class MainWindow:public QMainWindow{
       set("trajectory_safety","trajectory_safety_supervisor.ros__parameters.minimum_turning_radius_m",turn);
     }
   }
+  bool vehicleStationaryForRuntimeApply(QString *reason=nullptr) const {
+    const double cmd=number(telemetry_->get(QStringLiteral("cmd_final.linear_x")));
+    const double esc=number(telemetry_->get(QStringLiteral("esc_drive_actual")));
+    const double odom=number(telemetry_->get(QStringLiteral("ekf_local.v")));
+    const double steerRate=number(telemetry_->get(QStringLiteral("ekf_local.w")));
+    const auto moving=[](double v,double limit){return std::isfinite(v)&&std::abs(v)>limit;};
+    if(moving(cmd,0.03)||moving(esc,0.03)||moving(odom,0.03)||moving(steerRate,0.05)){
+      if(reason)*reason=QStringLiteral("kendaraan/perintah masih bergerak (syarat apply: |v|≤0.03 m/s dan |w|≤0.05 rad/s)");
+      return false;
+    }
+    if(reason)reason->clear();
+    return true;
+  }
+  QStringList exactNodeProcesses(const QString&nodeName) const {
+    QString bare=nodeName;
+    if(bare.startsWith('/'))bare.remove(0,1);
+    QStringList pids;
+    QDir proc(QStringLiteral("/proc"));
+    const QStringList dirs=proc.entryList(QDir::Dirs|QDir::NoDotAndDotDot,QDir::Name);
+    for(const QString&pidText:dirs){
+      bool ok=false; const qlonglong pid=pidText.toLongLong(&ok);
+      if(!ok||pid<=1||pid==QCoreApplication::applicationPid())continue;
+      QFile f(QStringLiteral("/proc/")+pidText+QStringLiteral("/cmdline"));
+      if(!f.open(QIODevice::ReadOnly))continue;
+      QByteArray raw=f.readAll();
+      raw.replace('\0',' ');
+      const QString cmd=QString::fromLocal8Bit(raw);
+      // launch_ros always adds the exact __node remap. Match that token only;
+      // never kill processes using a loose executable substring.
+      const QString marker=QStringLiteral("__node:=")+bare;
+      const QString markerSlash=QStringLiteral("__node:=/")+bare;
+      if(cmd.contains(marker)||cmd.contains(markerSlash))pids<<pidText;
+    }
+    return pids;
+  }
+  bool restartExactRuntimeNode(const QString&nodeName,QString *message=nullptr){
+    const QStringList pids=exactNodeProcesses(nodeName);
+    if(pids.isEmpty()){
+      if(message)*message=QStringLiteral("node tidak sedang berjalan; YAML akan dipakai pada start berikutnya");
+      return false;
+    }
+    int stopped=0;
+    for(const QString&pidText:pids){
+      bool ok=false; const qlonglong pid=pidText.toLongLong(&ok);
+      if(ok&&::kill(pid_t(pid),SIGTERM)==0)++stopped;
+    }
+    if(message)*message=QStringLiteral("SIGTERM %1/%2 proses; launch respawn membaca ulang YAML").arg(stopped).arg(pids.size());
+    return stopped>0;
+  }
+  QSet<QString> restartTargetsForChange(const QString&file,const QString&path) const {
+    QSet<QString> out;
+    if(file==QStringLiteral("ekf")){
+      if(path.startsWith(QStringLiteral("ekf_filter_node_odom.")))out<<QStringLiteral("ekf_filter_node_odom");
+      if(path.startsWith(QStringLiteral("ekf_filter_node_map.")))out<<QStringLiteral("ekf_filter_node_map");
+    }else if(file==QStringLiteral("localization"))out<<QStringLiteral("localization_core");
+    else if(file==QStringLiteral("gnss"))out<<QStringLiteral("data_cuav_node");
+    else if(file==QStringLiteral("imu"))out<<QStringLiteral("data_imu_node");
+    else if(file==QStringLiteral("navigation_core"))out<<QStringLiteral("navigation_core");
+    else if(file==QStringLiteral("mppi"))out<<QStringLiteral("mppi_closed_loop_supervisor");
+    else if(file==QStringLiteral("trajectory_safety"))out<<QStringLiteral("trajectory_safety_supervisor");
+    else if(file==QStringLiteral("collision"))out<<QStringLiteral("collision_monitor");
+    else if(file==QStringLiteral("nav2")){
+      if(path.startsWith(QStringLiteral("planner_server."))||path.startsWith(QStringLiteral("global_costmap.")))out<<QStringLiteral("planner_server");
+      if(path.startsWith(QStringLiteral("controller_server."))||path.startsWith(QStringLiteral("local_costmap.")))out<<QStringLiteral("controller_server");
+      if(path.startsWith(QStringLiteral("velocity_smoother.")))out<<QStringLiteral("velocity_smoother");
+      if(path.startsWith(QStringLiteral("behavior_server.")))out<<QStringLiteral("behavior_server");
+      if(path.startsWith(QStringLiteral("bt_navigator.")))out<<QStringLiteral("bt_navigator");
+      if(path.startsWith(QStringLiteral("map_server.")))out<<QStringLiteral("map_server");
+    }else if(file==QStringLiteral("vehicle")){
+      // vehicle.yaml is the physical authority; syncVehicleAuthority propagates
+      // its dependent values into these runtime consumers.
+      out<<QStringLiteral("esc_ackermann")<<QStringLiteral("navigation_core")
+         <<QStringLiteral("planner_server")<<QStringLiteral("controller_server")
+         <<QStringLiteral("velocity_smoother")<<QStringLiteral("trajectory_safety_supervisor");
+    }else if(file==QStringLiteral("esc"))out<<QStringLiteral("esc_ackermann");
+    return out;
+  }
+  void queueRuntimeRestarts(const QSet<QString>&nodes){
+    pendingRestartNodes_.unite(nodes);
+    if(!pendingRestartNodes_.isEmpty()&&runtimeApplyTimer_)runtimeApplyTimer_->start();
+  }
+  void applyPendingRestarts(){
+    if(pendingRestartNodes_.isEmpty()||runtimeRestartInFlight_)return;
+    QString reason;
+    if(!vehicleStationaryForRuntimeApply(&reason)){
+      saveLabel_->setText(QStringLiteral("PENDING APPLY ⚠ • %1 • %2 node menunggu restart aman")
+        .arg(reason).arg(pendingRestartNodes_.size()));
+      runtimeApplyTimer_->start(600);
+      return;
+    }
+    runtimeRestartInFlight_=true;
+    const QSet<QString>nodes=pendingRestartNodes_;
+    pendingRestartNodes_.clear();
+    QStringList details;
+    int restarted=0;
+    for(const QString&node:nodes){
+      QString msg;
+      const bool ok=restartExactRuntimeNode(node,&msg);
+      if(ok)++restarted;
+      details<<QStringLiteral("/%1: %2").arg(node,msg);
+    }
+    saveLabel_->setText(QStringLiteral("APPLYING… %1/%2 node direstart aman • menunggu respawn + verifikasi")
+      .arg(restarted).arg(nodes.size()));
+    QTimer::singleShot(3600,this,[this,details](){
+      runtimeRestartInFlight_=false;
+      verifyRuntime(false);
+      if(!pendingRestartNodes_.isEmpty()&&runtimeApplyTimer_)runtimeApplyTimer_->start(300);
+    });
+  }
   void liveApplyChanges(const QSet<QString>&changedKeys){
-    // Only parameters with an explicit runtime callback are pushed live. The
-    // YAML file remains authoritative for every other node and is consumed on
-    // the next launch/restart. This avoids a dangerous false-positive where the
-    // ROS parameter server changes but a custom node keeps using cached values.
+    // YAML remains the source of truth. Only parameters backed by a proven
+    // on_set_parameters callback are set live. All startup-cached parameters
+    // are applied by a safe exact-node respawn, then verified by readback.
     const QString escPrefix="esc_ackermann.ros__parameters.";
     const QSet<QString> escDynamic={
       "serial_enabled",
@@ -755,38 +876,32 @@ class MainWindow:public QMainWindow{
       "steering_feedback_calibration_saved_at","steering_calibration_apply_token"
     };
     QVariantMap escParams;
-    int restartOnly=0;
+    QSet<QString>restartNodes;
     for(const QString&key:changedKeys){
       const QString file=key.section('|',0,0),path=key.section('|',1);
+      bool handledLive=false;
       if(file=="esc"&&path.startsWith(escPrefix)&&stores_.contains("esc")){
         QString param=path.mid(escPrefix.size());
         QString yamlPath=path;
         const QString tail=param.section('.',-1);
-        bool numeric=false;
-        tail.toInt(&numeric);
-        if(numeric){
-          param=param.section('.',0,-2);
-          yamlPath=escPrefix+param;
+        bool numeric=false; tail.toInt(&numeric);
+        if(numeric){param=param.section('.',0,-2);yamlPath=escPrefix+param;}
+        if(escDynamic.contains(param)){
+          escParams[param]=stores_["esc"]->get(yamlPath);
+          handledLive=true;
         }
-        if(escDynamic.contains(param))escParams[param]=stores_["esc"]->get(yamlPath);
-        else ++restartOnly;
       }
-      else if(file!="gui") {
-        ++restartOnly;
-      }
+      if(!handledLive&&file!="gui")restartNodes.unite(restartTargetsForChange(file,path));
     }
-    if(!escParams.isEmpty()){
-      ros_->setParametersAtomically("/esc_ackermann",escParams,"live_yaml:/esc_ackermann");
-      saveLabel_->setText(QString("YAML tersimpan ✓ • live-apply ESC (%1) • %2 perubahan lain berlaku saat restart")
-      .arg(escParams.size()).arg(restartOnly));
-    }
-    else{
-      saveLabel_->setText(restartOnly>0?
-      QString("YAML tersimpan ✓ • %1 perubahan berlaku saat node/launch berikutnya").arg(restartOnly):
-      QString("YAML tersimpan ✓"));
-    }
+    if(!escParams.isEmpty())ros_->setParametersAtomically("/esc_ackermann",escParams,"live_yaml:/esc_ackermann");
+    queueRuntimeRestarts(restartNodes);
+    if(restartNodes.isEmpty()&&escParams.isEmpty())saveLabel_->setText(QStringLiteral("YAML tersimpan ✓"));
+    else if(!restartNodes.isEmpty())saveLabel_->setText(QStringLiteral("YAML tersimpan ✓ • APPLY QUEUED %1 node • restart hanya saat kendaraan diam")
+      .arg(restartNodes.size()));
+    else saveLabel_->setText(QStringLiteral("YAML tersimpan ✓ • live-apply ESC %1 parameter").arg(escParams.size()));
   }
-  void verifyRuntime(){
+  void verifyRuntime(bool interactive=true){
+    runtimeVerifyInteractive_=interactive;
     runtimeExpected_.clear();
     runtimeResults_.clear();
     struct Audit{
@@ -795,27 +910,75 @@ class MainWindow:public QMainWindow{
       QString file,prefix;
     };
     QVector<Audit>a={
-      {
-        "/esc_ackermann","esc",{
-          "serial_enabled","wheelbase_m","track_width_m","steering_physical_calibration_enabled","steering_physical_left_limit_deg","steering_physical_right_limit_deg","steering_physical_operational_limit_deg","steering_physical_lut_enabled","steering_lut_physical_deg","steering_lut_command_increasing_deg","steering_lut_command_decreasing_deg","steering_lut_feedback_increasing_deg","steering_lut_feedback_decreasing_deg"
-        },"esc","esc_ackermann.ros__parameters."
-      },{
-        "/localization_core","localization",{
-          "gnss_antenna_x_m","gnss_antenna_y_m","enable_global_gnss_velocity_fusion","enable_global_gnss_cog_fusion","gnss_yaw_rate_min_speed_mps","gnss_yaw_rate_max_abs_rps","gnss_yaw_rate_filter_alpha","anchor_init_requires_strict"
-        },"localization","localization_core.ros__parameters."
-      },{
-        "/data_imu_node","imu",{
-          "gyro_packet_timeout_sec","accel_packet_timeout_sec","require_fresh_gyro_for_imu_publish"
-        },"imu","data_imu_node.ros__parameters."
-      }
+      {"/esc_ackermann","esc",{
+        "wheelbase_m","track_width_m","odom_v_variance_base","odom_v_variance_rpm_error_gain",
+        "odom_yaw_variance_base","odom_yaw_variance_steer_gain","odom_yaw_rate_variance_base",
+        "steering_physical_left_limit_deg","steering_physical_right_limit_deg","steering_physical_operational_limit_deg"
+      },"esc","esc_ackermann.ros__parameters."},
+      {"/data_cuav_node","gnss",{
+        "navigation_rate_hz","min_satellites","max_dop","max_hacc_m","max_sacc_mps",
+        "position_fit_window_sec","position_fit_min_samples","position_fit_min_baseline_m"
+      },"gnss","data_cuav_node.ros__parameters."},
+      {"/data_imu_node","imu",{
+        "publish_rate_hz","yaw_offset_rad","gyro_bias","orientation_covariance",
+        "angular_velocity_covariance","gyro_packet_timeout_sec","accel_packet_timeout_sec"
+      },"imu","data_imu_node.ros__parameters."},
+      {"/ekf_filter_node_odom","ekf_local",{
+        "frequency","sensor_timeout","predict_to_current_time","odom0_queue_size","imu0_queue_size","twist0_queue_size",
+        "odom0_twist_rejection_threshold","twist0_rejection_threshold","process_noise_covariance"
+      },"ekf","ekf_filter_node_odom.ros__parameters."},
+      {"/ekf_filter_node_map","ekf_global",{
+        "frequency","sensor_timeout","predict_to_current_time","odom0_queue_size","twist0_queue_size","pose0_queue_size","imu0_queue_size",
+        "odom0_pose_rejection_threshold","twist0_rejection_threshold","process_noise_covariance"
+      },"ekf","ekf_filter_node_map.ros__parameters."},
+      {"/localization_core","localization",{
+        "gnss_antenna_x_m","gnss_antenna_y_m","gnss_sync_max_gap_sec","gnss_speed_consistency_max_mps",
+        "cog_min_forward_speed_mps","cog_max_sacc_mps","gnss_velocity_fusion_min_variance","gnss_velocity_fusion_max_variance",
+        "gnss_cog_fusion_min_variance_rad2","gnss_cog_fusion_max_variance_rad2","strict_min_satellites","strict_max_dop","strict_max_hacc_m",
+        "strict_correction_alpha","strict_moving_correction_alpha","strict_max_correction_m","global_ekf_yaw_correction_alpha","global_ekf_yaw_max_step_rad"
+      },"localization","localization_core.ros__parameters."},
+      {"/planner_server","planner",{
+        "GridBased.minimum_turning_radius","GridBased.downsampling_factor","GridBased.angle_quantization_bins",
+        "GridBased.max_planning_time","GridBased.cost_penalty","GridBased.non_straight_penalty","GridBased.reverse_penalty",
+        "GridBased.analytic_expansion_ratio","GridBased.analytic_expansion_max_length","GridBased.smoother.w_smooth","GridBased.smoother.w_data"
+      },"nav2","planner_server.ros__parameters."},
+      {"/controller_server","controller",{
+        "controller_frequency","failure_tolerance","progress_checker.required_movement_radius","progress_checker.movement_time_allowance",
+        "goal_checker.xy_goal_tolerance","goal_checker.yaw_goal_tolerance","FollowPath.model_dt","FollowPath.time_steps","FollowPath.batch_size",
+        "FollowPath.vx_std","FollowPath.wz_std","FollowPath.vx_max","FollowPath.wz_max","FollowPath.ax_max",
+        "FollowPath.AckermannConstraints.min_turning_r","FollowPath.PathAlignCritic.cost_weight","FollowPath.PathFollowCritic.cost_weight",
+        "FollowPath.PathAngleCritic.cost_weight","FollowPath.CostCritic.cost_weight","FollowPath.GoalCritic.cost_weight"
+      },"nav2","controller_server.ros__parameters."},
+      {"/velocity_smoother","smoother",{
+        "smoothing_frequency","feedback","max_accel","max_decel","deadband_velocity","velocity_timeout"
+      },"nav2","velocity_smoother.ros__parameters."},
+      {"/local_costmap/local_costmap","local_costmap",{
+        "update_frequency","width","height","resolution","footprint_padding","inflation_layer.inflation_radius","inflation_layer.cost_scaling_factor"
+      },"nav2","local_costmap.local_costmap.ros__parameters."},
+      {"/global_costmap/global_costmap","global_costmap",{
+        "update_frequency","resolution","footprint_padding","inflation_layer.inflation_radius","inflation_layer.cost_scaling_factor","transform_tolerance"
+      },"nav2","global_costmap.global_costmap.ros__parameters."},
+      {"/navigation_core","navigation_core",{
+        "autonomy_timeout_sec","max_forward_speed_mps","max_reverse_speed_mps","max_yaw_rate_rps",
+        "linear_deadband_mps","angular_deadband_rps","min_speed_for_yaw_mps","minimum_turning_radius_m"
+      },"navigation_core","navigation_core.ros__parameters."}
     };
     for(const auto&x:a){
+      auto store=stores_.value(x.file);
+      if(!store)continue;
       QVariantMap exp;
-      for(const QString&n:x.names)exp[n]=stores_.value(x.file)->get(x.prefix+n);
+      QStringList validNames;
+      for(const QString&n:x.names){
+        const QVariant value=store->get(x.prefix+n);
+        if(!value.isValid())continue;
+        exp[n]=value;
+        validNames<<n;
+      }
+      if(validNames.isEmpty())continue;
       runtimeExpected_[x.tag]=exp;
-      ros_->getParameters(x.node,x.names,"audit:"+x.tag);
+      ros_->getParameters(x.node,validNames,"audit:"+x.tag);
     }
-    saveLabel_->setText("VERIFY RUNTIME...");
+    saveLabel_->setText(interactive?QStringLiteral("VERIFY RUNTIME…"):QStringLiteral("APPLY COMPLETE • VERIFY RUNTIME…"));
   }
   void handleRuntimeAudit(const QString&tag,bool ok,const QVariantMap&v){
     if(!tag.startsWith("audit:"))return;
@@ -836,8 +999,9 @@ class MainWindow:public QMainWindow{
         all&=eq;
       }
     }
-    QMessageBox::information(this,"Config vs Runtime",lines.join('\n'));
-    saveLabel_->setText(all?"CONFIG == RUNTIME ✓":"RUNTIME MISMATCH • restart/live-apply sebelum merekam tuning");
+    if(runtimeVerifyInteractive_)QMessageBox::information(this,"Config vs Runtime",lines.join('\n'));
+    saveLabel_->setText(all?QStringLiteral("CONFIG == RUNTIME ✓ • tuning aktif"):
+      QStringLiteral("RUNTIME MISMATCH ⚠ • jangan anggap parameter aktif sebelum MATCH"));
   }
   void applyStyle(){
     setStyleSheet(QStringLiteral(R"CSS(

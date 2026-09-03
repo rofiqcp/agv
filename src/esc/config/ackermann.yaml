@@ -3,6 +3,9 @@ esc_ackermann:
   ros__parameters:
     teleop_source_topic: /teleop/active_source
     teleop_estop_topic: /teleop/emergency_stop_latched
+    hmi_topic: /hmi/cmd_vel
+    hmi_source_topic: /hmi/active_source
+    hmi_timeout_sec: 0.30
     output_topic: /cmd_vel/actuator
     autonomy_gate_topic: /system/autonomy_motion_allowed
     global_estop_topic: /safety/estop
@@ -11,7 +14,7 @@ esc_ackermann:
     nav2_timeout_sec: 0.6
     manual_release_hold_sec: 0.5
     speed_max: 1.0
-    serial_left_max_deg: 80.0
+    serial_left_max_deg: 90.0
     serial_right_max_rpm: 300.0
     wheelbase_m: 0.7
     track_width_m: 0.48
@@ -56,29 +59,29 @@ esc_ackermann:
     - 15.0
     - 30.0
     steering_lut_command_increasing_deg:
-    - -80.0
-    - -40.0
+    - -90.0
+    - -45.0
     - 0.0
-    - 40.0
-    - 80.0
+    - 45.0
+    - 90.0
     steering_lut_command_decreasing_deg:
-    - -80.0
-    - -40.0
+    - -90.0
+    - -45.0
     - 0.0
-    - 40.0
-    - 80.0
+    - 45.0
+    - 90.0
     steering_lut_feedback_increasing_deg:
-    - -80.0
-    - -40.0
+    - -90.0
+    - -45.0
     - 0.0
-    - 40.0
-    - 80.0
+    - 45.0
+    - 90.0
     steering_lut_feedback_decreasing_deg:
-    - -80.0
-    - -40.0
+    - -90.0
+    - -45.0
     - 0.0
-    - 40.0
-    - 80.0
+    - 45.0
+    - 90.0
     steering_lut_direction_deadband_deg: 0.15
     steering_lut_calibration_saved_at: ''
     steering_center_bias_from_left_deg: 0.0

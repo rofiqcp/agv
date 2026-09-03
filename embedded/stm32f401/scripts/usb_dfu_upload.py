@@ -92,6 +92,14 @@ def _request_software_dfu(port):
         with serial.Serial(port, 115200, timeout=0.20, write_timeout=1.0) as ser:
             time.sleep(0.15)
             ser.reset_input_buffer()
+            # Terminate any partial command left in the MCU parser by a previous
+            # process that closed the CDC port mid-frame, then start from a clean line.
+            # Multiple terminators flush any partial telemetry command left when
+            # stmf4_hmi_bridge closed the CDC stream mid-frame.
+            ser.write(b"\n\n\n")
+            ser.flush()
+            time.sleep(0.08)
+            ser.reset_input_buffer()
             ser.write(b"BOOT:DFU\n")
             ser.flush()
             time.sleep(0.20)

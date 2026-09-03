@@ -10,6 +10,7 @@
  */
 
 #include <rclcpp/rclcpp.hpp>
+#include <rcl_interfaces/msg/parameter_descriptor.hpp>
 #include <rclcpp/executors/multi_threaded_executor.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <nav_msgs/msg/path.hpp>
@@ -121,6 +122,19 @@ struct ObstacleTrack
   bool confirmed{false};
 };
 
+struct NearFieldDecision
+{
+  bool raw_candidate{false};
+  bool emergency{false};
+  bool drivable_contact{false};
+  int class_id{-1};
+  double confidence{0.0};
+  double bbox_height_fraction{0.0};
+  double center_x_fraction{0.5};
+  double drivable_fraction{0.0};
+  std::string reason{"CLEAR"};
+};
+
 float intersectionOverUnion(const Detection & a, const Detection & b)
 {
   const float left = std::max(a.x1, b.x1);
@@ -223,8 +237,11 @@ private:
   {
     declare_parameter<std::string>("pt_model_path", "/home/otomasi/ros/models/yolopv2.pt");
     declare_parameter<double>("cpu_inference_fps", 2.0);
-    // 0 = otomatis: maksimal 4 thread dan menyisakan core untuk ROS/Nav2/GUI.
-    declare_parameter<int>("cpu_threads", 0);
+    // Benchmark full-stack i5-7500 menunjukkan 2 thread paling stabil; 3-4 thread
+    // mengganggu capture/ROS dan menghasilkan stall multi-detik.
+    declare_parameter<int>("cpu_threads", 2);
+    declare_parameter<int>("opencv_threads", 1);
+    declare_parameter<bool>("torch_optimize_for_inference", true);
     declare_parameter<std::string>("rgb_device", "auto");
     declare_parameter<int>("rgb_width", 1280);
     declare_parameter<int>("rgb_height", 720);
@@ -311,6 +328,14 @@ private:
     declare_parameter<double>("metric_maximum_forward_m", 4.0);
     declare_parameter<double>("metric_maximum_abs_left_m", 2.5);
     declare_parameter<double>("minimum_obstacle_confidence", 0.30);
+    // Per-class affine correction: [human_scale, human_bias_m, motorcycle_scale, motorcycle_bias_m].
+    // Identity is safe until the 1..5 m physical calibration wizard is completed.
+    rcl_interfaces::msg::ParameterDescriptor obstacle_calibration_descriptor;
+    obstacle_calibration_descriptor.dynamic_typing = true;
+    declare_parameter(
+      "obstacle_distance_calibration_coefficients",
+      rclcpp::ParameterValue(std::vector<double>{1.0, 0.0, 1.0, 0.0}),
+      obstacle_calibration_descriptor);
     declare_parameter<bool>("accept_all_detected_classes_as_obstacles", false);
     declare_parameter<std::vector<int64_t>>("safety_obstacle_class_ids", {0, 2, 3});
     declare_parameter<bool>("require_drivable_contact", true);
@@ -332,6 +357,16 @@ private:
     declare_parameter<double>("clearing_obstacle_margin_m", 0.20);
     declare_parameter<double>("cpu_emergency_stop_distance_m", 0.65);
     declare_parameter<double>("cpu_emergency_half_width_m", 0.55);
+    // Near-field image-space guard tetap valid sebelum homography metriks tersertifikasi.
+    declare_parameter<bool>("near_field_emergency_enabled", true);
+    declare_parameter<double>("near_field_min_confidence", 0.25);
+    declare_parameter<double>("near_field_center_corridor_fraction", 0.65);
+    declare_parameter<double>("near_field_min_bbox_height_fraction", 0.20);
+    declare_parameter<bool>("near_field_drivable_guard_enabled", true);
+    declare_parameter<double>("near_field_bottom_roi_fraction", 0.22);
+    declare_parameter<double>("near_field_min_drivable_fraction", 0.12);
+    declare_parameter<int>("near_field_confirm_frames", 2);
+    declare_parameter<int>("near_field_release_frames", 5);
     declare_parameter<double>("lane_vehicle_width_m", 0.55);
     declare_parameter<double>("edge_warning_clearance_m", 1.0);
     declare_parameter<double>("edge_critical_clearance_m", 0.40);
@@ -357,6 +392,8 @@ private:
     pt_model_path_ = resolveCpuModelPath(get_parameter("pt_model_path").as_string());
     inference_fps_ = get_parameter("cpu_inference_fps").as_double();
     cpu_threads_ = resolveCpuThreadCount(get_parameter("cpu_threads").as_int());
+    opencv_threads_ = get_parameter("opencv_threads").as_int();
+    torch_optimize_for_inference_ = get_parameter("torch_optimize_for_inference").as_bool();
     rgb_device_ = get_parameter("rgb_device").as_string();
     requested_width_ = get_parameter("rgb_width").as_int();
     requested_height_ = get_parameter("rgb_height").as_int();
@@ -445,6 +482,30 @@ private:
     max_forward_ = get_parameter("metric_maximum_forward_m").as_double();
     max_abs_left_ = get_parameter("metric_maximum_abs_left_m").as_double();
     minimum_obstacle_confidence_ = get_parameter("minimum_obstacle_confidence").as_double();
+    {
+      const auto calibration_parameter = get_parameter("obstacle_distance_calibration_coefficients");
+      if (calibration_parameter.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY) {
+        obstacle_distance_calibration_coefficients_ = calibration_parameter.as_double_array();
+      } else if (calibration_parameter.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER_ARRAY) {
+        obstacle_distance_calibration_coefficients_.clear();
+        for (const auto value : calibration_parameter.as_integer_array())
+          obstacle_distance_calibration_coefficients_.push_back(static_cast<double>(value));
+        RCLCPP_WARN(get_logger(),
+          "obstacle_distance_calibration_coefficients arrived as integer_array; converted safely to double_array");
+      } else {
+        obstacle_distance_calibration_coefficients_.clear();
+      }
+      if (obstacle_distance_calibration_coefficients_.size() != 4U)
+        obstacle_distance_calibration_coefficients_ = {1.0, 0.0, 1.0, 0.0};
+    }
+    obstacle_distance_calibration_coefficients_[0] =
+      std::clamp(obstacle_distance_calibration_coefficients_[0], 0.50, 1.50);
+    obstacle_distance_calibration_coefficients_[1] =
+      std::clamp(obstacle_distance_calibration_coefficients_[1], -2.0, 2.0);
+    obstacle_distance_calibration_coefficients_[2] =
+      std::clamp(obstacle_distance_calibration_coefficients_[2], 0.50, 1.50);
+    obstacle_distance_calibration_coefficients_[3] =
+      std::clamp(obstacle_distance_calibration_coefficients_[3], -2.0, 2.0);
     accept_all_obstacles_ = get_parameter("accept_all_detected_classes_as_obstacles").as_bool();
     safety_classes_ = get_parameter("safety_obstacle_class_ids").as_integer_array();
     require_drivable_contact_ = get_parameter("require_drivable_contact").as_bool();
@@ -467,6 +528,15 @@ private:
     clearing_obstacle_margin_m_ = get_parameter("clearing_obstacle_margin_m").as_double();
     emergency_distance_m_ = get_parameter("cpu_emergency_stop_distance_m").as_double();
     emergency_half_width_m_ = get_parameter("cpu_emergency_half_width_m").as_double();
+    near_field_emergency_enabled_ = get_parameter("near_field_emergency_enabled").as_bool();
+    near_field_min_confidence_ = get_parameter("near_field_min_confidence").as_double();
+    near_field_center_corridor_fraction_ = get_parameter("near_field_center_corridor_fraction").as_double();
+    near_field_min_bbox_height_fraction_ = get_parameter("near_field_min_bbox_height_fraction").as_double();
+    near_field_drivable_guard_enabled_ = get_parameter("near_field_drivable_guard_enabled").as_bool();
+    near_field_bottom_roi_fraction_ = get_parameter("near_field_bottom_roi_fraction").as_double();
+    near_field_min_drivable_fraction_ = get_parameter("near_field_min_drivable_fraction").as_double();
+    near_field_confirm_frames_ = get_parameter("near_field_confirm_frames").as_int();
+    near_field_release_frames_ = get_parameter("near_field_release_frames").as_int();
     lane_vehicle_width_m_ = get_parameter("lane_vehicle_width_m").as_double();
     lane_thresholds_.warning_clearance_m = get_parameter("edge_warning_clearance_m").as_double();
     lane_thresholds_.critical_clearance_m = get_parameter("edge_critical_clearance_m").as_double();
@@ -500,6 +570,7 @@ private:
     }
     inference_fps_ = std::clamp(inference_fps_, 0.5, 30.0);
     cpu_threads_ = std::clamp(cpu_threads_, 1, 64);
+    opencv_threads_ = std::clamp(opencv_threads_, 1, 8);
     requested_width_ = std::max(320, requested_width_);
     requested_height_ = std::max(240, requested_height_);
     camera_fps_ = std::clamp(camera_fps_, 1, 60);
@@ -549,9 +620,16 @@ private:
     obstacle_forward_min_m_ = std::max(0.0, obstacle_forward_min_m_);
     obstacle_forward_max_m_ = std::min(max_forward_, std::max(obstacle_forward_min_m_ + 0.05, obstacle_forward_max_m_));
     minimum_obstacle_width_m_ = std::clamp(minimum_obstacle_width_m_, 0.05, 3.0);
+    near_field_min_confidence_ = std::clamp(near_field_min_confidence_, 0.01, 1.0);
+    near_field_center_corridor_fraction_ = std::clamp(near_field_center_corridor_fraction_, 0.10, 1.0);
+    near_field_min_bbox_height_fraction_ = std::clamp(near_field_min_bbox_height_fraction_, 0.05, 0.95);
+    near_field_bottom_roi_fraction_ = std::clamp(near_field_bottom_roi_fraction_, 0.05, 0.80);
+    near_field_min_drivable_fraction_ = std::clamp(near_field_min_drivable_fraction_, 0.0, 1.0);
+    near_field_confirm_frames_ = std::clamp(near_field_confirm_frames_, 1, 30);
+    near_field_release_frames_ = std::clamp(near_field_release_frames_, 1, 60);
     points_per_box_ = std::clamp(points_per_box_, 1, 21);
     clearing_ray_count_ = std::clamp(clearing_ray_count_, 3, 181);
-    cv::setNumThreads(cpu_threads_);
+    cv::setNumThreads(opencv_threads_);
   }
 
   static cv::Mat tensorToCv(const torch::Tensor & source)
@@ -656,17 +734,45 @@ private:
     // Inter-op parallelism >1 mudah meng-oversubscribe Mini-PC ketika OpenCV,
     // ROS executor, GUI, dan LibTorch aktif bersamaan.
     torch::set_num_interop_threads(1);
+
+    const auto verify_contract = [this]() {
+      cv::Mat zero_image = cv::Mat::zeros(MODEL_HEIGHT, MODEL_WIDTH, CV_8UC3);
+      auto outputs = forwardTorch(zero_image);
+      validateOutputs(outputs);
+    };
+
     try {
-      module_ = torch::jit::load(pt_model_path_, torch::kCPU);
-      module_.eval();
+      auto loaded = torch::jit::load(pt_model_path_, torch::kCPU);
+      loaded.eval();
+      if (torch_optimize_for_inference_) {
+        try {
+          auto frozen = torch::jit::freeze(loaded);
+          module_ = torch::jit::optimize_for_inference(frozen);
+          module_.eval();
+          verify_contract();
+          torch_optimized_active_ = true;
+          RCLCPP_INFO(get_logger(), "TorchScript freeze + optimize_for_inference: PASS");
+        } catch (const std::exception & optimize_error) {
+          RCLCPP_WARN(
+            get_logger(),
+            "Torch optimize_for_inference tidak kompatibel dengan checkpoint ini; fallback model asli: %s",
+            optimize_error.what());
+          module_ = std::move(loaded);
+          module_.eval();
+          verify_contract();
+          torch_optimized_active_ = false;
+        }
+      } else {
+        module_ = std::move(loaded);
+        module_.eval();
+        verify_contract();
+        torch_optimized_active_ = false;
+      }
     } catch (const c10::Error & error) {
       throw std::runtime_error(
         std::string("LibTorch gagal membaca YOLOPv2 .pt sebagai TorchScript: ") + error.what());
     }
 
-    cv::Mat zero_image = cv::Mat::zeros(MODEL_HEIGHT, MODEL_WIDTH, CV_8UC3);
-    auto warmup_outputs = forwardTorch(zero_image);
-    validateOutputs(warmup_outputs);
     RCLCPP_INFO(
       get_logger(),
       "YOLOPv2 CPU TorchScript warm-up + 8-output contract: PASS (%s)",
@@ -1005,6 +1111,24 @@ private:
     return std::isfinite(forward) && std::isfinite(left);
   }
 
+  float calibratedForwardDistance(int class_id, float raw_forward_m) const
+  {
+    if (!std::isfinite(raw_forward_m) || obstacle_distance_calibration_coefficients_.size() != 4U) {
+      return raw_forward_m;
+    }
+    double scale = 1.0;
+    double bias = 0.0;
+    if (class_id == 0) {
+      scale = obstacle_distance_calibration_coefficients_[0];
+      bias = obstacle_distance_calibration_coefficients_[1];
+    } else if (class_id == 3) {
+      scale = obstacle_distance_calibration_coefficients_[2];
+      bias = obstacle_distance_calibration_coefficients_[3];
+    }
+    const double corrected = scale * static_cast<double>(raw_forward_m) + bias;
+    return std::isfinite(corrected) ? static_cast<float>(corrected) : raw_forward_m;
+  }
+
   bool drivableContact(const Detection & d, const cv::Mat & drivable) const
   {
     if (!require_drivable_contact_) return true;
@@ -1017,7 +1141,7 @@ private:
     const float right = d.x2 - inset;
     int road = 0;
     int total = 0;
-    const std::array<int, 3> ys{bottom - tol, bottom - tol / 2, bottom};
+    const std::array<int, 5> ys{bottom - tol, bottom - tol / 2, bottom, bottom + tol / 2, bottom + tol};
     for (const int raw_y : ys) {
       const int y = std::clamp(raw_y, 0, drivable.rows - 1);
       for (int sample = 0; sample < 5; ++sample) {
@@ -1079,8 +1203,12 @@ private:
       const float center_x = 0.5F * (d.x1 + d.x2);
       float forward = 0.0F;
       float left = 0.0F;
-      if (!projectPixel(center_x, d.y2, forward, left) ||
-        forward < obstacle_forward_min_m_ || forward > obstacle_forward_max_m_ || std::abs(left) > max_abs_left_)
+      if (!projectPixel(center_x, d.y2, forward, left))
+      {
+        continue;
+      }
+      forward = calibratedForwardDistance(d.class_id, forward);
+      if (forward < obstacle_forward_min_m_ || forward > obstacle_forward_max_m_ || std::abs(left) > max_abs_left_)
       {
         continue;
       }
@@ -1163,6 +1291,44 @@ private:
     obstacle_tracks_.erase(std::remove_if(obstacle_tracks_.begin(), obstacle_tracks_.end(), [this](const auto & t) {return t.missed > track_max_missed_frames_;}), obstacle_tracks_.end());
     // Missed tracks stay only in the association cache. They are never republished as active safety obstacles on slow CPU.
     return confirmed;
+  }
+
+  sensor_msgs::msg::PointCloud2 makeObstacleCloud(
+    const rclcpp::Time & stamp, const std::vector<MetricObstacle> & obstacles) const
+  {
+    sensor_msgs::msg::PointCloud2 message;
+    message.header.stamp = stamp;
+    message.header.frame_id = metric_frame_id_;
+    message.height = 1U;
+    message.is_bigendian = false;
+    message.is_dense = true;
+    message.point_step = 20U;
+    message.fields.resize(5U);
+    const char *names[] = {"x", "y", "z", "intensity", "track_id"};
+    for (size_t i = 0; i < 5U; ++i) {
+      message.fields[i].name = names[i];
+      message.fields[i].offset = static_cast<uint32_t>(i * sizeof(float));
+      message.fields[i].datatype = sensor_msgs::msg::PointField::FLOAT32;
+      message.fields[i].count = 1U;
+    }
+    const size_t count = obstacles.size() * static_cast<size_t>(points_per_box_);
+    message.width = static_cast<uint32_t>(count);
+    message.row_step = message.point_step * message.width;
+    message.data.resize(count * message.point_step);
+    size_t out_index = 0U;
+    for (const auto & obstacle : obstacles) {
+      const float half = 0.5F * obstacle.width_m;
+      for (int i = 0; i < points_per_box_; ++i) {
+        const float ratio = points_per_box_ <= 1 ? 0.5F :
+          static_cast<float>(i) / static_cast<float>(points_per_box_ - 1);
+        const std::array<float, 5> point{
+          obstacle.forward_m, obstacle.left_m - half + ratio * 2.0F * half,
+          0.20F, obstacle.score, static_cast<float>(obstacle.track_id)};
+        std::memcpy(message.data.data() + out_index * message.point_step, point.data(), message.point_step);
+        ++out_index;
+      }
+    }
+    return message;
   }
 
   std::vector<std::array<float, 4>> obstaclePoints(const std::vector<MetricObstacle> & obstacles) const
@@ -1354,7 +1520,8 @@ private:
     camera_info_pub_->publish(std::move(message));
   }
 
-  void publishDetectionMessages(const rclcpp::Time & stamp, const std::vector<Detection> & detections)
+  void publishDetectionMessages(
+    const rclcpp::Time & stamp, const std::vector<Detection> & detections, int image_width, int image_height)
   {
     if (publish_detections_ && detections_pub_->get_subscription_count() > 0U) {
       vision_msgs::msg::Detection2DArray array;
@@ -1377,10 +1544,43 @@ private:
       detections_pub_->publish(std::move(array));
     }
     std::ostringstream summary;
-    summary << std::fixed << std::setprecision(3) << "backend=cpu;count=" << detections.size();
+    summary << std::fixed << std::setprecision(5)
+            << "{\"backend\":\"cpu\",\"count\":" << detections.size()
+            << ",\"image_width\":" << image_width
+            << ",\"image_height\":" << image_height
+            << ",\"detections\":[";
     for (size_t i = 0; i < detections.size(); ++i) {
-      summary << ";d" << i << "=cls:" << detections[i].class_id << ",score:" << detections[i].score;
+      const auto &d = detections[i];
+      const float u = 0.5F * (d.x1 + d.x2);
+      const float v = d.y2;
+      float raw_forward = 0.0F;
+      float raw_left = 0.0F;
+      const bool metric_ok = projectPixel(u, v, raw_forward, raw_left);
+      const double hfrac = image_height > 0 ?
+        std::max(0.0, static_cast<double>(d.y2 - d.y1)) / static_cast<double>(image_height) : 0.0;
+      const double cfrac = image_width > 0 ?
+        0.5 * static_cast<double>(d.x1 + d.x2) / static_cast<double>(image_width) : 0.5;
+      const bool clipped = image_height > 0 && d.y2 >= static_cast<float>(image_height - 2);
+      if (i) summary << ',';
+      summary << "{\"class_id\":" << d.class_id
+              << ",\"score\":" << d.score
+              << ",\"x1\":" << d.x1 << ",\"y1\":" << d.y1
+              << ",\"x2\":" << d.x2 << ",\"y2\":" << d.y2
+              << ",\"bottom_u_px\":" << u << ",\"bottom_v_px\":" << v
+              << ",\"bbox_height_fraction\":" << hfrac
+              << ",\"center_x_fraction\":" << cfrac
+              << ",\"bottom_clipped\":" << (clipped ? "true" : "false");
+      if (metric_ok) {
+        summary << ",\"raw_forward_m\":" << raw_forward
+                << ",\"raw_left_m\":" << raw_left
+                << ",\"calibrated_forward_m\":"
+                << calibratedForwardDistance(d.class_id, raw_forward);
+      } else {
+        summary << ",\"raw_forward_m\":null,\"raw_left_m\":null,\"calibrated_forward_m\":null";
+      }
+      summary << '}';
     }
+    summary << "]}";
     std_msgs::msg::String message;
     message.data = summary.str();
     raw_detection_pub_->publish(std::move(message));
@@ -1389,10 +1589,92 @@ private:
   double bottomDrivableFraction(const cv::Mat & drivable) const
   {
     if (drivable.empty()) return 0.0;
-    const int y0 = std::clamp(static_cast<int>(std::lround(drivable.rows * 0.78)), 0, drivable.rows - 1);
+    const int y0 = std::clamp(
+      static_cast<int>(std::lround(drivable.rows * (1.0 - near_field_bottom_roi_fraction_))),
+      0, drivable.rows - 1);
     const cv::Mat roi = drivable.rowRange(y0, drivable.rows);
     return static_cast<double>(cv::countNonZero(roi)) /
       static_cast<double>(std::max<size_t>(1U, roi.total()));
+  }
+
+  NearFieldDecision evaluateNearField(
+    const std::vector<Detection> & detections, const cv::Mat & drivable, int width, int height)
+  {
+    NearFieldDecision decision;
+    decision.drivable_fraction = bottomDrivableFraction(drivable);
+    if (!near_field_emergency_enabled_ || width <= 0 || height <= 0) {
+      near_field_candidate_hits_ = 0;
+      near_field_release_hits_ = 0;
+      near_field_latched_ = false;
+      decision.reason = near_field_emergency_enabled_ ? "INVALID_IMAGE" : "DISABLED";
+      return decision;
+    }
+
+    const double half_corridor = 0.5 * near_field_center_corridor_fraction_;
+    const double min_center = 0.5 - half_corridor;
+    const double max_center = 0.5 + half_corridor;
+    const double bottom_roi_start = 1.0 - near_field_bottom_roi_fraction_;
+    const Detection *best = nullptr;
+    double best_height = 0.0;
+    bool best_contact = false;
+    for (const auto &d : detections) {
+      if (!isSafetyClass(d.class_id) || d.score < near_field_min_confidence_) continue;
+      const double center = 0.5 * static_cast<double>(d.x1 + d.x2) / static_cast<double>(width);
+      const double height_fraction = std::max(0.0, static_cast<double>(d.y2 - d.y1)) / static_cast<double>(height);
+      const double bottom_fraction = std::clamp(static_cast<double>(d.y2) / static_cast<double>(height), 0.0, 1.0);
+      if (center < min_center || center > max_center ||
+          height_fraction < near_field_min_bbox_height_fraction_ ||
+          bottom_fraction < bottom_roi_start) continue;
+      const bool contact = drivableContact(d, drivable);
+      if (near_field_drivable_guard_enabled_ &&
+          (!contact || decision.drivable_fraction < near_field_min_drivable_fraction_)) continue;
+      if (!best || height_fraction > best_height ||
+          (std::abs(height_fraction - best_height) < 1.0e-6 && d.score > best->score)) {
+        best = &d;
+        best_height = height_fraction;
+        best_contact = contact;
+      }
+    }
+
+    decision.raw_candidate = best != nullptr;
+    if (best) {
+      decision.class_id = best->class_id;
+      decision.confidence = best->score;
+      decision.bbox_height_fraction = best_height;
+      decision.center_x_fraction = 0.5 * static_cast<double>(best->x1 + best->x2) / static_cast<double>(width);
+      decision.drivable_contact = best_contact;
+      last_near_field_class_id_ = decision.class_id;
+      last_near_field_confidence_ = decision.confidence;
+      last_near_field_bbox_height_fraction_ = decision.bbox_height_fraction;
+      last_near_field_center_x_fraction_ = decision.center_x_fraction;
+      last_near_field_drivable_contact_ = decision.drivable_contact;
+      ++near_field_candidate_hits_;
+      near_field_release_hits_ = 0;
+      if (near_field_candidate_hits_ >= near_field_confirm_frames_) near_field_latched_ = true;
+    } else {
+      near_field_candidate_hits_ = 0;
+      if (near_field_latched_) {
+        ++near_field_release_hits_;
+        if (near_field_release_hits_ >= near_field_release_frames_) {
+          near_field_latched_ = false;
+          near_field_release_hits_ = 0;
+        }
+      } else {
+        near_field_release_hits_ = 0;
+      }
+    }
+
+    decision.emergency = near_field_latched_;
+    if (decision.emergency && !best) {
+      decision.class_id = last_near_field_class_id_;
+      decision.confidence = last_near_field_confidence_;
+      decision.bbox_height_fraction = last_near_field_bbox_height_fraction_;
+      decision.center_x_fraction = last_near_field_center_x_fraction_;
+      decision.drivable_contact = last_near_field_drivable_contact_;
+    }
+    decision.reason = decision.emergency ? "IMAGE_NEAR_FIELD_CONFIRMED" :
+      (decision.raw_candidate ? "IMAGE_NEAR_FIELD_CONFIRMING" : "CLEAR");
+    return decision;
   }
 
   void publishObstacleMetrics(
@@ -1424,28 +1706,26 @@ private:
     obstacle_metrics_pub_->publish(std::move(message));
   }
 
-  void publishNearFieldState(
-    bool emergency, const std::vector<MetricObstacle> & obstacles, double drivable_fraction)
+  void publishNearFieldState(const NearFieldDecision & near, bool metric_emergency)
   {
-    int class_id = -1;
-    double confidence = 0.0;
-    double nearest = std::numeric_limits<double>::infinity();
-    for (const auto & obstacle : obstacles) {
-      if (obstacle.forward_m < nearest &&
-        std::abs(obstacle.left_m) <= emergency_half_width_m_ + 0.5 * obstacle.width_m)
-      {
-        nearest = obstacle.forward_m;
-        class_id = obstacle.class_id;
-        confidence = obstacle.score;
-      }
-    }
+    const bool emergency = near.emergency || metric_emergency;
+    const std::string reason = near.emergency ? near.reason :
+      (metric_emergency ? "METRIC_NEAR_FIELD" : near.reason);
     std::ostringstream json;
     json << std::boolalpha << std::fixed << std::setprecision(4)
          << "{\"backend\":\"cpu\",\"emergency\":" << emergency
-         << ",\"reason\":\"" << (emergency ? "METRIC_NEAR_FIELD" : "CLEAR") << "\""
-         << ",\"raw_class_id\":" << class_id
-         << ",\"confidence\":" << confidence
-         << ",\"near_field_drivable_fraction\":" << drivable_fraction << '}';
+         << ",\"image_emergency\":" << near.emergency
+         << ",\"metric_emergency\":" << metric_emergency
+         << ",\"raw_candidate\":" << near.raw_candidate
+         << ",\"reason\":\"" << reason << "\""
+         << ",\"raw_class_id\":" << near.class_id
+         << ",\"confidence\":" << near.confidence
+         << ",\"bbox_height_fraction\":" << near.bbox_height_fraction
+         << ",\"center_x_fraction\":" << near.center_x_fraction
+         << ",\"drivable_contact\":" << near.drivable_contact
+         << ",\"near_field_drivable_fraction\":" << near.drivable_fraction
+         << ",\"confirm_hits\":" << near_field_candidate_hits_
+         << ",\"release_hits\":" << near_field_release_hits_ << '}';
     std_msgs::msg::String message;
     message.data = json.str();
     near_field_state_pub_->publish(std::move(message));
@@ -1653,10 +1933,13 @@ private:
       const auto geometry_started = std::chrono::steady_clock::now();
       const double decode_ms = std::chrono::duration<double, std::milli>(geometry_started - decode_started).count();
 
-      bool emergency = false;
+      bool metric_emergency_raw = false;
       std::vector<std::pair<float, float>> obstacle_centers;
       std::vector<MetricObstacle> metric_obstacles;
-      projectObstacles(detections, drivable, emergency, obstacle_centers, metric_obstacles);
+      projectObstacles(detections, drivable, metric_emergency_raw, obstacle_centers, metric_obstacles);
+      const NearFieldDecision near_field = evaluateNearField(detections, drivable, frame.cols, frame.rows);
+      // Metric emergency hanya memiliki authority setelah homography divalidasi secara fisik.
+      const bool metric_emergency = camera_metric_calibration_validated_ && metric_emergency_raw;
       const size_t metric_candidate_count = metric_obstacles.size();
       const auto confirmed_obstacles = updateObstacleTracks(metric_obstacles);
       obstacle_centers.clear();
@@ -1673,21 +1956,21 @@ private:
         drivable, lane_valid, left_clearance, right_clearance, center_error,
         heading_error, road_width, valid_rows);
 
-      object_pub_->publish(makeCloud(stamp, object_points));
+      object_pub_->publish(makeObstacleCloud(stamp, confirmed_obstacles));
       boundary_pub_->publish(makeCloud(stamp, boundary_points));
       publishClearingFan(stamp, obstacle_centers);
       publishObstacleMetrics(stamp, confirmed_obstacles);
       publishDrivableSpace(stamp, lane_valid, valid_rows, boundary_points.size());
-      publishNearFieldState(emergency, metric_obstacles, bottomDrivableFraction(drivable));
+      publishNearFieldState(near_field, metric_emergency);
       publishLaneState(
         stamp, lane_valid, left_clearance, right_clearance, center_error,
         heading_error, road_width, valid_rows);
-      publishEmergency(emergency || !image_healthy);
+      publishEmergency(near_field.emergency || metric_emergency || !image_healthy);
       publishHealth(
         image_healthy, image_healthy ? "OK" : "IMAGE_DEGRADED",
         mean_luma, image_stddev, extreme_fraction, mean_gradient);
       publishConnected(true);
-      publishDetectionMessages(stamp, detections);
+      publishDetectionMessages(stamp, detections, frame.cols, frame.rows);
       const auto publish_started = std::chrono::steady_clock::now();
       const double geometry_ms = std::chrono::duration<double, std::milli>(publish_started - geometry_started).count();
 
@@ -1764,6 +2047,8 @@ private:
            << ",\"postprocess_ms\":" << postprocess_ms
            << ",\"target_fps\":" << inference_fps_
            << ",\"cpu_threads\":" << cpu_threads_
+           << ",\"opencv_threads\":" << opencv_threads_
+           << ",\"torch_optimized\":" << (torch_optimized_active_ ? "true" : "false")
            << ",\"capture_dropped_total\":" << capture_dropped_total_.load()
            << ",\"capture_overwrite_total\":" << capture_overwrite_total_.load()
            << ",\"capture_frames_total\":" << capture_frames_total_.load()
@@ -1911,7 +2196,10 @@ private:
 
   std::string pt_model_path_;
   double inference_fps_{5.0};
-  int cpu_threads_{4};
+  int cpu_threads_{2};
+  int opencv_threads_{1};
+  bool torch_optimize_for_inference_{true};
+  bool torch_optimized_active_{false};
   std::string rgb_device_{"auto"};
   int requested_width_{1280};
   int requested_height_{720};
@@ -1972,6 +2260,7 @@ private:
   double max_forward_{4.0};
   double max_abs_left_{2.5};
   double minimum_obstacle_confidence_{0.30};
+  std::vector<double> obstacle_distance_calibration_coefficients_{1.0, 0.0, 1.0, 0.0};
   bool accept_all_obstacles_{false};
   std::vector<int64_t> safety_classes_;
   bool require_drivable_contact_{true};
@@ -1995,6 +2284,23 @@ private:
   double clearing_obstacle_margin_m_{0.20};
   double emergency_distance_m_{0.65};
   double emergency_half_width_m_{0.55};
+  bool near_field_emergency_enabled_{true};
+  double near_field_min_confidence_{0.25};
+  double near_field_center_corridor_fraction_{0.65};
+  double near_field_min_bbox_height_fraction_{0.20};
+  bool near_field_drivable_guard_enabled_{true};
+  double near_field_bottom_roi_fraction_{0.22};
+  double near_field_min_drivable_fraction_{0.12};
+  int near_field_confirm_frames_{2};
+  int near_field_release_frames_{5};
+  int near_field_candidate_hits_{0};
+  int near_field_release_hits_{0};
+  bool near_field_latched_{false};
+  int last_near_field_class_id_{-1};
+  double last_near_field_confidence_{0.0};
+  double last_near_field_bbox_height_fraction_{0.0};
+  double last_near_field_center_x_fraction_{0.5};
+  bool last_near_field_drivable_contact_{false};
   double lane_vehicle_width_m_{0.55};
   safety::LaneThresholds lane_thresholds_;
   std::unique_ptr<safety::ConfirmedState> lane_state_filter_;

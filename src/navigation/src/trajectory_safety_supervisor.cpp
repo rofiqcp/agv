@@ -121,6 +121,17 @@ bool extractBoolField(const std::string & text, const std::string & key, bool fa
   return fallback;
 }
 
+double extractDoubleField(const std::string & text, const std::string & key, double fallback)
+{
+  const std::string token = "\"" + key + "\":";
+  const auto pos = text.find(token);
+  if (pos == std::string::npos) return fallback;
+  std::istringstream stream(text.substr(pos + token.size()));
+  double value = fallback;
+  if (!(stream >> value) || !std::isfinite(value)) return fallback;
+  return value;
+}
+
 std::string extractStringField(
   const std::string & text, const std::string & key, const std::string & fallback)
 {
@@ -292,7 +303,8 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "TrajectorySafetySupervisor aktif: NAV2=%s + PATH(global=%s/local=%s) + perception constraints -> %s; corridor=+/-%.2fm horizon=%.2fm",
+      "TrajectorySafetySupervisor aktif: mode=%s NAV2=%s + PATH(global=%s/local=%s) + perception constraints -> %s; corridor=+/-%.2fm horizon=%.2fm",
+      metric_obstacle_safety_enabled_ ? "METRIC_FULL" : "GUARD_ONLY",
       nav_cmd_topic_.c_str(), global_plan_topic_.c_str(), local_plan_topic_.c_str(),
       output_cmd_topic_.c_str(), path_corridor_half_width_m_, path_horizon_m_);
   }
@@ -317,6 +329,7 @@ private:
     declare_parameter<std::string>("camera_connected_topic", "/perception/camera_connected");
     declare_parameter<std::string>("camera_health_topic", "/perception/camera_healthy");
     declare_parameter<std::string>("emergency_stop_topic", "/perception/emergency_stop");
+    declare_parameter<std::string>("perception_performance_topic", "/perception/performance");
     declare_parameter<std::string>("state_topic", "/navigation/trajectory_safety_state");
 
     declare_parameter<double>("control_rate_hz", 20.0);
@@ -328,6 +341,17 @@ private:
     declare_parameter<double>("obstacle_timeout_sec", 0.90);
     declare_parameter<double>("lane_timeout_sec", 0.75);
     declare_parameter<double>("drivable_timeout_sec", 0.75);
+    declare_parameter<double>("perception_performance_timeout_sec", 2.0);
+
+    // Metric obstacle/path decisions require validated homography. Guard-only mode
+    // still enforces camera health + image-space near-field emergency stop.
+    declare_parameter<bool>("metric_obstacle_safety_enabled", false);
+    declare_parameter<bool>("latency_compensation_enabled", true);
+    declare_parameter<double>("perception_latency_fallback_sec", 1.0);
+    declare_parameter<double>("latency_safety_margin_sec", 0.15);
+    declare_parameter<double>("latency_distance_margin_m", 0.25);
+    declare_parameter<double>("braking_deceleration_mps2", 1.0);
+    declare_parameter<double>("max_dynamic_stop_distance_m", 2.50);
 
     declare_parameter<double>("vehicle_width_m", 0.60);
     declare_parameter<double>("trajectory_lateral_margin_m", 0.25);
@@ -391,6 +415,7 @@ private:
     camera_connected_topic_ = get_parameter("camera_connected_topic").as_string();
     camera_health_topic_ = get_parameter("camera_health_topic").as_string();
     emergency_stop_topic_ = get_parameter("emergency_stop_topic").as_string();
+    perception_performance_topic_ = get_parameter("perception_performance_topic").as_string();
     state_topic_ = get_parameter("state_topic").as_string();
 
     control_rate_hz_ = std::clamp(get_parameter("control_rate_hz").as_double(), 2.0, 100.0);
@@ -402,6 +427,14 @@ private:
     obstacle_timeout_sec_ = std::max(0.10, get_parameter("obstacle_timeout_sec").as_double());
     lane_timeout_sec_ = std::max(0.10, get_parameter("lane_timeout_sec").as_double());
     drivable_timeout_sec_ = std::max(0.10, get_parameter("drivable_timeout_sec").as_double());
+    perception_performance_timeout_sec_ = std::max(0.20, get_parameter("perception_performance_timeout_sec").as_double());
+    metric_obstacle_safety_enabled_ = get_parameter("metric_obstacle_safety_enabled").as_bool();
+    latency_compensation_enabled_ = get_parameter("latency_compensation_enabled").as_bool();
+    perception_latency_fallback_sec_ = std::clamp(get_parameter("perception_latency_fallback_sec").as_double(), 0.05, 3.0);
+    latency_safety_margin_sec_ = std::clamp(get_parameter("latency_safety_margin_sec").as_double(), 0.0, 1.0);
+    latency_distance_margin_m_ = std::clamp(get_parameter("latency_distance_margin_m").as_double(), 0.0, 1.5);
+    braking_deceleration_mps2_ = std::clamp(get_parameter("braking_deceleration_mps2").as_double(), 0.2, 5.0);
+    max_dynamic_stop_distance_m_ = std::clamp(get_parameter("max_dynamic_stop_distance_m").as_double(), 0.5, 4.0);
 
     vehicle_width_m_ = std::max(0.10, get_parameter("vehicle_width_m").as_double());
     trajectory_lateral_margin_m_ = std::max(0.0, get_parameter("trajectory_lateral_margin_m").as_double());
@@ -588,6 +621,19 @@ private:
         emergency_received_ = now();
       });
 
+    performance_sub_ = create_subscription<std_msgs::msg::String>(
+      perception_performance_topic_, rclcpp::QoS(rclcpp::KeepLast(1)).reliable(),
+      [this](std_msgs::msg::String::SharedPtr msg) {
+        const double p95_ms = extractDoubleField(msg->data, "pipeline_p95_ms", -1.0);
+        const double current_ms = extractDoubleField(msg->data, "pipeline_ms", -1.0);
+        const double chosen_ms = p95_ms > 0.0 ? p95_ms : current_ms;
+        if (chosen_ms <= 0.0 || !std::isfinite(chosen_ms)) return;
+        std::lock_guard<std::mutex> lock(mutex_);
+        perception_latency_sec_ = std::clamp(chosen_ms / 1000.0, 0.0, 5.0);
+        perception_latency_received_ = now();
+        perception_latency_seen_ = true;
+      });
+
     candidate_cloud_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
       candidate_obstacle_topic_, cloud_qos,
       std::bind(&TrajectorySafetySupervisor::onCandidateCloud, this, std::placeholders::_1));
@@ -719,6 +765,25 @@ private:
     planning_filtered.data.clear();
     planning_filtered.is_dense = true;
 
+    if (!metric_obstacle_safety_enabled_) {
+      relevant_cloud_pub_->publish(filtered);
+      planning_cloud_pub_->publish(planning_filtered);
+      std::lock_guard<std::mutex> lock(mutex_);
+      last_obstacle_stream_ = t;
+      obstacle_stream_seen_ = true;
+      latest_path_ = {};
+      candidate_point_count_ = 0U;
+      relevant_point_count_ = 0U;
+      planning_relevant_point_count_ = 0U;
+      min_obstacle_along_path_m_ = std::numeric_limits<double>::infinity();
+      min_obstacle_along_command_m_ = std::numeric_limits<double>::infinity();
+      closest_path_obstacle_forward_m_ = std::numeric_limits<double>::infinity();
+      closest_path_obstacle_right_edge_m_ = std::numeric_limits<double>::infinity();
+      closest_path_obstacle_left_edge_m_ = -std::numeric_limits<double>::infinity();
+      last_relevant_cloud_ = t;
+      return;
+    }
+
     uint32_t x_offset = 0U;
     uint32_t y_offset = 0U;
     uint32_t track_offset = 0U;
@@ -849,6 +914,8 @@ private:
     bool lane_critical = false;
     bool lane_control_fresh = false;
     bool lane_recenter_blocked = false;
+    double perception_latency_sec = perception_latency_fallback_sec_;
+    bool perception_latency_fresh = false;
     std::string lane_state = "UNKNOWN";
     std::string lane_control_decision = "UNKNOWN";
     PathSnapshot path;
@@ -875,6 +942,9 @@ private:
         (camera_health_seen_ && camera_healthy_);
       emergency = emergency_seen_ && perception_emergency_stop_;
       obstacle_stream_fresh = obstacle_stream_seen_ && fresh(last_obstacle_stream_, obstacle_timeout_sec_, t);
+      perception_latency_fresh = perception_latency_seen_ &&
+        fresh(perception_latency_received_, perception_performance_timeout_sec_, t);
+      if (perception_latency_fresh) perception_latency_sec = perception_latency_sec_;
       lane_fresh = lane_seen_ && fresh(lane_received_, lane_timeout_sec_, t);
       lane_valid = lane_valid_;
       lane_critical = lane_critical_;
@@ -905,6 +975,16 @@ private:
     std::string decision = "NAV2_PASS";
     double speed_scale = 1.0;
     const bool moving_request = nav_fresh && std::abs(nav.linear.x) > 1.0e-4;
+    const double forward_speed = nav_fresh ? std::max(0.0, nav.linear.x) : 0.0;
+    const double reaction_distance = forward_speed * (perception_latency_sec + latency_safety_margin_sec_);
+    const double braking_distance = forward_speed * forward_speed / (2.0 * braking_deceleration_mps2_);
+    const double required_stop_distance = std::clamp(
+      reaction_distance + braking_distance + latency_distance_margin_m_, 0.0, max_dynamic_stop_distance_m_);
+    const double effective_hard_stop_m = latency_compensation_enabled_ ?
+      std::max(hard_stop_path_distance_m_, required_stop_distance) : hard_stop_path_distance_m_;
+    const double effective_immediate_stop_m = latency_compensation_enabled_ ?
+      std::max(immediate_command_hard_stop_m_, required_stop_distance) : immediate_command_hard_stop_m_;
+    const double effective_slow_distance_m = std::max(slow_path_distance_m_, effective_hard_stop_m + 0.60);
 
     if (!nav_fresh) {
       decision = "NAV_CMD_STALE_STOP";
@@ -918,34 +998,36 @@ private:
     } else if (!camera_health_ok) {
       decision = "CAMERA_UNHEALTHY_STOP";
       output = geometry_msgs::msg::Twist{};
-    } else if (moving_request && require_plan_when_moving_ && !path.valid) {
+    } else if (metric_obstacle_safety_enabled_ && moving_request && require_plan_when_moving_ && !path.valid) {
       decision = "PLAN_UNAVAILABLE_STOP";
       output = geometry_msgs::msg::Twist{};
-    } else if (moving_request && require_obstacle_stream_when_moving_ && !obstacle_stream_fresh) {
+    } else if (metric_obstacle_safety_enabled_ && moving_request && require_obstacle_stream_when_moving_ && !obstacle_stream_fresh) {
       decision = "OBSTACLE_STREAM_STALE_STOP";
       output = geometry_msgs::msg::Twist{};
     } else if (lane_safety_enabled_ && lane_control_fresh && lane_recenter_blocked) {
       decision = "LANE_RECENTER_BLOCKED_STOP";
       output = geometry_msgs::msg::Twist{};
-    } else if (std::isfinite(min_obstacle_command_along) &&
-               min_obstacle_command_along <= immediate_command_hard_stop_m_) {
+    } else if (metric_obstacle_safety_enabled_ && std::isfinite(min_obstacle_command_along) &&
+               min_obstacle_command_along <= effective_immediate_stop_m) {
       // Emergency geometric veto: current MPPI command masih membawa footprint
       // langsung menuju obstacle yang sudah sangat dekat.
       decision = "IMMEDIATE_COMMAND_HARD_STOP";
       output = geometry_msgs::msg::Twist{};
     } else {
-      const bool path_obstacle_near = std::isfinite(min_obstacle_along) &&
-        min_obstacle_along < slow_path_distance_m_;
-      const bool path_obstacle_close = std::isfinite(min_obstacle_along) &&
-        min_obstacle_along <= hard_stop_path_distance_m_;
-      const bool command_still_hits_close = std::isfinite(min_obstacle_command_along) &&
-        min_obstacle_command_along <= hard_stop_path_distance_m_;
+      const bool path_obstacle_near = metric_obstacle_safety_enabled_ && std::isfinite(min_obstacle_along) &&
+        min_obstacle_along < effective_slow_distance_m;
+      const bool path_obstacle_close = metric_obstacle_safety_enabled_ && std::isfinite(min_obstacle_along) &&
+        min_obstacle_along <= effective_hard_stop_m;
+      const bool command_still_hits_close = metric_obstacle_safety_enabled_ && std::isfinite(min_obstacle_command_along) &&
+        min_obstacle_command_along <= effective_hard_stop_m;
       const bool any_free_side = free_corridor.left_free || free_corridor.right_free;
 
-      if (path_obstacle_near) {
-        const double span = std::max(0.05, slow_path_distance_m_ - hard_stop_path_distance_m_);
+      if (!metric_obstacle_safety_enabled_) {
+        decision = "GUARD_ONLY_PASS";
+      } else if (path_obstacle_near) {
+        const double span = std::max(0.05, effective_slow_distance_m - effective_hard_stop_m);
         const double ratio = std::clamp(
-          (min_obstacle_along - hard_stop_path_distance_m_) / span, 0.0, 1.0);
+          (min_obstacle_along - effective_hard_stop_m) / span, 0.0, 1.0);
         speed_scale = minimum_slow_speed_scale_ + (1.0 - minimum_slow_speed_scale_) * ratio;
         output.linear.x *= speed_scale;
         if (output.linear.x > 0.0 && avoidance_speed_mps_ > 0.0) {
@@ -1013,6 +1095,12 @@ private:
        << ";camera_connected=" << camera_ok
        << ";camera_health_ok=" << camera_health_ok
        << ";emergency=" << emergency
+       << ";metric_obstacle_safety=" << metric_obstacle_safety_enabled_
+       << ";perception_latency_fresh=" << perception_latency_fresh
+       << ";perception_latency_sec=" << perception_latency_sec
+       << ";required_stop_m=" << required_stop_distance
+       << ";effective_hard_stop_m=" << effective_hard_stop_m
+       << ";effective_slow_m=" << effective_slow_distance_m
        << ";obstacle_stream_fresh=" << obstacle_stream_fresh
        << ";candidate_points=" << candidates
        << ";path_relevant_points=" << relevant
@@ -1099,6 +1187,7 @@ private:
   std::string camera_connected_topic_;
   std::string camera_health_topic_;
   std::string emergency_stop_topic_;
+  std::string perception_performance_topic_;
   std::string state_topic_;
 
   double control_rate_hz_{20.0};
@@ -1110,6 +1199,14 @@ private:
   double obstacle_timeout_sec_{0.90};
   double lane_timeout_sec_{0.75};
   double drivable_timeout_sec_{0.75};
+  double perception_performance_timeout_sec_{2.0};
+  bool metric_obstacle_safety_enabled_{false};
+  bool latency_compensation_enabled_{true};
+  double perception_latency_fallback_sec_{1.0};
+  double latency_safety_margin_sec_{0.15};
+  double latency_distance_margin_m_{0.25};
+  double braking_deceleration_mps2_{1.0};
+  double max_dynamic_stop_distance_m_{2.50};
   double vehicle_width_m_{0.60};
   double trajectory_lateral_margin_m_{0.25};
   double path_corridor_half_width_m_{0.55};
@@ -1173,6 +1270,9 @@ private:
   bool emergency_seen_{false};
   bool perception_emergency_stop_{false};
   rclcpp::Time emergency_received_{0, 0, RCL_ROS_TIME};
+  bool perception_latency_seen_{false};
+  double perception_latency_sec_{1.0};
+  rclcpp::Time perception_latency_received_{0, 0, RCL_ROS_TIME};
 
   bool obstacle_stream_seen_{false};
   rclcpp::Time last_obstacle_stream_{0, 0, RCL_ROS_TIME};
@@ -1197,6 +1297,7 @@ private:
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr camera_connected_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr camera_health_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr emergency_stop_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr performance_sub_;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr candidate_cloud_sub_;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr drivable_boundary_sub_;
 

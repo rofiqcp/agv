@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
+#include <future>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -14,6 +15,8 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <signal.h>
+#include <sys/types.h>
 #include <utility>
 #include <vector>
 
@@ -56,6 +59,7 @@
 #include <nav_msgs/msg/path.hpp>
 #include <rcl_interfaces/msg/parameter.hpp>
 #include <rcl_interfaces/msg/parameter_type.hpp>
+#include <rcl_interfaces/srv/get_parameters.hpp>
 #include <rcl_interfaces/srv/set_parameters_atomically.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
@@ -68,6 +72,7 @@
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_srvs/srv/trigger.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 #include <tf2/time.h>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
@@ -120,6 +125,38 @@ QJsonValue yamlToJson(const YAML::Node &node) {
   return QJsonValue();
 }
 
+QJsonValue rosParameterValueToJson(const rcl_interfaces::msg::ParameterValue &value) {
+  using PT = rcl_interfaces::msg::ParameterType;
+  switch (value.type) {
+    case PT::PARAMETER_BOOL: return value.bool_value;
+    case PT::PARAMETER_INTEGER: return static_cast<double>(value.integer_value);
+    case PT::PARAMETER_DOUBLE: return value.double_value;
+    case PT::PARAMETER_STRING: return QString::fromStdString(value.string_value);
+    case PT::PARAMETER_BYTE_ARRAY: { QJsonArray a; for (auto v : value.byte_array_value) a.append(static_cast<double>(v)); return a; }
+    case PT::PARAMETER_BOOL_ARRAY: { QJsonArray a; for (auto v : value.bool_array_value) a.append(v); return a; }
+    case PT::PARAMETER_INTEGER_ARRAY: { QJsonArray a; for (auto v : value.integer_array_value) a.append(static_cast<double>(v)); return a; }
+    case PT::PARAMETER_DOUBLE_ARRAY: { QJsonArray a; for (auto v : value.double_array_value) a.append(v); return a; }
+    case PT::PARAMETER_STRING_ARRAY: { QJsonArray a; for (const auto &v : value.string_array_value) a.append(QString::fromStdString(v)); return a; }
+    default: return QJsonValue();
+  }
+}
+
+bool jsonRuntimeEquivalent(const QJsonValue &a, const QJsonValue &b) {
+  if (a.isDouble() && b.isDouble()) {
+    const double x=a.toDouble(), y=b.toDouble();
+    return std::abs(x-y) <= 1e-8 * std::max({1.0,std::abs(x),std::abs(y)});
+  }
+  if (a.isBool() && b.isBool()) return a.toBool()==b.toBool();
+  if (a.isString() && b.isString()) return a.toString()==b.toString();
+  if (a.isArray() && b.isArray()) {
+    const QJsonArray aa=a.toArray(), bb=b.toArray();
+    if (aa.size()!=bb.size()) return false;
+    for (int i=0;i<aa.size();++i) if (!jsonRuntimeEquivalent(aa.at(i),bb.at(i))) return false;
+    return true;
+  }
+  return a == b;
+}
+
 QString packageConfigDir(const QString &packageName, const char *envName) {
   const QByteArray envValue = qgetenv(envName);
   if (!envValue.trimmed().isEmpty()) {
@@ -148,6 +185,7 @@ QMap<QString, QString> configCandidates() {
   const QString nav = packageConfigDir("navigation", "AGV_CONFIG_DIR");
   const QString esc = packageConfigDir("esc", "AGV_ESC_CONFIG_DIR");
   const QString per = packageConfigDir("perception", "AGV_PERCEPTION_CONFIG_DIR");
+  const QString hmi = packageConfigDir("stmf4", "AGV_STMF4_CONFIG_DIR");
   return {
       {"vehicle", nav + "/vehicle.yaml"},
       {"navigation_core", nav + "/navigation_core.yaml"},
@@ -158,11 +196,13 @@ QMap<QString, QString> configCandidates() {
       {"imu", nav + "/imu.yaml"},
       {"stage3", nav + "/stage3_navigation.yaml"},
       {"trajectory_safety", nav + "/trajectory_safety.yaml"},
+      {"collision", nav + "/collision_monitor_production.yaml"},
       {"mppi_closed_loop", nav + "/mppi_closed_loop.yaml"},
       {"gui", nav + "/gui_calibration.yaml"},
       {"esc", esc + "/ackermann.yaml"},
       {"teleop", esc + "/teleop.yaml"},
       {"foc_thesis", esc + "/foc_thesis.yaml"},
+      {"hmi", hmi + "/hmi.yaml"},
       {"perception", per + "/astra_yolop_gpu.yaml"},
       {"bbox_calibration", per + "/bbox_obstacle_calibration.yaml"},
   };
@@ -175,6 +215,7 @@ QJsonObject loadConfigSnapshot() {
   paths["navigation"] = packageConfigDir("navigation", "AGV_CONFIG_DIR");
   paths["esc"] = packageConfigDir("esc", "AGV_ESC_CONFIG_DIR");
   paths["perception"] = packageConfigDir("perception", "AGV_PERCEPTION_CONFIG_DIR");
+  paths["hmi"] = packageConfigDir("stmf4", "AGV_STMF4_CONFIG_DIR");
 
   const QMap<QString, QString> candidates = configCandidates();
   for (auto it = candidates.cbegin(); it != candidates.cend(); ++it) {
@@ -212,6 +253,24 @@ QString jsonScalarInlineYaml(const QJsonValue &value) {
 
 QString jsonScalarPreservingYamlType(const QJsonValue &value, QString originalScalar) {
   originalScalar = originalScalar.trimmed();
+  // Preserve floating-point arrays as floating-point arrays. QJson serializes
+  // 1.0 as 1, which otherwise changes a ROS 2 double_array into integer_array.
+  if (value.isArray() && originalScalar.startsWith('[') && originalScalar.endsWith(']')) {
+    static const QRegularExpression floatToken(QStringLiteral(R"([+-]?(?:\d+\.\d*|\d*\.\d+|\d+[eE][+-]?\d+))"));
+    if (floatToken.match(originalScalar).hasMatch()) {
+      QStringList items;
+      for (const QJsonValue &entry : value.toArray()) {
+        if (entry.isDouble()) {
+          QString n = QString::number(entry.toDouble(), 'g', 16);
+          if (!n.contains('.') && !n.contains('e', Qt::CaseInsensitive)) n += QStringLiteral(".0");
+          items << n;
+        } else {
+          items << jsonScalarInlineYaml(entry);
+        }
+      }
+      return QStringLiteral("[") + items.join(QStringLiteral(", ")) + QStringLiteral("]");
+    }
+  }
   if (!value.isDouble()) return jsonScalarInlineYaml(value);
 
   // QJson stores every JSON number as double. ROS 2 YAML, however, distinguishes
@@ -554,7 +613,7 @@ QJsonObject experimentCatalogJson() {
             {"key", field.key}, {"label", field.label}, {"kind", field.kind},
             {"yamlFileKey", field.yamlFileKey}, {"yamlPath", field.yamlPath},
             {"placeholder", field.placeholder}, {"lockedValue", field.lockedValue},
-            {"isGroundTruth", field.isGroundTruth}, {"locked", field.locked}});
+            {"isGroundTruth", field.isGroundTruth}, {"locked", field.locked}, {"group", field.group}});
       }
       item["parameterFields"] = parameters;
       QJsonArray graphs;
@@ -562,7 +621,8 @@ QJsonObject experimentCatalogJson() {
         QJsonArray series;
         for (const QString &s : graph.series) series.append(s);
         graphs.append(QJsonObject{{"type", graph.type}, {"series", series},
-                                  {"xSeries", graph.xSeries}, {"ySeries", graph.ySeries}});
+                                  {"xSeries", graph.xSeries}, {"ySeries", graph.ySeries},
+                                  {"xLabel", graph.xLabel}, {"yLabel", graph.yLabel}});
       }
       item["graphs"] = graphs;
       entries.append(item);
@@ -650,6 +710,85 @@ class WebRosBridge {
   QByteArray localCostmapPng() const {
     std::lock_guard<std::mutex> lock(mediaMutex_);
     return localCostmapPng_;
+  }
+
+  QJsonObject applyConfigChange(const QString &fileKey, const QString &yamlPath) {
+    QJsonObject result{{"requested", true}, {"file_key", fileKey}, {"path", yamlPath}};
+    const auto targets = runtimeTargetsForChange(fileKey, yamlPath);
+    if (targets.isEmpty()) {
+      result["mode"] = "yaml_only";
+      result["status"] = "NO_RUNTIME_TARGET";
+      result["runtime_match"] = false;
+      return result;
+    }
+    QString stationaryReason;
+    if (!vehicleStationaryForRuntimeApply(&stationaryReason)) {
+      result["mode"] = "restart_when_stationary";
+      result["status"] = "PENDING_STATIONARY";
+      result["message"] = stationaryReason;
+      result["runtime_match"] = false;
+      update("runtime_config_apply", result);
+      return result;
+    }
+
+    QSet<QString> restartNodes;
+    for (const auto &target : targets) restartNodes.insert(target.first);
+    QJsonArray restartResults;
+    int signaled = 0;
+    for (const QString &nodeName : restartNodes) {
+      const QStringList pids = exactNodeProcesses(nodeName);
+      int stopped = 0;
+      for (const QString &pidText : pids) {
+        bool ok = false;
+        const qlonglong pid = pidText.toLongLong(&ok);
+        if (ok && pid > 1 && ::kill(pid_t(pid), SIGTERM) == 0) ++stopped;
+      }
+      signaled += stopped;
+      restartResults.append(QJsonObject{{"node", nodeName}, {"matched_processes", pids.size()}, {"signaled", stopped}});
+    }
+    result["mode"] = "safe_restart";
+    result["restart"] = restartResults;
+    result["signaled_processes"] = signaled;
+    if (signaled == 0) {
+      result["status"] = "NEXT_START";
+      result["message"] = "Node target tidak sedang berjalan; YAML akan aktif pada start berikutnya.";
+      result["runtime_match"] = false;
+      update("runtime_config_apply", result);
+      return result;
+    }
+
+    // Tuning-critical nodes such as perception need time for model load/freeze/warm-up
+    // after launch_ros respawn. Poll the parameter service instead of reporting a
+    // false RUNTIME_MISMATCH while the constructor is still starting.
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    const QString paramName = parameterNameForYamlPath(yamlPath);
+    const QJsonValue expected = expectedRuntimeValue(fileKey, yamlPath);
+    QJsonArray verify;
+    bool allMatch = false;
+    int verifyAttempts = 0;
+    constexpr int kMaxVerifyAttempts = 8;
+    for (int attempt = 1; attempt <= kMaxVerifyAttempts; ++attempt) {
+      verifyAttempts = attempt;
+      QJsonArray round;
+      bool roundMatch = !paramName.isEmpty() && !expected.isUndefined();
+      for (const auto &target : targets) {
+        const QJsonObject one = readRuntimeParameter(target.second, paramName, expected);
+        round.append(one);
+        roundMatch = roundMatch && one.value("match").toBool(false);
+      }
+      verify = round;
+      if (roundMatch) { allMatch = true; break; }
+      if (attempt < kMaxVerifyAttempts) std::this_thread::sleep_for(std::chrono::milliseconds(900));
+    }
+    result["verify_attempts"] = verifyAttempts;
+    result["verify"] = verify;
+    result["runtime_match"] = allMatch;
+    result["status"] = allMatch ? "ACTIVE_MATCH" : "RUNTIME_MISMATCH";
+    result["message"] = allMatch
+        ? QStringLiteral("YAML == runtime; parameter aktif setelah safe restart.")
+        : QStringLiteral("Restart terkirim tetapi runtime belum MATCH; jangan mulai run tuning dulu.");
+    update("runtime_config_apply", result);
+    return result;
   }
 
   bool publishGoal(double x, double y, double yawRad, QString *message) {
@@ -741,6 +880,22 @@ class WebRosBridge {
     return true;
   }
 
+  bool publishHmiRequest(const QString &request, QString *message) {
+    if (readOnly_) return rejectReadOnly(message);
+    const QString cmd = request.trimmed();
+    if (cmd.isEmpty() || cmd.size() > 96) {
+      if (message) *message = "Perintah HMI tidak valid";
+      return false;
+    }
+    std_msgs::msg::String msg;
+    msg.data = cmd.toStdString();
+    hmiRequestPub_->publish(msg);
+    update("web_action", QJsonObject{{"ok", true}, {"action", "hmi_request"},
+                                     {"command", cmd}, {"at_ms", nowMs()}});
+    if (message) *message = "Perintah HMI dikirim: " + cmd;
+    return true;
+  }
+
   bool setSteeringCalibrationMode(bool enabled, QString *message) {
     if (readOnly_) return rejectReadOnly(message);
     if (enabled) {
@@ -809,6 +964,118 @@ class WebRosBridge {
   rclcpp::TimerBase::SharedPtr tfTimer_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr goalPub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr initialPosePub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr hmiRequestPub_;
+
+  QVector<QPair<QString,QString>> runtimeTargetsForChange(const QString &fileKey, const QString &path) const {
+    QVector<QPair<QString,QString>> out;
+    auto add=[&](const QString &restartNode,const QString &parameterNode){out.append(qMakePair(restartNode,parameterNode));};
+    if (fileKey == QStringLiteral("ekf")) {
+      if (path.startsWith(QStringLiteral("ekf_filter_node_odom."))) add(QStringLiteral("ekf_filter_node_odom"),QStringLiteral("/ekf_filter_node_odom"));
+      else if (path.startsWith(QStringLiteral("ekf_filter_node_map."))) add(QStringLiteral("ekf_filter_node_map"),QStringLiteral("/ekf_filter_node_map"));
+    } else if (fileKey == QStringLiteral("localization")) add(QStringLiteral("localization_core"),QStringLiteral("/localization_core"));
+    else if (fileKey == QStringLiteral("gnss")) add(QStringLiteral("data_cuav_node"),QStringLiteral("/data_cuav_node"));
+    else if (fileKey == QStringLiteral("imu")) add(QStringLiteral("data_imu_node"),QStringLiteral("/data_imu_node"));
+    else if (fileKey == QStringLiteral("navigation_core")) add(QStringLiteral("navigation_core"),QStringLiteral("/navigation_core"));
+    else if (fileKey == QStringLiteral("trajectory_safety")) add(QStringLiteral("trajectory_safety_supervisor"),QStringLiteral("/trajectory_safety_supervisor"));
+    else if (fileKey == QStringLiteral("perception")) add(QStringLiteral("perception"),QStringLiteral("/perception"));
+    else if (fileKey == QStringLiteral("collision")) add(QStringLiteral("collision_monitor"),QStringLiteral("/collision_monitor"));
+    else if (fileKey == QStringLiteral("esc")) add(QStringLiteral("esc_ackermann"),QStringLiteral("/esc_ackermann"));
+    else if (fileKey == QStringLiteral("hmi")) add(QStringLiteral("stmf4_hmi_bridge"),QStringLiteral("/stmf4_hmi_bridge"));
+    else if (fileKey == QStringLiteral("nav2")) {
+      if (path.startsWith(QStringLiteral("planner_server."))) add(QStringLiteral("planner_server"),QStringLiteral("/planner_server"));
+      else if (path.startsWith(QStringLiteral("global_costmap."))) add(QStringLiteral("planner_server"),QStringLiteral("/global_costmap/global_costmap"));
+      else if (path.startsWith(QStringLiteral("controller_server."))) add(QStringLiteral("controller_server"),QStringLiteral("/controller_server"));
+      else if (path.startsWith(QStringLiteral("local_costmap."))) add(QStringLiteral("controller_server"),QStringLiteral("/local_costmap/local_costmap"));
+      else if (path.startsWith(QStringLiteral("velocity_smoother."))) add(QStringLiteral("velocity_smoother"),QStringLiteral("/velocity_smoother"));
+      else if (path.startsWith(QStringLiteral("behavior_server."))) add(QStringLiteral("behavior_server"),QStringLiteral("/behavior_server"));
+      else if (path.startsWith(QStringLiteral("bt_navigator."))) add(QStringLiteral("bt_navigator"),QStringLiteral("/bt_navigator"));
+      else if (path.startsWith(QStringLiteral("map_server."))) add(QStringLiteral("map_server"),QStringLiteral("/map_server"));
+    }
+    // vehicle.yaml is physical authority. The staged GUI exposes those fields
+    // locked; runtime fan-out is handled by the native authority synchronizer.
+    return out;
+  }
+
+  bool vehicleStationaryForRuntimeApply(QString *reason) const {
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    auto numberAt=[&](const QString &key)->std::optional<double>{
+      const QJsonValue value=state_.value(key);
+      if (value.isDouble()) return value.toDouble();
+      return std::nullopt;
+    };
+    double cmd=0.0, esc=0.0, wz=0.0;
+    const QJsonObject cmdObj=state_.value(QStringLiteral("cmd_final")).toObject();
+    if (cmdObj.value(QStringLiteral("linear_x")).isDouble()) cmd=cmdObj.value(QStringLiteral("linear_x")).toDouble();
+    if (cmdObj.value(QStringLiteral("angular_z")).isDouble()) wz=cmdObj.value(QStringLiteral("angular_z")).toDouble();
+    if (const auto v=numberAt(QStringLiteral("esc_drive_actual"))) esc=*v;
+    if (std::abs(cmd)>0.03 || std::abs(esc)>0.03 || std::abs(wz)>0.05) {
+      if (reason) *reason=QStringLiteral("Kendaraan/perintah masih bergerak; safe runtime apply menunggu |v|<=0.03 m/s dan |w|<=0.05 rad/s.");
+      return false;
+    }
+    if (reason) reason->clear();
+    return true;
+  }
+
+  QStringList exactNodeProcesses(const QString &nodeName) const {
+    QString bare=nodeName; if (bare.startsWith('/')) bare.remove(0,1);
+    QStringList pids;
+    QDir proc(QStringLiteral("/proc"));
+    for (const QString &pidText : proc.entryList(QDir::Dirs|QDir::NoDotAndDotDot,QDir::Name)) {
+      bool ok=false; const qlonglong pid=pidText.toLongLong(&ok);
+      if (!ok || pid<=1 || pid==QCoreApplication::applicationPid()) continue;
+      QFile f(QStringLiteral("/proc/")+pidText+QStringLiteral("/cmdline"));
+      if (!f.open(QIODevice::ReadOnly)) continue;
+      QByteArray raw=f.readAll(); raw.replace('\0',' ');
+      const QString cmd=QString::fromLocal8Bit(raw);
+      if (cmd.contains(QStringLiteral("__node:=")+bare) || cmd.contains(QStringLiteral("__node:=/")+bare)) pids<<pidText;
+    }
+    return pids;
+  }
+
+  QString parameterNameForYamlPath(const QString &yamlPath) const {
+    const QString marker=QStringLiteral(".ros__parameters.");
+    const int pos=yamlPath.indexOf(marker);
+    if (pos<0) return QString();
+    QString name=yamlPath.mid(pos+marker.size());
+    const QString tail=name.section('.',-1);
+    bool numeric=false; tail.toInt(&numeric);
+    if (numeric) name=name.section('.',0,-2);
+    return name;
+  }
+
+  QJsonValue expectedRuntimeValue(const QString &fileKey, const QString &yamlPath) const {
+    const auto candidates=configCandidates();
+    if (!candidates.contains(fileKey) || !QFileInfo::exists(candidates.value(fileKey))) return QJsonValue(QJsonValue::Undefined);
+    QString expectedPath=yamlPath;
+    const QString tail=yamlPath.section('.',-1);
+    bool numeric=false; tail.toInt(&numeric);
+    if (numeric) expectedPath=yamlPath.section('.',0,-2);
+    try {
+      YAML::Node root=YAML::LoadFile(candidates.value(fileKey).toStdString());
+      return yamlPathValue(root, expectedPath.split('.',Qt::SkipEmptyParts));
+    } catch (...) { return QJsonValue(QJsonValue::Undefined); }
+  }
+
+  QJsonObject readRuntimeParameter(const QString &nodeName, const QString &parameterName, const QJsonValue &expected) {
+    QJsonObject out{{"node",nodeName},{"parameter",parameterName},{"expected",expected},{"match",false}};
+    if (parameterName.isEmpty()) { out["status"]="NO_PARAMETER_NAME"; return out; }
+    auto client=node_->create_client<rcl_interfaces::srv::GetParameters>((nodeName+QStringLiteral("/get_parameters")).toStdString());
+    if (!client->wait_for_service(1200ms)) { out["status"]="SERVICE_UNAVAILABLE"; return out; }
+    auto request=std::make_shared<rcl_interfaces::srv::GetParameters::Request>();
+    request->names.push_back(parameterName.toStdString());
+    auto future=client->async_send_request(request);
+    if (future.wait_for(1500ms)!=std::future_status::ready) { out["status"]="TIMEOUT"; return out; }
+    try {
+      const auto response=future.get();
+      if (response->values.empty()) { out["status"]="EMPTY_RESPONSE"; return out; }
+      const QJsonValue actual=rosParameterValueToJson(response->values.front());
+      const bool match=jsonRuntimeEquivalent(expected,actual);
+      out["actual"]=actual; out["match"]=match; out["status"]=match?"MATCH":"MISMATCH";
+    } catch (const std::exception &e) {
+      out["status"]="ERROR"; out["message"]=QString::fromUtf8(e.what());
+    }
+    return out;
+  }
 
   bool rejectReadOnly(QString *message) const {
     if (message) *message = "Web GUI berjalan dalam read-only mode";
@@ -841,6 +1108,7 @@ class WebRosBridge {
 
     const std::vector<std::pair<const char *, const char *>> bools = {
         {"/gnss/connected", "connected.gnss"}, {"/imu/connected", "connected.imu"},
+        {"/hmi/connected", "connected.hmi"},
         {"/perception/camera_connected", "connected.camera"}, {"/esc/ready", "connected.esc_ready"},
         {"/esc/armed", "connected.esc_armed"}, {"/esc/feedback_valid", "connected.esc_feedback"},
         {"/esc/drive/connected", "connected.esc_drive"}, {"/esc/steer/connected", "connected.esc_steer"},
@@ -882,16 +1150,22 @@ class WebRosBridge {
         {"/perception/performance", "perception_performance"},
         {"/navigation/trajectory_safety_state", "trajectory_safety_state"},
         {"/collision_monitor/state", "collision_monitor_state"}, {"/esc/status", "esc_status"},
+        {"/hmi/page", "hmi_page"}, {"/hmi/operator_mode", "hmi_mode"},
+        {"/hmi/camera_tab", "hmi_camera_tab"}, {"/hmi/waypoints", "hmi_waypoints"},
+        {"/hmi/navigation_state", "hmi_navigation"},
+        {"/hmi/manual_state", "hmi_manual"}, {"/hmi/status", "hmi_status"},
         {"/esc/foc/telemetry", "foc_telemetry"}, {"/esc/mux/active_source", "esc_mux"}};
     for (const auto &entry : strings) {
       const QString channel = QString::fromLatin1(entry.second);
       const QString topic = QString::fromLatin1(entry.first);
       const bool perceptionStream = topic.startsWith(QStringLiteral("/perception/")) ||
                                     topic.startsWith(QStringLiteral("/yolop/"));
-      const rclcpp::QoS & stringQos = perceptionStream ? sensorQos : stateQos;
+      const bool latchedStream = topic.startsWith(QStringLiteral("/hmi/"));
+      const rclcpp::QoS & stringQos = perceptionStream ? sensorQos : (latchedStream ? latchedQos : stateQos);
       subscribe<std_msgs::msg::String>(entry.first, stringQos, [this, channel](std_msgs::msg::String::ConstSharedPtr msg) {
         const QString raw = QString::fromStdString(msg->data);
         if (channel == "goal_state") update(channel, QJsonObject{{"state", raw.trimmed().toUpper()}, {"raw", raw}});
+        else if (channel == "hmi_page" || channel == "hmi_mode" || channel == "hmi_camera_tab") update(channel, raw.trimmed().toUpper());
         else if (channel == "raw_detections") update(channel, parseRawDetectionSummary(raw));
         else if (channel == "perception_performance") update(channel, normalizePerceptionPerformance(parseJsonOrKv(raw)));
         else if (channel == "obstacle_metrics") update(channel, enrichObstacleMetrics(parseJsonOrKv(raw)));
@@ -969,6 +1243,8 @@ class WebRosBridge {
       update("imu", QJsonObject{{"roll_rad", roll}, {"pitch_rad", pitch}, {"yaw_rad", yawFromQuat(q.x, q.y, q.z, q.w)},
                                 {"gx", msg->angular_velocity.x}, {"gy", msg->angular_velocity.y}, {"gz", msg->angular_velocity.z},
                                 {"ax", msg->linear_acceleration.x}, {"ay", msg->linear_acceleration.y}, {"az", msg->linear_acceleration.z},
+                                {"var_roll", msg->orientation_covariance[0]}, {"var_pitch", msg->orientation_covariance[4]},
+                                {"var_yaw", msg->orientation_covariance[8]},
                                 {"var_gx", msg->angular_velocity_covariance[0]}, {"var_gy", msg->angular_velocity_covariance[4]},
                                 {"var_gz", msg->angular_velocity_covariance[8]},
                                 {"measurement_stamp_sec", double(msg->header.stamp.sec) + msg->header.stamp.nanosec * 1e-9}});
@@ -983,10 +1259,12 @@ class WebRosBridge {
                                {"v", msg->twist.twist.linear.x}, {"w", msg->twist.twist.angular.z},
                                {"var_x", msg->pose.covariance[0]}, {"var_y", msg->pose.covariance[7]},
                                {"var_yaw", msg->pose.covariance[35]},
+                               {"var_v", msg->twist.covariance[0]}, {"var_w", msg->twist.covariance[35]},
                                {"measurement_stamp_sec", double(msg->header.stamp.sec) + msg->header.stamp.nanosec * 1e-9}});
       });
     };
     odomSubscribe("/esc/odom", "esc_odom");
+    odomSubscribe("/odometry/gnss_map", "gnss_map_odom");
     odomSubscribe("/odometry/filtered", "ekf_local");
     odomSubscribe("/odometry/filtered_map", "ekf_global");
 
@@ -1018,13 +1296,48 @@ class WebRosBridge {
           if (i % stride == 0 || i + 1 == msg->poses.size()) points.append(QJsonArray{p.x, p.y, yaw});
         }
         update(ch, QJsonObject{{"count", static_cast<double>(msg->poses.size())}, {"length_m", length},
-                               {"heading_variation_rad", headingVariation}, {"points", points},
+                               {"heading_variation_rad", headingVariation}, {"frame_id", QString::fromStdString(msg->header.frame_id)},
+                               {"points", points},
                                {"measurement_stamp_sec", double(msg->header.stamp.sec) + msg->header.stamp.nanosec * 1e-9}});
       });
     };
     pathSubscribe("/plan", "nav_path");
     pathSubscribe("/controller_server/transformed_global_plan", "local_path");
     pathSubscribe("/local_plan", "local_path");
+
+    // Nav2 Humble MPPI TrajectoryVisualizer publishes a MarkerArray on the
+    // controller node's relative `trajectories` topic.  Bridge candidate and
+    // optimal trajectories so the browser map can show the same control output
+    // that is normally inspected in RViz.
+    subscribe<visualization_msgs::msg::MarkerArray>(
+      "/controller_server/trajectories", sensorQos,
+      [this](visualization_msgs::msg::MarkerArray::ConstSharedPtr msg) {
+        QJsonArray trajectories;
+        size_t pointCount = 0;
+        size_t optimalCount = 0;
+        for (const auto &marker : msg->markers) {
+          if (marker.action == visualization_msgs::msg::Marker::DELETE ||
+              marker.action == visualization_msgs::msg::Marker::DELETEALL || marker.points.empty()) continue;
+          QJsonArray points;
+          const size_t stride = std::max<size_t>(1, marker.points.size() / 160 + 1);
+          for (size_t i = 0; i < marker.points.size(); ++i) {
+            if (i % stride != 0 && i + 1 != marker.points.size()) continue;
+            const auto &p = marker.points[i];
+            points.append(QJsonArray{p.x, p.y, p.z});
+          }
+          if (points.size() < 2) continue;
+          const QString ns = QString::fromStdString(marker.ns);
+          const bool optimal = ns.contains(QStringLiteral("Optimal"), Qt::CaseInsensitive);
+          if (optimal) ++optimalCount;
+          pointCount += static_cast<size_t>(points.size());
+          trajectories.append(QJsonObject{
+            {"ns", ns}, {"id", marker.id}, {"frame_id", QString::fromStdString(marker.header.frame_id)},
+            {"optimal", optimal}, {"points", points}});
+        }
+        update("mppi_trajectories", QJsonObject{
+          {"count", trajectories.size()}, {"optimal_count", static_cast<double>(optimalCount)},
+          {"point_count", static_cast<double>(pointCount)}, {"trajectories", trajectories}});
+      });
 
     const auto goalSubscribe = [this, stateQos](const char *topic) {
       subscribe<geometry_msgs::msg::PoseStamped>(topic, stateQos, [this](geometry_msgs::msg::PoseStamped::ConstSharedPtr msg) {
@@ -1257,6 +1570,7 @@ class WebRosBridge {
 
     goalPub_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>("/navigation/goal_request", 10);
     initialPosePub_ = node_->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>("/initialpose", 10);
+    hmiRequestPub_ = node_->create_publisher<std_msgs::msg::String>("/hmi/request", 10);
   }
 };
 
@@ -1317,6 +1631,7 @@ class LocalHttpServer : public QObject {
   QString recordingVariation_;
   QString recordingCondition_;
   QString recordingStartedIso_;
+  qint64 recordingStartedMs_{0};
   double recordingRateHz_{5.0};
   QVector<QMap<QString, QString>> recordingRows_;
   QByteArray lastDownloadCsv_;
@@ -1431,11 +1746,19 @@ class LocalHttpServer : public QObject {
       if (bridge_->readOnly()) {
         return sendJson(socket, 403, QJsonObject{{"ok", false}, {"message", "Web GUI read-only; perubahan YAML ditolak"}});
       }
+      const QString fileKey=json.value("file_key").toString();
+      const QString yamlPath=json.value("path").toString();
       QJsonValue saved;
-      ok = setYamlValueAtomic(json.value("file_key").toString(), json.value("path").toString(),
-                              json.value("value"), &message, &saved);
-      return sendJson(socket, ok ? 200 : 409, QJsonObject{{"ok", ok}, {"message", message},
-                       {"file_key", json.value("file_key")}, {"path", json.value("path")}, {"saved_value", saved},
+      ok = setYamlValueAtomic(fileKey, yamlPath, json.value("value"), &message, &saved);
+      QJsonObject runtimeApply;
+      if (ok) runtimeApply=bridge_->applyConfigChange(fileKey,yamlPath);
+      const QString runtimeStatus=runtimeApply.value("status").toString();
+      const QString combined=ok
+          ? message + QStringLiteral(" Runtime: ") + runtimeStatus + QStringLiteral(". ") + runtimeApply.value("message").toString()
+          : message;
+      return sendJson(socket, ok ? 200 : 409, QJsonObject{{"ok", ok}, {"message", combined},
+                       {"file_key", fileKey}, {"path", yamlPath}, {"saved_value", saved},
+                       {"runtime_apply", runtimeApply}, {"runtime_match", runtimeApply.value("runtime_match")},
                        {"config", loadConfigSnapshot()}, {"at_ms", nowMs()}});
     } else if (request.path == "/api/experiment/record/start") {
       ok = startRecording(json, &message);
@@ -1444,6 +1767,11 @@ class LocalHttpServer : public QObject {
     } else if (request.path == "/api/experiment/record/stop") {
       QJsonObject result;
       ok = stopRecording(&message, &result);
+      result["ok"] = ok; result["message"] = message; result["at_ms"] = nowMs();
+      return sendJson(socket, ok ? 200 : 409, result);
+    } else if (request.path == "/api/experiment/table/save") {
+      QJsonObject result;
+      ok = saveTemplateTable(json, &message, &result);
       result["ok"] = ok; result["message"] = message; result["at_ms"] = nowMs();
       return sendJson(socket, ok ? 200 : 409, result);
     } else if (request.path == "/api/navigation/goal") {
@@ -1458,6 +1786,50 @@ class LocalHttpServer : public QObject {
                                        json.value("y").toDouble(std::numeric_limits<double>::quiet_NaN()),
                                        json.contains("yaw_rad") ? json.value("yaw_rad").toDouble() : json.value("yaw_deg").toDouble() * kPi / 180.0,
                                        &message);
+    } else if (request.path == "/api/hmi/page") {
+      const QString page = json.value("page").toString().trimmed().toUpper();
+      static const QSet<QString> allowed{QStringLiteral("HOME"), QStringLiteral("CAMERA"), QStringLiteral("GPS"), QStringLiteral("ACTUATOR")};
+      if (!allowed.contains(page)) return sendJson(socket, 400, QJsonObject{{"ok", false}, {"message", "Page HMI tidak valid"}});
+      ok = bridge_->publishHmiRequest("PAGE:" + page, &message);
+    } else if (request.path == "/api/hmi/camera-tab") {
+      const QString tab = json.value("tab").toString().trimmed().toUpper();
+      static const QSet<QString> allowedTabs{QStringLiteral("VIEW"), QStringLiteral("DETECT"), QStringLiteral("DRIVE"), QStringLiteral("STATUS")};
+      if (!allowedTabs.contains(tab)) return sendJson(socket, 400, QJsonObject{{"ok", false}, {"message", "Camera tab HMI tidak valid"}});
+      ok = bridge_->publishHmiRequest("CAMERA_TAB:" + tab, &message);
+    } else if (request.path == "/api/hmi/waypoint/select") {
+      const int index = json.value("index").toInt(-1);
+      if (index < 0 || index > 3) return sendJson(socket, 400, QJsonObject{{"ok", false}, {"message", "Waypoint index wajib 0..3"}});
+      ok = bridge_->publishHmiRequest(QString("WAYPOINT:SELECT:%1").arg(index), &message);
+    } else if (request.path == "/api/hmi/waypoint/save") {
+      const int index = json.value("index").toInt(-1);
+      QString name = json.value("name").toString().trimmed().left(18);
+      name.remove(QRegularExpression(QStringLiteral("[^A-Za-z0-9 _-]")));
+      if (index < 0 || index > 3) return sendJson(socket, 400, QJsonObject{{"ok", false}, {"message", "Waypoint index wajib 0..3"}});
+      const QString command = name.isEmpty() ? QString("WAYPOINT:SAVE:%1").arg(index) : QString("WAYPOINT:SAVE:%1:%2").arg(index).arg(name);
+      ok = bridge_->publishHmiRequest(command, &message);
+    } else if (request.path == "/api/hmi/waypoint/go") {
+      const int index = json.value("index").toInt(-1);
+      if (index < 0 || index > 3) return sendJson(socket, 400, QJsonObject{{"ok", false}, {"message", "Waypoint index wajib 0..3"}});
+      ok = bridge_->publishHmiRequest(QString("WAYPOINT:GO:%1").arg(index), &message);
+    } else if (request.path == "/api/hmi/navigation/stop") {
+      ok = bridge_->publishHmiRequest("NAV:STOP", &message);
+    } else if (request.path == "/api/hmi/mode") {
+      const QString mode = json.value("mode").toString().trimmed().toUpper();
+      if (mode != "AUTO" && mode != "MANUAL") return sendJson(socket, 400, QJsonObject{{"ok", false}, {"message", "Mode HMI wajib AUTO/MANUAL"}});
+      ok = bridge_->publishHmiRequest("MODE:" + mode, &message);
+    } else if (request.path == "/api/hmi/control") {
+      const QString action = json.value("action").toString().trimmed().toUpper();
+      static const QSet<QString> drive{QStringLiteral("FWD"), QStringLiteral("REV"), QStringLiteral("STOP")};
+      static const QSet<QString> steer{QStringLiteral("LEFT"), QStringLiteral("CENTER"), QStringLiteral("RIGHT")};
+      if (drive.contains(action)) ok = bridge_->publishHmiRequest("DRIVE:" + action, &message);
+      else if (steer.contains(action)) ok = bridge_->publishHmiRequest("STEER:" + action, &message);
+      else return sendJson(socket, 400, QJsonObject{{"ok", false}, {"message", "Control HMI tidak valid"}});
+    } else if (request.path == "/api/hmi/speed") {
+      const int pct = json.value("pct").toInt(-1);
+      if (pct < 10 || pct > 50 || pct % 10 != 0) return sendJson(socket, 400, QJsonObject{{"ok", false}, {"message", "Speed HMI wajib 10/20/30/40/50%"}});
+      ok = bridge_->publishHmiRequest(QString("SPEED:%1").arg(pct), &message);
+    } else if (request.path == "/api/hmi/sync") {
+      ok = bridge_->publishHmiRequest("SYNC", &message);
     } else if (request.path == "/api/localization/reset-calibration") {
       ok = bridge_->triggerService("/localization/reset_calibration_samples", "reset_localization_calibration", &message);
     } else if (request.path == "/api/steering/calibration-mode") {
@@ -1472,6 +1844,7 @@ class LocalHttpServer : public QObject {
     return QJsonObject{{"active", recording_}, {"subsystem", recordingSubsystem_}, {"id", recordingId_},
                        {"label", recordingLabel_}, {"variation", recordingVariation_}, {"condition", recordingCondition_},
                        {"started_at", recordingStartedIso_}, {"sample_rate_hz", recordingRateHz_},
+                       {"elapsed_s", recording_ && recordingStartedMs_ > 0 ? (nowMs() - recordingStartedMs_) / 1000.0 : 0.0},
                        {"samples", recordingRows_.size()},
                        {"report_root", QStringLiteral("/home/otomasi/ros/data")}};
   }
@@ -1496,6 +1869,7 @@ class LocalHttpServer : public QObject {
     recordingCondition_ = json.value("condition").toString().trimmed();
     recordingRateHz_ = std::clamp(json.value("sample_rate_hz").toDouble(5.0), 1.0, 20.0);
     recordingStartedIso_ = QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
+    recordingStartedMs_ = nowMs();
     recordingRows_.clear();
     recording_ = true;
     recordingTimer_.start(std::max(50, static_cast<int>(std::lround(1000.0 / recordingRateHz_))));
@@ -1507,7 +1881,9 @@ class LocalHttpServer : public QObject {
   void captureRecordingSample() {
     if (!recording_ || !bridge_) return;
     QMap<QString, QString> row;
+    const qint64 sampleMs = nowMs();
     row["time_iso"] = QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
+    row["elapsed_s"] = QString::number(recordingStartedMs_ > 0 ? (sampleMs - recordingStartedMs_) / 1000.0 : 0.0, 'f', 3);
     row["subsystem"] = recordingSubsystem_;
     row["section_id"] = recordingId_;
     row["section_label"] = recordingLabel_;
@@ -1523,6 +1899,47 @@ class LocalHttpServer : public QObject {
       recording_ = false;
       recordingTimer_.stop();
     }
+  }
+
+  bool saveTemplateTable(const QJsonObject &json, QString *message, QJsonObject *result) {
+    const QString subsystem = json.value("subsystem").toString().trimmed();
+    const QString id = json.value("id").toString().trimmed();
+    const QString label = json.value("label").toString().trimmed();
+    const int tableIndex = std::max(0, json.value("table_index").toInt(0));
+    const QString csvText = json.value("csv").toString();
+    if (!QStringList{QStringLiteral("navigation"), QStringLiteral("perception"), QStringLiteral("steering")}.contains(subsystem) ||
+        id.isEmpty() || csvText.trimmed().isEmpty()) {
+      if (message) *message = QStringLiteral("Template table payload tidak valid");
+      return false;
+    }
+    const QString domain = subsystem == QStringLiteral("navigation") ? QStringLiteral("navigasi") :
+                           subsystem == QStringLiteral("perception") ? QStringLiteral("presepsi") : QStringLiteral("esc");
+    const QString dataRoot = QDir(QStringLiteral("/home/otomasi/ros/data")).filePath(domain);
+    if (!QDir().mkpath(dataRoot)) {
+      if (message) *message = QStringLiteral("Gagal membuat folder data: ") + dataRoot;
+      return false;
+    }
+    const QString stemLabel = label.isEmpty() ? id : label;
+    const QString minuteStamp = QDateTime::currentDateTime().toString("MMdd_HHmmss");
+    const QString baseStem = recordingCsvStem(stemLabel) + QStringLiteral("_table%1_").arg(tableIndex + 1) + minuteStamp;
+    QString fileName = baseStem + QStringLiteral(".csv");
+    int suffix = 2;
+    while (QFileInfo::exists(QDir(dataRoot).filePath(fileName)))
+      fileName = baseStem + QStringLiteral("_%1.csv").arg(suffix++, 2, 10, QChar('0'));
+    const QString path = QDir(dataRoot).filePath(fileName);
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+      if (message) *message = QStringLiteral("Gagal membuka template CSV: ") + path;
+      return false;
+    }
+    file.write(csvText.toUtf8());
+    if (!file.commit()) {
+      if (message) *message = QStringLiteral("Gagal commit template CSV: ") + path;
+      return false;
+    }
+    if (result) *result = QJsonObject{{"path", path}, {"table_index", tableIndex}, {"section_id", id}, {"subsystem", subsystem}};
+    if (message) *message = QStringLiteral("Template table CSV tersimpan: ") + path;
+    return true;
   }
 
   bool saveRecordingFiles(QJsonObject *result, QString *message) {
@@ -1548,7 +1965,7 @@ class LocalHttpServer : public QObject {
     std::sort(columns.begin(), columns.end());
     for (const QString &preferred : {QStringLiteral("condition"), QStringLiteral("variation"),
                                       QStringLiteral("section_label"), QStringLiteral("section_id"),
-                                      QStringLiteral("subsystem"), QStringLiteral("time_iso")}) {
+                                      QStringLiteral("subsystem"), QStringLiteral("elapsed_s"), QStringLiteral("time_iso")}) {
       columns.removeAll(preferred);
     }
     columns.prepend(QStringLiteral("condition"));
@@ -1556,6 +1973,7 @@ class LocalHttpServer : public QObject {
     columns.prepend(QStringLiteral("section_label"));
     columns.prepend(QStringLiteral("section_id"));
     columns.prepend(QStringLiteral("subsystem"));
+    columns.prepend(QStringLiteral("elapsed_s"));
     columns.prepend(QStringLiteral("time_iso"));
 
     QByteArray csv;

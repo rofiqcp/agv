@@ -56,6 +56,7 @@ def generate_launch_description():
     node = Node(
         package='navigation', executable='gnss_node', name='data_cuav_node',
         output='screen', emulate_tty=True,
+        respawn=True, respawn_delay=2.0,
         parameters=[default_params, {
             'port': LaunchConfiguration('port'),
             'baudrate': ParameterValue(LaunchConfiguration('baudrate'), value_type=int),

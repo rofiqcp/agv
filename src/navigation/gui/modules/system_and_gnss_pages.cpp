@@ -480,6 +480,7 @@ struct ExperimentSessionData {
   QVector<QVariantMap> summaryRows;
   QMap<QString, QVector<QPointF>> liveSeries;
   QMap<int, QVector<QPointF>> liveScatter;
+  QMap<int, QPointF> scatterRawOrigin;  // raw lon/lat origin for metric GNSS scatter
 };
 class ExperimentWorkspacePage : public QWidget {
   public:
@@ -491,12 +492,14 @@ class ExperimentWorkspacePage : public QWidget {
     i < catalog_.size();
     ++i) leafIndex_[catalog_[i].id] = i;
     auto *layout = new QVBoxLayout(this);
-    auto *title = new QLabel(subsystemTitle() + QStringLiteral(" — Akuisisi Data BAB IV"));
+    auto *title = new QLabel(subsystem_==QStringLiteral("navigation")
+      ? QStringLiteral("NAVIGASI — Tuning & Commissioning Autonomous N0 → N17")
+      : subsystemTitle() + QStringLiteral(" — Akuisisi Data BAB IV"));
     title->setObjectName(QStringLiteral("pageTitle"));
     layout->addWidget(title);
-    auto *description = new QLabel(QStringLiteral(
-    "Tabel mengikuti kolom laporan. Hijau diisi otomatis dari topic/source yang tersedia; kuning harus diisi dari ground truth atau instrumen eksternal. "
-    "Tidak ada nilai estimasi yang dipakai sebagai hasil aktual."));
+    auto *description = new QLabel(subsystem_==QStringLiteral("navigation")
+      ? QStringLiteral("Urutan commissioning: N0 timing → N1/N3 fisik & odometri → N4/N5 sensor → N7/N8 EKF P-Q-R-K_eff → N9 localization → N10/N11 planning → N12/N13 control → N14 safety → N16 end-to-end. Grafik memakai Time [s] relatif; data live ROS, bukan nilai estimasi DOCX.")
+      : QStringLiteral("Tabel mengikuti kolom laporan. Hijau diisi otomatis dari topic/source yang tersedia; kuning harus diisi dari ground truth atau instrumen eksternal. Tidak ada nilai estimasi yang dipakai sebagai hasil aktual."));
     description->setWordWrap(true);
     description->setObjectName(QStringLiteral("pageDescription"));
     layout->addWidget(description);
@@ -673,6 +676,8 @@ class ExperimentWorkspacePage : public QWidget {
     if (!currentId_.isEmpty()) saveTableState();
     currentId_ = id;
     currentTableIndex_ = 0;
+    diagnosticPrevious_.clear();
+    lastGraphSecond_ = -1;
     applyLeaf();
   }
   // Used by MainWindow to push the active leaf's parameter definition to the sidebar.
@@ -733,6 +738,10 @@ class ExperimentWorkspacePage : public QWidget {
   QElapsedTimer elapsed_;
   QElapsedTimer liveElapsed_;
   HostMetricsSampler hostMetrics_;
+  // Previous covariance/time samples used only for GUI drift diagnostics.
+  // This never feeds the EKF; it quantifies uncertainty growth for the operator.
+  QMap<QString,QPair<double,double>> diagnosticPrevious_;
+  qint64 lastGraphSecond_{-1};
   ExperimentParameterPanel *paramPanel_ = nullptr;
   GraphFullscreenDialog *fullscreenDialog_ = nullptr;
   int fullscreenGraphIndex_ = -1;
@@ -1287,6 +1296,19 @@ class ExperimentWorkspacePage : public QWidget {
   QVariant instantValue(const QString &path) {
     if (path.startsWith(QStringLiteral("host."))) return hostMetrics_.value(path);
     if (!path.startsWith(QStringLiteral("derived."))) return telemetry_->get(path);
+    if(path==QStringLiteral("derived.rate_gnss_hz"))return telemetry_->rate(QStringLiteral("gnss_fix"));
+    if(path==QStringLiteral("derived.rate_imu_hz"))return telemetry_->rate(QStringLiteral("imu"));
+    if(path==QStringLiteral("derived.rate_esc_hz"))return telemetry_->rate(QStringLiteral("esc_odom"));
+    if(path==QStringLiteral("derived.rate_ekf_local_hz"))return telemetry_->rate(QStringLiteral("ekf_local"));
+    if(path==QStringLiteral("derived.rate_ekf_global_hz"))return telemetry_->rate(QStringLiteral("ekf_global"));
+    if(path==QStringLiteral("derived.dt_gnss_s"))return telemetry_->interval(QStringLiteral("gnss_fix"));
+    if(path==QStringLiteral("derived.dt_imu_s"))return telemetry_->interval(QStringLiteral("imu"));
+    if(path==QStringLiteral("derived.dt_esc_s"))return telemetry_->interval(QStringLiteral("esc_odom"));
+    if(path==QStringLiteral("derived.age_gnss_s"))return telemetry_->age(QStringLiteral("gnss_fix"));
+    if(path==QStringLiteral("derived.age_imu_s"))return telemetry_->age(QStringLiteral("imu"));
+    if(path==QStringLiteral("derived.age_esc_s"))return telemetry_->age(QStringLiteral("esc_odom"));
+    if(path==QStringLiteral("derived.age_ekf_local_s"))return telemetry_->age(QStringLiteral("ekf_local"));
+    if(path==QStringLiteral("derived.age_ekf_global_s"))return telemetry_->age(QStringLiteral("ekf_global"));
     if (path == QStringLiteral("derived.velocity_error_mps")) {
       const double target=number(telemetry_->get("esc_drive_target")), actual=number(telemetry_->get("esc_drive_actual"));
       return std::isfinite(target)&&std::isfinite(actual)?QVariant(target-actual):QVariant();
@@ -1331,7 +1353,102 @@ class ExperimentWorkspacePage : public QWidget {
       if(path.endsWith("y_m"))return sy-gy;
       return std::hypot(sx-gx,sy-gy);
     }
+    if (path.startsWith(QStringLiteral("derived.ekf_"))) return ekfDiagnosticValue(path);
     return navigationDerived(path);
+  }
+  QVariant ekfDiagnosticValue(const QString &path) {
+    auto v=[this](const QString&k){return number(telemetry_->get(k));};
+    auto positive=[](double x){return std::isfinite(x)&&x>=0.0;};
+    auto sigma=[&](double p)->QVariant{return positive(p)?QVariant(std::sqrt(p)):QVariant();};
+    auto gain=[&](double p,double r)->QVariant{
+      if(!positive(p)||!positive(r)||p+r<=1e-15)return {};
+      // Diagnostic authority proxy only. robot_localization does not publish
+      // its internal prior covariance/K matrix through the public ROS API.
+      return QVariant(std::clamp(p/(p+r),0.0,1.0));
+    };
+    auto residual=[](double measurement,double estimate,bool angular=false)->QVariant{
+      if(!std::isfinite(measurement)||!std::isfinite(estimate))return {};
+      return angular?QVariant(normalizeAngle(measurement-estimate)):QVariant(measurement-estimate);
+    };
+    auto nis=[&](double res,double p,double r)->QVariant{
+      if(!std::isfinite(res)||!positive(p)||!positive(r)||p+r<=1e-15)return {};
+      return QVariant((res*res)/(p+r));
+    };
+    auto growth=[&](const QString&key,double p)->QVariant{
+      if(!positive(p))return {};
+      const double t=(recording_?elapsed_.elapsed():liveElapsed_.elapsed())/1000.0;
+      const auto prev=diagnosticPrevious_.value(key,QPair<double,double>(std::numeric_limits<double>::quiet_NaN(),std::numeric_limits<double>::quiet_NaN()));
+      diagnosticPrevious_[key]=qMakePair(t,p);
+      if(!std::isfinite(prev.first)||!std::isfinite(prev.second)||t-prev.first<=1e-4)return {};
+      return QVariant((p-prev.second)/(t-prev.first));
+    };
+
+    const bool local=path.startsWith(QStringLiteral("derived.ekf_local_"));
+    const QString prefix=local?QStringLiteral("ekf_local."):QStringLiteral("ekf_global.");
+    const QString tail=path.mid(local?QStringLiteral("derived.ekf_local_").size():QStringLiteral("derived.ekf_global_").size());
+    const double px=v(prefix+QStringLiteral("var_x")),py=v(prefix+QStringLiteral("var_y")),pyaw=v(prefix+QStringLiteral("var_yaw"));
+    const double pv=v(prefix+QStringLiteral("var_v")),pw=v(prefix+QStringLiteral("var_w"));
+    if(tail==QStringLiteral("sigma_x"))return sigma(px);
+    if(tail==QStringLiteral("sigma_y"))return sigma(py);
+    if(tail==QStringLiteral("sigma_yaw"))return sigma(pyaw);
+    if(tail==QStringLiteral("sigma_vx"))return sigma(pv);
+    if(tail==QStringLiteral("sigma_w"))return sigma(pw);
+    if(tail==QStringLiteral("p_growth_x"))return growth(prefix+QStringLiteral("x"),px);
+    if(tail==QStringLiteral("p_growth_y"))return growth(prefix+QStringLiteral("y"),py);
+    if(tail==QStringLiteral("p_growth_yaw"))return growth(prefix+QStringLiteral("yaw"),pyaw);
+    if(tail==QStringLiteral("p_growth_vx"))return growth(prefix+QStringLiteral("vx"),pv);
+    if(tail==QStringLiteral("p_growth_w"))return growth(prefix+QStringLiteral("w"),pw);
+
+    if(local){
+      const double rEscV=v(QStringLiteral("esc_odom.var_v"));
+      const double rEscW=v(QStringLiteral("esc_odom.var_w"));
+      const double rImuYaw=v(QStringLiteral("imu.var_yaw"));
+      const double rImuW=v(QStringLiteral("imu.var_gz"));
+      const double rGnssV=v(QStringLiteral("gnss_base_vel_fusion.cov_x"));
+      const double eV=v(QStringLiteral("ekf_local.v")),eW=v(QStringLiteral("ekf_local.w")),eYaw=v(QStringLiteral("ekf_local.yaw"));
+      const double mEscV=v(QStringLiteral("esc_odom.v")),mEscW=v(QStringLiteral("esc_odom.w"));
+      const double mGnssV=v(QStringLiteral("gnss_base_vel_fusion.vx")),mImuW=v(QStringLiteral("imu.gz")),mImuYaw=v(QStringLiteral("imu.yaw_rad"));
+      if(tail==QStringLiteral("k_vx_esc"))return gain(pv,rEscV);
+      if(tail==QStringLiteral("k_vx_gnss"))return gain(pv,rGnssV);
+      if(tail==QStringLiteral("k_yaw_imu"))return gain(pyaw,rImuYaw);
+      if(tail==QStringLiteral("k_w_esc"))return gain(pw,rEscW);
+      if(tail==QStringLiteral("k_w_imu"))return gain(pw,rImuW);
+      const QVariant rvEsc=residual(mEscV,eV),rvGnss=residual(mGnssV,eV),rwEsc=residual(mEscW,eW),rwImu=residual(mImuW,eW),ryaw=residual(mImuYaw,eYaw,true);
+      if(tail==QStringLiteral("res_vx_esc"))return rvEsc;
+      if(tail==QStringLiteral("res_vx_gnss"))return rvGnss;
+      if(tail==QStringLiteral("res_yaw_imu"))return ryaw;
+      if(tail==QStringLiteral("res_w_esc"))return rwEsc;
+      if(tail==QStringLiteral("res_w_imu"))return rwImu;
+      if(tail==QStringLiteral("nis_vx_esc"))return nis(number(rvEsc),pv,rEscV);
+      if(tail==QStringLiteral("nis_vx_gnss"))return nis(number(rvGnss),pv,rGnssV);
+      if(tail==QStringLiteral("nis_yaw_imu"))return nis(number(ryaw),pyaw,rImuYaw);
+      if(tail==QStringLiteral("nis_w_esc"))return nis(number(rwEsc),pw,rEscW);
+      if(tail==QStringLiteral("nis_w_imu"))return nis(number(rwImu),pw,rImuW);
+    }else{
+      const double rX=v(QStringLiteral("gnss_map_odom.var_x")),rY=v(QStringLiteral("gnss_map_odom.var_y"));
+      const double rV=v(QStringLiteral("gnss_base_vel_fusion.cov_x"));
+      const double rCog=v(QStringLiteral("gnss_cog_fusion.yaw_variance"));
+      const double rImuW=v(QStringLiteral("imu.var_gz"));
+      const double ex=v(QStringLiteral("ekf_global.x")),ey=v(QStringLiteral("ekf_global.y")),ev=v(QStringLiteral("ekf_global.v")),ew=v(QStringLiteral("ekf_global.w")),eyaw=v(QStringLiteral("ekf_global.yaw"));
+      const double mx=v(QStringLiteral("gnss_map_odom.x")),my=v(QStringLiteral("gnss_map_odom.y")),mv=v(QStringLiteral("gnss_base_vel_fusion.vx")),mcog=v(QStringLiteral("gnss_cog_fusion.yaw_rad")),miw=v(QStringLiteral("imu.gz"));
+      if(tail==QStringLiteral("k_x_gnss"))return gain(px,rX);
+      if(tail==QStringLiteral("k_y_gnss"))return gain(py,rY);
+      if(tail==QStringLiteral("k_vx_gnss"))return gain(pv,rV);
+      if(tail==QStringLiteral("k_yaw_cog"))return gain(pyaw,rCog);
+      if(tail==QStringLiteral("k_w_imu"))return gain(pw,rImuW);
+      const QVariant rx=residual(mx,ex),ry=residual(my,ey),rv=residual(mv,ev),rcog=residual(mcog,eyaw,true),rw=residual(miw,ew);
+      if(tail==QStringLiteral("res_x_gnss"))return rx;
+      if(tail==QStringLiteral("res_y_gnss"))return ry;
+      if(tail==QStringLiteral("res_vx_gnss"))return rv;
+      if(tail==QStringLiteral("res_yaw_cog"))return rcog;
+      if(tail==QStringLiteral("res_w_imu"))return rw;
+      if(tail==QStringLiteral("nis_x_gnss"))return nis(number(rx),px,rX);
+      if(tail==QStringLiteral("nis_y_gnss"))return nis(number(ry),py,rY);
+      if(tail==QStringLiteral("nis_vx_gnss"))return nis(number(rv),pv,rV);
+      if(tail==QStringLiteral("nis_yaw_cog"))return nis(number(rcog),pyaw,rCog);
+      if(tail==QStringLiteral("nis_w_imu"))return nis(number(rw),pw,rImuW);
+    }
+    return {};
   }
   QVariant navigationDerived(const QString &path) const {
     const double x=number(telemetry_->get("localization_state.map_x"),number(telemetry_->get("ekf_global.x")));
@@ -1387,6 +1504,9 @@ class ExperimentWorkspacePage : public QWidget {
     session().rawRows.clear();
     session().liveSeries.clear();
     session().liveScatter.clear();
+    session().scatterRawOrigin.clear();
+    diagnosticPrevious_.clear();
+    lastGraphSecond_ = -1;
     elapsed_.restart();
     activeRecordingSummaryRow_ = -1;
     trialActive_=false;
@@ -1461,41 +1581,53 @@ class ExperimentWorkspacePage : public QWidget {
     for(auto it=spec().liveSeries.cbegin();
     it!=spec().liveSeries.cend();
     ++it)if(!paths.contains(it.value()))paths<<it.value();
+    for(const ExperimentGraphSpec&g:spec().graphs){
+      if(g.type!=QStringLiteral("scatter"))continue;
+      if(!g.xSeries.isEmpty()&&!paths.contains(g.xSeries))paths<<g.xSeries;
+      if(!g.ySeries.isEmpty()&&!paths.contains(g.ySeries))paths<<g.ySeries;
+    }
     for(const QString&path:paths){
       QVariant value=instantValue(path);
       if(value.isValid())row[path]=value;
     }
     if(recording_) session().rawRows<<row;
     const double time=row["elapsed_s"].toDouble();
-    for(auto it=spec().liveSeries.cbegin();
-    it!=spec().liveSeries.cend();
-    ++it){
-      const double value=number(row.value(it.value()));
-      if(std::isfinite(value))session().liveSeries[it.key()]<<QPointF(time,value);
-    }
-    // Keep the plot live before, during, and after a run. Bound the live
-    // renderer buffer so leaving the GUI open cannot grow memory forever.
-    for(auto it=spec().liveSeries.cbegin();
-    it!=spec().liveSeries.cend();
-    ++it){
-      auto &series=session().liveSeries[it.key()];
-      while(series.size()>1200)series.removeFirst();
-    }
-    // Live scatter buffer (e.g. 4.1.1 GNSS position scatter): rendered from
-    // the moment the source topic arrives — before any Start Record. This
-    // buffer is display-only; saved evidence still comes from rawRows.
-    for (int gi = 0; gi < spec().graphs.size(); ++gi) {
-      const ExperimentGraphSpec &g = spec().graphs.at(gi);
-      if (g.type != QStringLiteral("scatter")) continue;
-      const double x = number(row.value(g.xSeries));
-      const double y = number(row.value(g.ySeries));
-      if (std::isfinite(x) && std::isfinite(y)) {
-        auto &pts = session().liveScatter[gi];
-        pts << QPointF(x, y);
-        while (pts.size() > 2000) pts.removeFirst();
+    const qint64 graphSecond = std::max<qint64>(0, static_cast<qint64>(std::floor(time + 1.0e-9)));
+    const bool graphTick = graphSecond != lastGraphSecond_;
+    if (graphTick) {
+      lastGraphSecond_ = graphSecond;
+      const double graphTime = static_cast<double>(graphSecond);
+      for(auto it=spec().liveSeries.cbegin(); it!=spec().liveSeries.cend(); ++it){
+        const double value=number(row.value(it.value()));
+        if(std::isfinite(value))session().liveSeries[it.key()]<<QPointF(graphTime,value);
+      }
+      // Plot evidence is intentionally 1 Hz. Raw CSV may retain the configured
+      // acquisition rate, but every time-axis graph uses exact integer seconds.
+      for(auto it=spec().liveSeries.cbegin(); it!=spec().liveSeries.cend(); ++it){
+        auto &series=session().liveSeries[it.key()];
+        while(series.size()>7200)series.removeFirst();
+      }
+      for (int gi = 0; gi < spec().graphs.size(); ++gi) {
+        const ExperimentGraphSpec &g = spec().graphs.at(gi);
+        if (g.type != QStringLiteral("scatter")) continue;
+        double x = number(row.value(g.xSeries));
+        double y = number(row.value(g.ySeries));
+        if (std::isfinite(x) && std::isfinite(y)) {
+          if (g.xSeries == QStringLiteral("gnss_fix.lon") && g.ySeries == QStringLiteral("gnss_fix.lat")) {
+            if (!session().scatterRawOrigin.contains(gi)) session().scatterRawOrigin[gi] = QPointF(x, y);
+            const QPointF origin = session().scatterRawOrigin.value(gi);
+            constexpr double earthRadiusM = 6378137.0;
+            const double lat0Rad = origin.y() * kPi / 180.0;
+            x = (x - origin.x()) * kPi / 180.0 * earthRadiusM * std::cos(lat0Rad);
+            y = (y - origin.y()) * kPi / 180.0 * earthRadiusM;
+          }
+          auto &pts = session().liveScatter[gi];
+          pts << QPointF(x, y);
+          while (pts.size() > 7200) pts.removeFirst();
+        }
       }
     }
-    if(recording_ && (!summaryUpdateClock_.isValid() || summaryUpdateClock_.elapsed() >= 500)){
+    if(recording_ && (!summaryUpdateClock_.isValid() || summaryUpdateClock_.elapsed() >= 1000)){
       updateRecordingSummaryRow();
       summaryUpdateClock_.restart();
     }
@@ -1516,6 +1648,12 @@ class ExperimentWorkspacePage : public QWidget {
     if(mode=="last")return data.last();
     if(mode=="max")return *std::max_element(data.begin(),data.end());
     if(mode=="min")return *std::min_element(data.begin(),data.end());
+    if(mode=="p95"){
+      QVector<double> sorted=data;
+      std::sort(sorted.begin(),sorted.end());
+      const int idx=std::clamp(int(std::ceil(0.95*sorted.size()))-1,0,sorted.size()-1);
+      return sorted[idx];
+    }
     const double mean=std::accumulate(data.begin(),data.end(),0.0)/data.size();
     if(mode=="mean")return mean;
     double sum=0.0;
@@ -1759,6 +1897,39 @@ class ExperimentWorkspacePage : public QWidget {
     if(key.contains("gain amplitudo"))return responseMetric("gain");
     if(key.contains("iq peak"))return aggregate("foc_telemetry.iq_a","max");
     if(key.contains("iq rms")||key.contains("ripple iq"))return aggregate("foc_telemetry.iq_a",key.contains("ripple")?"std":"rmse");
+    // Generic staged-tuning table support. Columns can use the same readable
+    // label as a YAML field or live graph series and are filled automatically.
+    auto normalizeLabel=[](QString x){
+      x=x.toLower();
+      x.replace(QRegularExpression(QStringLiteral("[^a-z0-9]+")),QStringLiteral(" "));
+      return x.simplified();
+    };
+    const QString normalizedKey=normalizeLabel(column);
+    for(const ExperimentParameterField&field:spec().parameterFields){
+      const QString normalizedField=normalizeLabel(field.label);
+      const QString normalizedFieldKey=normalizeLabel(field.key);
+      if((!normalizedField.isEmpty()&&(normalizedKey==normalizedField||normalizedField.contains(normalizedKey)||normalizedKey.contains(normalizedField)))||
+         (!normalizedFieldKey.isEmpty()&&normalizedKey==normalizedFieldKey)){
+        const QVariant pv=parameterValue(field.key);
+        if(pv.isValid())return pv;
+        if(!field.yamlFileKey.isEmpty()&&!field.yamlPath.isEmpty()&&stores_.contains(field.yamlFileKey))
+          return stores_.value(field.yamlFileKey)->get(field.yamlPath);
+      }
+    }
+    for(auto it=spec().liveSeries.cbegin();it!=spec().liveSeries.cend();++it){
+      const QString label=normalizeLabel(it.key());
+      if(label.isEmpty()||(!normalizedKey.contains(label)&&normalizedKey!=label))continue;
+      QString mode=QStringLiteral("mean");
+      if(normalizedKey.contains(QStringLiteral("p95")))mode=QStringLiteral("p95");
+      else if(normalizedKey.contains(QStringLiteral("rmse")))mode=QStringLiteral("rmse");
+      else if(normalizedKey.contains(QStringLiteral("std")))mode=QStringLiteral("std");
+      else if(normalizedKey.contains(QStringLiteral("max")))mode=QStringLiteral("max");
+      else if(normalizedKey.contains(QStringLiteral("min")))mode=QStringLiteral("min");
+      else if(normalizedKey.contains(QStringLiteral("akhir"))||normalizedKey.contains(QStringLiteral("last")))mode=QStringLiteral("last");
+      return aggregate(it.value(),mode);
+    }
+    if(key.contains(QStringLiteral("jumlah sampel"))||key==QStringLiteral("samples"))return sessions_.value(currentId_).rawRows.size();
+    if(key.contains(QStringLiteral("durasi run"))||key==QStringLiteral("duration s"))return aggregate(QStringLiteral("elapsed_s"),QStringLiteral("last"));
     if(key.contains("mean gyro")){
       const QString axis=variant.toLower();
       return aggregate(axis.startsWith('x')?"imu.gx":axis.startsWith('y')?"imu.gy":"imu.gz","mean");
@@ -1912,7 +2083,7 @@ class ExperimentWorkspacePage : public QWidget {
   }
   struct GraphSnapshot {
     QMap<QString, QVector<QPointF>> series;
-    QString xLabel = QStringLiteral("Waktu (s)");
+    QString xLabel = QStringLiteral("Time [s]");
     QString yLabel = QStringLiteral("Nilai");
     bool connectPoints = true;
     QString emptyMessage;
@@ -1999,8 +2170,8 @@ class ExperimentWorkspacePage : public QWidget {
     }
     const ExperimentGraphSpec &g = s.graphs.at(index);
     if (g.type == QStringLiteral("scatter")) {
-      out.xLabel = g.xSeries;
-      out.yLabel = g.ySeries;
+      out.xLabel = g.xLabel.isEmpty()?g.xSeries:g.xLabel;
+      out.yLabel = g.yLabel.isEmpty()?g.ySeries:g.yLabel;
       out.connectPoints = false;
       // The live scatter buffer starts as soon as the GUI receives valid
       // telemetry. startRecording() clears it together with rawRows, therefore
@@ -2011,6 +2182,8 @@ class ExperimentWorkspacePage : public QWidget {
       }
       return out;
     }
+    if(!g.xLabel.isEmpty())out.xLabel=g.xLabel;
+    if(!g.yLabel.isEmpty())out.yLabel=g.yLabel;
     const QMap<QString, QVector<QPointF>> &all = sessions_.value(currentId_).liveSeries;
     QStringList missing;
     for (const QString &label : g.series) {

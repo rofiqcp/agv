@@ -24,6 +24,7 @@ struct VehicleTelemetry {
 
   bool cameraReady;
   bool perceptionReady;
+  float cameraFps;
   char detectedObject[24];
   float objectDistanceM;
   float confidencePct;
@@ -39,6 +40,12 @@ struct VehicleTelemetry {
   bool encoderReady;
 
   uint8_t manualSpeedPct;
+
+  bool waypointSaved[HMI_WAYPOINT_COUNT];
+  char waypointName[HMI_WAYPOINT_COUNT][HMI_WAYPOINT_NAME_LEN];
+  uint8_t selectedWaypoint;
+  char activeTarget[HMI_WAYPOINT_NAME_LEN];
+  NavigationStatus navigationStatus;
 };
 
 inline VehicleTelemetry defaultTelemetry() {
@@ -59,6 +66,7 @@ inline VehicleTelemetry defaultTelemetry() {
 
   t.cameraReady = false;
   t.perceptionReady = false;
+  t.cameraFps = 0.0f;
   snprintf(t.detectedObject, sizeof(t.detectedObject), "%s", "NONE");
   t.objectDistanceM = 0.0f;
   t.confidencePct = 0.0f;
@@ -72,6 +80,14 @@ inline VehicleTelemetry defaultTelemetry() {
   t.escReady = false;
   t.encoderReady = false;
   t.manualSpeedPct = MANUAL_SPEED_DEFAULT;
+  const char* defaults[HMI_WAYPOINT_COUNT] = {"Titik A", "Titik B", "Titik C", "Titik D"};
+  for (uint8_t i = 0; i < HMI_WAYPOINT_COUNT; ++i) {
+    t.waypointSaved[i] = false;
+    snprintf(t.waypointName[i], HMI_WAYPOINT_NAME_LEN, "%s", defaults[i]);
+  }
+  t.selectedWaypoint = 0;
+  snprintf(t.activeTarget, sizeof(t.activeTarget), "%s", "NONE");
+  t.navigationStatus = NAV_IDLE;
   return t;
 }
 
@@ -132,4 +148,21 @@ inline uint16_t gpsFixColor(GpsFixState s) {
   if (s == GPS_3D_FIX) return C_READY;
   if (s == GPS_2D_FIX || s == GPS_DEGRADED) return C_WARNING;
   return C_FAULT;
+}
+
+inline const char* navigationStatusText(NavigationStatus s) {
+  switch (s) {
+    case NAV_SELECTED:   return "TARGET DIPILIH";
+    case NAV_QUEUED:     return "MENUNGGU NAV2";
+    case NAV_NAVIGATING: return "NAVIGASI AKTIF";
+    case NAV_ARRIVED:    return "TIBA";
+    case NAV_STOPPED:    return "DIHENTIKAN";
+    case NAV_FAILED:     return "NAVIGASI GAGAL";
+    case NAV_IDLE:
+    default:             return "BELUM ADA TARGET";
+  }
+}
+
+inline bool navigationHasTarget(const VehicleTelemetry& d) {
+  return strcmp(d.activeTarget, "NONE") != 0 && d.activeTarget[0] != '\0';
 }

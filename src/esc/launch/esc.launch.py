@@ -59,6 +59,7 @@ def generate_launch_description():
         executable="ackermann_controller_server",
         name="esc_ackermann",
         output="screen",
+        respawn=True, respawn_delay=2.0,
         condition=IfCondition(LaunchConfiguration("start_ackermann")),
         # Runtime-routing keys intentionally live only in this launch override
         # block (not in node-scoped ackermann.yaml), so deployment/commissioning

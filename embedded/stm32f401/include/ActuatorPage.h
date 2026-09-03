@@ -127,7 +127,33 @@ inline void drawActuatorPage(const VehicleTelemetry& d,
 inline void updateActuatorPage(const VehicleTelemetry& d,
                                ControlAction activeDrive = CTRL_NONE,
                                ControlAction activeSteer = CTRL_NONE) {
-  drawTopBar("ACTUATOR", d, true, true);
-  drawActuatorControlPanel(d, activeDrive, activeSteer);
-  drawActuatorInfoPanel(d);
+  // Keep controls/static card stable. Redraw buttons only when their state changes,
+  // and redraw feedback values in small rectangles.
+  updateTopHealthOnly(d, true);
+  static VehicleMode lastMode = MODE_AUTO; static SystemStatus lastSys = SYS_OFF;
+  static int lastEsc=-1,lastEnc=-1; static ControlAction lastDrive=CTRL_NONE,lastSteer=CTRL_NONE;
+  static char lastSpeed[10]="",lastActual[16]="",lastTarget[16]="",lastRpm[16]="";
+  static bool init=false; char buf[24];
+
+  const bool escChanged = !init || lastEsc != static_cast<int>(d.escReady);
+  const bool encChanged = !init || lastEnc != static_cast<int>(d.encoderReady);
+  if(!init || lastMode!=d.mode || lastSys!=d.systemStatus || escChanged || encChanged || lastDrive!=activeDrive || lastSteer!=activeSteer){
+    lastMode=d.mode; lastSys=d.systemStatus; lastEsc=d.escReady; lastEnc=d.encoderReady; lastDrive=activeDrive; lastSteer=activeSteer;
+    drawActuatorControlPanel(d,activeDrive,activeSteer);
+    tft.fillRect(ACT_INFO_X+5,ACT_INFO_Y+6,ACT_INFO_W-10,20,C_CARD);
+    drawMicroText("MODE",ACT_INFO_X+9,ACT_INFO_Y+10,C_DISABLED,C_CARD);
+    drawCompactText(modeText(d.mode),ACT_INFO_X+ACT_INFO_W-8,ACT_INFO_Y+9,C_INK,C_CARD,TR_DATUM);
+  }
+
+  snprintf(buf,sizeof(buf),"%u%%",d.manualSpeedPct);
+  if(!init || strcmp(buf,lastSpeed)!=0){ snprintf(lastSpeed,sizeof(lastSpeed),"%s",buf); drawUiTextPadded(buf,ACT_INFO_X+ACT_INFO_W-9,ACT_INFO_Y+33,C_ACCENT,C_CARD,46,TR_DATUM); }
+  snprintf(buf,sizeof(buf),"%+.1f",d.steeringActualDeg);
+  if(!init || strcmp(buf,lastActual)!=0){ snprintf(lastActual,sizeof(lastActual),"%s",buf); drawUiTextPadded(buf,ACT_INFO_X+ACT_INFO_W-13,ACT_INFO_Y+56,C_ACCENT,C_CARD,50,TR_DATUM); drawDegreeMark(ACT_INFO_X+ACT_INFO_W-8,ACT_INFO_Y+61,C_ACCENT,C_CARD); }
+  snprintf(buf,sizeof(buf),"%+.1f",d.steeringTargetDeg);
+  if(!init || strcmp(buf,lastTarget)!=0){ snprintf(lastTarget,sizeof(lastTarget),"%s",buf); drawUiTextPadded(buf,ACT_INFO_X+ACT_INFO_W-13,ACT_INFO_Y+77,C_ACCENT,C_CARD,50,TR_DATUM); drawDegreeMark(ACT_INFO_X+ACT_INFO_W-8,ACT_INFO_Y+82,C_ACCENT,C_CARD); }
+  if (escChanged) drawStatusDot(ACT_INFO_X+ACT_INFO_W-12,ACT_INFO_Y+109,healthColor(d.escReady),3);
+  if (encChanged) drawStatusDot(ACT_INFO_X+ACT_INFO_W-12,ACT_INFO_Y+122,healthColor(d.encoderReady),3);
+  snprintf(buf,sizeof(buf),"%.0f",d.motorRpm);
+  if(!init || strcmp(buf,lastRpm)!=0){ snprintf(lastRpm,sizeof(lastRpm),"%s",buf); drawCompactTextPadded(buf,ACT_INFO_X+ACT_INFO_W-8,ACT_INFO_Y+128,C_ACCENT,C_CARD,48,TR_DATUM); }
+  init=true;
 }

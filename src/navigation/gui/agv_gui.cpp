@@ -806,6 +806,12 @@ namespace {
             },{
               "az",m->linear_acceleration.z
             },{
+              "var_roll",m->orientation_covariance[0]
+            },{
+              "var_pitch",m->orientation_covariance[4]
+            },{
+              "var_yaw",m->orientation_covariance[8]
+            },{
               "var_gx",m->angular_velocity_covariance[0]
             },{
               "var_gy",m->angular_velocity_covariance[4]
@@ -838,12 +844,17 @@ namespace {
               },{
                 "var_yaw",m->pose.covariance[35]
               },{
+                "var_v",m->twist.covariance[0]
+              },{
+                "var_w",m->twist.covariance[35]
+              },{
                 "measurement_stamp_sec",double(m->header.stamp.sec)+m->header.stamp.nanosec*1e-9
               }
             });
           });
         };
         odomSub("/esc/odom","esc_odom");
+        odomSub("/odometry/gnss_map","gnss_map_odom");
         odomSub("/odometry/filtered","ekf_local");
         odomSub("/odometry/filtered_map","ekf_global");
         auto pathSub=[&](const char*topic,const char*ch){

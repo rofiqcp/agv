@@ -22,6 +22,7 @@
 #include <sstream>
 #include <string>
 #include <termios.h>
+#include <sys/ioctl.h>
 #include <thread>
 #include <unistd.h>
 #include <vector>
@@ -141,7 +142,17 @@ public:
 
   ~EscAckermann() override
   {
+    requestSafeShutdown();
     stopSerialThread();
+  }
+
+  // Called from rclcpp::on_shutdown as soon as SIGINT/SIGTERM is observed.
+  // Keep this callback lock-free/non-blocking: the serial worker performs the
+  // bounded final safe-stop burst and owns the file descriptor close.
+  void requestSafeShutdown() noexcept
+  {
+    safe_stop_requested_.store(true);
+    serial_thread_running_.store(false);
   }
 
 private:
@@ -173,6 +184,9 @@ private:
     declare_parameter<std::string>("teleop_topic", "/cmd_vel/teleop");
     declare_parameter<std::string>("teleop_source_topic", "/teleop/active_source");
     declare_parameter<std::string>("teleop_estop_topic", "/teleop/emergency_stop_latched");
+    declare_parameter<std::string>("hmi_topic", "/hmi/cmd_vel");
+    declare_parameter<std::string>("hmi_source_topic", "/hmi/active_source");
+    declare_parameter<double>("hmi_timeout_sec", 0.30);
     declare_parameter<std::string>("nav2_topic", "/cmd_vel");
     declare_parameter<std::string>("output_topic", "/cmd_vel/actuator");
     declare_parameter<std::string>("active_source_topic", "/esc/mux/active_source");
@@ -188,7 +202,7 @@ private:
     // Injected by esc.launch.py from the single esc/config/teleop.yaml source of truth.
     declare_parameter<double>("speed_max", 1.0);
     declare_parameter<double>("yaw_max_deg_s", 80.0);
-    declare_parameter<double>("serial_left_max_deg", 80.0);
+    declare_parameter<double>("serial_left_max_deg", 90.0);
     declare_parameter<double>("serial_right_max_rpm", 300.0);
     declare_parameter<double>("wheelbase_m", 0.70);
     declare_parameter<double>("track_width_m", 0.48);
@@ -201,8 +215,8 @@ private:
     // invert_steering is applied, so the values match the old GUI display.
     declare_parameter<bool>("steering_feedback_calibration_enabled", false);
     declare_parameter<double>("steering_feedback_center_deg", 0.0);
-    declare_parameter<double>("steering_feedback_right_stop_deg", 80.0);
-    declare_parameter<double>("steering_feedback_left_stop_deg", -80.0);
+    declare_parameter<double>("steering_feedback_right_stop_deg", 90.0);
+    declare_parameter<double>("steering_feedback_left_stop_deg", -90.0);
     // Backward-compatible parameter only. Runtime uses independently captured RIGHT
     // and LEFT points directly; do not force equal raw encoder spans because the
     // steering linkage can have different transfer ratios on each side.
@@ -260,10 +274,10 @@ private:
     // Part-1 calibration remains the fail-safe fallback when this LUT is disabled.
     declare_parameter<bool>("steering_physical_lut_enabled", false);
     declare_parameter<std::vector<double>>("steering_lut_physical_deg", {-30.0, 0.0, 30.0});
-    declare_parameter<std::vector<double>>("steering_lut_command_increasing_deg", {-80.0, 0.0, 80.0});
-    declare_parameter<std::vector<double>>("steering_lut_command_decreasing_deg", {-80.0, 0.0, 80.0});
-    declare_parameter<std::vector<double>>("steering_lut_feedback_increasing_deg", {-80.0, 0.0, 80.0});
-    declare_parameter<std::vector<double>>("steering_lut_feedback_decreasing_deg", {-80.0, 0.0, 80.0});
+    declare_parameter<std::vector<double>>("steering_lut_command_increasing_deg", {-90.0, 0.0, 90.0});
+    declare_parameter<std::vector<double>>("steering_lut_command_decreasing_deg", {-90.0, 0.0, 90.0});
+    declare_parameter<std::vector<double>>("steering_lut_feedback_increasing_deg", {-90.0, 0.0, 90.0});
+    declare_parameter<std::vector<double>>("steering_lut_feedback_decreasing_deg", {-90.0, 0.0, 90.0});
     declare_parameter<double>("steering_lut_direction_deadband_deg", 0.15);
     declare_parameter<std::string>("steering_lut_calibration_saved_at", "");
 
@@ -303,6 +317,9 @@ private:
     teleop_topic_ = get_parameter("teleop_topic").as_string();
     teleop_source_topic_ = get_parameter("teleop_source_topic").as_string();
     teleop_estop_topic_ = get_parameter("teleop_estop_topic").as_string();
+    hmi_topic_ = get_parameter("hmi_topic").as_string();
+    hmi_source_topic_ = get_parameter("hmi_source_topic").as_string();
+    hmi_timeout_sec_ = std::clamp(get_parameter("hmi_timeout_sec").as_double(), 0.05, 2.0);
     nav2_topic_ = get_parameter("nav2_topic").as_string();
     output_topic_ = get_parameter("output_topic").as_string();
     active_source_topic_ = get_parameter("active_source_topic").as_string();
@@ -776,6 +793,24 @@ private:
         }
       });
 
+    hmi_sub_ = create_subscription<geometry_msgs::msg::Twist>(
+      hmi_topic_, cmd_qos,
+      [this](geometry_msgs::msg::Twist::SharedPtr msg) {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (!finiteTwist(*msg)) { hmi_.valid = false; return; }
+        hmi_.cmd = *msg;
+        hmi_.received = now();
+        hmi_.valid = true;
+      });
+
+    hmi_source_sub_ = create_subscription<std_msgs::msg::String>(
+      hmi_source_topic_, cmd_qos,
+      [this](std_msgs::msg::String::SharedPtr msg) {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        hmi_source_ = msg->data;
+        hmi_source_received_ = now();
+      });
+
     teleop_estop_sub_ = create_subscription<std_msgs::msg::Bool>(
       teleop_estop_topic_, stateQos(),
       [this](std_msgs::msg::Bool::SharedPtr msg) {
@@ -868,6 +903,9 @@ private:
     const bool source_fresh =
       fresh_stamp(teleop_source_received_, teleop_timeout_sec_);
     const bool teleop_fresh = teleop_.valid && fresh_stamp(teleop_.received, teleop_timeout_sec_);
+    const bool hmi_source_fresh = fresh_stamp(hmi_source_received_, hmi_timeout_sec_);
+    const bool hmi_fresh = hmi_.valid && fresh_stamp(hmi_.received, hmi_timeout_sec_);
+    const bool hmi_active = hmi_source_fresh && hmi_source_ != "STOP" && hmi_source_ != "IDLE" && hmi_source_ != "";
     const bool nav2_fresh = nav2_.valid && fresh_stamp(nav2_.received, nav2_timeout_sec_);
     const bool teleop_active = source_fresh &&
       teleop_source_ != "STOP" && teleop_source_ != "IDLE" && teleop_source_ != "E_STOP" &&
@@ -880,6 +918,14 @@ private:
     if (estop) {
       selected.estop = true;
       selected.source = "E_STOP";
+      return selected;
+    }
+
+    if (hmi_fresh && hmi_active) {
+      selected.twist = clampTwist(hmi_.cmd);
+      // HMI uses the same normalized angular.z steering encoding as manual teleop.
+      selected.teleop = true;
+      selected.source = hmi_source_;
       return selected;
     }
 
@@ -1271,6 +1317,27 @@ private:
       right_rpm = 0.0;
       effective_source = "STEERING_CALIBRATION_DIRECT";
       resetCenterHold();
+    } else if (selected.source.rfind("HMI_", 0) == 0) {
+      // HMI/Web steering is intentionally a full-scale STM protocol request.
+      // The operator-visible command domain is -90..+90 deg, while
+      // steering_deg above remains the separate calibrated PHYSICAL wheel target.
+      // This prevents the historical +/-30 physical fallback from silently
+      // shrinking a full LEFT/RIGHT HMI command before it reaches the STM.
+      const double yaw_scale = yaw_max_deg_s_ * kPi / 180.0;
+      const double fraction = yaw_scale > 1.0e-9
+        ? std::clamp(selected.twist.angular.z / yaw_scale, -1.0, 1.0)
+        : 0.0;
+      if (fraction > 0.0) {
+        protocol_cmd_deg = steering_feedback_center_deg_ +
+          fraction * (steering_feedback_effective_right_stop_deg_ - steering_feedback_center_deg_);
+      } else if (fraction < 0.0) {
+        protocol_cmd_deg = steering_feedback_center_deg_ +
+          (-fraction) * (steering_feedback_effective_left_stop_deg_ - steering_feedback_center_deg_);
+      } else {
+        protocol_cmd_deg = steering_feedback_center_deg_;
+      }
+      protocol_cmd_deg = std::clamp(protocol_cmd_deg, -steering_max_deg_, steering_max_deg_);
+      resetCenterHold();
     } else {
       const double base_protocol_cmd_deg = uncalibratedSteeringTargetDeg(steering_deg);
       protocol_cmd_deg = centerHeldUncalibratedTargetDeg(steering_deg, base_protocol_cmd_deg);
@@ -1397,6 +1464,15 @@ private:
       const int fd = ::open(path.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
       if (fd < 0) {
         last_error = errno;
+        continue;
+      }
+
+      // Prevent a stale/second autonomous launch from becoming another owner
+      // of the same USB-UART. TIOCEXCL is released automatically on last close.
+      // This is especially important for PL2303 adapters after interrupted runs.
+      if (::ioctl(fd, TIOCEXCL) != 0) {
+        last_error = errno;
+        ::close(fd);
         continue;
       }
 
@@ -1536,6 +1612,7 @@ private:
 
   void startSerialThread()
   {
+    safe_stop_requested_.store(false);
     if (serial_thread_running_.exchange(true)) return;
     if (serial_thread_.joinable()) serial_thread_.join();
     serial_thread_ = std::thread(&EscAckermann::serialLoop, this);
@@ -1544,6 +1621,9 @@ private:
 
   void stopSerialThread()
   {
+    // Runtime disable and process shutdown both fail closed. The worker owns fd,
+    // so never close it from this thread while read/write may still be active.
+    safe_stop_requested_.store(true);
     serial_thread_running_.store(false);
     if (serial_thread_.joinable()) serial_thread_.join();
     serial_connected_.store(false);
@@ -1674,7 +1754,40 @@ private:
       std::this_thread::sleep_for(1ms);
     }
 
-    if (fd >= 0) ::close(fd);
+    if (fd >= 0) {
+      if (safe_stop_requested_.load()) {
+        // Final bounded shutdown transaction: stop propulsion immediately and
+        // assert firmware E-STOP while preserving the latest steering command,
+        // avoiding an unexpected steering recenter during Ctrl+C.
+        SerialCommand safe_cmd{};
+        bool command_seen = false;
+        {
+          std::lock_guard<std::mutex> lock(serial_command_mutex_);
+          safe_cmd.left_cdeg = serial_command_.left_cdeg;
+          command_seen = serial_command_stamp_.time_since_epoch().count() != 0;
+        }
+        if (!command_seen) {
+          safe_cmd.left_cdeg = static_cast<std::int16_t>(
+            std::lround(stmSteeringCommandDeg(0.0) * 100.0));
+        }
+        safe_cmd.right_rpm_x10 = 0;
+        safe_cmd.flags = kFlagEstop;
+
+        bool stop_sent = false;
+        for (int attempt = 0; attempt < 3; ++attempt) {
+          ++sequence;
+          stop_sent = writeFrame(fd, buildFrame(sequence, safe_cmd));
+          if (!stop_sent) break;
+          std::this_thread::sleep_for(2ms);
+        }
+        RCLCPP_INFO(
+          get_logger(), "[ESC] SAFE SHUTDOWN: drive=0 + E-STOP %s; closing %s",
+          stop_sent ? "sent" : "best-effort failed", active_path.c_str());
+      }
+      // Never tcdrain() here: a disconnected USB-UART can block in the kernel.
+      // fd is O_NONBLOCK and all writes above have a bounded retry budget.
+      ::close(fd);
+    }
     serial_connected_.store(false);
     {
       std::lock_guard<std::mutex> lock(serial_state_mutex_);
@@ -1897,6 +2010,8 @@ private:
   std::string teleop_topic_;
   std::string teleop_source_topic_;
   std::string teleop_estop_topic_;
+  std::string hmi_topic_{"/hmi/cmd_vel"};
+  std::string hmi_source_topic_{"/hmi/active_source"};
   std::string nav2_topic_;
   std::string output_topic_;
   std::string active_source_topic_{"/esc/mux/active_source"};
@@ -1904,12 +2019,13 @@ private:
   std::string global_estop_topic_;
   double command_rate_hz_{50.0};
   double teleop_timeout_sec_{0.30};
+  double hmi_timeout_sec_{0.30};
   double nav2_timeout_sec_{0.60};
   double manual_release_hold_sec_{0.50};
   bool require_autonomy_gate_{true};
   double speed_max_mps_{1.0};
   double yaw_max_deg_s_{80.0};
-  double steering_max_deg_{80.0};
+  double steering_max_deg_{90.0};
   double right_max_rpm_{300.0};
   double wheelbase_m_{0.70};
   double track_width_m_{0.48};
@@ -1919,11 +2035,11 @@ private:
   bool steering_feedback_calibration_enabled_{false};
   bool steering_feedback_calibration_valid_{false};
   double steering_feedback_center_deg_{0.0};
-  double steering_feedback_right_stop_deg_{80.0};
-  double steering_feedback_left_stop_deg_{-80.0};
+  double steering_feedback_right_stop_deg_{90.0};
+  double steering_feedback_left_stop_deg_{-90.0};
   bool steering_feedback_force_symmetric_span_{false};
-  double steering_feedback_effective_right_stop_deg_{80.0};
-  double steering_feedback_effective_left_stop_deg_{-80.0};
+  double steering_feedback_effective_right_stop_deg_{90.0};
+  double steering_feedback_effective_left_stop_deg_{-90.0};
   double steering_straight_deadband_deg_{1.0};
   bool steering_center_hold_enabled_{true};
   double steering_center_hold_request_deadband_deg_{0.75};
@@ -1959,10 +2075,10 @@ private:
   bool steering_physical_lut_enabled_{false};
   bool steering_physical_lut_valid_{false};
   std::vector<double> steering_lut_physical_deg_{-30.0, 0.0, 30.0};
-  std::vector<double> steering_lut_command_increasing_deg_{-80.0, 0.0, 80.0};
-  std::vector<double> steering_lut_command_decreasing_deg_{-80.0, 0.0, 80.0};
-  std::vector<double> steering_lut_feedback_increasing_deg_{-80.0, 0.0, 80.0};
-  std::vector<double> steering_lut_feedback_decreasing_deg_{-80.0, 0.0, 80.0};
+  std::vector<double> steering_lut_command_increasing_deg_{-90.0, 0.0, 90.0};
+  std::vector<double> steering_lut_command_decreasing_deg_{-90.0, 0.0, 90.0};
+  std::vector<double> steering_lut_feedback_increasing_deg_{-90.0, 0.0, 90.0};
+  std::vector<double> steering_lut_feedback_decreasing_deg_{-90.0, 0.0, 90.0};
   double steering_lut_direction_deadband_deg_{0.15};
   std::string steering_lut_calibration_saved_at_;
   int steering_lut_motion_direction_{0};
@@ -2000,10 +2116,13 @@ private:
   // Arbitration state
   std::mutex state_mutex_;
   Sample teleop_{};
+  Sample hmi_{};
   Sample nav2_{};
   std::string teleop_source_{"STOP"};
   rclcpp::Time teleop_source_received_{0, 0, RCL_ROS_TIME};
   rclcpp::Time teleop_takeover_until_{0, 0, RCL_ROS_TIME};
+  std::string hmi_source_{"STOP"};
+  rclcpp::Time hmi_source_received_{0, 0, RCL_ROS_TIME};
   bool teleop_estop_{false};
   bool global_estop_{false};
   bool autonomy_gate_{false};
@@ -2012,6 +2131,7 @@ private:
 
   // Serial command + feedback
   std::atomic<bool> serial_thread_running_{false};
+  std::atomic<bool> safe_stop_requested_{false};
   std::thread serial_thread_;
   std::atomic<bool> serial_connected_{false};
   std::atomic<bool> ack_timeout_{false};
@@ -2042,6 +2162,8 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr teleop_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr teleop_source_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr teleop_estop_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr hmi_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr hmi_source_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr nav2_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr autonomy_gate_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr global_estop_sub_;
@@ -2072,7 +2194,14 @@ private:
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<EscAckermann>());
-  rclcpp::shutdown();
+  auto node = std::make_shared<EscAckermann>();
+  std::weak_ptr<EscAckermann> weak_node = node;
+  rclcpp::on_shutdown([weak_node]() {
+    if (auto locked = weak_node.lock()) locked->requestSafeShutdown();
+  });
+  rclcpp::spin(node);
+  node->requestSafeShutdown();
+  node.reset();
+  if (rclcpp::ok()) rclcpp::shutdown();
   return 0;
 }

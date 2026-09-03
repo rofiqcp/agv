@@ -641,6 +641,16 @@ class TelemetryStore {
     QMutexLocker lk(&mu_);
     const double now=QDateTime::currentMSecsSinceEpoch()/1000.0;
     values_[channel]=value;
+    const double previous=times_.value(channel,0.0);
+    if(previous>0.0){
+      const double dt=now-previous;
+      if(dt>1e-4&&dt<30.0){
+        const double instant=1.0/dt;
+        const double old=rates_.value(channel,instant);
+        rates_[channel]=0.82*old+0.18*instant;
+        intervals_[channel]=dt;
+      }
+    }
     times_[channel]=now;
     const quint64 seq=++sequences_[channel];
     // BAB-IV final perception acquisition must consume every perception event,
@@ -698,9 +708,19 @@ class TelemetryStore {
     if(!times_.contains(channel))return std::numeric_limits<double>::infinity();
     return QDateTime::currentMSecsSinceEpoch()/1000.0-times_.value(channel);
   }
+  double rate(const QString &channel) const {
+    QMutexLocker lk(&mu_);
+    return rates_.value(channel,std::numeric_limits<double>::quiet_NaN());
+  }
+  double interval(const QString &channel) const {
+    QMutexLocker lk(&mu_);
+    return intervals_.value(channel,std::numeric_limits<double>::quiet_NaN());
+  }
   private: mutable QMutex mu_;
   QHash<QString,QVariant> values_;
   QHash<QString,double> times_;
+  QHash<QString,double> rates_;
+  QHash<QString,double> intervals_;
   QHash<QString,quint64> sequences_;
   QHash<QString,std::deque<TelemetryEvent>> history_;
 };

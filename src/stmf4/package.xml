@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>stmf4</name>
+  <version>1.0.0</version>
+  <description>STM32F411 USB HMI bridge for bidirectional ADV ROS2/Web SCADA synchronization.</description>
+  <maintainer email="maintainer@example.com">ADV Maintainer</maintainer>
+  <license>GPL-3.0-or-later</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>action_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

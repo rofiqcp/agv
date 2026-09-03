@@ -154,9 +154,6 @@ perception:
     raw_detection_markers_topic: /perception/raw_detection_markers
     raw_detection_log_period_sec: 0.5
     minimum_obstacle_confidence: 0.3
-    # 1..5 m obstacle calibration wizard. [human_scale, human_bias_m, motorcycle_scale, motorcycle_bias_m]
-    # Identity until real samples are captured and saved from ROSWeb.
-    obstacle_distance_calibration_coefficients: [1.0, 0.0, 1.0, 0.0]
     accept_all_detected_classes_as_obstacles: false
     safety_obstacle_class_ids:
     - 0

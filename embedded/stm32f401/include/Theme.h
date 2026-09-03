@@ -110,6 +110,40 @@ inline void drawHeroText(const char* text, int x, int y, uint16_t color, uint16_
   tft.drawString(text, x, y);
 }
 
+// Dynamic-value helpers: TFT_eSPI clears only the text padding as part of the
+// same drawString operation. This removes the visible blank frame produced by
+// a separate fillRect() followed by text rendering.
+inline void drawMicroTextPadded(const char* text, int x, int y, uint16_t color, uint16_t bg,
+                                uint16_t padding, uint8_t datum = TL_DATUM) {
+  useFontMicro(); setTextStyle(color, bg, datum); tft.setTextPadding(padding);
+  tft.drawString(text, x, y); tft.setTextPadding(0);
+}
+inline void drawCompactTextPadded(const char* text, int x, int y, uint16_t color, uint16_t bg,
+                                  uint16_t padding, uint8_t datum = TL_DATUM) {
+  useFontCompact(); setTextStyle(color, bg, datum); tft.setTextPadding(padding);
+  tft.drawString(text, x, y); tft.setTextPadding(0);
+}
+inline void drawSmallTextPadded(const char* text, int x, int y, uint16_t color, uint16_t bg,
+                                uint16_t padding, uint8_t datum = TL_DATUM) {
+  useFontSmall(); setTextStyle(color, bg, datum); tft.setTextPadding(padding);
+  tft.drawString(text, x, y); tft.setTextPadding(0);
+}
+inline void drawUiTextPadded(const char* text, int x, int y, uint16_t color, uint16_t bg,
+                             uint16_t padding, uint8_t datum = TL_DATUM) {
+  useFontUi(); setTextStyle(color, bg, datum); tft.setTextPadding(padding);
+  tft.drawString(text, x, y); tft.setTextPadding(0);
+}
+inline void drawValueTextPadded(const char* text, int x, int y, uint16_t color, uint16_t bg,
+                                uint16_t padding, uint8_t datum = TL_DATUM) {
+  useFontValue(); setTextStyle(color, bg, datum); tft.setTextPadding(padding);
+  tft.drawString(text, x, y); tft.setTextPadding(0);
+}
+inline void drawHeroTextPadded(const char* text, int x, int y, uint16_t color, uint16_t bg,
+                               uint16_t padding, uint8_t datum = TL_DATUM) {
+  useFontHero(); setTextStyle(color, bg, datum); tft.setTextPadding(padding);
+  tft.drawString(text, x, y); tft.setTextPadding(0);
+}
+
 inline void drawThinDivider(int x, int y, int w, uint16_t color = C_CARD_LINE) {
   tft.drawFastHLine(x, y, w, color);
 }
