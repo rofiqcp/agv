@@ -25,11 +25,11 @@ global_=ekf['ekf_filter_node_map']['ros__parameters']
 # 1) TF and sensor ownership: no ESC dependency in estimator startup.
 require(local.get('publish_tf') is True,'Local EKF must own odom->base TF')
 require(global_.get('publish_tf') is False,'Global EKF must not publish map->odom TF')
-require(local.get('odom0')=='/esc/odom' and enabled(local.get('odom0_config'))=={6,11},'Local EKF optional ESC odom must fuse vx+kinematic vyaw')
+require(local.get('odom0')=='/esc/odom' and enabled(local.get('odom0_config'))=={6},'Local EKF optional ESC odom must remain vx-only; steering/encoder yaw is not heading authority')
 require(local.get('twist0')=='/gnss/base_velocity_fusion' and enabled(local.get('twist0_config'))=={6},
         'Local EKF must use independent GNSS vx')
-require(local.get('imu0')=='/imu/data' and enabled(local.get('imu0_config'))=={5,11},
-        'Local EKF must use IMU yaw + gyro-Z')
+require(local.get('imu0')=='/imu/data' and enabled(local.get('imu0_config'))=={11},
+        'Local EKF must use IMU gyro-Z only; magnetic yaw is startup seed, not continuous fusion')
 require(global_.get('odom0')=='/odometry/gnss_map' and enabled(global_.get('odom0_config'))=={0,1},
         'Global EKF GNSS x/y source changed')
 # Global EKF twist0 depends on COG fusion: vx-only when COG active, vx+vyaw when COG off.
@@ -58,9 +58,13 @@ require(0.0<float(loc['gnss_velocity_covariance_min_variance'])<float(loc['gnss_
         'GNSS covariance bounds invalid')
 require(loc.get('require_gnss_velocity_certification_for_fusion') is False,
         'GNSS velocity bootstrap must not require ESC-dependent field certification')
-require(loc.get('enable_global_gnss_velocity_fusion') is True,'GNSS vx/vyaw fusion must be enabled')
+require(loc.get('enable_global_gnss_velocity_fusion') is True,'GNSS velocity fusion must be enabled')
 require(isinstance(loc.get('enable_global_gnss_cog_fusion'),bool),'COG fusion flag must be boolean')
 require(loc.get('enable_gnss_course_yaw_correction') is False,'legacy GNSS yaw correction must stay off')
+require(float(loc.get('cog_min_forward_speed_mps',999.0)) <= 0.18,
+        'COG heading qualification must be reachable at Stage-3 commissioning speed')
+require(float(loc.get('global_ekf_yaw_max_innovation_rad',0.0)) >= math.pi/2,
+        'COG correction must recover a >=90deg bad startup heading seed')
 require(loc.get('anchor_init_requires_strict') is False,'map display bootstrap should allow sane degraded GNSS')
 for key in ('gnss_yaw_rate_min_speed_mps','gnss_yaw_rate_max_abs_rps','gnss_yaw_rate_filter_alpha',
             'gnss_yaw_rate_min_variance','gnss_yaw_rate_max_variance'):
@@ -73,7 +77,8 @@ for key in ('stage2_min_velocity_epochs','stage2_min_cog_epochs','stage2_min_vel
             'stage2_min_cog_qualified_ratio','stage2_max_sync_gap_p95_sec','stage2_max_wheel_gnss_residual_p95_mps'):
     require(key in loc,f'persistent Stage-2 evidence missing: {key}')
 
-# 4) IMU calibration remains an autonomy interlock, but stale gyro does not suppress fresh yaw.
+# 4) IMU calibration remains an autonomy interlock; magnetic orientation may be published for
+# startup seeding/diagnostics, while EKF moving-yaw authority is gyro-Z + qualified COG.
 require(imu.get('require_fresh_gyro_for_imu_publish') is False,'IMU orientation must survive stale gyro when yaw is valid')
 for key in ('stationary_calibration_valid','stationary_calibration_saved_at','stationary_calibration_sample_count',
             'stationary_calibration_duration_sec','stationary_calibration_gyro_z_std_rps','stationary_calibration_accel_norm_error_mps2'):
@@ -91,6 +96,12 @@ for token in ('qualityFreshUnlocked','validVelocityCovarianceUnlocked','gnssMeas
               'gnss_yaw_rate_variance_','degraded_anchor_ok','DEGRADED_BOOTSTRAP'):
     require(token in cpp,f'LocalizationCore revised contract missing: {token}')
 require('local_odom_sync_gap' not in cpp,'old local-odom hard rejection must not return')
+raw_start=cpp.find('const bool raw_cog_candidate')
+raw_end=cpp.find('const auto t = now();',raw_start)
+require(raw_start>=0 and raw_end>raw_start,'raw COG qualification block missing')
+raw_block=cpp[raw_start:raw_end]
+require('gnss_velocity_qualified_' not in raw_block,'COG bootstrap must not depend on heading-projected velocity qualification')
+require('wheel_slip_motion_detected_' not in raw_block,'COG bootstrap must not depend on heading-projected wheel-slip residual')
 
 # 6) GUI has current localization controls and YAML autosave/live ESC sync.
 gui=read_gui_source(ROOT)+(ROOT/'gui/agv_gui_specs.hpp').read_text()
@@ -102,4 +113,4 @@ for key in ('steering_calibration_valid','steering_circle_calibration_valid','dr
     require(isinstance(vehicle.get(key),bool),f'vehicle {key} missing/not bool')
 
 print('STAGE2 LOCALIZATION FOUNDATION SELF-CHECK: PASS')
-print('GNSS=vx+vyaw | IMU=yaw | ESC optional for localization | map bootstrap degraded-safe')
+print('GNSS=vx/COG | IMU=gyro-Z + startup magnetic seed | ESC vx-only auxiliary | map bootstrap degraded-safe')

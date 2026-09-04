@@ -1,4 +1,4 @@
-# Sensor ownership: GNSS -> vx + vyaw; IMU -> absolute yaw.
+# Sensor ownership: GNSS -> vx/COG; IMU -> gyro-z during motion; magnetic yaw only seeds map heading at standstill.
 # Local EKF owns odom->base_footprint; LocalizationCore alone owns map->odom.
 ekf_filter_node_odom:
   ros__parameters:
@@ -52,7 +52,7 @@ ekf_filter_node_odom:
     - false
     - false
     - false
-    - true
+    - false
     - false
     - false
     - false
@@ -377,9 +377,9 @@ ekf_filter_node_map:
     twist0_queue_size: 12
     twist0_nodelay: true
     twist0_rejection_threshold: 10.0
-    # GNSS COG absolute heading is the preferred moving-heading correction.
-    # IMU absolute yaw remains fused as the stationary/low-speed heading source;
-    # robot_localization weights both by covariance when COG becomes qualified.
+    # GNSS COG absolute heading is the moving absolute-yaw authority.
+    # IMU contributes gyro-Z only; magnetic absolute yaw is used only by
+    # LocalizationCore as a startup seed and is not continuously fused here.
     pose0: /gnss/cog_heading_fusion
     pose0_config:
     - false
@@ -408,7 +408,7 @@ ekf_filter_node_map:
     - false
     - false
     - false
-    - true
+    - false
     - false
     - false
     - false

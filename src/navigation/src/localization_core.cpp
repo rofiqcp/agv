@@ -113,7 +113,7 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "LocalizationCore C++ aktif: local=GNSS vx/vyaw + IMU yaw; GNSS fusion vel=%s(cert=%s) COG=%s(cert=%s); legacy COG=%s; degraded planning=%s; strict hAcc<=%.2fm DOP<=%.2f sat>=%d",
+      "LocalizationCore C++ aktif: local=wheel/GNSS vx + IMU gyro-z; magnetic yaw=startup seed; GNSS COG=moving heading correction; fusion vel=%s(cert=%s) COG=%s(cert=%s); direct COG fallback=%s; degraded planning=%s; strict hAcc<=%.2fm DOP<=%.2f sat>=%d",
       enable_global_gnss_velocity_fusion_ ? "on" : "off",
       gnss_velocity_calibration_valid_ ? "PASS" : "WAIT",
       enable_global_gnss_cog_fusion_ ? "on" : "off",
@@ -1245,13 +1245,22 @@ private:
       vector_speed_ok && cog_vel_ok && lateral_ok;
     if (fit_fresh) gnss_velocity_qualified_ = gnss_velocity_qualified_ && fit_speed_ok;
 
-    const bool raw_cog_candidate = have_local_motion_at_gnss_ && gnss_velocity_qualified_ && speed_active &&
+    // COG heading qualification must NOT depend on the current map/body yaw projection.
+    // If the startup magnetic seed is wrong by ~90 deg, gnss_base_vy becomes large by
+    // construction; requiring lateral_ok/gnss_velocity_qualified here would create a
+    // circular gate where the correct GNSS COG can never repair the wrong heading.
+    // For absolute heading bootstrap we instead require receiver quality, positive
+    // forward motion, straight local gyro, and mutually consistent GNSS Doppler/course.
+    // Base-frame velocity fusion remains stricter below and will only qualify after
+    // the heading has converged enough for lateral velocity/residual checks to pass.
+    const bool raw_cog_candidate = have_local_motion_at_gnss_ && vel_fresh && quality_ok &&
+      speed_active && vector_speed_ok &&
       local_forward_at_gnss_mps_ >= cog_min_forward_speed_mps_ &&
       std::isfinite(quality_.course_enu_rad) &&
       std::isfinite(quality_.course_accuracy_rad) &&
       quality_.course_accuracy_rad <= cog_max_heading_accuracy_rad_ &&
       std::abs(local_yaw_rate_at_gnss_rps_) <= cog_max_local_yaw_rate_rps_ &&
-      cog_vel_ok && fit_course_ok && !wheel_slip_motion_detected_;
+      cog_vel_ok && fit_course_ok;
 
     const auto t = now();
     if (raw_cog_candidate) {
@@ -1339,8 +1348,10 @@ private:
     }
 
     // GNSS velocity must remain usable even when the ESC serial link is absent.
-    // IMU absolute yaw is the primary orientation used to rotate ENU velocity to
-    // the vehicle frame. Local EKF/ESC odometry is diagnostic-only here.
+    // Before map anchoring, magnetic yaw is only a startup seed. After anchoring, the
+    // synchronized local EKF gyro heading rotates ENU velocity into the vehicle frame.
+    // COG qualification below is deliberately independent of this projection so a bad
+    // startup seed cannot block its own correction.
     const bool imu_heading_fresh = imu_orientation_valid_ &&
       last_imu_orientation_time_.nanoseconds() > 0 &&
       (now() - last_imu_orientation_time_).seconds() >= 0.0 &&
@@ -1417,8 +1428,18 @@ private:
       gnss_yaw_rate_variance_ = 1.0e6;
     }
 
-    gnss_map_yaw_at_measurement_rad_ = navigation_math::normalizeAngle(
-      imu_yaw_enu_rad_ + map_yaw_from_enu_rad_ + map_calibration_.yaw);
+    // Magnetometer is reliable as a stationary absolute seed but can be disturbed
+    // by steering/traction motor current. Once map->odom is anchored, rotate GNSS
+    // velocity with the synchronized local EKF heading (gyro-integrated yaw) instead
+    // of the live magnetic yaw. This prevents motor magnetic fields from creating a
+    // false heading correction during motion.
+    if (anchor_valid_ && have_local_motion_at_gnss_) {
+      gnss_map_yaw_at_measurement_rad_ = navigation_math::normalizeAngle(
+        anchor_map_odom_.yaw + local.pose.yaw);
+    } else {
+      gnss_map_yaw_at_measurement_rad_ = navigation_math::normalizeAngle(
+        imu_yaw_enu_rad_ + map_yaw_from_enu_rad_ + map_calibration_.yaw);
+    }
 
     const double theta = map_yaw_from_enu_rad_ + map_calibration_.yaw;
     const double c = std::cos(theta), sn = std::sin(theta);
@@ -1791,7 +1812,7 @@ private:
       RCLCPP_INFO(
         get_logger(),
         "HEADING SEED: %s map_yaw=%.2fdeg odom_yaw=%.2fdeg; "
-        "live heading selanjutnya dari local EKF (GNSS vx/vyaw + IMU yaw)",
+        "live heading selanjutnya dari local EKF gyro + qualified GNSS COG correction",
         use_imu_initial_heading_ ? "IMU_ONCE" : "CONFIG_ONLY",
         initial_map_heading_rad_ * 180.0 / 3.14159265358979323846,
         initial_odom_yaw_rad_ * 180.0 / 3.14159265358979323846);

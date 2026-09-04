@@ -23,4 +23,15 @@ mx=math.cos(yaw)*speed; my=math.sin(yaw)*speed
 bx=math.cos(yaw)*mx+math.sin(yaw)*my
 by=-math.sin(yaw)*mx+math.cos(yaw)*my
 close(bx,speed,1e-9); close(by,0.0,1e-9)
+# Case 4: field regression — startup heading may be wrong by 90deg, but a valid
+# forward COG at the 0.18m/s commissioning cap must still be eligible for heading
+# bootstrap. Velocity projection is intentionally NOT part of this heading gate.
+commissioning_speed=0.18; cog_min_forward=0.15
+startup_yaw=math.pi/2; cog_yaw=0.0
+innovation=math.atan2(math.sin(cog_yaw-startup_yaw),math.cos(cog_yaw-startup_yaw))
+if commissioning_speed < cog_min_forward: raise SystemExit('FAIL COG gate unreachable in commissioning')
+if abs(innovation) > 2.3561944902: raise SystemExit('FAIL 90deg startup COG innovation rejected')
+step=max(-0.00872664626,min(0.00872664626,0.05*innovation))
+if not (step < 0.0 and abs(step) <= 0.00872664626+1e-12):
+    raise SystemExit('FAIL bounded COG yaw correction step')
 print('PASS gnss_motion_math_self_check')
