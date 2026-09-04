@@ -152,7 +152,11 @@ struct LaneCorridorDecision
   double right_gap_px{0.0};
   double left_penetration_px{0.0};
   double right_penetration_px{0.0};
+  double left_correction_m{0.0};
+  double right_correction_m{0.0};
   double correction_error_px{0.0};
+  bool left_recenter_latched{false};
+  bool right_recenter_latched{false};
   std::string left_status{"UNKNOWN"};
   std::string right_status{"UNKNOWN"};
   std::string recommendation{"NONE"};
@@ -362,6 +366,7 @@ private:
     declare_parameter<double>("lane_corridor_right_offset_px", 0.0);
     declare_parameter<double>("lane_corridor_warning_gap_px", 36.0);
     declare_parameter<double>("lane_corridor_touch_margin_px", 2.0);
+    declare_parameter<double>("lane_corridor_release_gap_px", 48.0);
     declare_parameter<double>("lane_corridor_critical_penetration_px", 24.0);
     declare_parameter<int>("lane_corridor_sample_stride_px", 6);
     declare_parameter<int>("lane_corridor_minimum_valid_rows", 6);
@@ -535,6 +540,7 @@ private:
     lane_corridor_right_offset_px_ = get_parameter("lane_corridor_right_offset_px").as_double();
     lane_corridor_warning_gap_px_ = get_parameter("lane_corridor_warning_gap_px").as_double();
     lane_corridor_touch_margin_px_ = get_parameter("lane_corridor_touch_margin_px").as_double();
+    lane_corridor_release_gap_px_ = get_parameter("lane_corridor_release_gap_px").as_double();
     lane_corridor_critical_penetration_px_ = get_parameter("lane_corridor_critical_penetration_px").as_double();
     lane_corridor_sample_stride_px_ = get_parameter("lane_corridor_sample_stride_px").as_int();
     lane_corridor_minimum_valid_rows_ = get_parameter("lane_corridor_minimum_valid_rows").as_int();
@@ -705,6 +711,8 @@ private:
     lane_corridor_warning_gap_px_ = std::clamp(lane_corridor_warning_gap_px_, 2.0, 300.0);
     lane_corridor_touch_margin_px_ = std::clamp(
       lane_corridor_touch_margin_px_, 0.0, lane_corridor_warning_gap_px_ - 1.0);
+    lane_corridor_release_gap_px_ = std::clamp(
+      lane_corridor_release_gap_px_, lane_corridor_warning_gap_px_ + 1.0, 500.0);
     lane_corridor_critical_penetration_px_ = std::clamp(
       lane_corridor_critical_penetration_px_, 1.0, 300.0);
     lane_corridor_sample_stride_px_ = std::clamp(lane_corridor_sample_stride_px_, 2, 40);
@@ -2059,42 +2067,79 @@ private:
   void publishLaneState(
     const rclcpp::Time & stamp, bool valid, double left_clearance,
     double right_clearance, double center_error, double heading_error,
-    double road_width, int valid_rows, const LaneCorridorDecision & corridor)
+    double road_width, int valid_rows, LaneCorridorDecision & corridor)
   {
-    bool effective_valid = valid;
-    double effective_center_error = center_error;
-    auto decision = safety::classifyLaneState(
+    const bool left_evidence = corridor.left_valid && std::isfinite(corridor.left_gap_px);
+    const bool right_evidence = corridor.right_valid && std::isfinite(corridor.right_gap_px);
+    const bool corridor_evidence = left_evidence || right_evidence;
+
+    const safety::PixelCorridorConfig pixel_config{
+      lane_corridor_touch_margin_px_, lane_corridor_warning_gap_px_,
+      lane_corridor_release_gap_px_, lane_corridor_correction_gain_m_per_px_,
+      lane_corridor_max_correction_m_};
+    const auto left_pixel = safety::updatePixelCorridorSide(
+      left_evidence, corridor.left_gap_px, left_lane_recenter_latched_, pixel_config);
+    const auto right_pixel = safety::updatePixelCorridorSide(
+      right_evidence, corridor.right_gap_px, right_lane_recenter_latched_, pixel_config);
+
+    left_lane_recenter_latched_ = left_pixel.latched;
+    right_lane_recenter_latched_ = right_pixel.latched;
+    corridor.left_recenter_latched = left_pixel.latched;
+    corridor.right_recenter_latched = right_pixel.latched;
+    corridor.left_correction_m = left_pixel.correction_m;
+    corridor.right_correction_m = right_pixel.correction_m;
+    if (left_evidence) corridor.left_status = left_pixel.status;
+    if (right_evidence) corridor.right_status = right_pixel.status;
+
+    bool effective_valid = valid || corridor_evidence;
+    double effective_center_error = valid ? center_error : 0.0;
+    auto metric_decision = safety::classifyLaneState(
       valid, left_clearance, right_clearance, center_error,
       lane_state_filter_->state(), lane_thresholds_);
+    safety::LaneDecision decision = metric_decision;
+    bool corridor_override = false;
 
-    // Lane-mask corridor hanya dapat memodifikasi kandidat control jika geometri
-    // drivable dasar valid. Authority fisik tetap terkunci lagi di controlTick().
-    if (valid && lane_corridor_control_enabled_) {
-      const bool left_red = corridor.left_status == "RED";
-      const bool right_red = corridor.right_status == "RED";
-      if (left_red && right_red) {
+    // Pixel safety mempunyai authority arah hanya setelah lane mask benar-benar
+    // menyentuh/masuk garis. Zona kuning sebelum touch hanya warning. Setelah
+    // touch, latch mempertahankan koreksi sampai gap >= release_gap_px.
+    if (lane_corridor_control_enabled_) {
+      if (left_pixel.latched && right_pixel.latched) {
         effective_valid = false;
         decision = {safety::LANE_LOST, true, "corridor_both_intrusion"};
-      } else if (left_red) {
-        const double correction = std::min(
-          lane_corridor_max_correction_m_,
-          corridor.left_penetration_px * lane_corridor_correction_gain_m_per_px_);
-        effective_center_error -= correction;
+        corridor.recommendation = "BOTH_INTRUSION_STOP";
+        corridor_override = true;
+      } else if (left_pixel.latched) {
+        effective_valid = true;
+        effective_center_error = (valid ? center_error : 0.0) - left_pixel.correction_m;
         decision = {safety::RECENTER_RIGHT,
           corridor.left_penetration_px >= lane_corridor_critical_penetration_px_,
-          "corridor_left_intrusion"};
-      } else if (right_red) {
-        const double correction = std::min(
-          lane_corridor_max_correction_m_,
-          corridor.right_penetration_px * lane_corridor_correction_gain_m_per_px_);
-        effective_center_error += correction;
+          "corridor_left_touch_recover"};
+        corridor.recommendation = "RECENTER_RIGHT";
+        corridor_override = true;
+      } else if (right_pixel.latched) {
+        effective_valid = true;
+        effective_center_error = (valid ? center_error : 0.0) + right_pixel.correction_m;
         decision = {safety::RECENTER_LEFT,
           corridor.right_penetration_px >= lane_corridor_critical_penetration_px_,
-          "corridor_right_intrusion"};
+          "corridor_right_touch_recover"};
+        corridor.recommendation = "RECENTER_LEFT";
+        corridor_override = true;
       }
     }
 
-    const std::string state = lane_state_filter_->update(decision.state);
+    std::string state;
+    if (corridor_override) {
+      // Touch sudah melalui robust multi-row gap; recenter pixel tidak menunggu
+      // filter state metric beberapa frame agar respons safety tidak terlambat.
+      state = decision.state;
+    } else if (!valid && corridor_evidence) {
+      decision = {safety::NORMAL, false, "lane_mask_safety_clear"};
+      state = safety::NORMAL;
+    } else {
+      state = lane_state_filter_->update(metric_decision.state);
+      decision = metric_decision;
+    }
+
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       latest_lane_state_ = state;
@@ -2130,6 +2175,13 @@ private:
          << ",\"right_gap_px\":" << corridor.right_gap_px
          << ",\"left_penetration_px\":" << corridor.left_penetration_px
          << ",\"right_penetration_px\":" << corridor.right_penetration_px
+         << ",\"left_correction_m\":" << corridor.left_correction_m
+         << ",\"right_correction_m\":" << corridor.right_correction_m
+         << ",\"left_recenter_latched\":" << corridor.left_recenter_latched
+         << ",\"right_recenter_latched\":" << corridor.right_recenter_latched
+         << ",\"warning_gap_px\":" << lane_corridor_warning_gap_px_
+         << ",\"touch_gap_px\":" << lane_corridor_touch_margin_px_
+         << ",\"release_gap_px\":" << lane_corridor_release_gap_px_
          << ",\"correction_error_px\":" << corridor.correction_error_px
          << ",\"left_samples\":" << corridor.left_samples
          << ",\"right_samples\":" << corridor.right_samples
@@ -2330,7 +2382,7 @@ private:
       const auto boundary_points = buildDrivableBoundary(
         drivable, lane_valid, left_clearance, right_clearance, center_error,
         heading_error, road_width, valid_rows);
-      const LaneCorridorDecision lane_corridor = evaluateLaneCorridor(lane, drivable);
+      LaneCorridorDecision lane_corridor = evaluateLaneCorridor(lane, drivable);
 
       object_pub_->publish(makeObstacleCloud(stamp, confirmed_obstacles));
       boundary_pub_->publish(makeCloud(stamp, boundary_points));
@@ -2667,12 +2719,15 @@ private:
   double lane_corridor_right_offset_px_{0.0};
   double lane_corridor_warning_gap_px_{36.0};
   double lane_corridor_touch_margin_px_{2.0};
+  double lane_corridor_release_gap_px_{48.0};
   double lane_corridor_critical_penetration_px_{24.0};
   int lane_corridor_sample_stride_px_{6};
   int lane_corridor_minimum_valid_rows_{6};
   double lane_corridor_minimum_drivable_fraction_{0.20};
   double lane_corridor_correction_gain_m_per_px_{0.004};
   double lane_corridor_max_correction_m_{0.35};
+  bool left_lane_recenter_latched_{false};
+  bool right_lane_recenter_latched_{false};
   std::string control_mode_{"active"};
   safety::MixerConfig mixer_config_{};
 

@@ -27,6 +27,9 @@ assert 'result.left_status = "UNKNOWN"' in src
 assert 'result.left_valid ? laneCorridorStatus(true, result.left_gap_px) : "GREEN"' in src
 assert cfg['lane_corridor_far_lookahead_m'] == 3.8
 assert abs(cfg['lane_corridor_safety_margin_m'] - 0.30) < 1e-9
+assert cfg['lane_corridor_touch_margin_px'] == 2.0
+assert cfg['lane_corridor_warning_gap_px'] == 36.0
+assert cfg['lane_corridor_release_gap_px'] == 48.0
 for token in ['lane_corridor_camera_height_m','lane_corridor_camera_pitch_deg','lane_corridor_safety_margin_m','lane_corridor_far_lookahead_m','lane_corridor_center_offset_px','lane_corridor_left_offset_px','lane_corridor_right_offset_px']:
     assert token in app, token
 # Deterministic default geometry: top must stay separated and bottom must be wider.

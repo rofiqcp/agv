@@ -151,6 +151,7 @@ perception:
     lane_corridor_right_offset_px: 0.0
     lane_corridor_warning_gap_px: 36.0
     lane_corridor_touch_margin_px: 2.0
+    lane_corridor_release_gap_px: 48.0
     lane_corridor_critical_penetration_px: 24.0
     lane_corridor_sample_stride_px: 6
     lane_corridor_minimum_valid_rows: 6

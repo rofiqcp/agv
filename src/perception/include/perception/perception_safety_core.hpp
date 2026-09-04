@@ -49,6 +49,68 @@ struct LaneDecision {
   std::string reason{"lane_geometry_invalid"};
 };
 
+// Konfigurasi safety line berbasis pixel. Lane mask aman selama tetap berada
+// di luar garis safety. Touch memulai recenter dan latch baru dilepas setelah
+// lane kembali melewati release gap agar steering tidak berosilasi di ambang.
+struct PixelCorridorConfig {
+  double touch_gap_px{2.0};
+  double warning_gap_px{36.0};
+  double release_gap_px{48.0};
+  double correction_gain_m_per_px{0.004};
+  double maximum_correction_m{0.35};
+
+  void validate() const {
+    const double values[] = {
+      touch_gap_px, warning_gap_px, release_gap_px,
+      correction_gain_m_per_px, maximum_correction_m};
+    for (const double value : values) {
+      if (!std::isfinite(value) || value < 0.0) {
+        throw std::invalid_argument("Pixel corridor config harus finite dan non-negative");
+      }
+    }
+    if (warning_gap_px <= touch_gap_px) {
+      throw std::invalid_argument("warning_gap_px harus lebih besar dari touch_gap_px");
+    }
+    if (release_gap_px <= warning_gap_px) {
+      throw std::invalid_argument("release_gap_px harus lebih besar dari warning_gap_px");
+    }
+  }
+};
+
+struct PixelCorridorSideDecision {
+  bool latched{false};
+  std::string status{"UNKNOWN"};
+  double correction_m{0.0};
+};
+
+// Memproses satu sisi safety line. Kuning tidak memulai steering. Saat gap <=
+// touch threshold, recenter langsung dilatch dan correction menargetkan release
+// gap, sehingga tepat saat menyentuh pun koreksi sudah > 0.
+inline PixelCorridorSideDecision updatePixelCorridorSide(
+  bool valid, double gap_px, bool previous_latched, const PixelCorridorConfig &config)
+{
+  config.validate();
+  if (!valid || !std::isfinite(gap_px)) return {};
+
+  bool latched = previous_latched;
+  if (gap_px <= config.touch_gap_px) latched = true;
+  else if (latched && gap_px >= config.release_gap_px) latched = false;
+
+  PixelCorridorSideDecision result;
+  result.latched = latched;
+  if (latched) {
+    result.status = gap_px <= config.touch_gap_px ? "RED" : "YELLOW";
+    const double recovery_gap_px = std::max(0.0, config.release_gap_px - gap_px);
+    result.correction_m = std::min(
+      config.maximum_correction_m, recovery_gap_px * config.correction_gain_m_per_px);
+  } else if (gap_px <= config.warning_gap_px) {
+    result.status = "YELLOW";
+  } else {
+    result.status = "GREEN";
+  }
+  return result;
+}
+
 // Mengklasifikasikan posisi kendaraan terhadap batas lane dengan hysteresis.
 // RECENTER_LEFT berarti kendaraan terlalu dekat ke sisi kanan dan harus bergeser kiri.
 inline LaneDecision classifyLaneState(

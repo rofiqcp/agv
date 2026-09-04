@@ -43,6 +43,42 @@ int main()
   const auto lost = classifyLaneState(false, 0.0, 0.0, 0.0, NORMAL, thresholds);
   assert(lost.state == LANE_LOST);
 
+  PixelCorridorConfig pixel;
+  // Jauh dari safety line: aman dan tidak ada koreksi.
+  const auto pixel_safe = updatePixelCorridorSide(true, 60.0, false, pixel);
+  assert(pixel_safe.status == "GREEN" && !pixel_safe.latched);
+  assert(std::abs(pixel_safe.correction_m) < 1.0e-12);
+
+  // Mendekati garis hanya warning; belum boleh mengubah steering.
+  const auto pixel_warning = updatePixelCorridorSide(true, 20.0, false, pixel);
+  assert(pixel_warning.status == "YELLOW" && !pixel_warning.latched);
+  assert(std::abs(pixel_warning.correction_m) < 1.0e-12);
+
+  // Tepat menyentuh safety line harus langsung latch dan menghasilkan koreksi > 0.
+  const auto pixel_touch = updatePixelCorridorSide(true, pixel.touch_gap_px, false, pixel);
+  assert(pixel_touch.status == "RED" && pixel_touch.latched);
+  assert(pixel_touch.correction_m > 0.0);
+
+  // Setelah touch, latch tetap aktif selama lane belum keluar melewati release gap.
+  const auto pixel_recover = updatePixelCorridorSide(true, 40.0, true, pixel);
+  assert(pixel_recover.status == "YELLOW" && pixel_recover.latched);
+  assert(pixel_recover.correction_m > 0.0);
+
+  // Baru setelah gap >= release, status kembali hijau dan koreksi nol.
+  const auto pixel_released = updatePixelCorridorSide(true, pixel.release_gap_px, true, pixel);
+  assert(pixel_released.status == "GREEN" && !pixel_released.latched);
+  assert(std::abs(pixel_released.correction_m) < 1.0e-12);
+
+  // Konvensi arah: lane kiri touch -> center error negatif -> belok kanan.
+  // Lane kanan touch -> center error positif -> belok kiri.
+  MixerConfig corridor_mixer;
+  const auto steer_right = mixRecenterCommand(
+    0.20, 0.0, -pixel_touch.correction_m, 0.0, false, corridor_mixer);
+  const auto steer_left = mixRecenterCommand(
+    0.20, 0.0, pixel_touch.correction_m, 0.0, false, corridor_mixer);
+  assert(steer_right.angular_z < 0.0);
+  assert(steer_left.angular_z > 0.0);
+
   // Mixer harus mempertahankan arah maju, membatasi speed recenter, dan finite.
   MixerConfig mixer;
   const auto cmd = mixRecenterCommand(0.30, 0.0, 0.50, 0.0, false, mixer);
