@@ -1756,9 +1756,13 @@ private:
 
     if (fd >= 0) {
       if (safe_stop_requested_.load()) {
-        // Final bounded shutdown transaction: stop propulsion immediately and
-        // assert firmware E-STOP while preserving the latest steering command,
-        // avoiding an unexpected steering recenter during Ctrl+C.
+        // Final bounded shutdown transaction: command propulsion=0 while
+        // preserving the latest steering command. Do NOT latch the firmware
+        // E-STOP on an ordinary ROS restart/shutdown: field validation showed
+        // that the actuator firmware can stop ACKing after that latch and then
+        // requires a hardware reset. Runtime E-STOP remains fail-closed through
+        // selected.estop above; loss of host frames is also covered by the MCU
+        // command watchdog.
         SerialCommand safe_cmd{};
         bool command_seen = false;
         {
@@ -1771,7 +1775,7 @@ private:
             std::lround(stmSteeringCommandDeg(0.0) * 100.0));
         }
         safe_cmd.right_rpm_x10 = 0;
-        safe_cmd.flags = kFlagEstop;
+        safe_cmd.flags = 0U;
 
         bool stop_sent = false;
         for (int attempt = 0; attempt < 3; ++attempt) {
@@ -1781,7 +1785,7 @@ private:
           std::this_thread::sleep_for(2ms);
         }
         RCLCPP_INFO(
-          get_logger(), "[ESC] SAFE SHUTDOWN: drive=0 + E-STOP %s; closing %s",
+          get_logger(), "[ESC] SAFE SHUTDOWN: drive=0 (no persistent E-STOP latch) %s; closing %s",
           stop_sent ? "sent" : "best-effort failed", active_path.c_str());
       }
       // Never tcdrain() here: a disconnected USB-UART can block in the kernel.
