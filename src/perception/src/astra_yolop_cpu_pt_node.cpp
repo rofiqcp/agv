@@ -135,7 +135,7 @@ struct NearFieldDecision
   std::string reason{"CLEAR"};
 };
 
-// Koridor virtual berbentuk trapesium pada bidang citra. Lane mask harus berada
+// Koridor safety diproyeksikan dari envelope fisik kendaraan ke bidang citra. Lane mask harus berada
 // di luar kedua sisi koridor. Gap positif berarti mask masih di luar garis,
 // gap nol/negatif berarti menyentuh atau menembus koridor.
 struct LaneCorridorDecision
@@ -346,14 +346,19 @@ private:
     declare_parameter<double>("lane_state_timeout_sec", 0.50);
     declare_parameter<bool>("camera_metric_calibration_validated", false);
     declare_parameter<bool>("lane_safety_enabled", false);
-    // Trapesium visual selalu dapat dipakai untuk commissioning. Authority ke
-    // steering tetap tunduk pada lane_safety_enabled + metric validation.
+    // Dua garis safety diproyeksikan dari envelope kendaraan + geometri kamera.
+    // Default sinkron dengan URDF ADV: lebar 0.55 m, tinggi kamera 0.736 m, pitch 0 deg.
+    // Offset pixel disediakan hanya untuk fine-calibration pemasangan kamera nyata.
     declare_parameter<bool>("lane_corridor_overlay_enabled", true);
     declare_parameter<bool>("lane_corridor_control_enabled", true);
     declare_parameter<double>("lane_corridor_top_y_ratio", 0.50);
     declare_parameter<double>("lane_corridor_bottom_y_ratio", 0.94);
-    declare_parameter<double>("lane_corridor_top_half_width_ratio", 0.10);
-    declare_parameter<double>("lane_corridor_bottom_half_width_ratio", 0.28);
+    declare_parameter<double>("lane_corridor_camera_height_m", 0.736);
+    declare_parameter<double>("lane_corridor_camera_pitch_deg", 0.0);
+    declare_parameter<double>("lane_corridor_safety_margin_m", 0.25);
+    declare_parameter<double>("lane_corridor_center_offset_px", 0.0);
+    declare_parameter<double>("lane_corridor_left_offset_px", 0.0);
+    declare_parameter<double>("lane_corridor_right_offset_px", 0.0);
     declare_parameter<double>("lane_corridor_warning_gap_px", 36.0);
     declare_parameter<double>("lane_corridor_touch_margin_px", 2.0);
     declare_parameter<double>("lane_corridor_critical_penetration_px", 24.0);
@@ -520,8 +525,12 @@ private:
     lane_corridor_control_enabled_ = get_parameter("lane_corridor_control_enabled").as_bool();
     lane_corridor_top_y_ratio_ = get_parameter("lane_corridor_top_y_ratio").as_double();
     lane_corridor_bottom_y_ratio_ = get_parameter("lane_corridor_bottom_y_ratio").as_double();
-    lane_corridor_top_half_width_ratio_ = get_parameter("lane_corridor_top_half_width_ratio").as_double();
-    lane_corridor_bottom_half_width_ratio_ = get_parameter("lane_corridor_bottom_half_width_ratio").as_double();
+    lane_corridor_camera_height_m_ = get_parameter("lane_corridor_camera_height_m").as_double();
+    lane_corridor_camera_pitch_deg_ = get_parameter("lane_corridor_camera_pitch_deg").as_double();
+    lane_corridor_safety_margin_m_ = get_parameter("lane_corridor_safety_margin_m").as_double();
+    lane_corridor_center_offset_px_ = get_parameter("lane_corridor_center_offset_px").as_double();
+    lane_corridor_left_offset_px_ = get_parameter("lane_corridor_left_offset_px").as_double();
+    lane_corridor_right_offset_px_ = get_parameter("lane_corridor_right_offset_px").as_double();
     lane_corridor_warning_gap_px_ = get_parameter("lane_corridor_warning_gap_px").as_double();
     lane_corridor_touch_margin_px_ = get_parameter("lane_corridor_touch_margin_px").as_double();
     lane_corridor_critical_penetration_px_ = get_parameter("lane_corridor_critical_penetration_px").as_double();
@@ -684,9 +693,12 @@ private:
     lane_corridor_top_y_ratio_ = std::clamp(lane_corridor_top_y_ratio_, 0.10, 0.90);
     lane_corridor_bottom_y_ratio_ = std::clamp(
       lane_corridor_bottom_y_ratio_, lane_corridor_top_y_ratio_ + 0.05, 0.99);
-    lane_corridor_top_half_width_ratio_ = std::clamp(lane_corridor_top_half_width_ratio_, 0.02, 0.45);
-    lane_corridor_bottom_half_width_ratio_ = std::clamp(
-      lane_corridor_bottom_half_width_ratio_, lane_corridor_top_half_width_ratio_, 0.49);
+    lane_corridor_camera_height_m_ = std::clamp(lane_corridor_camera_height_m_, 0.20, 2.50);
+    lane_corridor_camera_pitch_deg_ = std::clamp(lane_corridor_camera_pitch_deg_, -25.0, 45.0);
+    lane_corridor_safety_margin_m_ = std::clamp(lane_corridor_safety_margin_m_, 0.0, 1.50);
+    lane_corridor_center_offset_px_ = std::clamp(lane_corridor_center_offset_px_, -500.0, 500.0);
+    lane_corridor_left_offset_px_ = std::clamp(lane_corridor_left_offset_px_, -500.0, 500.0);
+    lane_corridor_right_offset_px_ = std::clamp(lane_corridor_right_offset_px_, -500.0, 500.0);
     lane_corridor_warning_gap_px_ = std::clamp(lane_corridor_warning_gap_px_, 2.0, 300.0);
     lane_corridor_touch_margin_px_ = std::clamp(
       lane_corridor_touch_margin_px_, 0.0, lane_corridor_warning_gap_px_ - 1.0);
@@ -1866,6 +1878,48 @@ private:
     return "GREEN";
   }
 
+  struct LaneSafetyLineAtRow
+  {
+    double center_x{0.0};
+    double left_x{0.0};
+    double right_x{0.0};
+  };
+
+  LaneSafetyLineAtRow laneSafetyLineAtRow(int y, int image_width, int image_height) const
+  {
+    const double sx = static_cast<double>(image_width) / static_cast<double>(std::max(1, requested_width_));
+    const double sy = static_cast<double>(image_height) / static_cast<double>(std::max(1, requested_height_));
+    const double fx = camera_fx_ * sx;
+    const double fy = camera_fy_ * sy;
+    const double cx = camera_cx_ * sx + lane_corridor_center_offset_px_ * sx;
+    const double cy = camera_cy_ * sy;
+    const double pitch = lane_corridor_camera_pitch_deg_ * 3.14159265358979323846 / 180.0;
+    const double sin_pitch = std::sin(pitch);
+    const double cos_pitch = std::cos(pitch);
+    const double q = fy > 1.0e-9 ? (static_cast<double>(y) - cy) / fy : 0.0;
+    const double denominator = q * cos_pitch + sin_pitch;
+    double half_width_px = 0.0;
+    if (denominator > 1.0e-6) {
+      const double forward_m = lane_corridor_camera_height_m_ *
+        (cos_pitch - q * sin_pitch) / denominator;
+      const double optical_depth_m = cos_pitch * forward_m +
+        lane_corridor_camera_height_m_ * sin_pitch;
+      if (forward_m >= 0.0 && optical_depth_m > 1.0e-6) {
+        const double half_width_m = 0.5 * lane_vehicle_width_m_ + lane_corridor_safety_margin_m_;
+        half_width_px = fx * half_width_m / optical_depth_m;
+      }
+    }
+    half_width_px = std::clamp(half_width_px, 0.0, 0.49 * static_cast<double>(image_width));
+    LaneSafetyLineAtRow line;
+    line.center_x = cx;
+    line.left_x = cx - half_width_px + lane_corridor_left_offset_px_ * sx;
+    line.right_x = cx + half_width_px + lane_corridor_right_offset_px_ * sx;
+    line.left_x = std::clamp(line.left_x, 0.0, static_cast<double>(image_width - 1));
+    line.right_x = std::clamp(line.right_x, 0.0, static_cast<double>(image_width - 1));
+    if (line.left_x > line.right_x) std::swap(line.left_x, line.right_x);
+    return line;
+  }
+
   LaneCorridorDecision evaluateLaneCorridor(const cv::Mat & lane, const cv::Mat & drivable) const
   {
     LaneCorridorDecision result;
@@ -1880,7 +1934,6 @@ private:
       static_cast<int>(std::lround(lane.rows * lane_corridor_top_y_ratio_)), 0, lane.rows - 2);
     const int bottom_y = std::clamp(
       static_cast<int>(std::lround(lane.rows * lane_corridor_bottom_y_ratio_)), top_y + 1, lane.rows - 1);
-    const double center_x = 0.5 * static_cast<double>(lane.cols - 1);
     std::vector<double> left_gaps;
     std::vector<double> right_gaps;
     left_gaps.reserve(static_cast<size_t>((bottom_y - top_y) / lane_corridor_sample_stride_px_ + 2));
@@ -1889,12 +1942,10 @@ private:
     uint64_t corridor_pixels = 0U;
 
     for (int y = top_y; y <= bottom_y; y += lane_corridor_sample_stride_px_) {
-      const double t = static_cast<double>(y - top_y) /
-        static_cast<double>(std::max(1, bottom_y - top_y));
-      const double half_ratio = lane_corridor_top_half_width_ratio_ +
-        t * (lane_corridor_bottom_half_width_ratio_ - lane_corridor_top_half_width_ratio_);
-      const double left_line = center_x - half_ratio * static_cast<double>(lane.cols);
-      const double right_line = center_x + half_ratio * static_cast<double>(lane.cols);
+      const auto safety_line = laneSafetyLineAtRow(y, lane.cols, lane.rows);
+      const double center_x = safety_line.center_x;
+      const double left_line = safety_line.left_x;
+      const double right_line = safety_line.right_x;
       const auto * lane_row = lane.ptr<uint8_t>(y);
       const auto * drivable_row = drivable.ptr<uint8_t>(y);
 
@@ -1973,29 +2024,21 @@ private:
   void drawLaneCorridorOverlay(cv::Mat & image, const LaneCorridorDecision & corridor) const
   {
     if (!lane_corridor_overlay_enabled_ || image.empty()) return;
-    const int top_y = std::clamp(static_cast<int>(std::lround(image.rows * lane_corridor_top_y_ratio_)), 0, image.rows - 2);
-    const int bottom_y = std::clamp(static_cast<int>(std::lround(image.rows * lane_corridor_bottom_y_ratio_)), top_y + 1, image.rows - 1);
-    const double center_x = 0.5 * static_cast<double>(image.cols - 1);
-    const int top_half = static_cast<int>(std::lround(image.cols * lane_corridor_top_half_width_ratio_));
-    const int bottom_half = static_cast<int>(std::lround(image.cols * lane_corridor_bottom_half_width_ratio_));
-    const cv::Point top_left(static_cast<int>(std::lround(center_x)) - top_half, top_y);
-    const cv::Point top_right(static_cast<int>(std::lround(center_x)) + top_half, top_y);
-    const cv::Point bottom_left(static_cast<int>(std::lround(center_x)) - bottom_half, bottom_y);
-    const cv::Point bottom_right(static_cast<int>(std::lround(center_x)) + bottom_half, bottom_y);
-    cv::line(image, top_left, top_right, cv::Scalar(210, 210, 210), 2, cv::LINE_AA);
-    cv::line(image, bottom_left, bottom_right, cv::Scalar(210, 210, 210), 2, cv::LINE_AA);
-    // Sisi dinamis digambar terakhir agar GREEN/YELLOW/RED tidak tertutup border netral.
+    const int top_y = std::clamp(
+      static_cast<int>(std::lround(image.rows * lane_corridor_top_y_ratio_)), 0, image.rows - 2);
+    const int bottom_y = std::clamp(
+      static_cast<int>(std::lround(image.rows * lane_corridor_bottom_y_ratio_)), top_y + 1, image.rows - 1);
+    const auto top = laneSafetyLineAtRow(top_y, image.cols, image.rows);
+    const auto bottom = laneSafetyLineAtRow(bottom_y, image.cols, image.rows);
+    const cv::Point top_left(static_cast<int>(std::lround(top.left_x)), top_y);
+    const cv::Point top_right(static_cast<int>(std::lround(top.right_x)), top_y);
+    const cv::Point bottom_left(static_cast<int>(std::lround(bottom.left_x)), bottom_y);
+    const cv::Point bottom_right(static_cast<int>(std::lround(bottom.right_x)), bottom_y);
+
+    // Preview hanya menampilkan dua garis safety miring. Tidak ada garis horizontal
+    // atau label diagnostik, sehingga kamera tetap bersih dan mudah dibaca operator.
     cv::line(image, top_left, bottom_left, laneCorridorColor(corridor.left_status), 5, cv::LINE_AA);
     cv::line(image, top_right, bottom_right, laneCorridorColor(corridor.right_status), 5, cv::LINE_AA);
-    std::ostringstream label;
-    label << "TRAPEZOID  ROAD:" << (corridor.drivable_detected ? "OK" : "UNKNOWN")
-          << "  L:" << corridor.left_status;
-    if (corridor.left_valid) label << " " << std::fixed << std::setprecision(0) << corridor.left_gap_px << "px";
-    label << "  R:" << corridor.right_status;
-    if (corridor.right_valid) label << " " << std::fixed << std::setprecision(0) << corridor.right_gap_px << "px";
-    label << "  " << corridor.recommendation;
-    cv::putText(image, label.str(), cv::Point(18, std::max(28, top_y - 12)),
-      cv::FONT_HERSHEY_SIMPLEX, 0.62, cv::Scalar(255, 255, 255), 2, cv::LINE_AA);
   }
 
   void publishLaneState(
@@ -2305,7 +2348,7 @@ private:
         green.copyTo(annotated, drivable);
         cv::addWeighted(frame, 1.0 - overlay_alpha_, annotated, overlay_alpha_, 0.0, annotated);
         red.copyTo(annotated, lane);
-        // Trapesium digambar setelah mask agar warna status kiri/kanan selalu terlihat.
+        // Dua garis safety digambar setelah mask agar warna status kiri/kanan selalu terlihat.
         drawLaneCorridorOverlay(annotated, lane_corridor);
         // The official YOLOPv2 checkpoint used here does not expose reliable COCO
         // semantic class identities.  Keep this layer class-agnostic; the separate
@@ -2600,8 +2643,12 @@ private:
   bool lane_corridor_control_enabled_{true};
   double lane_corridor_top_y_ratio_{0.50};
   double lane_corridor_bottom_y_ratio_{0.94};
-  double lane_corridor_top_half_width_ratio_{0.10};
-  double lane_corridor_bottom_half_width_ratio_{0.28};
+  double lane_corridor_camera_height_m_{0.736};
+  double lane_corridor_camera_pitch_deg_{0.0};
+  double lane_corridor_safety_margin_m_{0.25};
+  double lane_corridor_center_offset_px_{0.0};
+  double lane_corridor_left_offset_px_{0.0};
+  double lane_corridor_right_offset_px_{0.0};
   double lane_corridor_warning_gap_px_{36.0};
   double lane_corridor_touch_margin_px_{2.0};
   double lane_corridor_critical_penetration_px_{24.0};

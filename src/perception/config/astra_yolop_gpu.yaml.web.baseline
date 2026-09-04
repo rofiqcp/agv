@@ -135,14 +135,19 @@ perception:
     - 0.0
     enable_integrated_perception_runtime: true
     lane_safety_enabled: false
-    # Virtual trapezoid lane corridor: overlay aktif untuk commissioning, tetapi
-    # steering authority tetap terkunci oleh lane_safety_enabled + metric validation.
+    # Dua garis safety fisik. Baseline sinkron URDF ADV: total_width=0.550 m,
+    # camera ground height = vehicle_top(0.700) + camera offset(0.036) = 0.736 m,
+    # camera pitch URDF = 0 deg. fx/fy/cx/cy di bawah merepresentasikan FOV kamera.
     lane_corridor_overlay_enabled: true
     lane_corridor_control_enabled: true
     lane_corridor_top_y_ratio: 0.50
     lane_corridor_bottom_y_ratio: 0.94
-    lane_corridor_top_half_width_ratio: 0.10
-    lane_corridor_bottom_half_width_ratio: 0.28
+    lane_corridor_camera_height_m: 0.736
+    lane_corridor_camera_pitch_deg: 0.0
+    lane_corridor_safety_margin_m: 0.25
+    lane_corridor_center_offset_px: 0.0
+    lane_corridor_left_offset_px: 0.0
+    lane_corridor_right_offset_px: 0.0
     lane_corridor_warning_gap_px: 36.0
     lane_corridor_touch_margin_px: 2.0
     lane_corridor_critical_penetration_px: 24.0
