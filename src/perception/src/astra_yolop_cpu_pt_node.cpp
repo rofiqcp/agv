@@ -355,8 +355,8 @@ private:
     declare_parameter<double>("lane_corridor_bottom_y_ratio", 0.98);
     declare_parameter<double>("lane_corridor_camera_height_m", 0.736);
     declare_parameter<double>("lane_corridor_camera_pitch_deg", 0.0);
-    declare_parameter<double>("lane_corridor_safety_margin_m", 0.25);
-    declare_parameter<double>("lane_corridor_far_lookahead_m", 4.0);
+    declare_parameter<double>("lane_corridor_safety_margin_m", 0.30);
+    declare_parameter<double>("lane_corridor_far_lookahead_m", 3.8);
     declare_parameter<double>("lane_corridor_center_offset_px", 0.0);
     declare_parameter<double>("lane_corridor_left_offset_px", 0.0);
     declare_parameter<double>("lane_corridor_right_offset_px", 0.0);
@@ -2660,8 +2660,8 @@ private:
   double lane_corridor_bottom_y_ratio_{0.98};
   double lane_corridor_camera_height_m_{0.736};
   double lane_corridor_camera_pitch_deg_{0.0};
-  double lane_corridor_safety_margin_m_{0.25};
-  double lane_corridor_far_lookahead_m_{4.0};
+  double lane_corridor_safety_margin_m_{0.30};
+  double lane_corridor_far_lookahead_m_{3.8};
   double lane_corridor_center_offset_px_{0.0};
   double lane_corridor_left_offset_px_{0.0};
   double lane_corridor_right_offset_px_{0.0};

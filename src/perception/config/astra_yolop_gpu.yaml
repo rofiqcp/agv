@@ -144,8 +144,8 @@ perception:
     lane_corridor_bottom_y_ratio: 0.98
     lane_corridor_camera_height_m: 0.736
     lane_corridor_camera_pitch_deg: 0.0
-    lane_corridor_safety_margin_m: 0.25
-    lane_corridor_far_lookahead_m: 4.0
+    lane_corridor_safety_margin_m: 0.30
+    lane_corridor_far_lookahead_m: 3.8
     lane_corridor_center_offset_px: 0.0
     lane_corridor_left_offset_px: 0.0
     lane_corridor_right_offset_px: 0.0
