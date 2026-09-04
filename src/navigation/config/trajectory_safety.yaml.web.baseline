@@ -44,7 +44,7 @@ trajectory_safety_supervisor:
     planning_min_forward_m: 0.15
     planning_max_abs_lateral_m: 2.6
     path_horizon_m: 4.0
-    command_collision_horizon_m: 2.5
+    command_collision_horizon_m: 2.0
     command_collision_sample_step_m: 0.05
     command_collision_lateral_margin_m: 0.2
     immediate_command_hard_stop_m: 0.65

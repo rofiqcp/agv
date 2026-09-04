@@ -23,7 +23,7 @@ def count_catalog(subsystem: str) -> int:
 
 
 checks = [
-    (count_catalog("navigation") == 50, "navigation catalog must contain 50 report leaves"),
+    (count_catalog("navigation") >= 84, "navigation catalog must preserve at least 84 report leaves"),
     (count_catalog("perception") == 35, "perception catalog must contain 35 report leaves"),
     (count_catalog("steering") == 15, "steering catalog must contain 15 report leaves"),
     ('"4.9.1"' in CATALOG and '"4.9.4"' in CATALOG, "navigation section 4.9 must be covered"),

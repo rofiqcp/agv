@@ -204,6 +204,19 @@ body.sidebar-collapsed .brand-mark:focus-visible{box-shadow:0 0 0 2px #071011,0 
 body.sidebar-collapsed .sidebar-tuning-head,body.sidebar-collapsed .sidebar-tuning-group,body.sidebar-collapsed .tuning-nav>div{display:none}
 body.sidebar-collapsed .nav-item.tuning-nav>span{width:100%;min-width:0;text-align:center;font-size:8px}
 
+/* BAB IV report recap: intentionally bright violet so report leaves are visually distinct from green tuning. */
+.sidebar-report-head{margin:16px 5px 4px;padding:11px 7px 7px;border-top:1px solid rgba(189,140,255,.34);display:flex;justify-content:space-between;align-items:center;color:#cba8ff;text-shadow:0 0 14px rgba(189,140,255,.45)}
+.sidebar-report-head span{font-size:9px;font-weight:950;letter-spacing:1.55px}.sidebar-report-head small{font:8px ui-monospace;color:#a98ad7}
+.sidebar-report-group{padding:9px 10px 4px;color:#d9c2ff;font-size:8px;font-weight:900;letter-spacing:.72px;text-transform:uppercase}
+.nav-item.report-nav{align-items:flex-start;gap:8px;padding:8px 9px;min-height:0;border-color:transparent}
+.nav-item.report-nav>span{width:42px;min-width:42px;padding-top:1px;color:#c797ff;font:900 9px ui-monospace;text-align:left;text-shadow:0 0 12px rgba(189,140,255,.5)}
+.nav-item.report-nav>div{min-width:0;flex:1}.nav-item.report-nav b{font-size:10px;line-height:1.3;font-weight:700;white-space:normal;color:#eadfff}.nav-item.report-nav small{display:block;margin-top:3px;color:#a88ec8;font-size:7.5px;line-height:1.3}
+.nav-item.report-nav:hover{background:rgba(189,140,255,.07);border-color:rgba(189,140,255,.18)}
+.nav-item.report-nav.active{background:linear-gradient(90deg,rgba(189,140,255,.22),rgba(111,77,170,.08));border-color:rgba(189,140,255,.32);box-shadow:inset 3px 0 #bd8cff,0 0 16px rgba(189,140,255,.08)}
+body.sidebar-collapsed .sidebar-report-head,body.sidebar-collapsed .sidebar-report-group,body.sidebar-collapsed .report-nav>div{display:none}
+body.sidebar-collapsed .nav-item.report-nav>span{width:100%;min-width:0;text-align:center;font-size:8px}
+.light .sidebar-report-head{color:#7b3fd1;text-shadow:none}.light .sidebar-report-group{color:#7548aa}.light .nav-item.report-nav b{color:#51306f}.light .nav-item.report-nav small{color:#876aa4}.light .nav-item.report-nav.active{background:linear-gradient(90deg,rgba(139,82,205,.15),rgba(139,82,205,.04))}
+
 /* Domain sidebar final: Nav2/Live/Runtime first, tuning leaves immediately below. */
 @media(min-width:821px){:root{--sidebar:292px}}
 .context-summary{position:absolute;inset:0;padding:16px;overflow:auto;background:radial-gradient(circle at 85% 10%,rgba(49,168,255,.08),transparent 34%),#050b0d}

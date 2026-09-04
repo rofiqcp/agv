@@ -71,9 +71,10 @@ need("RENAME perception_cpu_node" not in perception_cmake,
      "legacy Python PT->ONNX launcher still owns perception_cpu_node")
 
 per_cfg = params(PERCEPTION / "config/astra_yolop_gpu.yaml", "perception")
-need(per_cfg.get("perception_mode") == "cpu", "Mini-PC perception_mode YAML must default CPU")
+need(per_cfg.get("perception_mode") == "off", "Mini-PC perception_mode YAML must default OFF for lazy YOLO toggle")
 need(per_cfg.get("pt_model_path") == "/home/otomasi/ros/models/yolopv2.pt", "PT path YAML must use workspace models path")
-need(int(per_cfg.get("cpu_threads", -1)) == 0, "CPU threads YAML must default auto=0")
+need(per_cfg.get("inference_enabled") is False, "YOLO inference must default OFF")
+need(int(per_cfg.get("cpu_threads", -1)) == 2, "CPU threads YAML must default to bounded 2-thread Mini-PC budget")
 
 # Sensor fusion contract.
 ekf = yaml.safe_load((ROOT / "config/ekf.yaml").read_text(encoding="utf-8"))
