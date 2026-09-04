@@ -16,7 +16,7 @@ data_imu_node:
     debug: false
     configure_output_on_connect: true
     persist_output_config: false
-    output_content_mask: 14
+    output_content_mask: 30
     output_rate_code: 6
     orientation_packet_timeout_sec: 8.0
     orientation_publish_timeout_sec: 0.5
@@ -65,3 +65,11 @@ data_imu_node:
     - 0.25
     - 0.36
     mag_scale_tesla_per_lsb: 1.0e-07
+    use_magnetic_yaw: true
+    mag_yaw_sign: -1.0
+    mag_yaw_offset_rad: 1.9351317590
+    mag_yaw_filter_alpha: 0.20
+    mag_yaw_max_step_rad: 0.0523598776
+    mag_yaw_packet_timeout_sec: 0.50
+    mag_yaw_min_norm_ut: 100.0
+    mag_yaw_max_norm_ut: 1000.0

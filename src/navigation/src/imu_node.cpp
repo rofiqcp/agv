@@ -115,6 +115,20 @@ ImuNode::ImuNode(const rclcpp::NodeOptions & options)
   yaw_offset_rad_ = this->declare_parameter<double>("yaw_offset_rad", 0.0);
   magnetic_declination_rad_ = this->declare_parameter<double>("magnetic_declination_radians", 0.0);
   mag_scale_tesla_per_lsb_ = this->declare_parameter<double>("mag_scale_tesla_per_lsb", 1e-7);
+  use_magnetic_yaw_ = this->declare_parameter<bool>("use_magnetic_yaw", false);
+  const double configured_mag_yaw_sign = this->declare_parameter<double>("mag_yaw_sign", -1.0);
+  mag_yaw_sign_ = configured_mag_yaw_sign < 0.0 ? -1.0 : 1.0;
+  mag_yaw_offset_rad_ = this->declare_parameter<double>("mag_yaw_offset_rad", 0.0);
+  mag_yaw_filter_alpha_ = std::clamp(
+    this->declare_parameter<double>("mag_yaw_filter_alpha", 0.20), 0.01, 1.0);
+  mag_yaw_max_step_rad_ = std::clamp(
+    this->declare_parameter<double>("mag_yaw_max_step_rad", 0.0523598776), 0.001, 0.35);
+  mag_yaw_packet_timeout_sec_ = std::clamp(
+    this->declare_parameter<double>("mag_yaw_packet_timeout_sec", 0.50), 0.10, 2.0);
+  mag_yaw_min_norm_ut_ = std::max(0.0,
+    this->declare_parameter<double>("mag_yaw_min_norm_ut", 100.0));
+  mag_yaw_max_norm_ut_ = std::max(mag_yaw_min_norm_ut_ + 1.0,
+    this->declare_parameter<double>("mag_yaw_max_norm_ut", 1000.0));
   accel_bias_ = this->declare_parameter<std::vector<double>>("accel_bias", {0.0, 0.0, 0.0});
   gyro_bias_ = this->declare_parameter<std::vector<double>>("gyro_bias", {0.0, 0.0, 0.0});
   // Stage-2 commissioning metadata. The driver does not alter these values;
@@ -160,9 +174,10 @@ ImuNode::ImuNode(const rclcpp::NodeOptions & options)
   }
   RCLCPP_INFO(
     this->get_logger(),
-    "IMU yaw conversion: yaw_ros=normalize(%+.0f*yaw_raw + %.6f - declination %.6f), "
-    "gyro_z_ros=%+.0f*gyro_z_raw; CCW harus bernilai positif",
-    yaw_sign_, yaw_offset_rad_, magnetic_declination_rad_, yaw_sign_);
+    "IMU yaw conversion: source=%s angle=normalize(%+.0f*yaw_raw + %.6f) "
+    "mag=normalize(%+.0f*atan2(My,Mx) + %.6f) declination=%.6f; gyro_z_ros=%+.0f*gyro_z_raw",
+    use_magnetic_yaw_ ? "MAG_FILTERED" : "ANGLE", yaw_sign_, yaw_offset_rad_,
+    mag_yaw_sign_, mag_yaw_offset_rad_, magnetic_declination_rad_, yaw_sign_);
   auto_detect_ = (port_ == "auto");
 
   // USB-UART pada sensor 10 Hz tidak memerlukan timeout 2 ms. Margin 20 ms
@@ -448,6 +463,8 @@ void ImuNode::closeSerial()
   has_gyro_ = false;
   has_angle_ = false;
   has_mag_ = false;
+  mag_yaw_filter_initialized_ = false;
+  filtered_mag_yaw_rad_ = 0.0;
   last_accel_packet_time_ = 0.0;
   last_gyro_packet_time_ = 0.0;
   last_mag_packet_time_ = 0.0;
@@ -482,6 +499,15 @@ bool ImuNode::publishImu()
   const bool orientation_fresh = has_angle_ && last_orientation_packet_time_ > 0.0 &&
     stamp_sec - last_orientation_packet_time_ >= 0.0 &&
     stamp_sec - last_orientation_packet_time_ <= orientation_publish_timeout_sec_;
+  const bool mag_fresh = has_mag_ && last_mag_packet_time_ > 0.0 &&
+    stamp_sec - last_mag_packet_time_ >= 0.0 &&
+    stamp_sec - last_mag_packet_time_ <= mag_yaw_packet_timeout_sec_;
+  const double mag_norm_ut = std::sqrt(mx_ * mx_ + my_ * my_ + mz_ * mz_) *
+    mag_scale_tesla_per_lsb_ * 1.0e6;
+  const bool mag_norm_ok = std::isfinite(mag_norm_ut) &&
+    mag_norm_ut >= mag_yaw_min_norm_ut_ && mag_norm_ut <= mag_yaw_max_norm_ut_;
+  const bool magnetic_yaw_valid = mag_fresh && mag_norm_ok &&
+    std::hypot(mx_, my_) > 1.0;
 
   // EKF yaw now comes from the absolute IMU orientation quaternion; vyaw comes
   // from GNSS. A stale gyro therefore must not suppress a fresh orientation.
@@ -498,11 +524,26 @@ bool ImuNode::publishImu()
   msg.header.stamp = this->now();
   msg.header.frame_id = frame_id_;
 
-  if (orientation_fresh && publish_orientation_) {
+  const bool yaw_source_valid = !use_magnetic_yaw_ || magnetic_yaw_valid;
+  if (orientation_fresh && publish_orientation_ && yaw_source_valid) {
     const double roll_rad = (invert_roll_ ? -1.0 : 1.0) * roll_ * M_PI / 180.0 + roll_offset_rad_;
     const double pitch_rad = (invert_pitch_ ? -1.0 : 1.0) * pitch_ * M_PI / 180.0 + pitch_offset_rad_;
-    const double yaw_rad = normalizeAngle(
+    double yaw_rad = normalizeAngle(
       yaw_sign_ * yaw_ * M_PI / 180.0 + yaw_offset_rad_ - magnetic_declination_rad_);
+    if (use_magnetic_yaw_) {
+      const double raw_mag_yaw = normalizeAngle(
+        mag_yaw_sign_ * std::atan2(my_, mx_) + mag_yaw_offset_rad_ - magnetic_declination_rad_);
+      if (!mag_yaw_filter_initialized_) {
+        filtered_mag_yaw_rad_ = raw_mag_yaw;
+        mag_yaw_filter_initialized_ = true;
+      } else {
+        const double innovation = normalizeAngle(raw_mag_yaw - filtered_mag_yaw_rad_);
+        const double step = std::clamp(
+          mag_yaw_filter_alpha_ * innovation, -mag_yaw_max_step_rad_, mag_yaw_max_step_rad_);
+        filtered_mag_yaw_rad_ = normalizeAngle(filtered_mag_yaw_rad_ + step);
+      }
+      yaw_rad = filtered_mag_yaw_rad_;
+    }
     double qx, qy, qz, qw;
     quatFromEuler(roll_rad, pitch_rad, yaw_rad, qx, qy, qz, qw);
     msg.orientation.x = qx;
@@ -514,6 +555,12 @@ bool ImuNode::publishImu()
     msg.orientation_covariance[8] = orientation_covariance_[2];
   } else {
     msg.orientation_covariance[0] = -1.0;
+    if (use_magnetic_yaw_ && !magnetic_yaw_valid) {
+      RCLCPP_WARN_THROTTLE(
+        this->get_logger(), *this->get_clock(), 5000,
+        "MAG yaw invalid/stale: fresh=%s norm=%.1fuT valid_range=%.1f..%.1fuT; orientation fail-closed",
+        mag_fresh ? "yes" : "no", mag_norm_ut, mag_yaw_min_norm_ut_, mag_yaw_max_norm_ut_);
+    }
   }
 
   // Tanda angular velocity harus konsisten dengan orientasi yang dipublikasikan.

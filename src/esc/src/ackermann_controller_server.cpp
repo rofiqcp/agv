@@ -1073,10 +1073,11 @@ private:
         : 0.0;
       steering_deg = fraction * operationalPhysicalLimitDeg();
     } else if (selected.nav2) {
-      // ROS/Nav2 uses REP-103: +angular.z = CCW/left turn.
-      // The STM steering convention requested for this vehicle is +degree = RIGHT.
-      // Therefore ONLY the Nav2 yaw-rate conversion changes sign here. Teleop keeps
-      // its own already-calibrated steering convention.
+      // ROS/Nav2 uses REP-103: +angular.z = CCW/left turn. Field validation on
+      // 2026-09-05 confirmed that +physical steering on this deployed vehicle also
+      // produces +ROS yaw (CCW/left). Keep the same sign here; the previous minus
+      // sign created positive feedback (right correction command made yaw turn left).
+      // Teleop/HMI conventions are intentionally unchanged.
       const double v = selected.twist.linear.x;
       const double omega = selected.twist.angular.z;
       if (std::abs(v) >= min_speed_for_nav_steering_mps_) {
@@ -1087,7 +1088,7 @@ private:
             std::max(1.0e-6, center_radius - 0.5 * track_width_m_);
           const double inner_angle = std::atan(wheelbase_m_ / inner_radius);
           steering_deg =
-            -std::copysign(inner_angle, kappa) * 180.0 / kPi;
+            std::copysign(inner_angle, kappa) * 180.0 / kPi;
         }
       } else {
         steering_deg = 0.0;  // Ackermann cannot execute pure rotation.

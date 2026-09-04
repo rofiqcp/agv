@@ -81,6 +81,19 @@ private:
   double yaw_offset_rad_ = 0.0;
   double magnetic_declination_rad_ = 0.0;
   double mag_scale_tesla_per_lsb_ = 1e-7;
+  // Absolute yaw may use the onboard magnetometer instead of WIT ANGLE yaw.
+  // ANGLE yaw was observed to jump while stationary; MAG is used only after a
+  // field north-reference calibration and is filtered/bounded before EKF fusion.
+  bool use_magnetic_yaw_ = false;
+  double mag_yaw_sign_ = -1.0;
+  double mag_yaw_offset_rad_ = 0.0;
+  double mag_yaw_filter_alpha_ = 0.20;
+  double mag_yaw_max_step_rad_ = 0.0523598776;
+  double mag_yaw_packet_timeout_sec_ = 0.50;
+  double mag_yaw_min_norm_ut_ = 100.0;
+  double mag_yaw_max_norm_ut_ = 1000.0;
+  bool mag_yaw_filter_initialized_ = false;
+  double filtered_mag_yaw_rad_ = 0.0;
   std::vector<double> accel_bias_{0.0, 0.0, 0.0};
   std::vector<double> gyro_bias_{0.0, 0.0, 0.0};
   std::vector<double> orientation_covariance_{0.001, 0.001, 0.003};

@@ -125,6 +125,7 @@ localization_core:
     imu_timeout_sec: 0.75
     odom_timeout_sec: 0.75
     tf_publish_rate_hz: 30.0
+    tf_future_offset_sec: 0.05
     status_publish_rate_hz: 1.0
     log_heartbeat_sec: 10.0
     allow_manual_pose_for_motion: false

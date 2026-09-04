@@ -367,6 +367,7 @@ private:
     declare_parameter<double>("imu_timeout_sec", 0.75);
     declare_parameter<double>("odom_timeout_sec", 0.75);
     declare_parameter<double>("tf_publish_rate_hz", 10.0);
+    declare_parameter<double>("tf_future_offset_sec", 0.05);
     declare_parameter<double>("status_publish_rate_hz", 2.0);
     declare_parameter<double>("log_heartbeat_sec", 10.0);
     declare_parameter<bool>("allow_manual_pose_for_motion", false);
@@ -592,6 +593,8 @@ private:
     imu_timeout_sec_ = get_parameter("imu_timeout_sec").as_double();
     odom_timeout_sec_ = get_parameter("odom_timeout_sec").as_double();
     tf_publish_rate_hz_ = std::max(1.0, get_parameter("tf_publish_rate_hz").as_double());
+    tf_future_offset_sec_ = std::clamp(
+      get_parameter("tf_future_offset_sec").as_double(), 0.0, 0.25);
     status_publish_rate_hz_ = std::max(0.5, get_parameter("status_publish_rate_hz").as_double());
     log_heartbeat_sec_ = std::max(1.0, get_parameter("log_heartbeat_sec").as_double());
     allow_manual_pose_for_motion_ = get_parameter("allow_manual_pose_for_motion").as_bool();
@@ -2493,7 +2496,10 @@ private:
     if (!valid) return;
 
     geometry_msgs::msg::TransformStamped tf;
-    tf.header.stamp = now();
+    // Future-date the continuously stable map->odom transform slightly. At 30 Hz
+    // a controller pose can be 0..33 ms newer than the latest TF sample; without
+    // this bounded offset tf2 intermittently rejects an otherwise valid path.
+    tf.header.stamp = now() + rclcpp::Duration::from_seconds(tf_future_offset_sec_);
     tf.header.frame_id = map_frame_;
     tf.child_frame_id = odom_frame_;
     tf.transform.translation.x = anchor.x;
@@ -2999,6 +3005,7 @@ private:
   double imu_timeout_sec_{0.75};
   double odom_timeout_sec_{0.75};
   double tf_publish_rate_hz_{10.0};
+  double tf_future_offset_sec_{0.05};
   double status_publish_rate_hz_{2.0};
   double log_heartbeat_sec_{10.0};
   bool allow_manual_pose_for_motion_{false};
