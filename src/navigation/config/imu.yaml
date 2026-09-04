@@ -29,7 +29,7 @@ data_imu_node:
     invert_roll: false
     invert_pitch: false
     invert_yaw: false
-    yaw_sign: 1.0
+    yaw_sign: -1.0
     roll_offset_rad: 0.0
     pitch_offset_rad: 0.0
     yaw_offset_rad: 0.1923228413
@@ -67,7 +67,7 @@ data_imu_node:
     mag_scale_tesla_per_lsb: 1.0e-07
     use_magnetic_yaw: true
     mag_yaw_sign: -1.0
-    mag_yaw_offset_rad: 1.7116332028
+    mag_yaw_offset_rad: 1.5451826276
     mag_yaw_filter_alpha: 0.20
     mag_yaw_max_step_rad: 0.0523598776
     mag_yaw_packet_timeout_sec: 0.50

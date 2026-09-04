@@ -30,7 +30,7 @@ esc_ackermann:
     steering_center_hold_enabled: true
     steering_center_hold_request_deadband_deg: 0.75
     steering_center_hold_capture_deg: 35.0
-    steering_center_hold_feedback_deadband_deg: 0.5
+    steering_center_hold_feedback_deadband_deg: 1.0
     steering_center_hold_kp: 0.18
     steering_center_hold_adapt_gain_per_sec: 1.5
     steering_center_hold_ki: 0.0
@@ -44,7 +44,7 @@ esc_ackermann:
     steering_calibration_mode_enabled: false
     steering_calibration_direct_limit_deg: 90.0
     steering_feedback_left_reference_deg: -155.78
-    steering_feedback_center_reference_deg: -3.16
+    steering_feedback_center_reference_deg: -14.14
     steering_feedback_right_reference_deg: 60.56000000000001
     steering_physical_calibration_enabled: false
     steering_physical_left_limit_deg: -30.0
