@@ -140,8 +140,8 @@ perception:
     # camera pitch URDF = 0 deg. fx/fy/cx/cy di bawah merepresentasikan FOV kamera.
     lane_corridor_overlay_enabled: true
     lane_corridor_control_enabled: true
-    lane_corridor_top_y_ratio: 0.50
-    lane_corridor_bottom_y_ratio: 0.94
+    lane_corridor_top_y_ratio: 0.02
+    lane_corridor_bottom_y_ratio: 0.98
     lane_corridor_camera_height_m: 0.736
     lane_corridor_camera_pitch_deg: 0.0
     lane_corridor_safety_margin_m: 0.25

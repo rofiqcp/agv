@@ -351,8 +351,8 @@ private:
     // Offset pixel disediakan hanya untuk fine-calibration pemasangan kamera nyata.
     declare_parameter<bool>("lane_corridor_overlay_enabled", true);
     declare_parameter<bool>("lane_corridor_control_enabled", true);
-    declare_parameter<double>("lane_corridor_top_y_ratio", 0.50);
-    declare_parameter<double>("lane_corridor_bottom_y_ratio", 0.94);
+    declare_parameter<double>("lane_corridor_top_y_ratio", 0.02);
+    declare_parameter<double>("lane_corridor_bottom_y_ratio", 0.98);
     declare_parameter<double>("lane_corridor_camera_height_m", 0.736);
     declare_parameter<double>("lane_corridor_camera_pitch_deg", 0.0);
     declare_parameter<double>("lane_corridor_safety_margin_m", 0.25);
@@ -692,7 +692,7 @@ private:
       throw std::runtime_error("Parameter homography/ground metric CPU tidak valid");
     }
     lane_thresholds_.validate();
-    lane_corridor_top_y_ratio_ = std::clamp(lane_corridor_top_y_ratio_, 0.10, 0.90);
+    lane_corridor_top_y_ratio_ = std::clamp(lane_corridor_top_y_ratio_, 0.0, 0.95);
     lane_corridor_bottom_y_ratio_ = std::clamp(
       lane_corridor_bottom_y_ratio_, lane_corridor_top_y_ratio_ + 0.05, 0.99);
     lane_corridor_camera_height_m_ = std::clamp(lane_corridor_camera_height_m_, 0.20, 2.50);
@@ -2656,8 +2656,8 @@ private:
   bool lane_safety_enabled_{false};
   bool lane_corridor_overlay_enabled_{true};
   bool lane_corridor_control_enabled_{true};
-  double lane_corridor_top_y_ratio_{0.50};
-  double lane_corridor_bottom_y_ratio_{0.94};
+  double lane_corridor_top_y_ratio_{0.02};
+  double lane_corridor_bottom_y_ratio_{0.98};
   double lane_corridor_camera_height_m_{0.736};
   double lane_corridor_camera_pitch_deg_{0.0};
   double lane_corridor_safety_margin_m_{0.25};
