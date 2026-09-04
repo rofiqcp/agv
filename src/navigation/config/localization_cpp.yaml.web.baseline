@@ -92,7 +92,7 @@ localization_core:
     degraded_max_dop: 8.0
     degraded_max_hacc_m: 25.0
     startup_gnss_samples: 5
-    startup_imu_samples: 3
+    startup_imu_samples: 50
     startup_max_spread_m: 5.0
     global_odom_map_reference_max_error_m: 15.0
     strict_min_satellites: 8

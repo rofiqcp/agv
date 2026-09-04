@@ -20,8 +20,9 @@ ekf_filter_node_odom:
     odom_frame: odom
     base_link_frame: base_footprint
     world_frame: odom
-    # Local state: wheel/steering feedback supplies body vx + kinematic yaw-rate.
-    # IMU supplies absolute yaw + gyro-Z; GNSS Doppler below supplies an independent vx.
+    # Local state: wheel encoder remains auxiliary for body vx only.
+    # Heading/yaw-rate authority belongs to IMU; GNSS Doppler supplies an independent vx.
+    # This prevents steering/encoder slip from rotating the local estimate.
     odom0: /esc/odom
     odom0_config:
     - false
@@ -35,7 +36,7 @@ ekf_filter_node_odom:
     - false
     - false
     - false
-    - true
+    - false
     - false
     - false
     - false
@@ -376,9 +377,9 @@ ekf_filter_node_map:
     twist0_queue_size: 12
     twist0_nodelay: true
     twist0_rejection_threshold: 10.0
-    # GNSS COG absolute heading — mirrors global_field_test architecture.
-    # When enable_global_gnss_cog_fusion=true, LocalizationCore publishes this.
-    # IMU yaw (idx 5) is dropped to avoid double-counting two absolute-yaw sources.
+    # GNSS COG absolute heading is the preferred moving-heading correction.
+    # IMU absolute yaw remains fused as the stationary/low-speed heading source;
+    # robot_localization weights both by covariance when COG becomes qualified.
     pose0: /gnss/cog_heading_fusion
     pose0_config:
     - false
@@ -407,7 +408,7 @@ ekf_filter_node_map:
     - false
     - false
     - false
-    - false
+    - true
     - false
     - false
     - false
