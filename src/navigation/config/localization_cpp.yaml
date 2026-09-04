@@ -107,6 +107,7 @@ localization_core:
     motion_critical_max_dop: 4.0
     motion_critical_min_satellites: 6
     strict_correction_alpha: 0.08
+    freeze_stationary_map_translation: true
     strict_moving_correction_alpha: 0.01
     enable_wheel_slip_pose_correction: false
     strict_slip_correction_alpha: 0.1

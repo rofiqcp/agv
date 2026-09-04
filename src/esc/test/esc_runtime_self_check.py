@@ -79,6 +79,13 @@ for token in (
         fail(f"ESC runtime safety behavior missing: {token}")
 if "age >= 0.0 && age <= timeout_sec" not in source:
     fail("ESC command freshness must reject negative age after a clock jump")
+if "physical_deg / operational_deg" not in source or "(-physical_deg) / operational_deg" not in source:
+    fail("uncalibrated wheel span must map to the full STM/FOC +/-90 protocol span")
+if '<< " stm_range=+/-" << steering_max_deg_' not in source:
+    fail("ESC status must expose the STM/FOC protocol range separately from wheel angle")
+teleop_source = (ROOT / "src/motor_teleop.cpp").read_text()
+if 'RCLCPP_WARN(get_logger(), "[TTY] /dev/tty tidak dapat dibuka' in teleop_source:
+    fail("headless /dev/tty fallback must not be reported as a warning")
 if "TransformBroadcaster" in source or "sendTransform" in source:
     fail("ESC must not publish odom->base TF; local EKF owns that transform")
 if source.count("::open(") != 1:

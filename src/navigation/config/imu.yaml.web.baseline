@@ -32,7 +32,7 @@ data_imu_node:
     yaw_sign: 1.0
     roll_offset_rad: 0.0
     pitch_offset_rad: 0.0
-    yaw_offset_rad: -0.1458222590
+    yaw_offset_rad: 0.1923228413
     magnetic_declination_radians: 0.0
     accel_bias:
     - 0.0

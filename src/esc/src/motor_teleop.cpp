@@ -248,7 +248,9 @@ public:
       if (terminal_echo_suppressed_) {
         RCLCPP_INFO(get_logger(), "[TTY] Echo terminal OFF selama teleop aktif.");
       } else {
-        RCLCPP_WARN(get_logger(), "[TTY] /dev/tty tidak dapat dibuka; global keyboard tetap aktif.");
+        // Background/service mode commonly has no controlling /dev/tty. This is
+        // not a degraded control state because global evdev keyboard remains active.
+        RCLCPP_INFO(get_logger(), "[TTY] tanpa controlling /dev/tty; global evdev keyboard tetap aktif.");
       }
     }
   }

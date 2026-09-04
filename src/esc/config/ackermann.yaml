@@ -22,20 +22,20 @@ esc_ackermann:
     invert_steering: false
     invert_drive: false
     steering_feedback_calibration_enabled: true
-    steering_feedback_center_deg: -4.843750000000001
+    steering_feedback_center_deg: -25.84
     steering_feedback_right_stop_deg: 90.0
     steering_feedback_left_stop_deg: -90.0
     steering_feedback_force_symmetric_span: false
     steering_straight_deadband_deg: 1.0
     steering_center_hold_enabled: true
     steering_center_hold_request_deadband_deg: 0.75
-    steering_center_hold_capture_deg: 20.0
+    steering_center_hold_capture_deg: 35.0
     steering_center_hold_feedback_deadband_deg: 0.5
     steering_center_hold_kp: 0.18
     steering_center_hold_adapt_gain_per_sec: 1.5
     steering_center_hold_ki: 0.0
     steering_center_hold_integral_limit_deg_s: 0.0
-    steering_center_hold_max_trim_deg: 12.0
+    steering_center_hold_max_trim_deg: 18.0
     steering_center_hold_trim_rate_deg_s: 60.0
     steering_center_hold_latch_inside_deadband: true
     steering_center_hold_feedback_timeout_sec: 0.3

@@ -1,0 +1,333 @@
+Starting >>> perception
+Starting >>> navigation
+-- Found ament_cmake: 1.3.14 (/opt/ros/humble/share/ament_cmake/cmake)
+[  1%] Automatic MOC for target agv_gui
+-- Override CMake install command with custom implementation using symlinks instead of copying resources
+-- Found rclcpp: 16.0.19 (/opt/ros/humble/share/rclcpp/cmake)
+[  1%] Built target agv_gui_autogen
+[  2%] Automatic MOC for target imu_node
+-- Found rosidl_generator_c: 3.1.9 (/opt/ros/humble/share/rosidl_generator_c/cmake)
+-- Found rosidl_adapter: 3.1.9 (/opt/ros/humble/share/rosidl_adapter/cmake)
+[  2%] Built target imu_node_autogen
+-- Found rosidl_generator_cpp: 3.1.9 (/opt/ros/humble/share/rosidl_generator_cpp/cmake)
+[  3%] Automatic MOC for target joint_state_visualizer
+-- Using all available rosidl_typesupport_c: rosidl_typesupport_fastrtps_c;rosidl_typesupport_introspection_c
+[  3%] Built target joint_state_visualizer_autogen
+-- Using all available rosidl_typesupport_cpp: rosidl_typesupport_fastrtps_cpp;rosidl_typesupport_introspection_cpp
+[  5%] Automatic MOC for target localization_core
+[  5%] Built target localization_core_autogen
+-- Found rmw_implementation_cmake: 6.1.3 (/opt/ros/humble/share/rmw_implementation_cmake/cmake)
+-- Found rmw_fastrtps_cpp: 6.2.10 (/opt/ros/humble/share/rmw_fastrtps_cpp/cmake)
+[  6%] Automatic MOC for target cmd_vel_router
+[  6%] Built target cmd_vel_router_autogen
+[  7%] Automatic MOC for target navigation_core
+[  7%] Built target navigation_core_autogen
+[  9%] Automatic MOC for target mppi_closed_loop_supervisor
+[  9%] Built target mppi_closed_loop_supervisor_autogen
+[ 10%] Automatic MOC for target global_field_test_localizer
+-- Using RMW implementation 'rmw_fastrtps_cpp' as default
+[ 10%] Built target global_field_test_localizer_autogen
+[ 11%] Automatic MOC for target global_test_odom_bridge
+[ 11%] Built target global_test_odom_bridge_autogen
+-- Found sensor_msgs: 4.9.2 (/opt/ros/humble/share/sensor_msgs/cmake)
+[ 13%] Automatic MOC for target trajectory_safety_supervisor
+[ 13%] Built target trajectory_safety_supervisor_autogen
+-- Found nav_msgs: 4.9.2 (/opt/ros/humble/share/nav_msgs/cmake)
+[ 14%] Automatic MOC for target gnss_global_fusion_math_self_check
+[ 14%] Built target gnss_global_fusion_math_self_check_autogen
+-- Found visualization_msgs: 4.9.2 (/opt/ros/humble/share/visualization_msgs/cmake)
+[ 15%] Automatic MOC for target gnss_vyaw_math_self_check
+[ 15%] Built target gnss_vyaw_math_self_check_autogen
+-- Found vision_msgs: 4.1.1 (/opt/ros/humble/share/vision_msgs/cmake)
+[ 17%] Automatic MOC for target stage2_gnss_integrity_math_self_check
+[ 17%] Built target stage2_gnss_integrity_math_self_check_autogen
+[ 18%] Automatic MOC for target steering_physical_lut_math_self_check
+[ 18%] Built target steering_physical_lut_math_self_check_autogen
+[ 19%] Automatic MOC for target steering_physical_math_self_check
+[ 19%] Built target steering_physical_math_self_check_autogen
+[ 21%] Automatic MOC for target steering_physical_part3_math_self_check
+[ 21%] Built target steering_physical_part3_math_self_check_autogen
+[ 22%] Automatic MOC for target gui_navigation_tuning_catalog_self_check
+[ 22%] Built target gui_navigation_tuning_catalog_self_check_autogen
+[ 26%] Built target agv_gui
+[ 30%] Built target imu_node
+[ 34%] Built target joint_state_visualizer
+[ 38%] Built target localization_core
+[ 42%] Built target cmd_vel_router
+[ 46%] Built target navigation_core
+[ 50%] Built target mppi_closed_loop_supervisor
+[ 53%] Built target global_field_test_localizer
+[ 57%] Built target global_test_odom_bridge
+[ 61%] Built target trajectory_safety_supervisor
+[ 65%] Built target gnss_global_fusion_math_self_check
+[ 69%] Built target gnss_vyaw_math_self_check
+[ 73%] Built target stage2_gnss_integrity_math_self_check
+[ 77%] Built target steering_physical_lut_math_self_check
+[ 81%] Built target steering_physical_math_self_check
+[ 85%] Built target steering_physical_part3_math_self_check
+[ 89%] Built target gui_navigation_tuning_catalog_self_check
+[ 90%] Automatic MOC for target gnss_node
+[ 90%] Built target gnss_node_autogen
+[ 92%] Automatic MOC for target agv_web_gui
+[ 92%] Built target agv_web_gui_autogen
+[ 96%] Built target gnss_node
+Consolidate compiler generated dependencies of target agv_web_gui
+[ 97%] Building CXX object CMakeFiles/agv_web_gui.dir/web/web_server.cpp.o
+-- LibTorch CPU ditemukan dari /usr/bin/python3; ABI=1; prefix=/home/otomasi/.local/lib/python3.10/site-packages/torch/share/cmake
+-- Perception backends: CPU=ON GPU=OFF; camera-only=ON
+-- Configuring done
+-- Generating done
+-- Build files have been written to: /home/otomasi/ros/build/perception
+Consolidate compiler generated dependencies of target camera_only_node
+[ 16%] Built target camera_only_node
+Consolidate compiler generated dependencies of target bbox_static_test_logger
+[ 33%] Built target bbox_static_test_logger
+Consolidate compiler generated dependencies of target fit_bbox_calibration
+[ 50%] Built target fit_bbox_calibration
+Consolidate compiler generated dependencies of target converter_pt_to_onnx_to_engine
+[ 66%] Built target converter_pt_to_onnx_to_engine
+Consolidate compiler generated dependencies of target perception_safety_core_self_check
+[ 83%] Built target perception_safety_core_self_check
+Consolidate compiler generated dependencies of target perception_cpu_node
+[ 91%] Building CXX object CMakeFiles/perception_cpu_node.dir/src/astra_yolop_cpu_pt_node.cpp.o
+[100%] Linking CXX executable perception_cpu_node
+[Processing: navigation, perception]
+[Processing: navigation, perception]
+[Processing: navigation, perception]
+[Processing: navigation, perception]
+[100%] Built target perception_cpu_node
+-- Install configuration: "Release"
+-- Execute custom install script
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/lib/perception/camera_only_node
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/lib/perception/perception_cpu_node
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/lib/perception/bbox_static_test_logger
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/lib/perception/fit_bbox_calibration
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/lib/perception/converter_pt_to_onnx_to_engine
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/include/perception/perception_safety_core.hpp
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/share/perception/launch/__pycache__/astra_yolop.launch.cpython-310.pyc
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/share/perception/launch/__pycache__/astra_yolop_gpu.launch.cpython-310.pyc
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/share/perception/launch/__pycache__/astra_yolop_gpu_with_cv.launch.cpython-310.pyc
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/share/perception/launch/__pycache__/astra_yolop_gpu_with_rviz.launch.cpython-310.pyc
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/share/perception/launch/astra_yolop.launch.py
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/share/perception/launch/astra_yolop_gpu.launch.py
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/share/perception/launch/astra_yolop_gpu_with_cv.launch.py
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/share/perception/launch/astra_yolop_gpu_with_rviz.launch.py
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/share/perception/config/astra_yolop_gpu.yaml
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/share/perception/config/astra_yolop_gpu.yaml.web.bak.20260903_214513_558
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/share/perception/config/astra_yolop_gpu.yaml.web.bak.20260904_001608_958
+-- Symlinking: /home/otomasi/ros/install/perception/share/perception/config/astra_yolop_gpu.yaml.web.bak.20260904_003055_010
+-- Symlinking: /home/otomasi/ros/install/perception/share/perception/config/astra_yolop_gpu.yaml.web.bak.20260904_005224_882
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/share/perception/config/bbox_obstacle_calibration.yaml
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/share/perception/rviz/yolop_thesis.rviz
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/share/perception/models/README.md
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/share/perception/CPU_GPU_BACKEND_GUIDE.md
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/lib/perception/perception_backend_preflight.py
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/lib/perception/download_yolopv2.py
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/lib/perception/check_libtorch_cpu.py
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/lib/perception/yolopv2_official_export_v19_4.py
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/share/ament_index/resource_index/package_run_dependencies/perception
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/share/ament_index/resource_index/parent_prefix_path/perception
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/share/perception/environment/ament_prefix_path.sh
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/share/perception/environment/ament_prefix_path.dsv
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/share/perception/environment/path.sh
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/share/perception/environment/path.dsv
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/share/perception/local_setup.bash
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/share/perception/local_setup.sh
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/share/perception/local_setup.zsh
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/share/perception/local_setup.dsv
+-- Symlinking: /home/otomasi/ros/install/perception/share/perception/package.dsv
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/share/ament_index/resource_index/packages/perception
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/share/perception/cmake/perceptionConfig.cmake
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/share/perception/cmake/perceptionConfig-version.cmake
+-- Up-to-date symlink: /home/otomasi/ros/install/perception/share/perception/package.xml
+Finished <<< perception [2min 24s]
+[ 98%] Linking CXX executable agv_web_gui
+[Processing: navigation]
+[100%] Built target agv_web_gui
+-- Install configuration: "Release"
+-- Execute custom install script
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/lib/navigation/gnss_node
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/lib/navigation/imu_node
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/lib/navigation/joint_state_visualizer
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/lib/navigation/localization_core
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/lib/navigation/cmd_vel_router
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/lib/navigation/navigation_core
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/lib/navigation/mppi_closed_loop_supervisor
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/lib/navigation/trajectory_safety_supervisor
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/lib/navigation/global_field_test_localizer
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/lib/navigation/global_test_odom_bridge
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/lib/navigation/agv_gui
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/lib/navigation/agv_web_gui
+-- Symlinking: /home/otomasi/ros/install/navigation/share/navigation/launch/__pycache__/autonomous.launch.cpython-310.pyc
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/launch/__pycache__/autonomous.launch.cpython-311.pyc
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/launch/__pycache__/global_field_test.launch.cpython-310.pyc
+-- Symlinking: /home/otomasi/ros/install/navigation/share/navigation/launch/__pycache__/gnss.launch.cpython-310.pyc
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/launch/__pycache__/gnss.launch.cpython-311.pyc
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/launch/__pycache__/gui.launch.cpython-310.pyc
+-- Symlinking: /home/otomasi/ros/install/navigation/share/navigation/launch/__pycache__/imu.launch.cpython-310.pyc
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/launch/__pycache__/imu.launch.cpython-311.pyc
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/launch/__pycache__/urdf_rviz.launch.cpython-310.pyc
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/launch/__pycache__/web_gui.launch.cpython-310.pyc
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/launch/autonomous.launch.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/launch/global_field_test.launch.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/launch/gnss.launch.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/launch/gui.launch.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/launch/imu.launch.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/launch/urdf_rviz.launch.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/launch/web_gui.launch.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/config/collision_monitor.yaml
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/config/collision_monitor_preview.yaml
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/config/collision_monitor_production.yaml
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/config/ekf.yaml
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/config/ekf_global_field_test.yaml
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/config/fastdds_no_shm.xml
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/config/global_field_test.yaml
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/config/gnss.yaml
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/config/gnss.yaml.web.bak.20260903_194500_111
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/config/gnss.yaml.web.bak.20260903_203726_115
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/config/gui_calibration.yaml
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/config/imu.yaml
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/config/imu_calibration.yaml
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/config/localization_cpp.yaml
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/config/mppi_closed_loop.yaml
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/config/nav2_ackermann.yaml
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/config/navigation_core.yaml
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/config/saved_targets.yaml
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/config/stage3_navigation.yaml
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/config/trajectory_safety.yaml
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/config/vehicle.yaml
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/rviz/autonomous.rviz
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/rviz/global_field_test.rviz
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/rviz/urdf.rviz
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/agv.urdf.xacro
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/chassis.xacro
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/dimensions.xacro
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/joints.xacro
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/materials.xacro
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/meshes/atv_rim.stl
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/meshes/camera_astra_pro.stl
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/meshes/chassis_black.stl
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/meshes/chassis_caliper.stl
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/meshes/chassis_chain.stl
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/meshes/chassis_galvanized.stl
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/meshes/chassis_hardware.stl
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/meshes/chassis_silver.stl
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/meshes/chassis_spring.stl
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/meshes/chassis_straps.stl
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/meshes/chassis_wood.stl
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/meshes/chassis_wood_grain.stl
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/meshes/coil_spring.stl
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/meshes/gnss_dome.stl
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/meshes/hmi_case.stl
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/meshes/imu_case.stl
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/meshes/water_jug_19l.stl
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/meshes/water_jug_detail.stl
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/meshes/water_jug_handle.stl
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/meshes/wheel.stl
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/meshes/wood_lid.stl
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/sensors.xacro
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/steering.xacro
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/suspension.xacro
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/visual_drivetrain.xacro
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/water_jugs.xacro
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/urdf/wheels.xacro
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/maps/undip/undip_nav2.pgm
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/maps/undip/undip_nav2.yaml
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/maps/undip/undip_nav2_raw.osm
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/behavior_trees/ackermann_navigate_to_pose.xml
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/GNSS_DRIVER_V2_PART1.md
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/GNSS_DRIVER_V2_PART1_VALIDATION.txt
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/GNSS_GLOBAL_FUSION_PART3.md
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/GNSS_GLOBAL_FUSION_PART3_VALIDATION.txt
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/GNSS_MOTION_VALIDATION_PART2.md
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/GNSS_MOTION_VALIDATION_PART2_VALIDATION.txt
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/GUI_CPP_FINAL_VALIDATION.txt
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/GUI_CPP_MIGRATION_V1.md
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/GUI_NAV2_EMBEDDED.md
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/HUMBLE_BUILD_FIX_20260822.md
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/MINIPC_NAV2_AUDIT_20260824.md
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/MINIPC_NAV2_NO_CAMERA_COMMISSIONING.md
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/MINIPC_NAV2_STATIC_VALIDATION_20260824.txt
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/PART2_VALIDATION.txt
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/PART3_VALIDATION.txt
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/PRECISION_REVISION_PART1.md
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/PRECISION_REVISION_PART2.md
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/PRECISION_REVISION_PART3.md
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/PRECISION_REVISION_V9.md
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/PROJECT_AUDIT_GNSS_IMU_ACKERMANN_PROLIFIC_20260823.md
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/STAGE1_COMMISSIONING.md
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/STAGE2_GNSS_IMU_ODOMETRY_FUSION.md
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/STAGE3_IMPLEMENTATION_REPORT_20260823.md
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/STAGE3_NAV2_ACKERMANN_OUTDOOR_SAFETY.md
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/STAGE3_VALIDATION_20260823.txt
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/STATIC_VALIDATION_20260823.txt
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/STEERING_PHYSICAL_CALIBRATION_PART1.md
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/STEERING_PHYSICAL_CALIBRATION_PART2.md
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/STEERING_PHYSICAL_CALIBRATION_PART3.md
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/STEERING_PHYSICAL_PART1_VALIDATION.txt
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/STEERING_PHYSICAL_PART2_VALIDATION.txt
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/STEERING_PHYSICAL_PART3_VALIDATION.txt
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/WEB_GUI_AND_USB_ROUTING_20260902.md
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/gui_interface.md
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/nav2_gui_layout.svg
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/docs/trajectory_safety_integration.md
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/tools/__pycache__/experiment_rank.cpython-310.pyc
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/tools/__pycache__/minipc_nav2_preflight.cpython-310.pyc
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/tools/__pycache__/minipc_nav2_preflight.cpython-311.pyc
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/tools/__pycache__/osm_pgm.cpython-310.pyc
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/tools/__pycache__/rosbag_regression.cpython-310.pyc
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/tools/__pycache__/runtime_profile.cpython-310.pyc
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/tools/__pycache__/stage1_commissioning_check.cpython-310.pyc
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/tools/__pycache__/stage1_commissioning_check.cpython-311.pyc
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/tools/__pycache__/stage2_commissioning_check.cpython-310.pyc
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/tools/__pycache__/stage2_motion_csv_analyzer.cpython-310.pyc
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/tools/__pycache__/stage3_certify.cpython-310.pyc
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/tools/__pycache__/stage3_commissioning_check.cpython-310.pyc
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/tools/__pycache__/stage3_nav2_csv_analyzer.cpython-310.pyc
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/tools/experiment_rank.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/tools/minipc_nav2_preflight.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/tools/nav2_gui_flow_check.sh
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/tools/osm_pgm.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/tools/rosbag_regression.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/tools/runtime_profile.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/tools/serial_usb_preflight.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/tools/stage1_commissioning_check.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/tools/stage2_commissioning_check.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/tools/stage2_motion_csv_analyzer.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/tools/stage3_certify.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/tools/stage3_commissioning_check.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/tools/stage3_nav2_csv_analyzer.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/web/static/app.js
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/web/static/index.html
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/web/static/styles.css
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/lib/navigation/experiment_rank.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/lib/navigation/minipc_nav2_preflight.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/lib/navigation/nav2_gui_flow_check.sh
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/lib/navigation/rosbag_regression.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/lib/navigation/runtime_profile.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/lib/navigation/serial_usb_preflight.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/lib/navigation/stage1_commissioning_check.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/lib/navigation/stage2_commissioning_check.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/lib/navigation/stage2_motion_csv_analyzer.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/lib/navigation/stage3_commissioning_check.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/lib/navigation/stage3_nav2_csv_analyzer.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/lib/navigation/stage3_certify.py
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/gui/assets/undip_logo.png
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/ament_index/resource_index/package_run_dependencies/navigation
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/ament_index/resource_index/parent_prefix_path/navigation
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/environment/ament_prefix_path.sh
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/environment/ament_prefix_path.dsv
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/environment/path.sh
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/environment/path.dsv
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/local_setup.bash
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/local_setup.sh
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/local_setup.zsh
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/local_setup.dsv
+-- Symlinking: /home/otomasi/ros/install/navigation/share/navigation/package.dsv
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/ament_index/resource_index/packages/navigation
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/cmake/navigationConfig.cmake
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/cmake/navigationConfig-version.cmake
+-- Up-to-date symlink: /home/otomasi/ros/install/navigation/share/navigation/package.xml
+Finished <<< navigation [3min 8s]
+
+Summary: 2 packages finished [3min 9s]

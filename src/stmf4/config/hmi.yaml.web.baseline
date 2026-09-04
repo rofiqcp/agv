@@ -5,7 +5,7 @@ stmf4_hmi_bridge:
     reconnect_sec: 0.50
     telemetry_rate_hz: 10.0
     command_rate_hz: 30.0
-    heartbeat_sec: 1.0
+    heartbeat_sec: 5.0
     manual_speed_max_mps: 1.0
     manual_speed_min_pct: 10
     manual_speed_max_pct: 50

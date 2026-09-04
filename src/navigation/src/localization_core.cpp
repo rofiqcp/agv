@@ -347,6 +347,7 @@ private:
     // Continuous map->odom correction. Gain dibuat kecil saat kendaraan
     // benar-benar bergerak agar URDF tidak meloncat terhadap planner.
     declare_parameter<double>("strict_correction_alpha", 0.20);
+    declare_parameter<bool>("freeze_stationary_map_translation", true);
     declare_parameter<double>("strict_moving_correction_alpha", 0.03);
     declare_parameter<bool>("enable_wheel_slip_pose_correction", false);
     declare_parameter<double>("strict_slip_correction_alpha", 0.60);
@@ -559,6 +560,8 @@ private:
       1, static_cast<int>(get_parameter("motion_critical_min_satellites").as_int()));
     strict_correction_alpha_ = std::clamp(
       get_parameter("strict_correction_alpha").as_double(), 0.0, 1.0);
+    freeze_stationary_map_translation_ =
+      get_parameter("freeze_stationary_map_translation").as_bool();
     strict_moving_correction_alpha_ = std::clamp(
       get_parameter("strict_moving_correction_alpha").as_double(), 0.0, 1.0);
     enable_wheel_slip_pose_correction_ = get_parameter("enable_wheel_slip_pose_correction").as_bool();
@@ -1938,6 +1941,13 @@ private:
 
       double alpha = slip_pose_correction ? strict_slip_correction_alpha_ :
         (stationary ? strict_correction_alpha_ : strict_moving_correction_alpha_);
+      // Once the startup anchor is valid, wheel/IMU odometry is the short-term
+      // motion authority. Repeatedly pulling map->odom toward single-antenna GNSS
+      // jitter while the wheel speed is zero makes a parked robot appear to slide
+      // sideways and can provoke maximum-steering MPPI commands at launch.
+      if (stationary && freeze_stationary_map_translation_ && !slip_pose_correction) {
+        alpha = 0.0;
+      }
 
       // Saat hanya kualitas HOLD (bukan strict), tetap koreksi tetapi lebih lembut.
       if (!strictQualityPassesUnlocked()) {
@@ -1987,7 +1997,8 @@ private:
       anchor_map_odom_.y += dy;
       anchor_map_odom_.yaw = navigation_math::normalizeAngle(anchor_map_odom_.yaw + dyaw);
       anchor_mode_ = slip_pose_correction ? "STRICT_SLIP_CORRECT" :
-        (strictQualityPassesUnlocked() ? "STRICT" : "GNSS_HOLD");
+        ((stationary && freeze_stationary_map_translation_) ? "STATIONARY_HOLD" :
+         (strictQualityPassesUnlocked() ? "STRICT" : "GNSS_HOLD"));
       if (std::abs(dyaw) > 0.0) anchor_mode_ += yaw_from_global_ekf ? "+EKF_YAW" : "+COG_YAW";
 
       if (slip_detected) {
@@ -2970,6 +2981,7 @@ private:
   double motion_critical_max_dop_{4.0};
   int motion_critical_min_satellites_{6};
   double strict_correction_alpha_{0.20};
+  bool freeze_stationary_map_translation_{true};
   double strict_moving_correction_alpha_{0.03};
   bool enable_wheel_slip_pose_correction_{false};
   double strict_slip_correction_alpha_{0.60};

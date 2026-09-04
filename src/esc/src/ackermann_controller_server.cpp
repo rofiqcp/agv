@@ -1138,14 +1138,17 @@ private:
              ratio * (steering_feedback_effective_left_stop_deg_ - steering_feedback_center_deg_);
     }
 
-    // Backward-compatible legacy mapping for systems that have not yet measured
-    // the real wheel angle. This path must not be described as physical steering.
+    // Uncalibrated fallback keeps the Ackermann wheel-angle domain separate from
+    // the STM/FOC protocol domain. The full SAFE operational wheel span maps to
+    // the configured STM endpoints (normally -90..+90 deg), so a 28 deg wheel
+    // safety limit no longer truncates the motor protocol command to about 28 deg.
+    const double operational_deg = std::max(1.0e-9, operationalPhysicalLimitDeg());
     if (physical_deg > 0.0) {
-      const double ratio = physical_deg / steering_max_deg_;
+      const double ratio = std::clamp(physical_deg / operational_deg, 0.0, 1.0);
       return steering_feedback_center_deg_ +
              ratio * (steering_feedback_effective_right_stop_deg_ - steering_feedback_center_deg_);
     }
-    const double ratio = (-physical_deg) / steering_max_deg_;
+    const double ratio = std::clamp((-physical_deg) / operational_deg, 0.0, 1.0);
     return steering_feedback_center_deg_ +
            ratio * (steering_feedback_effective_left_stop_deg_ - steering_feedback_center_deg_);
   }
@@ -1173,6 +1176,18 @@ private:
     last_center_hold_measured_uncal_deg_ = steering_feedback_center_reference_deg_;
   }
 
+  void pauseCenterHoldPreserveTrim()
+  {
+    // A turn must pause center adaptation, but must NOT erase the bounded trim
+    // that was learned while the wheel was physically centered. Erasing it made
+    // the return-to-center command jump back to the raw 3-point center and could
+    // leave the wheel near its operational limit after every Nav2 turn.
+    steering_center_hold_active_ = false;
+    steering_center_hold_last_update_ = std::chrono::steady_clock::now();
+    last_center_hold_p_deg_ = 0.0;
+    last_center_hold_trim_deg_ = steering_center_hold_trim_state_deg_;
+  }
+
   double centerHeldUncalibratedTargetDeg(double calibrated_target_deg, double base_protocol_cmd_deg)
   {
     const auto now_steady = std::chrono::steady_clock::now();
@@ -1181,12 +1196,12 @@ private:
     // Remember the direction from which the mechanism will later return to center.
     if (calibrated_target_deg < -steering_center_hold_request_deadband_deg_) {
       last_steering_direction_ = -1;
-      resetCenterHold();
+      pauseCenterHoldPreserveTrim();
       return base_protocol_cmd_deg;
     }
     if (calibrated_target_deg > steering_center_hold_request_deadband_deg_) {
       last_steering_direction_ = +1;
-      resetCenterHold();
+      pauseCenterHoldPreserveTrim();
       return base_protocol_cmd_deg;
     }
 
@@ -1206,13 +1221,13 @@ private:
       ack_time = last_ack_time_;
     }
     if (!feedback_ok) {
-      resetCenterHold();
+      pauseCenterHoldPreserveTrim();
       return base_protocol_cmd_deg;
     }
 
     const double age = std::chrono::duration<double>(now_steady - ack_time).count();
     if (age > steering_center_hold_feedback_timeout_sec_) {
-      resetCenterHold();
+      pauseCenterHoldPreserveTrim();
       return base_protocol_cmd_deg;
     }
 
@@ -1229,17 +1244,22 @@ private:
     const double biased_base = base_protocol_cmd_deg + direction_bias;
 
     if (std::abs(error_deg) > steering_center_hold_capture_deg_) {
-      resetCenterHold();
+      // Outside the adaptation capture window, retain the previously learned
+      // bounded center trim instead of discarding it. This gives the actuator a
+      // deterministic path back toward center after a full steering excursion.
+      pauseCenterHoldPreserveTrim();
       last_center_hold_error_deg_ = error_deg;
       last_center_hold_measured_uncal_deg_ = measured_protocol_deg;
-      return std::clamp(biased_base, -90.0, 90.0);
+      return std::clamp(
+        biased_base + steering_center_hold_trim_state_deg_, -90.0, 90.0);
     }
 
     double dt = 0.0;
     if (!steering_center_hold_active_) {
       steering_center_hold_active_ = true;
       steering_center_hold_last_update_ = now_steady;
-      steering_center_hold_trim_state_deg_ = 0.0;
+      // Keep the retained trim from the previous centered episode. Adaptation
+      // below may refine it, but a normal steering turn never resets it to zero.
     } else {
       dt = std::clamp(
         std::chrono::duration<double>(now_steady - steering_center_hold_last_update_).count(),
@@ -1250,10 +1270,10 @@ private:
     const bool inside_deadband =
       std::abs(error_deg) <= steering_center_hold_feedback_deadband_deg_;
 
-    // Bounded center take-up. This is deliberately NOT a persistent PI
-    // integrator: resetCenterHold() clears trim_state on every non-center turn.
-    // During each return-to-center episode, trim_state adapts only until the
-    // measured STM feedback reaches the captured CENTER feedback, then freezes.
+    // Bounded center take-up. This is deliberately NOT an unbounded PI
+    // integrator: trim_state is clamped and survives normal steering turns so
+    // return-to-center remains repeatable. It is cleared only when center-hold
+    // itself is disabled/invalidated, not on each commanded turn.
     if (!inside_deadband && dt > 0.0) {
       const double requested_delta = steering_center_hold_adapt_gain_per_sec_ * error_deg * dt;
       const double max_delta = steering_center_hold_trim_rate_deg_s_ * dt;
@@ -1802,8 +1822,9 @@ private:
   double calibratedSteeringDeg(double measured_raw_deg) const
   {
     // Keep ACK feedback in its protocol/encoder domain, then map it to the REAL
-    // wheel angle measured by the operator. -90/0/+90 protocol values are never
-    // treated as physical wheel degrees once physical calibration is active.
+    // wheel angle when physical calibration exists. Before that calibration is
+    // certified, use the SAFE operational wheel span as a bounded estimate; do
+    // not scale protocol feedback by the STM +/-90 degree command domain.
     const double protocol_fb_deg = measured_raw_deg * (invert_steering_ ? -1.0 : 1.0);
     if (steering_physical_lut_enabled_ && steering_physical_lut_valid_) {
       const std::vector<double> * fb_lut = nullptr;
@@ -1835,12 +1856,12 @@ private:
       const double ratio = std::clamp(d / right_span, 0.0, 1.0);
       physical_deg = ratio * (
         (steering_physical_calibration_enabled_ && steering_physical_calibration_valid_)
-          ? steering_physical_right_limit_deg_ : steering_max_deg_);
+          ? steering_physical_right_limit_deg_ : operationalPhysicalLimitDeg());
     } else if (d * left_span > 0.0 && std::abs(left_span) > 1.0e-9) {
       const double ratio = std::clamp(d / left_span, 0.0, 1.0);
       physical_deg = ratio * (
         (steering_physical_calibration_enabled_ && steering_physical_calibration_valid_)
-          ? steering_physical_left_limit_deg_ : -steering_max_deg_);
+          ? steering_physical_left_limit_deg_ : -operationalPhysicalLimitDeg());
     }
 
     physical_deg = std::clamp(physical_deg, leftPhysicalLimitDeg(), rightPhysicalLimitDeg());
@@ -1928,6 +1949,8 @@ private:
                                   steering_physical_calibration_valid_) ? "on" : "off")
         << " physical_LR=" << steering_physical_left_limit_deg_ << "/"
         << steering_physical_right_limit_deg_ << "deg"
+        << " wheel_op=+/-" << operationalPhysicalLimitDeg() << "deg"
+        << " stm_range=+/-" << steering_max_deg_ << "deg"
         << " lut=" << ((steering_physical_lut_enabled_ && steering_physical_lut_valid_) ? "on" : "off")
         << " lut_n=" << steering_lut_physical_deg_.size()
         << " lut_dir=" << steering_lut_motion_direction_

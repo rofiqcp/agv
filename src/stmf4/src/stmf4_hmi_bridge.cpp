@@ -157,7 +157,7 @@ private:
     declare_parameter<double>("reconnect_sec", 0.5);
     declare_parameter<double>("telemetry_rate_hz", 10.0);
     declare_parameter<double>("command_rate_hz", 30.0);
-    declare_parameter<double>("heartbeat_sec", 1.0);
+    declare_parameter<double>("heartbeat_sec", 5.0);
     declare_parameter<double>("manual_speed_max_mps", 1.0);
     declare_parameter<int>("manual_speed_min_pct", 10);
     declare_parameter<int>("manual_speed_max_pct", 50);
@@ -593,10 +593,28 @@ private:
   bool sendLine(const std::string &line) {
     if (fd_ < 0) return false;
     const std::string packet = line + "\n";
-    const ssize_t n = ::write(fd_, packet.data(), packet.size());
-    if (n != static_cast<ssize_t>(packet.size())) {
-      if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return false;
-      closeSerial(std::strerror(errno));
+    size_t offset = 0;
+    int would_block_retries = 0;
+    while (offset < packet.size()) {
+      const ssize_t n = ::write(fd_, packet.data() + offset, packet.size() - offset);
+      if (n > 0) {
+        offset += static_cast<size_t>(n);
+        would_block_retries = 0;
+        continue;
+      }
+      if (n < 0 && errno == EINTR) continue;
+      if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        if (++would_block_retries <= 3) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+          continue;
+        }
+        // If no byte was emitted it is safe to drop this refresh and retry on
+        // the next timer tick. A partial frame must be closed/re-synchronized.
+        if (offset == 0) return false;
+        closeSerial("partial HMI write timed out");
+        return false;
+      }
+      closeSerial(n == 0 ? "zero-byte HMI write" : std::strerror(errno));
       return false;
     }
     return true;
@@ -882,7 +900,7 @@ private:
   std::string serial_device_;
   std::string waypoint_file_;
   int serial_baud_{115200};
-  double reconnect_sec_{0.5}, telemetry_rate_hz_{10.0}, command_rate_hz_{30.0}, heartbeat_sec_{1.0};
+  double reconnect_sec_{0.5}, telemetry_rate_hz_{10.0}, command_rate_hz_{30.0}, heartbeat_sec_{5.0};
   double waypoint_pose_timeout_sec_{2.5};
   double manual_speed_max_mps_{1.0}, hmi_steer_full_scale_deg_{90.0}, teleop_yaw_max_rps_{80.0 * kPi / 180.0};
   int speed_min_pct_{10}, speed_max_pct_{50}, manual_speed_pct_{20};
