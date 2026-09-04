@@ -76,6 +76,8 @@ int main()
     0.20, 0.0, -pixel_touch.correction_m, 0.0, false, corridor_mixer);
   const auto steer_left = mixRecenterCommand(
     0.20, 0.0, pixel_touch.correction_m, 0.0, false, corridor_mixer);
+  (void)steer_right;  // Tetap dianggap used saat assert dihapus oleh NDEBUG pada Release build.
+  (void)steer_left;   // Tetap dianggap used saat assert dihapus oleh NDEBUG pada Release build.
   assert(steer_right.angular_z < 0.0);
   assert(steer_left.angular_z > 0.0);
 

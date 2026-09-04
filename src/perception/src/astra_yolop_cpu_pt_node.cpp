@@ -246,6 +246,7 @@ public:
           if (!enabled) {
             publishEmergency(false);
             publishHealth(true, "CAMERA_ONLY");
+            publishCameraOnlyPerformance();
             RCLCPP_INFO(get_logger(), "YOLOPv2 inference OFF -> camera-only mode");
           } else {
             RCLCPP_INFO(get_logger(), "YOLOPv2 inference requested ON; model lazy-load on next frame");
@@ -2244,6 +2245,26 @@ private:
     emergency_stop_ = emergency;
   }
 
+  void publishCameraOnlyPerformance()
+  {
+    if (!performance_pub_) return;
+    std_msgs::msg::String performance;
+    std::ostringstream json;
+    json << std::fixed << std::setprecision(3)
+         << "{\"backend\":\"camera_only\",\"inference_enabled\":false"
+         << ",\"capture_fps\":" << capture_fps_.load()
+         << ",\"capture_frames_total\":" << capture_frames_total_.load()
+         << ",\"capture_dropped_total\":" << capture_dropped_total_.load()
+         << ",\"capture_overwrite_total\":" << capture_overwrite_total_.load()
+         << ",\"web_preview_published_total\":" << web_preview_published_total_.load()
+         << ",\"web_preview_fps_target\":" << web_preview_fps_
+         << ",\"cpu_threads\":" << cpu_threads_
+         << ",\"opencv_threads\":" << opencv_threads_
+         << '}';
+    performance.data = json.str();
+    performance_pub_->publish(performance);
+  }
+
   void captureLoop()
   {
     while (rclcpp::ok() && !capture_stop_.load()) {
@@ -2275,6 +2296,7 @@ private:
           publishConnected(true);
           publishHealth(true, "CAMERA_ONLY");
           publishEmergency(false);
+          publishCameraOnlyPerformance();
         }
       }
       if (last_capture_time_.time_since_epoch().count() != 0) {
@@ -2489,7 +2511,7 @@ private:
       std_msgs::msg::String performance;
       std::ostringstream json;
       json << std::fixed << std::setprecision(3)
-           << "{\"backend\":\"cpu\",\"window_frames\":" << timing.size()
+           << "{\"backend\":\"cpu\",\"inference_enabled\":true,\"window_frames\":" << timing.size()
            << ",\"pipeline_fps\":" << performance_fps_
            << ",\"pipeline_fps_ema\":" << performance_fps_
            << ",\"pipeline_ms_per_frame\":" << mean_ms
