@@ -1,3 +1,0 @@
-[ 25%] Automatic MOC for target agv_web_gui
-[ 25%] Built target agv_web_gui_autogen
-[ 50%] Building CXX object CMakeFiles/agv_web_gui.dir/web/web_server.cpp.o
