@@ -324,6 +324,10 @@ private:
     declare_parameter<int>("startup_gnss_samples", 5);
     declare_parameter<int>("startup_imu_samples", 3);
     declare_parameter<double>("startup_max_spread_m", 5.0);
+    // Global EKF may briefly publish an initialized (0,0) before its absolute
+    // GNSS state converges. Never let that transient overwrite a valid calibrated
+    // GNSS map pose during map->odom bootstrap.
+    declare_parameter<double>("global_odom_map_reference_max_error_m", 15.0);
 
     declare_parameter<int>("strict_min_satellites", 8);
     declare_parameter<double>("strict_max_dop", 2.0);
@@ -532,6 +536,8 @@ private:
     startup_gnss_samples_ = std::max(1, static_cast<int>(get_parameter("startup_gnss_samples").as_int()));
     startup_imu_samples_ = std::max(1, static_cast<int>(get_parameter("startup_imu_samples").as_int()));
     startup_max_spread_m_ = get_parameter("startup_max_spread_m").as_double();
+    global_odom_map_reference_max_error_m_ = std::max(1.0,
+      get_parameter("global_odom_map_reference_max_error_m").as_double());
 
     strict_min_satellites_ = static_cast<int>(get_parameter("strict_min_satellites").as_int());
     strict_max_dop_ = get_parameter("strict_max_dop").as_double();
@@ -1881,11 +1887,10 @@ private:
         return;
       }
       startup_anchor_quality_mode_ = strict_anchor_ok ? "STRICT" : "DEGRADED_BOOTSTRAP";
+      // Bootstrap MUST use the calibrated raw GNSS map pose. A freshly-created
+      // global EKF can legitimately be fresh while still sitting at (0,0).
+      // Substituting it here races startup and can place Nav2 in lethal space.
       navigation_math::Pose2D seed_pose = map_base;
-      if (globalOdomFreshUnlocked()) {
-        seed_pose.x = global_ekf_pose_.x;
-        seed_pose.y = global_ekf_pose_.y;
-      }
       seed_pose.yaw = fastMapHeadingUnlocked();
       startup_samples_.push_back({seed_pose, quality_.hacc_m, gnss_stamp});
       while (startup_samples_.size() > static_cast<size_t>(startup_gnss_samples_)) {
@@ -1900,7 +1905,6 @@ private:
     if (anchor_mode_ == "PROVISIONAL_DISPLAY" &&
         (degradedQualityPassesUnlocked() || strictQualityPassesUnlocked())) {
       navigation_math::Pose2D better = map_base;
-      if (globalOdomFreshUnlocked()) { better.x = global_ekf_pose_.x; better.y = global_ekf_pose_.y; }
       better.yaw = fastMapHeadingUnlocked();
       anchor_map_odom_ = navigation_math::mapOdomFromBase(better, odom_base_);
       anchor_mode_ = strictQualityPassesUnlocked() ? "STRICT_RESEED" : "DEGRADED_RESEED";
@@ -1912,7 +1916,7 @@ private:
     // sehingga wheel-slip pada local EKF dapat dikoreksi kembali ke posisi absolut tanpa TF snap besar.
     if (correctionQualityPassesUnlocked()) {
       navigation_math::Pose2D map_reference = map_base;
-      if (globalOdomFreshUnlocked()) {
+      if (globalOdomUsableAsMapReferenceUnlocked(map_base)) {
         map_reference.x = global_ekf_pose_.x;
         map_reference.y = global_ekf_pose_.y;
       }
@@ -2325,6 +2329,33 @@ private:
     }
     const double age = (now() - last_global_odom_time_).seconds();
     return age >= 0.0 && age <= std::max(1.5, 2.0 * odom_timeout_sec_);
+  }
+
+  bool globalOdomUsableAsMapReferenceUnlocked(const navigation_math::Pose2D &raw_map_base)
+  {
+    if (!globalOdomFreshUnlocked()) return false;
+    if (!std::isfinite(global_ekf_pose_.x) || !std::isfinite(global_ekf_pose_.y) ||
+        !std::isfinite(raw_map_base.x) || !std::isfinite(raw_map_base.y)) return false;
+
+    const double raw_norm = std::hypot(raw_map_base.x, raw_map_base.y);
+    const double global_norm = std::hypot(global_ekf_pose_.x, global_ekf_pose_.y);
+    if (raw_norm > 20.0 && global_norm < 1.0) return false;
+
+    const double disagreement = std::hypot(
+      global_ekf_pose_.x - raw_map_base.x, global_ekf_pose_.y - raw_map_base.y);
+    const double hacc_tolerance = std::isfinite(quality_.hacc_m) && quality_.hacc_m > 0.0 ?
+      2.0 * quality_.hacc_m : global_odom_map_reference_max_error_m_;
+    const double tolerance = std::min(30.0, std::max(
+      global_odom_map_reference_max_error_m_, hacc_tolerance));
+    if (disagreement > tolerance) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 5000,
+        "Global EKF map reference ditolak: disagreement=%.2fm > %.2fm; raw=(%.2f,%.2f) global=(%.2f,%.2f)",
+        disagreement, tolerance, raw_map_base.x, raw_map_base.y,
+        global_ekf_pose_.x, global_ekf_pose_.y);
+      return false;
+    }
+    return true;
   }
 
   // Fungsi: Memastikan kualitas strict stabil beberapa detik sebelum motion gate.
@@ -2926,6 +2957,7 @@ private:
   int startup_gnss_samples_{5};
   int startup_imu_samples_{3};
   double startup_max_spread_m_{5.0};
+  double global_odom_map_reference_max_error_m_{15.0};
   int strict_min_satellites_{8};
   double strict_max_dop_{2.0};
   double strict_max_hacc_m_{3.0};

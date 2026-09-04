@@ -30,7 +30,7 @@ for endpoint in ("/api/events", "/api/state", "/api/health", "/api/camera.jpg", 
                  "/api/global_costmap.png", "/api/local_costmap.png",
                  "/api/experiment/record/last.csv", "/api/navigation/goal", "/api/navigation/cancel",
                  "/api/localization/initial-pose", "/api/steering/calibration-mode",
-                 "/api/config/set", "/api/experiment/record/start",
+                 "/api/config/set", "/api/config/reset", "/api/config/reset-batch", "/api/experiment/record/start",
                  "/api/experiment/record/stop", "/api/experiment/record/status"):
     if endpoint not in cpp: fail(f"web endpoint missing {endpoint}")
 for page in ("overview", "navigation", "perception", "sensors", "esc", "calibration", "tuning", "experiments", "reports", "diagnostics", "configuration"):
@@ -49,12 +49,19 @@ if 'id="sidebarBackdrop"' not in html or "$('sidebarBackdrop').onclick" not in j
     fail("mobile sidebar backdrop behavior missing")
 
 # BAB IV web workbench must expose the three source domains and real tuning/evidence surfaces.
-for token in ("BAB IV • Pengujian, Tuning & Evidence", "data-exp=\"navigation\"",
+for token in ("CONTROL ENGINEERING", "Tuning & Control", "data-exp=\"navigation\"",
               "data-exp=\"perception\"", "data-exp=\"steering\"",
-              "id=\"tuningFields\"", "id=\"experimentGraphs\"", "id=\"experimentTable\"",
+              "id=\"tuningFields\"", "id=\"experimentGraphs\"", "id=\"experimentTables\"",
               "id=\"expMapCanvas\"", "id=\"expCameraImage\"", "id=\"expEscCanvas\"",
               "id=\"recordToggleBtn\""):
     if token not in html: fail(f"BAB IV web workbench missing {token}")
+if 'id="yoloToggleBtn"' not in html or 'id="yoloToggleState"' not in html:
+    fail("explicit YOLOPv2 perception toggle missing")
+per_start = html.find('id="page-perception"')
+per_end = html.find('id="page-sensors"', per_start)
+perception_html = html[per_start:per_end if per_end > per_start else len(html)]
+if 'data-hmi-camera-tab="VIEW"' in perception_html or 'data-hmi-camera-tab="DETECT"' in perception_html:
+    fail("legacy VIEW/DETECT/DRIVE/STATUS block still present in Persepsi")
 for token in ("WEB_TUNING", "resolveMetricPath", "drawExperimentChart", "drawExperimentMap",
               "drawExperimentEsc", "saveTuningField", "startWebRecording", "stopWebRecording", "setRecordingUi"):
     if token not in js: fail(f"BAB IV web behavior missing {token}")
@@ -65,12 +72,29 @@ for token in ("setYamlValueAtomic", "patchExistingYamlScalar", "captureRecording
               "localization_cpp.yaml", "mppi_closed_loop.yaml"):
     if token not in cpp: fail(f"web tuning backend missing {token}")
 
+# Navigation tuning must preserve an immutable initial YAML baseline and expose safe reset.
+for token in ("baselinePathForConfig", "ensureConfigBaseline", "baselineYamlValue",
+              "applyConfigChanges", "safe_batch_restart", "batch_backups",
+              "baseline_data", "RESET BASELINE", "/api/config/reset", "/api/config/reset-batch"):
+    if token not in cpp: fail(f"YAML baseline/reset backend missing {token}")
+for token in ('id="resetExperimentYaml"', '*.web.baseline', '.web.bak.*'):
+    if token not in html: fail(f"YAML baseline/reset UI missing {token}")
+for token in ("baselineConfigValue", "resetSelectedExperimentYaml", "Reset YAML tahap ini"):
+    if token not in js: fail(f"YAML baseline/reset frontend missing {token}")
+for name in ("vehicle.yaml", "navigation_core.yaml", "nav2_ackermann.yaml", "ekf.yaml",
+             "localization_cpp.yaml", "gnss.yaml", "imu.yaml", "stage3_navigation.yaml",
+             "trajectory_safety.yaml", "collision_monitor_production.yaml",
+             "mppi_closed_loop.yaml", "gui_calibration.yaml"):
+    baseline = ROOT / "config" / f"{name}.web.baseline"
+    if not baseline.is_file() or baseline.stat().st_size < 10:
+        fail(f"navigation baseline missing/empty: {baseline}")
+
 # RViz-like browser interaction: real Nav2 costmaps, pan/zoom, goal yaw drag and auto-save/download.
 for token in ("id=\"mapGoalTool\"", "id=\"mapPanTool\"", "id=\"layerGlobalCostmap\"",
               "id=\"layerLocalCostmap\"", "id=\"layerGrid\"", "id=\"mapZoomLabel\""):
     if token not in html: fail(f"RViz-like navigation control missing {token}")
 for token in ("loadCostmapImage", "zoomMap", "screenToWorld", "pointerdown", "pointermove",
-              "AUTO WRITE", "download_url"):
+              "template-only report", "saveTemplateTableServer"):
     if token not in js: fail(f"RViz-like/autosave frontend behavior missing {token}")
 
 if "Content-Security-Policy" not in cpp:

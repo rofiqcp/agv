@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sys/file.h>
+#include <sys/ioctl.h>
 #include <iomanip>
 #include <optional>
 #include <sstream>
@@ -116,6 +117,9 @@ public:
     serial_timer_ = create_wall_timer(10ms, std::bind(&StmF4HmiBridge::serialTick, this));
     telemetry_timer_ = create_wall_timer(
       std::chrono::duration<double>(1.0 / telemetry_rate_hz_), std::bind(&StmF4HmiBridge::telemetryTick, this));
+    heartbeat_timer_ = create_wall_timer(500ms, [this]() {
+      if (fd_ >= 0) (void)sendLine("ROS:1");
+    });
     command_timer_ = create_wall_timer(
       std::chrono::duration<double>(1.0 / command_rate_hz_), std::bind(&StmF4HmiBridge::commandTick, this));
     publishConnected(false);
@@ -525,6 +529,13 @@ private:
     if (!fs::exists(serial_device_)) return false;
     const int fd = ::open(serial_device_.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) return false;
+    // Kernel-level exclusive ownership prevents another serial monitor/uploader
+    // from opening the same CDC endpoint and interleaving bytes with ROS frames.
+    if (::ioctl(fd, TIOCEXCL) != 0) {
+      RCLCPP_WARN(get_logger(), "Cannot claim exclusive HMI tty ownership: %s", std::strerror(errno));
+      ::close(fd);
+      return false;
+    }
     termios tty{};
     if (::tcgetattr(fd, &tty) != 0) { ::close(fd); return false; }
     ::cfmakeraw(&tty);
@@ -551,6 +562,7 @@ private:
     ::tcflush(fd_, TCIFLUSH);
     publishConnected(true);
     RCLCPP_INFO(get_logger(), "HMI USB connected: %s", serial_device_.c_str());
+    sendLine("ROS:1");
     sendLine("PING");
     sendLine("GET:STATE");
     sendLine("MODE:" + mode_);
@@ -622,6 +634,10 @@ private:
     last_rx_ = std::chrono::steady_clock::now();
     if (line.rfind("[TOUCH]", 0) == 0) {
       RCLCPP_INFO(get_logger(), "%s", line.c_str());
+      return;
+    }
+    if (line.rfind("LINK:ROS:", 0) == 0) {
+      RCLCPP_INFO(get_logger(), "HMI %s", line.c_str());
       return;
     }
     if (line.rfind("PAGE:", 0) == 0) {
@@ -909,7 +925,7 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   std::vector<rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr> bool_subs_;
   std::vector<rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr> float_subs_;
-  rclcpp::TimerBase::SharedPtr reconnect_timer_, serial_timer_, telemetry_timer_, command_timer_;
+  rclcpp::TimerBase::SharedPtr reconnect_timer_, serial_timer_, telemetry_timer_, heartbeat_timer_, command_timer_;
 };
 
 int main(int argc, char **argv) {

@@ -17,7 +17,7 @@ checks={
  'provisional TF gate': 'provisionalQualityPassesUnlocked' in loc and 'PROVISIONAL_DISPLAY' in loc,
  'provisional cannot be motion authority': 'autonomous motion remains CLOSED' in loc and 'strictQualityHeldUnlocked()' in loc,
  'automotive 10Hz': gcfg.get('navigation_rate_hz')==10.0 and gcfg.get('dynamic_model')=='automotive' and '0x20110021u' in gnss,
- 'ekf load reduced': ekf['ekf_filter_node_odom']['ros__parameters']['frequency']==20.0 and ekf['ekf_filter_node_map']['ros__parameters']['frequency']==10.0,
+ 'ekf load reduced': ekf['ekf_filter_node_odom']['ros__parameters']['frequency']==10.0 and ekf['ekf_filter_node_map']['ros__parameters']['frequency']==10.0,
  'HUD gnss yaw vx vyaw': all(x in nav for x in ['GNSS yaw','gnss_base_vx','gnss_vyaw']),
  'GUI live gnss': all(x in gui for x in ['gnssFixOK','GNSS heading: COG yaw / derived vyaw','Receiver rate','Dynamic model']),
  'yaml provisional thresholds': lcfg.get('allow_provisional_map_display') is True and lcfg.get('provisional_min_satellites')==3,

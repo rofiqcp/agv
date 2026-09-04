@@ -38,7 +38,8 @@ def _find_cdc_port():
     candidates.extend(sorted(glob.glob(
         "/dev/serial/by-id/usb-STMicroelectronics_BLACKPILL_F411CE_CDC_in_FS_Mode*-if00"
     )))
-    candidates.extend(sorted(glob.glob("/dev/ttyACM*")))
+    # Intentionally no generic /dev/ttyACM* fallback: another CDC device may
+    # be present. Only the configured/by-id BlackPill endpoint is safe to trigger.
     for path in candidates:
         if os.path.exists(path):
             return path

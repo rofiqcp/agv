@@ -20,7 +20,7 @@ for token in (
     'prediction_heads.size() != 3U',
     'const torch::IValue element = list.get(i)',
     'anchor_heads.size() != 3U',
-    'YOLOPv2 CPU TorchScript warm-up + 8-output contract: PASS',
+    'YOLOPv2 CPU TorchScript lazy-load + warm-up + 8-output contract: PASS',
     'resolveCpuModelPath',
     'resolveCpuThreadCount',
     'torch::set_num_interop_threads(1)',

@@ -208,6 +208,41 @@ QMap<QString, QString> configCandidates() {
   };
 }
 
+QString baselinePathForConfig(const QString &filePath) {
+  return filePath + QStringLiteral(".web.baseline");
+}
+
+bool ensureConfigBaseline(const QString &filePath, QString *message = nullptr) {
+  if (!QFileInfo(filePath).isFile()) {
+    if (message) *message = QStringLiteral("YAML source tidak ditemukan: ") + filePath;
+    return false;
+  }
+  const QString baseline = baselinePathForConfig(filePath);
+  if (QFileInfo(baseline).isFile()) {
+    try { YAML::LoadFile(baseline.toStdString()); }
+    catch (const std::exception &e) {
+      if (message) *message = QStringLiteral("Baseline YAML invalid: ") + QString::fromUtf8(e.what());
+      return false;
+    }
+    if (message) *message = QStringLiteral("Baseline YAML tersedia");
+    return true;
+  }
+  if (!QFile::copy(filePath, baseline)) {
+    if (message) *message = QStringLiteral("Gagal membuat baseline YAML: ") + baseline;
+    return false;
+  }
+  try { YAML::LoadFile(baseline.toStdString()); }
+  catch (const std::exception &e) {
+    QFile::remove(baseline);
+    if (message) *message = QStringLiteral("Baseline hasil copy invalid: ") + QString::fromUtf8(e.what());
+    return false;
+  }
+  QFile::setPermissions(baseline, QFileDevice::ReadOwner | QFileDevice::WriteOwner |
+                                  QFileDevice::ReadGroup | QFileDevice::ReadOther);
+  if (message) *message = QStringLiteral("Baseline YAML dibuat: ") + baseline;
+  return true;
+}
+
 QJsonObject loadConfigSnapshot() {
   QJsonObject root;
   QJsonObject paths;
@@ -224,6 +259,16 @@ QJsonObject loadConfigSnapshot() {
         QJsonObject entry;
         entry["path"] = it.value();
         entry["data"] = yamlToJson(YAML::LoadFile(it.value().toStdString()));
+        QString baselineMessage;
+        const bool baselineOk = ensureConfigBaseline(it.value(), &baselineMessage);
+        entry["baseline_ok"] = baselineOk;
+        entry["baseline_path"] = baselinePathForConfig(it.value());
+        entry["baseline_message"] = baselineMessage;
+        if (baselineOk) {
+          const QString baselinePath = baselinePathForConfig(it.value());
+          entry["baseline_data"] = yamlToJson(YAML::LoadFile(baselinePath.toStdString()));
+          entry["baseline_mtime_ms"] = QFileInfo(baselinePath).lastModified().toMSecsSinceEpoch();
+        }
         files[it.key()] = entry;
       } catch (const std::exception &e) {
         files[it.key()] = QJsonObject{{"path", it.value()}, {"error", QString::fromUtf8(e.what())}};
@@ -362,6 +407,53 @@ QJsonValue yamlPathValue(YAML::Node node, const QStringList &parts, int index = 
   return yamlPathValue(node[parts[index].toStdString()], parts, index + 1);
 }
 
+bool baselineYamlValue(const QString &fileKey, const QString &yamlPath, QJsonValue *value,
+                       QString *message = nullptr) {
+  const QMap<QString, QString> candidates = configCandidates();
+  if (!candidates.contains(fileKey) || yamlPath.trimmed().isEmpty()) {
+    if (message) *message = QStringLiteral("file_key/path baseline tidak diizinkan");
+    return false;
+  }
+  const QString filePath = candidates.value(fileKey);
+  QString baselineMessage;
+  if (!ensureConfigBaseline(filePath, &baselineMessage)) {
+    if (message) *message = baselineMessage;
+    return false;
+  }
+  const QString baseline = baselinePathForConfig(filePath);
+  try {
+    YAML::Node current = YAML::LoadFile(baseline.toStdString());
+    const QStringList parts = yamlPath.split('.', Qt::SkipEmptyParts);
+    for (const QString &part : parts) {
+      bool numeric = false;
+      const int seqIndex = part.toInt(&numeric);
+      if (numeric && current.IsSequence()) {
+        if (seqIndex < 0 || static_cast<size_t>(seqIndex) >= current.size()) {
+          if (message) *message = QStringLiteral("Index baseline di luar batas: ") + yamlPath;
+          return false;
+        }
+        current = current[static_cast<size_t>(seqIndex)];
+      } else {
+        if (!current.IsMap() || !current[part.toStdString()]) {
+          if (message) *message = QStringLiteral("Path tidak ada pada baseline: ") + yamlPath;
+          return false;
+        }
+        current = current[part.toStdString()];
+      }
+    }
+    if (!current) {
+      if (message) *message = QStringLiteral("Nilai baseline tidak ditemukan: ") + yamlPath;
+      return false;
+    }
+    if (value) *value = yamlToJson(current);
+    if (message) *message = QStringLiteral("Nilai baseline ditemukan");
+    return true;
+  } catch (const std::exception &e) {
+    if (message) *message = QString::fromUtf8(e.what());
+    return false;
+  }
+}
+
 bool setYamlValueAtomic(const QString &fileKey, const QString &yamlPath, const QJsonValue &input,
                         QString *message, QJsonValue *savedValue = nullptr) {
   const QMap<QString, QString> candidates = configCandidates();
@@ -480,7 +572,7 @@ QString recordingCsvStem(QString section) {
     title = match.captured(2).trimmed();
   }
   title.replace(QRegularExpression(QStringLiteral("\\s+")), QStringLiteral("_"));
-  title.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9_-]+")), QStringLiteral("_"));
+  title.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9._-]+")), QStringLiteral("_"));
   while (title.contains(QStringLiteral("__"))) title.replace(QStringLiteral("__"), QStringLiteral("_"));
   while (title.startsWith('_')) title.remove(0, 1);
   while (title.endsWith('_')) title.chop(1);
@@ -791,6 +883,111 @@ class WebRosBridge {
     return result;
   }
 
+  QJsonObject applyConfigChanges(const QJsonArray &changes) {
+    QJsonObject result{{"requested", true}, {"change_count", changes.size()}};
+    if (changes.isEmpty()) {
+      result["mode"] = "batch";
+      result["status"] = "NO_CHANGES";
+      result["runtime_match"] = true;
+      return result;
+    }
+
+    QSet<QString> restartNodes;
+    bool hasRuntimeTarget = false;
+    for (const QJsonValue &value : changes) {
+      if (!value.isObject()) continue;
+      const QJsonObject change = value.toObject();
+      const auto targets = runtimeTargetsForChange(change.value("file_key").toString(), change.value("path").toString());
+      if (!targets.isEmpty()) hasRuntimeTarget = true;
+      for (const auto &target : targets) restartNodes.insert(target.first);
+    }
+    if (!hasRuntimeTarget) {
+      result["mode"] = "yaml_only";
+      result["status"] = "NO_RUNTIME_TARGET";
+      result["runtime_match"] = false;
+      return result;
+    }
+
+    QString stationaryReason;
+    if (!vehicleStationaryForRuntimeApply(&stationaryReason)) {
+      result["mode"] = "restart_when_stationary";
+      result["status"] = "PENDING_STATIONARY";
+      result["message"] = stationaryReason;
+      result["runtime_match"] = false;
+      update("runtime_config_apply", result);
+      return result;
+    }
+
+    QJsonArray restartResults;
+    int signaled = 0;
+    for (const QString &nodeName : restartNodes) {
+      const QStringList pids = exactNodeProcesses(nodeName);
+      int stopped = 0;
+      for (const QString &pidText : pids) {
+        bool ok = false;
+        const qlonglong pid = pidText.toLongLong(&ok);
+        if (ok && pid > 1 && ::kill(pid_t(pid), SIGTERM) == 0) ++stopped;
+      }
+      signaled += stopped;
+      restartResults.append(QJsonObject{{"node", nodeName}, {"matched_processes", pids.size()}, {"signaled", stopped}});
+    }
+    result["mode"] = "safe_batch_restart";
+    result["restart"] = restartResults;
+    result["signaled_processes"] = signaled;
+    if (signaled == 0) {
+      result["status"] = "NEXT_START";
+      result["message"] = "Node target tidak sedang berjalan; seluruh baseline YAML akan aktif pada start berikutnya.";
+      result["runtime_match"] = false;
+      update("runtime_config_apply", result);
+      return result;
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    QJsonArray verify;
+    bool allMatch = false;
+    int verifyAttempts = 0;
+    constexpr int kMaxVerifyAttempts = 8;
+    for (int attempt = 1; attempt <= kMaxVerifyAttempts; ++attempt) {
+      verifyAttempts = attempt;
+      QJsonArray round;
+      bool roundMatch = true;
+      bool checkedAny = false;
+      for (const QJsonValue &value : changes) {
+        if (!value.isObject()) continue;
+        const QJsonObject change = value.toObject();
+        const QString fileKey = change.value("file_key").toString();
+        const QString yamlPath = change.value("path").toString();
+        const auto targets = runtimeTargetsForChange(fileKey, yamlPath);
+        if (targets.isEmpty()) continue;
+        checkedAny = true;
+        const QString paramName = parameterNameForYamlPath(yamlPath);
+        const QJsonValue expected = expectedRuntimeValue(fileKey, yamlPath);
+        bool changeMatch = !paramName.isEmpty() && !expected.isUndefined();
+        QJsonArray targetVerify;
+        for (const auto &target : targets) {
+          const QJsonObject one = readRuntimeParameter(target.second, paramName, expected);
+          targetVerify.append(one);
+          changeMatch = changeMatch && one.value("match").toBool(false);
+        }
+        round.append(QJsonObject{{"file_key", fileKey}, {"path", yamlPath},
+                                 {"match", changeMatch}, {"verify", targetVerify}});
+        roundMatch = roundMatch && changeMatch;
+      }
+      verify = round;
+      if (checkedAny && roundMatch) { allMatch = true; break; }
+      if (attempt < kMaxVerifyAttempts) std::this_thread::sleep_for(std::chrono::milliseconds(900));
+    }
+    result["verify_attempts"] = verifyAttempts;
+    result["verify"] = verify;
+    result["runtime_match"] = allMatch;
+    result["status"] = allMatch ? "ACTIVE_MATCH" : "RUNTIME_MISMATCH";
+    result["message"] = allMatch
+        ? QStringLiteral("Semua parameter baseline yang memiliki runtime target sudah MATCH setelah satu batch restart.")
+        : QStringLiteral("Batch restart selesai tetapi sebagian parameter runtime belum MATCH; jangan mulai run tuning dulu.");
+    update("runtime_config_apply", result);
+    return result;
+  }
+
   bool publishGoal(double x, double y, double yawRad, QString *message) {
     if (readOnly_) return rejectReadOnly(message);
     if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(yawRad)) {
@@ -896,6 +1093,36 @@ class WebRosBridge {
     return true;
   }
 
+  bool setPerceptionInference(bool enabled, QString *message) {
+    if (readOnly_) return rejectReadOnly(message);
+    auto client = node_->create_client<rcl_interfaces::srv::SetParametersAtomically>("/perception/set_parameters_atomically");
+    if (!client->wait_for_service(800ms)) {
+      if (message) *message = "Node /perception belum tersedia untuk lazy inference";
+      return false;
+    }
+    auto request = std::make_shared<rcl_interfaces::srv::SetParametersAtomically::Request>();
+    rcl_interfaces::msg::Parameter parameter;
+    parameter.name = "inference_enabled";
+    parameter.value.type = rcl_interfaces::msg::ParameterType::PARAMETER_BOOL;
+    parameter.value.bool_value = enabled;
+    request->parameters.push_back(parameter);
+    client->async_send_request(request,
+      [this, client, enabled](rclcpp::Client<rcl_interfaces::srv::SetParametersAtomically>::SharedFuture future) {
+        try {
+          const auto response = future.get();
+          const bool ok = response->result.successful;
+          if (ok) update("perception_inference_enabled", enabled);
+          update("web_action", QJsonObject{{"ok", ok}, {"action", enabled ? "perception_inference_on" : "perception_inference_off"},
+                                           {"message", QString::fromStdString(response->result.reason)}, {"at_ms", nowMs()}});
+        } catch (const std::exception &e) {
+          update("web_action", QJsonObject{{"ok", false}, {"action", "perception_inference"},
+                                           {"message", QString::fromUtf8(e.what())}, {"at_ms", nowMs()}});
+        }
+      });
+    if (message) *message = enabled ? "YOLOPv2 inference diminta ON" : "YOLOPv2 inference diminta OFF (camera-only)";
+    return true;
+  }
+
   bool setSteeringCalibrationMode(bool enabled, QString *message) {
     if (readOnly_) return rejectReadOnly(message);
     if (enabled) {
@@ -981,6 +1208,8 @@ class WebRosBridge {
     else if (fileKey == QStringLiteral("collision")) add(QStringLiteral("collision_monitor"),QStringLiteral("/collision_monitor"));
     else if (fileKey == QStringLiteral("esc")) add(QStringLiteral("esc_ackermann"),QStringLiteral("/esc_ackermann"));
     else if (fileKey == QStringLiteral("hmi")) add(QStringLiteral("stmf4_hmi_bridge"),QStringLiteral("/stmf4_hmi_bridge"));
+    else if (fileKey == QStringLiteral("mppi_closed_loop")) add(QStringLiteral("mppi_closed_loop_supervisor"),QStringLiteral("/mppi_closed_loop_supervisor"));
+    else if (fileKey == QStringLiteral("teleop")) add(QStringLiteral("motor_teleop"),QStringLiteral("/motor_teleop"));
     else if (fileKey == QStringLiteral("nav2")) {
       if (path.startsWith(QStringLiteral("planner_server."))) add(QStringLiteral("planner_server"),QStringLiteral("/planner_server"));
       else if (path.startsWith(QStringLiteral("global_costmap."))) add(QStringLiteral("planner_server"),QStringLiteral("/global_costmap/global_costmap"));
@@ -1147,6 +1376,8 @@ class WebRosBridge {
         {"/yolop/lane_metrics", "lane_metrics"}, {"/perception/drivable_space", "drivable_space"},
         {"/perception/camera_health_state", "camera_health_state"}, {"/perception/near_field_state", "near_field_state"},
         {"/perception/obstacle_metrics", "obstacle_metrics"}, {"/perception/raw_detections", "raw_detections"},
+        {"/perception/semantic_detections", "semantic_detections"},
+        {"/perception/semantic_status", "semantic_status"},
         {"/perception/performance", "perception_performance"},
         {"/navigation/trajectory_safety_state", "trajectory_safety_state"},
         {"/collision_monitor/state", "collision_monitor_state"}, {"/esc/status", "esc_status"},
@@ -1302,6 +1533,7 @@ class WebRosBridge {
       });
     };
     pathSubscribe("/plan", "nav_path");
+    pathSubscribe("/transformed_global_plan", "local_path");
     pathSubscribe("/controller_server/transformed_global_plan", "local_path");
     pathSubscribe("/local_plan", "local_path");
 
@@ -1310,7 +1542,7 @@ class WebRosBridge {
     // optimal trajectories so the browser map can show the same control output
     // that is normally inspected in RViz.
     subscribe<visualization_msgs::msg::MarkerArray>(
-      "/controller_server/trajectories", sensorQos,
+      "/trajectories", sensorQos,
       [this](visualization_msgs::msg::MarkerArray::ConstSharedPtr msg) {
         QJsonArray trajectories;
         size_t pointCount = 0;
@@ -1395,7 +1627,10 @@ class WebRosBridge {
           lastCompressedCameraSeen_ = now;
           lastCameraEncode_ = now;
         }
-        update("camera_frame", QJsonObject{{"encoding", "jpeg"}, {"source", "preview_compressed"}, {"at_ms", nowMs()},
+        const QString format = QString::fromStdString(msg->format);
+        const QString source = format.contains(QStringLiteral("yolop_annotated")) ?
+          QStringLiteral("yolop_annotated") : QStringLiteral("camera_raw");
+        update("camera_frame", QJsonObject{{"encoding", "jpeg"}, {"source", source}, {"format", format}, {"at_ms", nowMs()},
                                             {"bytes", static_cast<double>(msg->data.size())}});
       });
 
@@ -1627,7 +1862,10 @@ class LocalHttpServer : public QObject {
   bool recording_{false};
   QString recordingSubsystem_;
   QString recordingId_;
+  QString recordingSourceExperimentId_;
   QString recordingLabel_;
+  QString recordingSectionLabel_;
+  QMap<QString, QString> recordingTuningConfig_;
   QString recordingVariation_;
   QString recordingCondition_;
   QString recordingStartedIso_;
@@ -1760,6 +1998,118 @@ class LocalHttpServer : public QObject {
                        {"file_key", fileKey}, {"path", yamlPath}, {"saved_value", saved},
                        {"runtime_apply", runtimeApply}, {"runtime_match", runtimeApply.value("runtime_match")},
                        {"config", loadConfigSnapshot()}, {"at_ms", nowMs()}});
+    } else if (request.path == "/api/config/reset") {
+      if (bridge_->readOnly()) {
+        return sendJson(socket, 403, QJsonObject{{"ok", false}, {"message", "Web GUI read-only; reset YAML ditolak"}});
+      }
+      const QString fileKey = json.value("file_key").toString();
+      const QString yamlPath = json.value("path").toString();
+      QJsonValue baselineValue;
+      QString baselineMessage;
+      ok = baselineYamlValue(fileKey, yamlPath, &baselineValue, &baselineMessage);
+      QJsonValue saved;
+      if (ok) ok = setYamlValueAtomic(fileKey, yamlPath, baselineValue, &message, &saved);
+      else message = baselineMessage;
+      QJsonObject runtimeApply;
+      if (ok) runtimeApply = bridge_->applyConfigChange(fileKey, yamlPath);
+      const QString runtimeStatus = runtimeApply.value("status").toString();
+      const QString combined = ok
+          ? QStringLiteral("RESET BASELINE: ") + message + QStringLiteral(" Runtime: ") + runtimeStatus +
+                QStringLiteral(". ") + runtimeApply.value("message").toString()
+          : message;
+      return sendJson(socket, ok ? 200 : 409, QJsonObject{{"ok", ok}, {"message", combined},
+                       {"file_key", fileKey}, {"path", yamlPath}, {"baseline_value", baselineValue},
+                       {"saved_value", saved}, {"runtime_apply", runtimeApply},
+                       {"runtime_match", runtimeApply.value("runtime_match")},
+                       {"config", loadConfigSnapshot()}, {"at_ms", nowMs()}});
+    } else if (request.path == "/api/config/reset-batch") {
+      if (bridge_->readOnly()) {
+        return sendJson(socket, 403, QJsonObject{{"ok", false}, {"message", "Web GUI read-only; batch reset YAML ditolak"}});
+      }
+      const QJsonArray items = json.value("items").toArray();
+      if (items.isEmpty() || items.size() > 64) {
+        return sendJson(socket, 400, QJsonObject{{"ok", false}, {"message", "items reset harus berisi 1..64 parameter"}});
+      }
+      const QMap<QString, QString> candidates = configCandidates();
+      QJsonArray resolved;
+      QSet<QString> seen;
+      QMap<QString, QString> sourceFiles;
+      for (const QJsonValue &value : items) {
+        if (!value.isObject()) return sendJson(socket, 400, QJsonObject{{"ok", false}, {"message", "item reset harus object"}});
+        const QJsonObject item = value.toObject();
+        const QString fileKey = item.value("file_key").toString();
+        const QString yamlPath = item.value("path").toString();
+        const QString identity = fileKey + QStringLiteral(":") + yamlPath;
+        if (seen.contains(identity)) continue;
+        seen.insert(identity);
+        QJsonValue baselineValue;
+        QString baselineMessage;
+        if (!baselineYamlValue(fileKey, yamlPath, &baselineValue, &baselineMessage)) {
+          return sendJson(socket, 409, QJsonObject{{"ok", false}, {"message", baselineMessage},
+                           {"file_key", fileKey}, {"path", yamlPath}});
+        }
+        if (!candidates.contains(fileKey)) {
+          return sendJson(socket, 409, QJsonObject{{"ok", false}, {"message", "file_key reset tidak diizinkan"}});
+        }
+        sourceFiles[fileKey] = candidates.value(fileKey);
+        resolved.append(QJsonObject{{"file_key", fileKey}, {"path", yamlPath}, {"baseline_value", baselineValue}});
+      }
+      if (resolved.isEmpty()) {
+        return sendJson(socket, 400, QJsonObject{{"ok", false}, {"message", "Tidak ada parameter unik untuk di-reset"}});
+      }
+
+      const QString stamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz");
+      QMap<QString, QString> batchBackups;
+      QJsonObject backupJson;
+      for (auto it = sourceFiles.cbegin(); it != sourceFiles.cend(); ++it) {
+        const QString backup = it.value() + QStringLiteral(".web.reset.bak.") + stamp;
+        if (!QFile::copy(it.value(), backup)) {
+          return sendJson(socket, 409, QJsonObject{{"ok", false},
+                           {"message", QStringLiteral("Gagal membuat batch backup sebelum reset: ") + it.value()}});
+        }
+        batchBackups[it.key()] = backup;
+        backupJson[it.key()] = backup;
+      }
+
+      QJsonArray savedItems;
+      QString saveError;
+      bool allSaved = true;
+      for (const QJsonValue &value : resolved) {
+        const QJsonObject item = value.toObject();
+        QJsonValue savedValue;
+        QString oneMessage;
+        if (!setYamlValueAtomic(item.value("file_key").toString(), item.value("path").toString(),
+                                item.value("baseline_value"), &oneMessage, &savedValue)) {
+          allSaved = false;
+          saveError = oneMessage;
+          break;
+        }
+        savedItems.append(QJsonObject{{"file_key", item.value("file_key")}, {"path", item.value("path")},
+                                      {"saved_value", savedValue}});
+      }
+      if (!allSaved) {
+        bool rollbackOk = true;
+        for (auto it = sourceFiles.cbegin(); it != sourceFiles.cend(); ++it) {
+          const QString backup = batchBackups.value(it.key());
+          if (backup.isEmpty() || !QFileInfo::exists(backup)) { rollbackOk = false; continue; }
+          QFile::remove(it.value());
+          if (!QFile::copy(backup, it.value())) rollbackOk = false;
+        }
+        return sendJson(socket, 409, QJsonObject{{"ok", false}, {"message", saveError},
+                         {"rolled_back", rollbackOk}, {"batch_backups", backupJson},
+                         {"saved_before_failure", savedItems}});
+      }
+
+      const QJsonObject runtimeApply = bridge_->applyConfigChanges(resolved);
+      const QString runtimeStatus = runtimeApply.value("status").toString();
+      const bool runtimeMatch = runtimeApply.value("runtime_match").toBool(false);
+      const QString combined = QStringLiteral("Batch reset baseline selesai: ") + QString::number(resolved.size()) +
+                               QStringLiteral(" parameter. Runtime: ") + runtimeStatus + QStringLiteral(". ") +
+                               runtimeApply.value("message").toString();
+      return sendJson(socket, 200, QJsonObject{{"ok", true}, {"message", combined},
+                       {"items", savedItems}, {"batch_backups", backupJson},
+                       {"runtime_apply", runtimeApply}, {"runtime_match", runtimeMatch},
+                       {"config", loadConfigSnapshot()}, {"at_ms", nowMs()}});
     } else if (request.path == "/api/experiment/record/start") {
       ok = startRecording(json, &message);
       return sendJson(socket, ok ? 200 : 409, QJsonObject{{"ok", ok}, {"message", message},
@@ -1774,6 +2124,8 @@ class LocalHttpServer : public QObject {
       ok = saveTemplateTable(json, &message, &result);
       result["ok"] = ok; result["message"] = message; result["at_ms"] = nowMs();
       return sendJson(socket, ok ? 200 : 409, result);
+    } else if (request.path == "/api/perception/inference") {
+      ok = bridge_->setPerceptionInference(json.value("enabled").toBool(false), &message);
     } else if (request.path == "/api/navigation/goal") {
       ok = bridge_->publishGoal(json.value("x").toDouble(std::numeric_limits<double>::quiet_NaN()),
                                 json.value("y").toDouble(std::numeric_limits<double>::quiet_NaN()),
@@ -1842,7 +2194,9 @@ class LocalHttpServer : public QObject {
 
   QJsonObject recordingStatus() const {
     return QJsonObject{{"active", recording_}, {"subsystem", recordingSubsystem_}, {"id", recordingId_},
-                       {"label", recordingLabel_}, {"variation", recordingVariation_}, {"condition", recordingCondition_},
+                       {"source_experiment_id", recordingSourceExperimentId_},
+                       {"label", recordingLabel_}, {"section_label", recordingSectionLabel_},
+                       {"variation", recordingVariation_}, {"condition", recordingCondition_},
                        {"started_at", recordingStartedIso_}, {"sample_rate_hz", recordingRateHz_},
                        {"elapsed_s", recording_ && recordingStartedMs_ > 0 ? (nowMs() - recordingStartedMs_) / 1000.0 : 0.0},
                        {"samples", recordingRows_.size()},
@@ -1862,9 +2216,17 @@ class LocalHttpServer : public QObject {
     }
     recordingSubsystem_ = subsystem;
     recordingId_ = id;
+    recordingSourceExperimentId_ = json.value("source_experiment_id").toString().trimmed();
+    if (recordingSourceExperimentId_.isEmpty()) recordingSourceExperimentId_ = recordingId_;
     recordingLabel_ = json.value("label").toString().trimmed();
-    if (recordingLabel_.isEmpty()) recordingLabel_ = json.value("section_label").toString().trimmed();
     if (recordingLabel_.isEmpty()) recordingLabel_ = recordingId_;
+    recordingSectionLabel_ = json.value("section_label").toString().trimmed();
+    if (recordingSectionLabel_.isEmpty()) recordingSectionLabel_ = recordingLabel_;
+    recordingTuningConfig_.clear();
+    const QJsonObject tuningConfig = json.value("tuning_config").toObject();
+    for (auto it = tuningConfig.constBegin(); it != tuningConfig.constEnd(); ++it) {
+      flattenJson(QStringLiteral("tuning_yaml.") + it.key(), it.value(), recordingTuningConfig_);
+    }
     recordingVariation_ = json.value("variation").toString().trimmed();
     recordingCondition_ = json.value("condition").toString().trimmed();
     recordingRateHz_ = std::clamp(json.value("sample_rate_hz").toDouble(5.0), 1.0, 20.0);
@@ -1886,9 +2248,11 @@ class LocalHttpServer : public QObject {
     row["elapsed_s"] = QString::number(recordingStartedMs_ > 0 ? (sampleMs - recordingStartedMs_) / 1000.0 : 0.0, 'f', 3);
     row["subsystem"] = recordingSubsystem_;
     row["section_id"] = recordingId_;
-    row["section_label"] = recordingLabel_;
+    row["source_experiment_id"] = recordingSourceExperimentId_;
+    row["section_label"] = recordingSectionLabel_;
     row["variation"] = recordingVariation_;
     row["condition"] = recordingCondition_;
+    for (auto it = recordingTuningConfig_.cbegin(); it != recordingTuningConfig_.cend(); ++it) row[it.key()] = it.value();
     const QJsonObject snap = bridge_->snapshot();
     for (auto it = snap.constBegin(); it != snap.constEnd(); ++it) {
       if (it.key().startsWith(QStringLiteral("__"))) continue;
@@ -1919,9 +2283,9 @@ class LocalHttpServer : public QObject {
       if (message) *message = QStringLiteral("Gagal membuat folder data: ") + dataRoot;
       return false;
     }
-    const QString stemLabel = label.isEmpty() ? id : label;
-    const QString minuteStamp = QDateTime::currentDateTime().toString("MMdd_HHmmss");
-    const QString baseStem = recordingCsvStem(stemLabel) + QStringLiteral("_table%1_").arg(tableIndex + 1) + minuteStamp;
+    const QString stemLabel = id.isEmpty() ? label : id;
+    const QString minuteStamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss");
+    const QString baseStem = recordingCsvStem(stemLabel) + QStringLiteral("_T%1_").arg(tableIndex + 1) + minuteStamp;
     QString fileName = baseStem + QStringLiteral(".csv");
     int suffix = 2;
     while (QFileInfo::exists(QDir(dataRoot).filePath(fileName)))
@@ -1964,13 +2328,15 @@ class LocalHttpServer : public QObject {
     QStringList columns = all.values();
     std::sort(columns.begin(), columns.end());
     for (const QString &preferred : {QStringLiteral("condition"), QStringLiteral("variation"),
-                                      QStringLiteral("section_label"), QStringLiteral("section_id"),
-                                      QStringLiteral("subsystem"), QStringLiteral("elapsed_s"), QStringLiteral("time_iso")}) {
+                                      QStringLiteral("section_label"), QStringLiteral("source_experiment_id"),
+                                      QStringLiteral("section_id"), QStringLiteral("subsystem"),
+                                      QStringLiteral("elapsed_s"), QStringLiteral("time_iso")}) {
       columns.removeAll(preferred);
     }
     columns.prepend(QStringLiteral("condition"));
     columns.prepend(QStringLiteral("variation"));
     columns.prepend(QStringLiteral("section_label"));
+    columns.prepend(QStringLiteral("source_experiment_id"));
     columns.prepend(QStringLiteral("section_id"));
     columns.prepend(QStringLiteral("subsystem"));
     columns.prepend(QStringLiteral("elapsed_s"));
@@ -1986,8 +2352,8 @@ class LocalHttpServer : public QObject {
       csv += values.join(',').toUtf8() + '\n';
     }
 
-    const QString minuteStamp = QDateTime::currentDateTime().toString("MMdd_HHmm");
-    const QString baseStem = recordingCsvStem(recordingLabel_) + QStringLiteral("_") + minuteStamp;
+    const QString minuteStamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss");
+    const QString baseStem = recordingCsvStem(recordingId_) + QStringLiteral("_") + minuteStamp;
     QString fileName = baseStem + QStringLiteral(".csv");
     int suffix = 2;
     while (QFileInfo::exists(QDir(dataRoot).filePath(fileName))) {
@@ -2011,7 +2377,8 @@ class LocalHttpServer : public QObject {
     lastDownloadName_ = fileName;
     if (result) {
       *result = QJsonObject{{"subsystem", recordingSubsystem_}, {"section_id", recordingId_},
-                           {"section_label", recordingLabel_}, {"sample_count", recordingRows_.size()},
+                           {"source_experiment_id", recordingSourceExperimentId_},
+                           {"section_label", recordingSectionLabel_}, {"sample_count", recordingRows_.size()},
                            {"primary_csv", primaryPath}, {"raw_csv", primaryPath},
                            {"report_root", dataRoot},
                            {"download_url", QStringLiteral("/api/experiment/record/last.csv")},

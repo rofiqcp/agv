@@ -15,7 +15,7 @@
 extern TFT_eSPI tft;
 
 inline bool manualDriveEnabled(const VehicleTelemetry& d) {
-  return d.systemStatus == SYS_READY && d.mode == MODE_MANUAL && d.escReady;
+  return d.rosConnected && d.systemStatus == SYS_READY && d.mode == MODE_MANUAL && d.escReady;
 }
 
 inline bool manualSteerEnabled(const VehicleTelemetry& d) {

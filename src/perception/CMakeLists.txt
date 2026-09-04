@@ -359,7 +359,12 @@ install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY launch config rviz models DESTINATION share/${PROJECT_NAME})
 install(FILES CPU_GPU_BACKEND_GUIDE.md DESTINATION share/${PROJECT_NAME})
 install(
-  PROGRAMS tools/perception_backend_preflight.py tools/download_yolopv2.py tools/check_libtorch_cpu.py
+  PROGRAMS
+    tools/perception_backend_preflight.py
+    tools/download_yolopv2.py
+    tools/check_libtorch_cpu.py
+    tools/semantic_obstacle_node.py
+    tools/prepare_coco_obstacle_subset.py
   DESTINATION lib/${PROJECT_NAME})
 install(
   PROGRAMS tools/yolopv2_official_export_v19_4.py

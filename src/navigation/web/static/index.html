@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#07100f">
   <link rel="icon" href="data:,">
   <title>ADV Operator Console</title>
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles.css?v=20260904-obcal40">
 </head>
 <body>
   <div class="app-shell">
@@ -144,7 +144,7 @@
         <!-- PERCEPTION -->
         <section class="page" id="page-perception">
           <div class="camera-layout">
-            <article class="panel camera-panel"><div class="panel-head"><div><span class="eyebrow">ASTRA PRO / YOLOPv2</span><h2>Live Perception</h2></div><span class="status-chip waiting" id="cameraChip">WAIT</span></div><div class="camera-stage"><img id="cameraImage" alt="Live camera frame"><div id="cameraPlaceholder" class="camera-placeholder">Menunggu frame kamera...</div><div class="camera-meta"><span id="cameraSource">--</span><span id="cameraResolution">--</span></div></div><div class="hmi-camera-mirror"><span>TFT CAMERA</span><b id="hmiCameraTabPerception">VIEW</b><div><button data-hmi-camera-tab="VIEW">VIEW</button><button data-hmi-camera-tab="DETECT">DETECT</button><button data-hmi-camera-tab="DRIVE">DRIVE</button><button data-hmi-camera-tab="STATUS">STATUS</button></div></div></article>
+            <article class="panel camera-panel"><div class="panel-head"><div><span class="eyebrow">ASTRA PRO / YOLOPv2</span><h2>Live Perception</h2></div><span class="status-chip waiting" id="cameraChip">WAIT</span></div><div class="camera-stage"><img id="cameraImage" alt="Live camera frame"><div id="cameraPlaceholder" class="camera-placeholder">Menunggu frame kamera...</div><div class="camera-meta"><span id="cameraSource">--</span><span id="cameraResolution">--</span></div></div><div class="yolop-toggle-panel"><div><span>YOLOPv2 DETECTION</span><b id="yoloToggleState">OFF • CAMERA ONLY</b><small>OFF menjaga kamera tetap hidup tanpa inference. ON menampilkan bounding box, drivable area, dan lane overlay.</small></div><button class="soft-btn yolop-toggle" id="yoloToggleBtn" type="button" aria-pressed="false">Aktifkan YOLOPv2</button></div></article>
             <div class="stack">
               <article class="panel compact"><div class="panel-head"><div><span class="eyebrow">LANE</span><h2>Lane Safety</h2></div></div><div class="kv-list"><div><span>State</span><b id="laneState">--</b></div><div><span>Control</span><b id="laneControl">--</b></div><div><span>Drivable</span><b id="drivableState">--</b></div><div><span>Near field</span><b id="nearFieldState">--</b></div></div></article>
               <article class="panel compact"><div class="panel-head"><div><span class="eyebrow">POINT CLOUD</span><h2>Planning Inputs</h2></div></div><div class="kv-list"><div><span>Objects</span><b id="cloudObjects">--</b></div><div><span>Path relevant</span><b id="cloudPath">--</b></div><div><span>Planning</span><b id="cloudPlanning">--</b></div><div><span>Boundary</span><b id="cloudBoundary">--</b></div></div></article>
@@ -175,7 +175,7 @@
         <!-- ESC -->
         <section class="page" id="page-esc">
           <div class="esc-hero">
-            <article class="panel esc-status-card"><div class="panel-head"><div><span class="eyebrow">SERIAL ACTUATOR</span><h2>ESC Runtime</h2></div><span class="status-chip waiting" id="escChip">OFFLINE</span></div><div class="esc-connection"><div class="connection-orb" id="escOrb"><span>ESC</span></div><div><h3 id="escConnectionTitle">No ACK</h3><p id="escConnectionDetail">Menunggu ESC Prolific PL2303 melalui stable USB identity.</p><div class="path-tag">AUTO ID <b>Prolific PL2303</b></div></div></div><div class="metric-grid"><div><span>Drive target</span><b id="escDriveTarget">--</b></div><div><span>Drive actual</span><b id="escDriveActual">--</b></div><div><span>Steer target</span><b id="escSteerTarget">--</b></div><div><span>Steer actual</span><b id="escSteerActual">--</b></div><div><span>Yaw rate</span><b id="escYawRate">--</b></div><div><span>MUX source</span><b id="escMuxSource">--</b></div></div></article>
+            <article class="panel esc-status-card"><div class="panel-head"><div><span class="eyebrow">SERIAL ACTUATOR</span><h2>ESC Runtime</h2></div><span class="status-chip waiting" id="escChip">OFFLINE</span></div><div class="esc-connection"><div class="connection-orb" id="escOrb"><span>ESC</span></div><div><h3 id="escConnectionTitle">No ACK</h3><p id="escConnectionDetail">Menunggu ESC Prolific PL2303 melalui stable USB identity.</p><div class="path-tag">AUTO ID <b>Prolific PL2303</b></div></div></div><div class="metric-grid"><div><span>Drive target</span><b id="escDriveTarget">--</b></div><div><span>Drive actual</span><b id="escDriveActual">--</b></div><div><span>Steer target STM</span><b id="escSteerTarget">--</b></div><div><span>Steer feedback STM</span><b id="escSteerActual">--</b></div><div><span>Yaw rate</span><b id="escYawRate">--</b></div><div><span>MUX source</span><b id="escMuxSource">--</b></div></div></article>
             <article class="panel"><div class="panel-head"><div><span class="eyebrow">STEERING CALIBRATION</span><h2>Calibration Control</h2></div><span class="status-chip waiting" id="calibrationChip">SAFE</span></div><p class="info-box">Mode kalibrasi memaksa drive RPM = 0. Aktifkan hanya saat kendaraan aman dan roda steering dapat bergerak bebas.</p><div class="button-row"><button class="warning-btn grow" id="calModeOn">Enable Calibration</button><button class="soft-btn grow" id="calModeOff">Disable</button></div><div class="kv-list spaced"><div><span>Controller ready</span><b id="calControllerReady">--</b></div><div><span>Raw command</span><b id="escRawCommand">--</b></div><div><span>Raw feedback</span><b id="escRawFeedback">--</b></div><div><span>Physical feedback</span><b id="escPhysicalFeedback">--</b></div></div></article>
           </div>
           <article class="panel hmi-scada-panel">
@@ -267,20 +267,20 @@
               </article>
 
               <article class="panel run-console">
-                <div class="panel-head"><div><span class="eyebrow">RUN CONTROL</span><h2>Identitas Run & CSV Evidence</h2></div></div>
+                <div class="panel-head"><div><span class="eyebrow">RUN CONTROL</span><h2>Identitas Run & Data Evidence</h2></div></div>
                 <div class="run-grid">
                   <label>Variation / Run<input id="runVariation" value="run-01" autocomplete="off"></label>
                   <label>Condition<input id="runCondition" value="nominal" autocomplete="off"></label>
                   <label>Sample rate<input id="runSampleRate" type="number" min="1" max="20" step="1" value="5"><small>Hz</small></label>
                   <div class="record-actions"><button class="record-toggle start" id="recordToggleBtn" data-active="false">● START</button></div>
                 </div>
-                <div class="record-footer"><span id="recordElapsed">00:00.0</span><span id="recordPath">Output: /home/otomasi/ros/data/{navigasi|presepsi|esc}</span><span id="recordMessage">STOP → RAW CSV tersimpan + otomatis terdownload ke PC user</span></div>
+                <div class="record-footer"><span id="recordElapsed">00:00.0</span><span id="recordPath">Output: /home/otomasi/ros/data/{navigasi|presepsi|esc}</span><span id="recordMessage">START/STOP → tabel 1 Hz tersimpan • Save CSV / Excel • tiap grafik dapat Download PNG</span></div>
               </article>
 
               <div class="lab-two-col">
                 <article class="panel tuning-editor">
-                  <div class="panel-head"><div><span class="eyebrow">PARAMETER TUNING</span><h2>YAML Aktual</h2></div><button class="soft-btn" id="refreshExperimentConfig">Reload YAML</button></div>
-                  <div class="tuning-note" id="tuningNote">AUTO YAML aktif: perubahan field editable langsung ditulis atomik ke source YAML (+ backup). Parameter runtime Nav2/EKF yang tidak dinamis tetap memerlukan lifecycle reload/restart agar nilai baru berlaku.</div>
+                  <div class="panel-head"><div><span class="eyebrow">PARAMETER TUNING</span><h2>YAML Aktual</h2></div><div class="panel-actions"><button class="warning-btn" id="resetExperimentYaml" hidden>↶ Reset Tahap ke Baseline</button><button class="soft-btn" id="refreshExperimentConfig">Reload YAML</button></div></div>
+                  <div class="tuning-note" id="tuningNote">AUTO YAML aktif: perubahan field editable langsung ditulis atomik ke source YAML (+ backup). Baseline awal disimpan terpisah pada <code>*.web.baseline</code>; tombol Reset mengembalikan hanya parameter tahap Navigasi yang aktif ke baseline tersebut, dan kondisi sebelum reset tetap diamankan lagi sebagai <code>.web.bak.*</code>. Parameter runtime Nav2/EKF yang tidak dinamis tetap memerlukan lifecycle reload/restart agar nilai baru berlaku.</div>
                   <div id="tuningFields" class="tuning-fields"><div class="empty-state">Pilih subpengujian.</div></div>
                 </article>
 
@@ -307,8 +307,8 @@
                 </div>
                 <section class="obstacle-cal-wizard" id="obstacleCalibrationWizard" hidden>
                   <div class="obcal-head">
-                    <div><span class="eyebrow">4.3 OBSTACLE DISTANCE CALIBRATION</span><b>Wizard 1–5 m • Human + Motorcycle</b><p>Ukur jarak horizontal dari proyeksi kamera ke object. Satu jarak dikunci setelah Human dan Motorcycle selesai.</p></div>
-                    <span class="status-chip waiting" id="obcalState">0 / 10</span>
+                    <div><span class="eyebrow">4.3 OBSTACLE DISTANCE CALIBRATION</span><b>Wizard 1–5 m • Human + Motorcycle • 4 Orientasi</b><p>Setiap jarak wajib 8 capture: Human dan Motorcycle masing-masing Depan, Belakang, Samping Kiri, dan Samping Kanan. Jarak dikunci setelah 8/8 selesai.</p></div>
+                    <span class="status-chip waiting" id="obcalState">0 / 40</span>
                   </div>
                   <div class="obcal-top-grid">
                     <div class="obcal-preview">
@@ -320,6 +320,7 @@
                       <span class="eyebrow">CURRENT MEASUREMENT</span>
                       <label>Jarak real dari kamera<select id="obcalDistance"><option value="1">1 meter</option><option value="2">2 meter</option><option value="3">3 meter</option><option value="4">4 meter</option><option value="5">5 meter</option></select></label>
                       <label>Object yang diukur<select id="obcalType"><option value="human">Human / Manusia</option><option value="motorcycle">Motorcycle / Motor</option></select></label>
+                      <label>Orientasi object<select id="obcalOrientation"><option value="front">Depan</option><option value="rear">Belakang</option><option value="left">Samping Kiri</option><option value="right">Samping Kanan</option></select></label>
                       <div class="obcal-rule" id="obcalRule">Posisikan object tepat di tengah depan kamera, tunggu bounding box stabil, lalu klik OK / Capture.</div>
                       <button class="primary-btn obcal-capture" id="obcalCaptureBtn">OK / CAPTURE</button>
                       <button class="soft-btn" id="obcalNextBtn" disabled>Next Distance →</button>
@@ -328,18 +329,18 @@
                       <span class="eyebrow">CALIBRATION PROGRESS</span>
                       <div id="obcalProgress" class="obcal-progress"></div>
                       <div class="obcal-progress-bar"><i id="obcalProgressBar"></i></div>
-                      <small id="obcalProgressText">0 / 10 kombinasi selesai</small>
+                      <small id="obcalProgressText">0 / 40 kombinasi selesai</small>
                     </div>
                   </div>
                   <div class="obcal-bottom-grid">
-                    <div class="obcal-table-wrap"><div class="obcal-subhead"><b>Calibration Data Table</b><span>1–2 m = near-field reference • 3–5 m = metric fit bila ground contact valid</span></div><div class="table-scroll"><table class="data-table obcal-table"><thead><tr><th>GT</th><th>Type</th><th>Conf</th><th>U</th><th>V</th><th>Raw X</th><th>Cal X</th><th>Error</th><th>Clipped</th><th>Use</th></tr></thead><tbody id="obcalTableBody"></tbody></table></div></div>
+                    <div class="obcal-table-wrap"><div class="obcal-subhead"><b>Calibration Data Table</b><span>1–2 m = near-field reference • 3–5 m = metric fit bila ground contact valid</span></div><div class="table-scroll"><table class="data-table obcal-table"><thead><tr><th>GT</th><th>Type</th><th>Orientasi</th><th>Conf</th><th>U</th><th>V</th><th>Raw X</th><th>Cal X</th><th>Error</th><th>Clipped</th><th>Use</th></tr></thead><tbody id="obcalTableBody"></tbody></table></div></div>
                     <div class="obcal-chart-wrap"><div class="obcal-subhead"><b>Actual vs Estimated Distance</b><span id="obcalFitSummary">Belum cukup data</span></div><canvas id="obcalChart" width="720" height="360"></canvas></div>
                   </div>
                   <div class="obcal-actions">
-                    <div class="obcal-result"><span class="eyebrow">CALIBRATION RESULT</span><b id="obcalResultTitle">WAITING 1–5 m</b><small id="obcalResultDetail">Lengkapi Human + Motorcycle pada setiap jarak.</small></div>
+                    <div class="obcal-result"><span class="eyebrow">CALIBRATION RESULT</span><b id="obcalResultTitle">WAITING 1–5 m</b><small id="obcalResultDetail">Lengkapi 40 capture: 5 jarak × 2 object × 4 orientasi.</small></div>
                     <button class="soft-btn" id="obcalExportCsv">Export CSV</button><button class="soft-btn" id="obcalExportGraph">Export Graph PNG</button><button class="warning-btn" id="obcalReset">Reset All</button><button class="primary-btn" id="obcalSaveApply" disabled>Save & Apply Calibration</button>
                   </div>
-                  <p class="tuning-note">Save & Apply menulis koefisien koreksi Human/Motorcycle ke YAML dan melakukan safe restart node perception saat kendaraan diam. Tombol ini <b>tidak</b> mengubah camera_metric_calibration_validated menjadi true; qualification MAE/RMSE tetap harus PASS secara fisik.</p>
+                  <p class="tuning-note">Save & Apply memakai seluruh sample orientasi valid untuk menulis koefisien koreksi Human/Motorcycle ke YAML dan melakukan safe restart node perception saat kendaraan diam. Tombol ini <b>tidak</b> mengubah camera_metric_calibration_validated menjadi true; qualification MAE/RMSE tetap harus PASS secara fisik.</p>
                 </section>
                 <section class="homography-assistant" id="homographyAssistant" hidden>
                   <div class="homography-head"><div><span class="eyebrow">METRIC CALIBRATION ASSISTANT</span><b>Click-to-GT Homography Points</b></div><span id="homographyPointCount">0/4 POINTS</span></div>
@@ -356,7 +357,7 @@
               </article>
 
               <article class="panel table-workspace">
-                <div class="panel-head"><div><span class="eyebrow">REPORT TABLE</span><h2>Tabel Pengujian</h2></div><div class="graph-controls"><span class="muted" id="tableLiveHint">Preview live + hasil run</span><button class="soft-btn" id="saveTableCsvBtn">Save Table CSV</button></div></div>
+                <div class="panel-head"><div><span class="eyebrow">REPORT TABLE</span><h2>Tabel Pengujian</h2></div><div class="graph-controls"><span class="muted" id="tableLiveHint">Preview live + hasil run</span><button class="soft-btn" id="saveTableCsvBtn">Save CSV</button><button class="primary-btn" id="saveTableExcelBtn">Save Excel (.xlsx)</button></div></div>
                 <div id="tableTabs" class="lab-tabs" hidden></div>
                 <div id="experimentTables" class="experiment-table-stack"><div class="empty-state">Subbab ini tidak mendefinisikan tabel.</div></div>
               </article>
@@ -396,6 +397,7 @@
   </div>
   <div class="toast-stack" id="toastStack" aria-live="polite"></div>
   <div class="modal-backdrop" id="confirmModal"><div class="modal"><span class="eyebrow">CONFIRM ACTION</span><h2 id="confirmTitle">Confirm</h2><p id="confirmText"></p><div class="button-row"><button class="soft-btn grow" id="confirmNo">Cancel</button><button class="danger-btn grow" id="confirmYes">Continue</button></div></div></div>
-  <script src="/app.js" defer></script>
+  <script src="/app.js?v=20260904-lane-corridor-v2" defer></script>
+  <script src="/export_tools.js" defer></script>
 </body>
 </html>

@@ -29,12 +29,23 @@ static bool touchActiveModeToggle = false;
 static CameraSubPage touchActiveCameraTab = CAM_NONE;
 static WaypointAction touchActiveWaypoint = WP_ACTION_NONE;
 
+inline void resetTouchState() {
+  touchWasDown = false;
+  touchActiveControl = CTRL_NONE;
+  touchActiveNav = PAGE_SPLASH;
+  touchActiveHome = false;
+  touchActiveModeToggle = false;
+  touchActiveCameraTab = CAM_NONE;
+  touchActiveWaypoint = WP_ACTION_NONE;
+}
+
 inline void beginTouch() {
   pinMode(PIN_TOUCH_CS, OUTPUT);
   digitalWrite(PIN_TOUCH_CS, HIGH);
   // Exact calibration path from the original HMI revision that was touchable.
   uint16_t calData[5] = { 300, 3600, 300, 3600, 1 };
   tft.setTouch(calData);
+  resetTouchState();
 }
 
 // Exact coordinate correction from the original working HMI.

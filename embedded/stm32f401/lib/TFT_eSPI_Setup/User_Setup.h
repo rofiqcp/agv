@@ -1,7 +1,7 @@
 // User_Setup.h for TFT_eSPI with ILI9341 on Black Pill F411CE (STM32F411CEU6)
 // Configuration for ILI9341 240x320 display with user's specific wiring:
 // TDO/MISO = PA6, TDIN/MOSI = PA7, TCLK/SCK = PA5
-// CS LCD = PB0, CS TS = PA4 (touch, not used)
+// CS LCD = PB0, CS TS = PA4 (XPT2046 touch)
 // VCC = 5V (module has onboard regulator), GND = GND
 // RESET = PB2, DC = PB1
 
@@ -28,10 +28,11 @@
 // CS LCD  = PB0
 // DC      = PB1
 // RESET   = PB2
-// (Touch CS = PA4, not used)
+// (Touch CS = PA4, shared SPI)
 #define TFT_CS     PB0   // Chip select control pin (LCD CS)
 #define TFT_DC     PB1   // Data/Command control pin
 #define TFT_RST    PB2   // Reset pin
+#define TOUCH_CS   PA4   // XPT2046 chip select
 
 // ============================================================================================
 // ILI9341 Display settings (240x320)
@@ -42,8 +43,8 @@
 // ============================================================================================
 // SPI frequency settings
 // ============================================================================================
-#define SPI_FREQUENCY  40000000   // 40MHz for ILI9341 (max 40MHz at 3.3V)
-#define SPI_READ_FREQUENCY  20000000  // 20MHz read frequency
+#define SPI_FREQUENCY  10000000   // conservative shared-SPI display clock
+#define SPI_READ_FREQUENCY  6000000   // conservative read frequency
 #define SPI_TOUCH_FREQUENCY  2500000  // 2.5MHz for touch (if touch supported)
 
 // ============================================================================================

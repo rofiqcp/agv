@@ -423,11 +423,21 @@ inline QVector<ExperimentSpec> buildExperimentCatalog(const QString &subsystem) 
       {"Global EKF trajectory during localization gating","GNSS quality during localization"},
       {{"Variasi","Mean Satelit","Mean DOP","Mean hAcc","Mean Global X","Mean Global Y"}},
       {{"Satelit","gnss_quality.sat"},{"DOP","gnss_quality.dop"},{"hAcc","gnss_quality.hacc_m"},{"Global X","ekf_global.x"},{"Global Y","ekf_global.y"}},
-      P({F("startup_gnss","Startup GNSS samples","int","localization","localization_core.ros__parameters.startup_gnss_samples","5","Startup"),
-         F("strict_sat","Strict minimum satellites","int","localization","localization_core.ros__parameters.strict_min_satellites","8","Strict Quality"),
-         F("strict_dop","Strict maximum DOP","float","localization","localization_core.ros__parameters.strict_max_dop","2.0","Strict Quality"),
-         F("strict_hacc","Strict maximum hAcc (m)","float","localization","localization_core.ros__parameters.strict_max_hacc_m","3.0","Strict Quality"),
-         F("hold_sec","Strict quality hold (s)","float","localization","localization_core.ros__parameters.strict_quality_hold_sec","1.5","Strict Quality")}),
+      P({F("startup_gnss","Startup GNSS samples","int","localization","localization_core.ros__parameters.startup_gnss_samples","5","Startup / Planning"),
+         F("degraded_sat","Degraded planning min satellites","int","localization","localization_core.ros__parameters.degraded_min_satellites","6","Startup / Planning"),
+         F("degraded_dop","Degraded planning max DOP","float","localization","localization_core.ros__parameters.degraded_max_dop","8.0","Startup / Planning"),
+         F("degraded_hacc","Degraded planning max hAcc (m)","float","localization","localization_core.ros__parameters.degraded_max_hacc_m","25.0","Startup / Planning"),
+         F("strict_sat","Strict minimum satellites","int","localization","localization_core.ros__parameters.strict_min_satellites","8","Motion Acquire"),
+         F("strict_dop","Strict maximum DOP","float","localization","localization_core.ros__parameters.strict_max_dop","2.0","Motion Acquire"),
+         F("strict_hacc","Strict maximum hAcc (m)","float","localization","localization_core.ros__parameters.strict_max_hacc_m","3.0","Motion Acquire"),
+         F("hold_sec","Strict quality hold (s)","float","localization","localization_core.ros__parameters.strict_quality_hold_sec","1.5","Motion Acquire"),
+         F("motion_hold_hacc","Motion hold max hAcc (m)","float","localization","localization_core.ros__parameters.motion_hold_max_hacc_m","4.5","Motion Hold"),
+         F("motion_hold_dop","Motion hold max DOP","float","localization","localization_core.ros__parameters.motion_hold_max_dop","2.5","Motion Hold"),
+         F("motion_hold_sat","Motion hold min satellites","int","localization","localization_core.ros__parameters.motion_hold_min_satellites","8","Motion Hold"),
+         F("motion_grace","Motion degrade grace (s)","float","localization","localization_core.ros__parameters.motion_degrade_grace_sec","3.0","Motion Hold"),
+         F("critical_hacc","Critical max hAcc (m)","float","localization","localization_core.ros__parameters.motion_critical_max_hacc_m","6.0","Motion Fail-Closed"),
+         F("critical_dop","Critical max DOP","float","localization","localization_core.ros__parameters.motion_critical_max_dop","4.0","Motion Fail-Closed"),
+         F("critical_sat","Critical min satellites","int","localization","localization_core.ros__parameters.motion_critical_min_satellites","6","Motion Fail-Closed")}),
       {{"scatter",{},"ekf_global.x","ekf_global.y","Map X [m]","Map Y [m]"},
        {"time_series",{"Satelit","DOP","hAcc"},{},{},"Time [s]","GNSS quality"}});
 
@@ -439,6 +449,7 @@ inline QVector<ExperimentSpec> buildExperimentCatalog(const QString &subsystem) 
       P({F("alpha_stationary","Strict correction alpha stationary","float","localization","localization_core.ros__parameters.strict_correction_alpha","0.08","Position Correction"),
          F("alpha_moving","Strict correction alpha moving","float","localization","localization_core.ros__parameters.strict_moving_correction_alpha","0.01","Position Correction"),
          F("max_corr","Strict max correction (m)","float","localization","localization_core.ros__parameters.strict_max_correction_m","0.08","Position Correction"),
+         F("global_ref_gate","Global EKF map-reference max error (m)","float","localization","localization_core.ros__parameters.global_odom_map_reference_max_error_m","15.0","Position Correction"),
          F("yaw_alpha","Global EKF yaw correction alpha","float","localization","localization_core.ros__parameters.global_ekf_yaw_correction_alpha","0.05","Yaw Correction"),
          F("yaw_step","Global EKF yaw max step (rad)","float","localization","localization_core.ros__parameters.global_ekf_yaw_max_step_rad","0.0087266","Yaw Correction"),
          F("yaw_innovation","Global EKF yaw max innovation (rad)","float","localization","localization_core.ros__parameters.global_ekf_yaw_max_innovation_rad","0.7854","Yaw Correction")}),
@@ -1940,8 +1951,8 @@ inline QVector<ExperimentSpec> buildExperimentCatalog(const QString &subsystem) 
       "Nearest X", "obstacle_metrics.nearest_forward_m"
     }
   });
-  add("perception", QStringLiteral("4.3"), QStringLiteral("4.3 Pengujian Estimasi Posisi Metrik Obstacle"), "4.3.1",
-  QStringLiteral("4.3.1 Pengujian Grid Ground Truth"),
+  add("perception", QStringLiteral("4.3"), QStringLiteral("4.3 Kalibrasi & Estimasi Jarak Obstacle"), "4.3.1",
+  QStringLiteral("4.3.1 Kalibrasi Obstacle 1–5 Meter (Human & Motorcycle × 4 Orientasi)"),
   {
   },
   {
@@ -1961,7 +1972,7 @@ inline QVector<ExperimentSpec> buildExperimentCatalog(const QString &subsystem) 
       "Nearest X", "obstacle_metrics.nearest_forward_m"
     }
   });
-  add("perception", QStringLiteral("4.3"), QStringLiteral("4.3 Pengujian Estimasi Posisi Metrik Obstacle"), "4.3.2",
+  add("perception", QStringLiteral("4.3"), QStringLiteral("4.3 Kalibrasi & Estimasi Jarak Obstacle"), "4.3.2",
   QStringLiteral("4.3.2 Hasil Pengujian Ground-Plane Homography"),
   {
     "Perbandingan ground truth dan hasil estimasi homography", "Error posisi obstacle terhadap jarak"
@@ -1983,7 +1994,7 @@ inline QVector<ExperimentSpec> buildExperimentCatalog(const QString &subsystem) 
       "Confidence", "obstacle_metrics.mean_confidence"
     }
   });
-  add("perception", QStringLiteral("4.3"), QStringLiteral("4.3 Pengujian Estimasi Posisi Metrik Obstacle"), "4.3.3",
+  add("perception", QStringLiteral("4.3"), QStringLiteral("4.3 Kalibrasi & Estimasi Jarak Obstacle"), "4.3.3",
   QStringLiteral("4.3.3 Kalibrasi Offset Posisi"),
   {
   },
@@ -2004,7 +2015,7 @@ inline QVector<ExperimentSpec> buildExperimentCatalog(const QString &subsystem) 
       "Confidence", "obstacle_metrics.mean_confidence"
     }
   });
-  add("perception", QStringLiteral("4.3"), QStringLiteral("4.3 Pengujian Estimasi Posisi Metrik Obstacle"), "4.3.4",
+  add("perception", QStringLiteral("4.3"), QStringLiteral("4.3 Kalibrasi & Estimasi Jarak Obstacle"), "4.3.4",
   QStringLiteral("4.3.4 Pengujian EMA Posisi Obstacle"),
   {
   },
@@ -2025,7 +2036,7 @@ inline QVector<ExperimentSpec> buildExperimentCatalog(const QString &subsystem) 
       "Confidence", "obstacle_metrics.mean_confidence"
     }
   });
-  add("perception", QStringLiteral("4.3"), QStringLiteral("4.3 Pengujian Estimasi Posisi Metrik Obstacle"), "4.3.5",
+  add("perception", QStringLiteral("4.3"), QStringLiteral("4.3 Kalibrasi & Estimasi Jarak Obstacle"), "4.3.5",
   QStringLiteral("4.3.5 Evaluasi Metode Alternatif Bounding Box Area"),
   {
   },

@@ -15,11 +15,11 @@
 extern TFT_eSPI tft;
 
 inline bool waypointSaveEnabled(const VehicleTelemetry& d) {
-  return d.gpsReady && (d.gpsFix == GPS_3D_FIX || d.gpsFix == GPS_2D_FIX);
+  return d.rosConnected && d.gpsReady && (d.gpsFix == GPS_3D_FIX || d.gpsFix == GPS_2D_FIX);
 }
 
 inline bool waypointGoEnabled(const VehicleTelemetry& d) {
-  return d.selectedWaypoint < HMI_WAYPOINT_COUNT && d.waypointSaved[d.selectedWaypoint] &&
+  return d.rosConnected && d.selectedWaypoint < HMI_WAYPOINT_COUNT && d.waypointSaved[d.selectedWaypoint] &&
          d.mode == MODE_AUTO && d.systemStatus == SYS_READY;
 }
 

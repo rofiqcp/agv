@@ -1,0 +1,18 @@
+mppi_closed_loop_supervisor:
+  ros__parameters:
+    feedback_timeout_sec: 0.30
+    command_timeout_sec: 0.60
+    enable_hold_sec: 0.75
+    disable_hold_sec: 0.20
+    status_rate_hz: 5.0
+
+    # Part 3 qualification gate for velocity_smoother CLOSED_LOOP trial.
+    # The supervisor only publishes eligibility; GUI/YAML + lifecycle restart
+    # are still required before changing feedback mode.
+    qualification_window_sec: 12.0
+    min_qualification_samples: 60
+    min_odom_rate_hz: 20.0
+    max_odom_jitter_sec: 0.020
+    max_velocity_rmse_mps: 0.08
+    max_steering_rmse_rad: 0.12
+    max_yaw_rate_rmse_rps: 0.15

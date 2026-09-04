@@ -187,9 +187,16 @@ static const float STEER_MAX_DEG =  90.0f;
 static const float STEER_LEFT_PRESET_DEG  = -90.0f;
 static const float STEER_RIGHT_PRESET_DEG =  90.0f;
 
-// Touch threshold from the original working HMI. TFT_eSPI performs the
-// pressure validation/debounce internally through getTouch().
-static const uint16_t TOUCH_THRESHOLD = 600;
+// TFT_eSPI performs pressure validation/debounce internally through getTouch().
+// Actual panel taps have been observed below Z=600; 300 keeps fingertip taps
+// responsive while remaining below TFT_eSPI's normal pressed range.
+static const uint16_t TOUCH_THRESHOLD = 300;
+static const uint32_t TOUCH_POLL_MS = 20;          // 50 Hz touch scan; avoids SPI hammering.
+static const uint32_t DISPLAY_REFRESH_MS = 500;    // 2 Hz visual refresh; telemetry stays full-rate.
+static const uint32_t ROS_LINK_TIMEOUT_MS = 2500;          // steady-state fail-close timeout.
+static const uint32_t ROS_LINK_STARTUP_TIMEOUT_MS = 12000; // startup callback burst grace.
+static const uint32_t ROS_HEARTBEAT_STABLE_GAP_MS = 1500;  // expected 500 ms heartbeat + margin.
+static const uint8_t ROS_HEARTBEAT_STABLE_COUNT = 3;       // then use strict timeout.
 
 // Splash timing.
 static const int PB_W = 180;

@@ -466,7 +466,7 @@ def generate_launch_description() -> LaunchDescription:
         stage3_params, 'stage3_navigation', 'production_autonomy_certified', False))
     stage3_commissioning_speed = float(_yaml_ros_param(
         stage3_params, 'stage3_navigation', 'commissioning_speed_cap_mps', 0.18))
-    configured_mode = str(_yaml_ros_param(camera_params, 'perception', 'perception_mode', 'cpu') or 'cpu').strip().lower()
+    configured_mode = str(_yaml_ros_param(camera_params, 'perception', 'perception_mode', 'off') or 'off').strip().lower()
     configured_engine = str(_yaml_ros_param(camera_params, 'perception', 'engine_path', '') or '')
     engine_path = os.environ.get('YOLOP_ENGINE_PATH', configured_engine)
     configured_pt = str(_yaml_ros_param(camera_params, 'perception', 'pt_model_path', 'auto') or 'auto')
@@ -500,6 +500,7 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('perception_mode', default_value=configured_mode),
         DeclareLaunchArgument('engine_path', default_value=engine_path),
         DeclareLaunchArgument('pt_model_path', default_value=pt_model_path),
+        DeclareLaunchArgument('perception_inference_enabled', default_value='false', description='YOLOPv2 inference lazy toggle; false keeps camera-only lightweight startup'),
         DeclareLaunchArgument('cpu_inference_fps', default_value=str(cpu_fps_default)),
         DeclareLaunchArgument('cpu_threads', default_value=str(cpu_threads_default)),
         DeclareLaunchArgument('enable_trajectory_safety', default_value='true'),
@@ -639,13 +640,23 @@ def generate_launch_description() -> LaunchDescription:
     perception_mode_valid = PythonExpression([
         "'", LaunchConfiguration('perception_mode'), "' in ['off', 'cpu', 'gpu']",
     ])
+    # Web mode keeps one CPU perception process alive in lazy camera-only state.
+    # The TorchScript model is NOT loaded until the Perception tab requests it.
+    # This avoids fighting for the V4L2 camera between camera_only_node and the
+    # CPU inference node while keeping startup inference cost at zero.
+    web_lazy_cpu_enabled = PythonExpression([
+        "'", LaunchConfiguration('mode'), "'.lower() == 'web' and '",
+        LaunchConfiguration('perception_mode'), "' == 'off' and ",
+        str(perception_package_available), " and ",
+        str(perception_cpu_executable_available),
+    ])
     camera_only_enabled = PythonExpression([
         "'", LaunchConfiguration('perception_mode'), "' == 'off' and ",
         str(perception_package_available), " and ",
-        str(perception_camera_executable_available),
+        str(perception_camera_executable_available), " and not (", web_lazy_cpu_enabled, ")",
     ])
     perception_cpu_enabled = PythonExpression([
-        "'", LaunchConfiguration('perception_mode'), "' == 'cpu' and ",
+        "('", LaunchConfiguration('perception_mode'), "' == 'cpu' or (", web_lazy_cpu_enabled, ")) and ",
         str(perception_package_available), " and ",
         str(perception_cpu_executable_available),
     ])
@@ -654,9 +665,10 @@ def generate_launch_description() -> LaunchDescription:
         str(perception_package_available), " and ",
         str(perception_gpu_executable_available),
     ])
-    # ``perception_enabled`` means model inference/safety streams, not camera.
+    # ``perception_enabled`` is safety authority, not merely the existence of
+    # the lazy CPU camera process. In default web/off mode it MUST remain false.
     perception_enabled = PythonExpression([
-        "(", perception_cpu_enabled, ") or (", perception_gpu_enabled, ")",
+        "'", LaunchConfiguration('perception_mode'), "' in ['cpu', 'gpu']",
     ])
     perception_requested_but_unavailable = PythonExpression([
         "not ", str(perception_package_available),
@@ -740,11 +752,32 @@ def generate_launch_description() -> LaunchDescription:
         respawn_delay=5.0,
         parameters=[camera_params, {
             'pt_model_path': LaunchConfiguration('pt_model_path'),
+            'inference_enabled': ParameterValue(PythonExpression([
+                "'", LaunchConfiguration('perception_mode'), "' == 'cpu' or '",
+                LaunchConfiguration('perception_inference_enabled'), "' == 'true'",
+            ]), value_type=bool),
             'cpu_inference_fps': ParameterValue(LaunchConfiguration('cpu_inference_fps'), value_type=float),
             'cpu_threads': ParameterValue(LaunchConfiguration('cpu_threads'), value_type=int),
             **common_perception_parameters,
         }],
     )
+    semantic_obstacle = Node(
+        package='perception', executable='semantic_obstacle_node.py', name='semantic_obstacle',
+        output='screen', emulate_tty=True, condition=IfCondition(PythonExpression(["'", LaunchConfiguration('mode'), "'.lower() == 'web'"])),
+        respawn=True, respawn_delay=3.0,
+        parameters=[{
+            'input_topic': '/camera/astra/image_preview/compressed',
+            'output_topic': '/perception/semantic_detections',
+            'status_topic': '/perception/semantic_status',
+            'score_threshold': 0.20,
+            'inference_hz': 1.0,
+            'cpu_threads': 1,
+            'enabled': True,
+            'torch_hub_dir': '/home/otomasi/ros/models/torch',
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+        }],
+    )
+
     map_server = Node(
         package='nav2_map_server', executable='map_server', name='map_server', output='screen',
         respawn=True, respawn_delay=2.0,
@@ -976,7 +1009,7 @@ def generate_launch_description() -> LaunchDescription:
             msg='[AGV] PERCEPTION OFF: camera-only aktif; raw/preview kamera jalan, model/inference OFF.'),
         robot_state, joint_state_visualizer, gnss, imu, hmi_bridge, esc_runtime,
         local_ekf, global_ekf, localization_core,
-        camera_only, perception_cpu, perception_gpu,
+        camera_only, perception_cpu, perception_gpu, semantic_obstacle,
         map_server, lifecycle_map, controller, planner, behavior, cmd_vel_router, smoother, collision, navigator,
         lifecycle_smoother, lifecycle_with_collision, lifecycle_without_collision,
         trajectory_safety, navigation_core, mppi_closed_loop, native_gui, stop_when_gui_closes, web_gui, rviz,

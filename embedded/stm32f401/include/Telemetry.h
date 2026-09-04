@@ -10,6 +10,7 @@ struct VehicleTelemetry {
   SystemStatus systemStatus;
   VehicleMode mode;
   VehicleState state;
+  bool rosConnected;
 
   float speedKmh;
   float headingDeg;
@@ -53,6 +54,7 @@ inline VehicleTelemetry defaultTelemetry() {
   t.systemStatus = SYS_INITIALIZING;
   t.mode = MODE_AUTO;
   t.state = STATE_STOPPED;
+  t.rosConnected = false;
   t.speedKmh = 0.0f;
   t.headingDeg = 0.0f;
 

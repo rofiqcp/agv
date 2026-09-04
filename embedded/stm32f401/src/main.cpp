@@ -42,6 +42,10 @@ static uint32_t lastFrameMs = 0;
 
 static bool uiDirty = false;
 static uint32_t lastUiRefreshMs = 0;
+static uint32_t lastRosHeartbeatMs = 0;
+static uint32_t lastTouchPollMs = 0;
+static uint8_t rosHeartbeatStableCount = 0;
+static bool rosHeartbeatStable = false;
 
 // Latched manual-control state. A single tap starts/changes the command;
 // releasing the finger does NOT cancel it. STOP, mode changes, faults, or
@@ -51,9 +55,11 @@ static ControlAction activeSteerControl = CTRL_NONE;   // LEFT / RIGHT / CENTER 
 
 static char serialRx[128];
 static uint8_t serialRxLen = 0;
+static bool serialRxDiscarding = false;
 #if HMI_LEGACY_UART
 static char serial1Rx[128];
 static uint8_t serial1RxLen = 0;
+static bool serial1RxDiscarding = false;
 #endif
 
 // ---------------------------------------------------------------------------
@@ -180,6 +186,10 @@ static void publishCameraTab() {
   printBoth(line);
 }
 
+static void publishLinkState() {
+  printBoth(gTelemetry.rosConnected ? "LINK:ROS:ONLINE" : "LINK:ROS:OFFLINE");
+}
+
 static void publishControlState() {
   char line[40];
   snprintf(line, sizeof(line), "MODE:%s", gTelemetry.mode == MODE_MANUAL ? "MANUAL" : "AUTO");
@@ -218,6 +228,10 @@ static void drawCurrentPage(bool fullDraw = true) {
 
 static void showPage(PageId page) {
   if (page == PAGE_SPLASH) return;
+  if (splashComplete && page == currentPage) {
+    publishPage();
+    return;
+  }
   if (!splashComplete) {
     splashComplete = true;
     beginTouch();
@@ -250,7 +264,9 @@ static void restartSplash() {
   lastFrameMs = 0;
   activeDriveControl = CTRL_NONE;
   activeSteerControl = CTRL_NONE;
-  touchWasDown = false;
+  resetTouchState();
+  uiDirty = false;
+  lastUiRefreshMs = 0;
   gTelemetry.systemStatus = SYS_INITIALIZING;
   drawSplashScreen();
   splashStartMs = millis();
@@ -335,7 +351,7 @@ static void handleWaypointTap(WaypointAction action) {
 // Touch behavior
 // ---------------------------------------------------------------------------
 static bool speedAdjustEnabled() {
-  return gTelemetry.systemStatus == SYS_READY && gTelemetry.mode == MODE_MANUAL;
+  return gTelemetry.rosConnected && gTelemetry.systemStatus == SYS_READY && gTelemetry.mode == MODE_MANUAL;
 }
 
 static bool controlAllowed(ControlAction action) {
@@ -443,9 +459,11 @@ static void handleTouch() {
       return;
     }
     if (currentPage == PAGE_CAMERA && ev.cameraTab != CAM_NONE) {
+      if (ev.cameraTab == currentCameraTab) return;
       currentCameraTab = ev.cameraTab;
-      // Tab change is an explicit user action: one full draw is OK here.
-      drawCameraPage(gTelemetry, currentCameraTab);
+      // Change only the tab strip and content card; never blank the full screen.
+      drawCameraTabs(currentCameraTab);
+      drawCameraContent(gTelemetry, currentCameraTab);
       publishCameraTab();
       return;
     }
@@ -499,6 +517,84 @@ static void parseVehicleState(const char* s) {
   else if (eqIgnoreCase(s, "FAULT")) gTelemetry.state = STATE_FAULT;
 }
 
+static void sanitizeTelemetry() {
+  if (!isfinite(gTelemetry.speedKmh)) gTelemetry.speedKmh = 0.0f;
+  gTelemetry.speedKmh = constrain(gTelemetry.speedKmh, 0.0f, 100.0f);
+  if (!isfinite(gTelemetry.headingDeg)) gTelemetry.headingDeg = 0.0f;
+  gTelemetry.headingDeg = fmodf(gTelemetry.headingDeg, 360.0f);
+  if (gTelemetry.headingDeg < 0.0f) gTelemetry.headingDeg += 360.0f;
+  if (!isfinite(gTelemetry.latitude) || gTelemetry.latitude < -90.0 || gTelemetry.latitude > 90.0) gTelemetry.latitude = 0.0;
+  if (!isfinite(gTelemetry.longitude) || gTelemetry.longitude < -180.0 || gTelemetry.longitude > 180.0) gTelemetry.longitude = 0.0;
+  if (!isfinite(gTelemetry.hdop)) gTelemetry.hdop = 0.0f;
+  gTelemetry.hdop = constrain(gTelemetry.hdop, 0.0f, 99.9f);
+  if (!isfinite(gTelemetry.cameraFps)) gTelemetry.cameraFps = 0.0f;
+  gTelemetry.cameraFps = constrain(gTelemetry.cameraFps, 0.0f, 120.0f);
+  if (!isfinite(gTelemetry.objectDistanceM) || gTelemetry.objectDistanceM < 0.0f) gTelemetry.objectDistanceM = 0.0f;
+  if (!isfinite(gTelemetry.confidencePct)) gTelemetry.confidencePct = 0.0f;
+  gTelemetry.confidencePct = constrain(gTelemetry.confidencePct, 0.0f, 100.0f);
+  if (!isfinite(gTelemetry.steeringTargetDeg)) gTelemetry.steeringTargetDeg = 0.0f;
+  if (!isfinite(gTelemetry.steeringActualDeg)) gTelemetry.steeringActualDeg = 0.0f;
+  if (!isfinite(gTelemetry.steeringErrorDeg)) gTelemetry.steeringErrorDeg = 0.0f;
+  if (!isfinite(gTelemetry.motorRpm)) gTelemetry.motorRpm = 0.0f;
+}
+
+static void markRosHeartbeat() {
+  const uint32_t now = millis();
+  if (!gTelemetry.rosConnected) {
+    rosHeartbeatStableCount = 1;
+    rosHeartbeatStable = false;
+    gTelemetry.rosConnected = true;
+    uiDirty = true;
+    publishLinkState();
+  } else {
+    const uint32_t gap = (uint32_t)(now - lastRosHeartbeatMs);
+    if (gap <= ROS_HEARTBEAT_STABLE_GAP_MS) {
+      if (rosHeartbeatStableCount < 255) ++rosHeartbeatStableCount;
+      if (rosHeartbeatStableCount >= ROS_HEARTBEAT_STABLE_COUNT) rosHeartbeatStable = true;
+    } else {
+      // A busy ROS startup may delay timers. Restart the qualification window
+      // without falsely declaring the link dead.
+      rosHeartbeatStableCount = 1;
+      rosHeartbeatStable = false;
+    }
+  }
+  lastRosHeartbeatMs = now;
+}
+
+static void forceRosOffline() {
+  const bool wasConnected = gTelemetry.rosConnected;
+  if (activeDriveControl == CTRL_FORWARD || activeDriveControl == CTRL_REVERSE) sendDriveStop();
+  activeDriveControl = CTRL_NONE;
+  activeSteerControl = CTRL_NONE;
+  gTelemetry.rosConnected = false;
+  rosHeartbeatStableCount = 0;
+  rosHeartbeatStable = false;
+  gTelemetry.systemStatus = SYS_NOT_READY;
+  gTelemetry.state = STATE_STOPPED;
+  gTelemetry.speedKmh = 0.0f;
+  gTelemetry.gpsReady = false;
+  gTelemetry.gpsFix = GPS_LOST;
+  gTelemetry.imuReady = false;
+  gTelemetry.cameraReady = false;
+  gTelemetry.perceptionReady = false;
+  gTelemetry.cameraFps = 0.0f;
+  gTelemetry.drivableAreaClear = false;
+  gTelemetry.obstacleDetected = false;
+  gTelemetry.escReady = false;
+  gTelemetry.encoderReady = false;
+  gTelemetry.motorRpm = 0.0f;
+  if (gTelemetry.navigationStatus == NAV_QUEUED || gTelemetry.navigationStatus == NAV_NAVIGATING)
+    gTelemetry.navigationStatus = NAV_FAILED;
+  uiDirty = true;
+  if (wasConnected) publishLinkState();
+}
+
+static void checkRosLinkTimeout() {
+  if (!gTelemetry.rosConnected) return;
+  const uint32_t timeoutMs = rosHeartbeatStable ? ROS_LINK_TIMEOUT_MS : ROS_LINK_STARTUP_TIMEOUT_MS;
+  if ((uint32_t)(millis() - lastRosHeartbeatMs) > timeoutMs) forceRosOffline();
+}
+
 static void handleSerialCommand(char* command) {
   while (*command == ' ' || *command == '\t') command++;
   if (!*command) return;
@@ -509,6 +605,7 @@ static void handleSerialCommand(char* command) {
   // Navigation / health commands
   if (!strcmp(command, "GET:STATE")) {
     publishPage();
+    publishLinkState();
     publishControlState();
     publishCameraTab();
     return;
@@ -516,6 +613,7 @@ static void handleSerialCommand(char* command) {
   if (!strcmp(command, "PING")) {
     printBoth("ACK:PONG");
     publishPage();
+    publishLinkState();
     publishControlState();
     publishCameraTab();
     return;
@@ -546,12 +644,19 @@ static void handleSerialCommand(char* command) {
   // new actuator CMD back to ROS, preventing SCADA feedback loops.
   if (!strncmp(command, "REMOTE:CAMTAB:", 14)) {
     const char* tab = command + 14;
-    if (eqIgnoreCase(tab, "VIEW")) currentCameraTab = CAM_VIEW;
-    else if (eqIgnoreCase(tab, "DETECT")) currentCameraTab = CAM_DETECT;
-    else if (eqIgnoreCase(tab, "DRIVE")) currentCameraTab = CAM_DRIVE;
-    else if (eqIgnoreCase(tab, "STATUS")) currentCameraTab = CAM_STATUS;
+    CameraSubPage next = CAM_NONE;
+    if (eqIgnoreCase(tab, "VIEW")) next = CAM_VIEW;
+    else if (eqIgnoreCase(tab, "DETECT")) next = CAM_DETECT;
+    else if (eqIgnoreCase(tab, "DRIVE")) next = CAM_DRIVE;
+    else if (eqIgnoreCase(tab, "STATUS")) next = CAM_STATUS;
     else return;
-    if (currentPage == PAGE_CAMERA) updateCameraPage(gTelemetry, currentCameraTab);
+    if (next != currentCameraTab) {
+      currentCameraTab = next;
+      if (currentPage == PAGE_CAMERA) {
+        drawCameraTabs(currentCameraTab);
+        drawCameraContent(gTelemetry, currentCameraTab);
+      }
+    }
     publishCameraTab();
     return;
   }
@@ -593,7 +698,10 @@ static void handleSerialCommand(char* command) {
     return;
   }
 
-  if (!strncmp(command, "FPS:", 4)) {
+  if (!strncmp(command, "ROS:", 4)) {
+    if (parseBool(command + 4)) markRosHeartbeat();
+    else forceRosOffline();
+  } else if (!strncmp(command, "FPS:", 4)) {
     gTelemetry.cameraFps = max(0.0f, (float)atof(command + 4));
   } else if (!strncmp(command, "WPSEL:", 6)) {
     gTelemetry.selectedWaypoint = (uint8_t)constrain(atoi(command + 6), 0, HMI_WAYPOINT_COUNT - 1);
@@ -709,33 +817,38 @@ static void handleSerialCommand(char* command) {
     return;
   }
 
+  sanitizeTelemetry();
   if (memcmp(&telemetryBefore, &gTelemetry, sizeof(VehicleTelemetry)) != 0) {
     uiDirty = true;
   }
 }
 
-static void pollSerialStream(Stream& io, char* rx, uint8_t& rxLen) {
+static void pollSerialStream(Stream& io, char* rx, uint8_t& rxLen, bool& discarding) {
   while (io.available() > 0) {
-    char c = (char)io.read();
+    const char c = (char)io.read();
     if (c == '\r') continue;
-
+    if (discarding) {
+      if (c == '\n') discarding = false;
+      continue;
+    }
     if (c == '\n') {
       rx[rxLen] = '\0';
-      handleSerialCommand(rx);
+      if (rxLen > 0) handleSerialCommand(rx);
       rxLen = 0;
-    } else if (rxLen < 127) {
+    } else if (rxLen < sizeof(serialRx) - 1) {
       rx[rxLen++] = c;
     } else {
       rxLen = 0;
+      discarding = true;
       io.println(F("ERR:COMMAND_TOO_LONG"));
     }
   }
 }
 
 static void pollSerialGui() {
-  pollSerialStream(Serial, serialRx, serialRxLen);
+  pollSerialStream(Serial, serialRx, serialRxLen, serialRxDiscarding);
 #if HMI_LEGACY_UART
-  pollSerialStream(Serial1, serial1Rx, serial1RxLen);
+  pollSerialStream(Serial1, serial1Rx, serial1RxLen, serial1RxDiscarding);
 #endif
 }
 
@@ -778,7 +891,7 @@ static bool updateProgressBar() {
     splashReadyMs = now;
     tft.fillRoundRect(PB_X + 2, PB_Y + 2, PB_W - 4, PB_H - 4, PB_R - 2, C_READY);
     tft.fillRect(70, 186, 180, 18, C_BG);
-    drawUiText("System ready", W / 2, 187, C_READY, C_BG, MC_DATUM);
+    drawUiText("HMI ready", W / 2, 187, C_READY, C_BG, MC_DATUM);
   }
 
   if (splashReadyText && now - splashReadyMs >= READY_HOLD) {
@@ -842,25 +955,28 @@ void setup() {
 }
 
 void loop() {
-  // Original scheduling order: consume serial first, then touch once per loop.
-  // ROS telemetry remains full-rate in RAM; TFT painting is intentionally slower.
+  // Serial stays full-rate in RAM. ROS link health is independent of USB presence:
+  // if the bridge stops sending heartbeats, stale READY states fail closed.
   pollSerialGui();
+  checkRosLinkTimeout();
 
   if (!splashComplete) {
     updateProgressBar();
   } else {
-    handleTouch();
+    const uint32_t now = millis();
+    if ((uint32_t)(now - lastTouchPollMs) >= TOUCH_POLL_MS) {
+      lastTouchPollMs = now;
+      handleTouch();
+    }
 
 #if HMI_DEMO_MODE
     updateDemoTelemetry();
 #endif
 
-    // Display refresh is decoupled from the 10 Hz ROS telemetry stream. Page
-    // update functions also cache formatted values, so unchanged pixels are not
-    // touched. This prevents the visible erase/redraw flashing of dynamic text.
-    static const uint32_t DISPLAY_REFRESH_MS = 500;
-    if (uiDirty && !touchWasDown && millis() - lastUiRefreshMs >= DISPLAY_REFRESH_MS) {
-      lastUiRefreshMs = millis();
+    // Full-rate telemetry never means full-rate painting. Each page also caches
+    // its formatted values, so only changed pixels are touched at this cadence.
+    if (uiDirty && !touchWasDown && (uint32_t)(now - lastUiRefreshMs) >= DISPLAY_REFRESH_MS) {
+      lastUiRefreshMs = now;
       uiDirty = false;
       drawCurrentPage(false);
     }

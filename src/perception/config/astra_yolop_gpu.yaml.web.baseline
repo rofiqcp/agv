@@ -148,7 +148,6 @@ perception:
     lane_corridor_critical_penetration_px: 24.0
     lane_corridor_sample_stride_px: 6
     lane_corridor_minimum_valid_rows: 6
-    lane_corridor_minimum_drivable_fraction: 0.20
     lane_corridor_correction_gain_m_per_px: 0.004
     lane_corridor_max_correction_m: 0.35
     lane_state_topic: /perception/lane_safety_state

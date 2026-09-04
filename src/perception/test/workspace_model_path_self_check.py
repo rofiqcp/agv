@@ -9,5 +9,6 @@ for rel in ["perception/launch/astra_yolop.launch.py", "navigation/launch/gui.la
     text=(ROOT/rel).read_text()
     assert "src/perception/models/yolopv2.pt" not in text, f"source-model fallback masih ada: {rel}"
 assert expected in (ROOT/"perception/src/astra_yolop_cpu_pt_node.cpp").read_text(), "C++ CPU default model path tidak sesuai"
-assert 'MODEL_TARGET="$ROOT/models/yolopv2.pt"' in (ROOT/"setup_minipc_cpu_yolopv2.sh").read_text()
+model_script=(ROOT.parent/'models/model.sh').read_text()
+assert 'MODEL_PATH="${SCRIPT_DIR}/yolopv2.pt"' in model_script, 'models/model.sh target tidak sesuai workspace/models'
 print("PASS workspace model path contract: <workspace>/models/yolopv2.pt")
