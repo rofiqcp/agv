@@ -356,6 +356,7 @@ private:
     declare_parameter<double>("lane_corridor_camera_height_m", 0.736);
     declare_parameter<double>("lane_corridor_camera_pitch_deg", 0.0);
     declare_parameter<double>("lane_corridor_safety_margin_m", 0.25);
+    declare_parameter<double>("lane_corridor_far_lookahead_m", 4.0);
     declare_parameter<double>("lane_corridor_center_offset_px", 0.0);
     declare_parameter<double>("lane_corridor_left_offset_px", 0.0);
     declare_parameter<double>("lane_corridor_right_offset_px", 0.0);
@@ -528,6 +529,7 @@ private:
     lane_corridor_camera_height_m_ = get_parameter("lane_corridor_camera_height_m").as_double();
     lane_corridor_camera_pitch_deg_ = get_parameter("lane_corridor_camera_pitch_deg").as_double();
     lane_corridor_safety_margin_m_ = get_parameter("lane_corridor_safety_margin_m").as_double();
+    lane_corridor_far_lookahead_m_ = get_parameter("lane_corridor_far_lookahead_m").as_double();
     lane_corridor_center_offset_px_ = get_parameter("lane_corridor_center_offset_px").as_double();
     lane_corridor_left_offset_px_ = get_parameter("lane_corridor_left_offset_px").as_double();
     lane_corridor_right_offset_px_ = get_parameter("lane_corridor_right_offset_px").as_double();
@@ -696,6 +698,7 @@ private:
     lane_corridor_camera_height_m_ = std::clamp(lane_corridor_camera_height_m_, 0.20, 2.50);
     lane_corridor_camera_pitch_deg_ = std::clamp(lane_corridor_camera_pitch_deg_, -25.0, 45.0);
     lane_corridor_safety_margin_m_ = std::clamp(lane_corridor_safety_margin_m_, 0.0, 1.50);
+    lane_corridor_far_lookahead_m_ = std::clamp(lane_corridor_far_lookahead_m_, 1.0, 20.0);
     lane_corridor_center_offset_px_ = std::clamp(lane_corridor_center_offset_px_, -500.0, 500.0);
     lane_corridor_left_offset_px_ = std::clamp(lane_corridor_left_offset_px_, -500.0, 500.0);
     lane_corridor_right_offset_px_ = std::clamp(lane_corridor_right_offset_px_, -500.0, 500.0);
@@ -1898,18 +1901,26 @@ private:
     const double cos_pitch = std::cos(pitch);
     const double q = fy > 1.0e-9 ? (static_cast<double>(y) - cy) / fy : 0.0;
     const double denominator = q * cos_pitch + sin_pitch;
-    double half_width_px = 0.0;
+
+    // Pada horizon, proyeksi ground menuju tak hingga. Untuk safety overlay operator,
+    // jangan biarkan half-width menjadi nol (yang membentuk segitiga). Gunakan
+    // far-lookahead fisik sebagai batas maksimum depth; titik bawah tetap mengikuti
+    // tinggi/pitch kamera dan intrinsic/FOV bila ground projection valid.
+    double optical_depth_m = lane_corridor_far_lookahead_m_;
     if (denominator > 1.0e-6) {
       const double forward_m = lane_corridor_camera_height_m_ *
         (cos_pitch - q * sin_pitch) / denominator;
-      const double optical_depth_m = cos_pitch * forward_m +
+      const double projected_depth_m = cos_pitch * forward_m +
         lane_corridor_camera_height_m_ * sin_pitch;
-      if (forward_m >= 0.0 && optical_depth_m > 1.0e-6) {
-        const double half_width_m = 0.5 * lane_vehicle_width_m_ + lane_corridor_safety_margin_m_;
-        half_width_px = fx * half_width_m / optical_depth_m;
+      if (forward_m >= 0.0 && projected_depth_m > 1.0e-6) {
+        optical_depth_m = std::min(projected_depth_m, lane_corridor_far_lookahead_m_);
       }
     }
-    half_width_px = std::clamp(half_width_px, 0.0, 0.49 * static_cast<double>(image_width));
+    optical_depth_m = std::max(0.25, optical_depth_m);
+    const double half_width_m = 0.5 * lane_vehicle_width_m_ + lane_corridor_safety_margin_m_;
+    double half_width_px = fx * half_width_m / optical_depth_m;
+    half_width_px = std::clamp(half_width_px, 1.0, 0.49 * static_cast<double>(image_width));
+
     LaneSafetyLineAtRow line;
     line.center_x = cx;
     line.left_x = cx - half_width_px + lane_corridor_left_offset_px_ * sx;
@@ -1941,11 +1952,14 @@ private:
     uint64_t drivable_pixels = 0U;
     uint64_t corridor_pixels = 0U;
 
+    const auto top_line = laneSafetyLineAtRow(top_y, lane.cols, lane.rows);
+    const auto bottom_line = laneSafetyLineAtRow(bottom_y, lane.cols, lane.rows);
     for (int y = top_y; y <= bottom_y; y += lane_corridor_sample_stride_px_) {
-      const auto safety_line = laneSafetyLineAtRow(y, lane.cols, lane.rows);
-      const double center_x = safety_line.center_x;
-      const double left_line = safety_line.left_x;
-      const double right_line = safety_line.right_x;
+      const double t = static_cast<double>(y - top_y) /
+        static_cast<double>(std::max(1, bottom_y - top_y));
+      const double center_x = top_line.center_x + t * (bottom_line.center_x - top_line.center_x);
+      const double left_line = top_line.left_x + t * (bottom_line.left_x - top_line.left_x);
+      const double right_line = top_line.right_x + t * (bottom_line.right_x - top_line.right_x);
       const auto * lane_row = lane.ptr<uint8_t>(y);
       const auto * drivable_row = drivable.ptr<uint8_t>(y);
 
@@ -1988,13 +2002,14 @@ private:
     if (result.left_valid) result.left_gap_px = robustClosestGap(left_gaps);
     if (result.right_valid) result.right_gap_px = robustClosestGap(right_gaps);
 
-    // Warna visual mengikuti konteks drivable. Bila drivable tidak terdeteksi,
-    // status tidak boleh hijau karena area jalan belum diketahui. Bila drivable
-    // terdeteksi tetapi tidak ada lane mask pada satu sisi, sisi itu dianggap CLEAR.
-    if (!result.drivable_detected) {
+    // Abu-abu HANYA bila kedua evidence tidak ada: drivable area tidak terdeteksi
+    // dan lane mask juga tidak terdeteksi. Bila salah satu evidence tersedia dan
+    // lane tidak mendekati batas, kondisi visual harus GREEN (aman).
+    const bool lane_mask_detected = result.left_samples > 0 || result.right_samples > 0;
+    if (!result.drivable_detected && !lane_mask_detected) {
       result.left_status = "UNKNOWN";
       result.right_status = "UNKNOWN";
-      result.recommendation = "DRIVABLE_UNKNOWN";
+      result.recommendation = "NO_MASK_EVIDENCE";
       return result;
     }
     result.left_status = result.left_valid ? laneCorridorStatus(true, result.left_gap_px) : "GREEN";
@@ -2646,6 +2661,7 @@ private:
   double lane_corridor_camera_height_m_{0.736};
   double lane_corridor_camera_pitch_deg_{0.0};
   double lane_corridor_safety_margin_m_{0.25};
+  double lane_corridor_far_lookahead_m_{4.0};
   double lane_corridor_center_offset_px_{0.0};
   double lane_corridor_left_offset_px_{0.0};
   double lane_corridor_right_offset_px_{0.0};
