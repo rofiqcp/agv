@@ -42,6 +42,7 @@ find_package(builtin_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(nav2_msgs REQUIRED)
+find_package(lifecycle_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(tf2_ros REQUIRED)
@@ -100,7 +101,7 @@ add_executable(navigation_core src/navigation_core.cpp)
 target_include_directories(navigation_core PRIVATE include)
 ament_target_dependencies(
   navigation_core
-  rclcpp rclcpp_action std_msgs geometry_msgs nav_msgs sensor_msgs nav2_msgs)
+  rclcpp rclcpp_action std_msgs geometry_msgs nav_msgs sensor_msgs nav2_msgs lifecycle_msgs)
 
 
 # Closed-loop observer/supervisor: tidak membuat controller baru; hanya mengawasi

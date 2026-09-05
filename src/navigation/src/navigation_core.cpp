@@ -5,6 +5,10 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <sensor_msgs/msg/joy.hpp>
 #include <nav2_msgs/srv/manage_lifecycle_nodes.hpp>
+#include <lifecycle_msgs/msg/state.hpp>
+#include <lifecycle_msgs/msg/transition.hpp>
+#include <lifecycle_msgs/srv/change_state.hpp>
+#include <lifecycle_msgs/srv/get_state.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <std_msgs/msg/bool.hpp>
@@ -95,6 +99,8 @@ public:
   using NavigateToPose = nav2_msgs::action::NavigateToPose;
   using GoalHandleNavigate = rclcpp_action::ClientGoalHandle<NavigateToPose>;
   using ManageLifecycleNodes = nav2_msgs::srv::ManageLifecycleNodes;
+  using ChangeState = lifecycle_msgs::srv::ChangeState;
+  using GetState = lifecycle_msgs::srv::GetState;
 
   NavigationCore()
   : Node("navigation_core")
@@ -481,7 +487,10 @@ private:
 
     nav_client_ = rclcpp_action::create_client<NavigateToPose>(this, action_name_);
     nav2_lifecycle_client_ = create_client<ManageLifecycleNodes>(lifecycle_manager_service_);
+    smoother_get_state_client_ = create_client<GetState>("/velocity_smoother/get_state");
+    smoother_change_state_client_ = create_client<ChangeState>("/velocity_smoother/change_state");
 
+    smoother_guard_timer_ = create_wall_timer(500ms, std::bind(&NavigationCore::onSmootherGuardTimer, this));
     nav2_startup_timer_ = create_wall_timer(500ms, std::bind(&NavigationCore::maybeStartNav2Lifecycle, this));
     goal_timer_ = create_wall_timer(500ms, std::bind(&NavigationCore::trySendQueuedGoal, this));
     command_timer_ = create_wall_timer(
@@ -552,7 +561,7 @@ private:
     // The autonomous gate is the last software interlock before the ESC mux.
     // Do not open it merely because localization is ready: the STM link must
     // also have a fresh ACK with both actuator-ready status bits.
-    if (estop_ || !esc_ready_ || !map_ready_ ||
+    if (estop_ || !esc_ready_ || !map_ready_ || !velocity_smoother_active_ ||
         !planning_localization_ready_ || !motion_localization_ready_) return false;
     if (require_camera_calibration_ && !camera_calibration_validated_) return false;
     if (require_steering_calibration_ && !steering_calibration_validated_) return false;
@@ -570,6 +579,111 @@ private:
       if (age < 0.0 || age > perception_timeout_sec_) return false;
     }
     return true;
+  }
+
+  void requestSmootherTransition(uint8_t transition_id, const char * transition_name)
+  {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (smoother_transition_request_in_flight_) return;
+      smoother_transition_request_in_flight_ = true;
+    }
+    if (!smoother_change_state_client_ || !smoother_change_state_client_->service_is_ready()) {
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        smoother_transition_request_in_flight_ = false;
+        velocity_smoother_active_ = false;
+      }
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 5000,
+        "velocity_smoother change_state service belum ready; autonomy tetap fail-closed");
+      return;
+    }
+
+    auto request = std::make_shared<ChangeState::Request>();
+    request->transition.id = transition_id;
+    smoother_change_state_client_->async_send_request(
+      request,
+      [this, transition_id, name = std::string(transition_name)](
+        rclcpp::Client<ChangeState>::SharedFuture future) {
+        bool success = false;
+        try {
+          const auto response = future.get();
+          success = response && response->success;
+        } catch (const std::exception & e) {
+          RCLCPP_WARN(get_logger(), "velocity_smoother %s exception: %s", name.c_str(), e.what());
+        }
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          smoother_transition_request_in_flight_ = false;
+          if (transition_id == lifecycle_msgs::msg::Transition::TRANSITION_ACTIVATE) {
+            velocity_smoother_active_ = success;
+          }
+        }
+        if (success) {
+          RCLCPP_INFO(get_logger(), "velocity_smoother lifecycle %s berhasil", name.c_str());
+        } else {
+          RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 5000,
+            "velocity_smoother lifecycle %s gagal; guard akan retry", name.c_str());
+        }
+      });
+  }
+
+  void onSmootherGuardTimer()
+  {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (smoother_state_request_in_flight_) return;
+      smoother_state_request_in_flight_ = true;
+    }
+    if (!smoother_get_state_client_ || !smoother_get_state_client_->service_is_ready()) {
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        smoother_state_request_in_flight_ = false;
+        velocity_smoother_active_ = false;
+      }
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 5000,
+        "velocity_smoother get_state service belum ready; autonomy tetap fail-closed");
+      return;
+    }
+
+    auto request = std::make_shared<GetState::Request>();
+    smoother_get_state_client_->async_send_request(
+      request,
+      [this](rclcpp::Client<GetState>::SharedFuture future) {
+        uint8_t state_id = lifecycle_msgs::msg::State::PRIMARY_STATE_UNKNOWN;
+        bool valid = false;
+        try {
+          const auto response = future.get();
+          if (response) {
+            state_id = response->current_state.id;
+            valid = true;
+          }
+        } catch (const std::exception & e) {
+          RCLCPP_WARN(get_logger(), "velocity_smoother get_state exception: %s", e.what());
+        }
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          smoother_state_request_in_flight_ = false;
+          velocity_smoother_active_ =
+            valid && state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE;
+        }
+        if (!valid || state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) return;
+        if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED) {
+          requestSmootherTransition(
+            lifecycle_msgs::msg::Transition::TRANSITION_CONFIGURE, "CONFIGURE");
+        } else if (state_id == lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE) {
+          requestSmootherTransition(
+            lifecycle_msgs::msg::Transition::TRANSITION_ACTIVATE, "ACTIVATE");
+        } else {
+          RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 5000,
+            "velocity_smoother state=%u bukan ACTIVE/INACTIVE/UNCONFIGURED; autonomy fail-closed",
+            static_cast<unsigned>(state_id));
+        }
+      });
   }
 
   bool mapStartupSettledUnlocked(const rclcpp::Time & t) const
@@ -763,7 +877,7 @@ private:
 
       // Goal success/stop sengaja TIDAK dihitung dari raw /odometry/gnss_map.
       // Nav2 SimpleGoalChecker menggunakan TF map->base_footprint yang sama dengan
-      // URDF di RViz. Dengan xy_goal_tolerance=2m, kendaraan baru dianggap selesai
+      // URDF di RViz. Dengan tolerance commissioning yang ketat, kendaraan baru dianggap selesai
       // ketika pose yang terlihat oleh planner/URDF memang sudah masuk radius itu.
 
       motion_allowed = autonomousMotionReadyUnlocked(t);
@@ -791,6 +905,7 @@ private:
     bool motion_loc = false;
     bool nav2_action = false;
     bool motion_allowed = false;
+    bool smoother_active = false;
     bool perception_fresh = false;
     bool estop = false;
     bool esc_ready = false;
@@ -841,6 +956,7 @@ private:
       planning_loc = planning_localization_ready_;
       motion_loc = motion_localization_ready_;
       motion_allowed = autonomousMotionReadyUnlocked(snapshot_time);
+      smoother_active = velocity_smoother_active_;
       perception_fresh = last_perception_time_.nanoseconds() > 0 &&
         (snapshot_time - last_perception_time_).seconds() >= 0.0 &&
         (snapshot_time - last_perception_time_).seconds() <= perception_timeout_sec_;
@@ -923,6 +1039,7 @@ private:
        << ";planning_localization=" << planning_loc
        << ";motion_localization=" << motion_loc
        << ";nav2_action=" << nav2_action
+       << ";velocity_smoother_active=" << smoother_active
        << ";autonomy_motion_allowed=" << motion_allowed
        << ";perception=" << perception_fresh
        << ";camera_usb=" << camera_connected
@@ -1191,6 +1308,8 @@ private:
   float map_resolution_{0.0F};
   bool planning_localization_ready_{false}, motion_localization_ready_{false};
   bool nav2_action_ready_{false}, nav2_lifecycle_started_{false}, nav2_startup_requested_{false};
+  bool velocity_smoother_active_{false};
+  bool smoother_state_request_in_flight_{false}, smoother_transition_request_in_flight_{false};
   bool estop_{false}, esc_ready_{false};
   bool gnss_connected_{false}, imu_connected_{false}, camera_connected_{false};
   bool esc_drive_connected_{false}, esc_steer_connected_{false}, esc_armed_{false}, esc_feedback_valid_{false};
@@ -1241,7 +1360,9 @@ private:
 
   rclcpp_action::Client<NavigateToPose>::SharedPtr nav_client_;
   rclcpp::Client<ManageLifecycleNodes>::SharedPtr nav2_lifecycle_client_;
-  rclcpp::TimerBase::SharedPtr nav2_startup_timer_, goal_timer_, command_timer_, status_timer_;
+  rclcpp::Client<GetState>::SharedPtr smoother_get_state_client_;
+  rclcpp::Client<ChangeState>::SharedPtr smoother_change_state_client_;
+  rclcpp::TimerBase::SharedPtr smoother_guard_timer_, nav2_startup_timer_, goal_timer_, command_timer_, status_timer_;
 };
 
 int main(int argc, char ** argv)
