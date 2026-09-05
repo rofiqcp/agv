@@ -53,3 +53,11 @@ Tanggal: 2026-09-06
 - Karena mode proyek LEFT adalah ABI, konektor Hall LEFT tidak boleh membawa Hall motor secara paralel. Encoder harus menggantikan fungsi konektor: pin1=GND, pin2=B->PB7/TIM4_CH2, pin3=A->PB6/TIM4_CH1, pin4=NC, pin5=VCC +5V sesuai skema proyek.
 - Jangan gunakan tegangan baterai/DC bus sebagai VCC encoder. Untuk output encoder push-pull 5V, gunakan level shifter; direct input hanya untuk open-collector/open-drain atau level logika 3.3V sesuai skema proyek.
 - Status tetap fail-closed: PWM LEFT high-Z dan closed-loop steering tidak diaktifkan sampai Hall LEFT dilepas dan ABI menghasilkan count nyata.
+
+## Koreksi diagnosis pull-test dan hipotesis mekanik — 2026-09-06
+- Kesimpulan sebelumnya bahwa Hall LEFT pasti masih tersambung berdasarkan tes internal pull-up/pull-down dibatalkan.
+- Skema proyek menunjukkan ENC_A dan ENC_B masing-masing memiliki pull-up eksternal 2.2 kOhm ke +3V3 dan resistor seri 3.3 kOhm. Karena itu PB6/PB7 tetap HIGH saat internal STM32 dibuat pull-down adalah perilaku yang dapat dijelaskan oleh rangkaian encoder board sendiri, bukan bukti Hall masih paralel.
+- Pengguna mengonfirmasi jalur Hall LEFT telah diputus sejak sebelumnya sementara rail VCC encoder tetap tersedia; ini konsisten karena VCC pin 5 adalah rail +5 V terpisah dari jalur A/B.
+- Bukti historis ENCHALL 2026-08-20 menunjukkan encoder_raw pernah berubah nyata selama active motor alignment, sehingga PB6/PB7/TIM4 dan encoder pernah menghasilkan count pada hardware ini.
+- Sweep manual steering output kiri->kanan yang menghasilkan delta count nol belum membuktikan encoder mati: encoder mengukur poros motor dan mekanisme reduksi steering dapat tidak back-drive poros motor/encoder.
+- Tes berikut yang valid harus memutar poros motor/encoder langsung saat LEFT high-Z, lalu membandingkan raw PB6/PB7 edges dan TIM4 CNT.
