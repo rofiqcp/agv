@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Read-only preflight for the final Mini-PC AGV profile.
+"""Read-only preflight for the production Mini-PC AGV profile.
 
-Final estimator ownership:
-  * GNSS position -> global x/y
-  * GNSS Doppler velocity -> vx + GNSS-derived vyaw
-  * IMU quaternion -> absolute yaw
-  * ESC -> actuator/feedback only; serial may be disabled/offline without
-    preventing map/localization from running.
+Production data ownership:
+  * F411 CDC -> CUAV NEO-3 GNSS + IST8310 magnetometer.
+  * IMU -> direct CP2102.
+  * F411 CDC <-> F103 VESC UART transport.
+  * Local EKF -> ESC vx + independent GNSS vx + relative IMU yaw/gyro-Z.
+  * Global EKF -> GNSS x/y + GNSS COG + NEO3/IMU magnetic absolute yaw +
+    relative IMU yaw/gyro-Z. LocalizationCore owns map->odom.
 """
 from __future__ import annotations
 
@@ -60,6 +61,17 @@ def one_serial(selector: str, *, by_path: bool = False) -> list[Path]:
         return []
     return sorted(p for p in root.iterdir() if selector in p.name)
 
+def f411_serial() -> list[Path]:
+    root = Path("/dev/serial/by-id")
+    if not root.is_dir():
+        return []
+    out = []
+    for p in root.iterdir():
+        name = p.name.upper()
+        if "STMICROELECTRONICS" in name and "F411" in name and "CDC" in name:
+            out.append(p)
+    return sorted(out)
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -67,9 +79,9 @@ def main() -> int:
     parser.add_argument("--runtime", action="store_true",
                         help="also inspect currently running ROS nodes/topics")
     parser.add_argument("--require-hardware", action="store_true",
-                        help="require GNSS+IMU identities; ESC remains optional")
+                        help="require production F411 gateway + IMU identities")
     parser.add_argument("--require-esc", action="store_true",
-                        help="also require one matching ESC serial identity")
+                        help="require the F411 gateway used by the VESC transport")
     parser.add_argument("--expect-esc-node", action="store_true",
                         help="when --runtime, require /esc_ackermann node")
     args = parser.parse_args()
@@ -101,38 +113,43 @@ def main() -> int:
 
     if local.get("publish_tf") is not True or local.get("world_frame") != "odom":
         errors.append("EKF lokal harus menjadi owner odom→base_footprint")
-    if "odom0" in local:
-        errors.append("EKF lokal masih bergantung pada ESC odometry")
-    if local.get("twist0") != "/gnss/base_velocity_fusion" or enabled_indices(local.get("twist0_config")) != {6, 11}:
-        errors.append("EKF lokal harus memakai GNSS vx+vyaw")
-    if local.get("imu0") != "/imu/data" or enabled_indices(local.get("imu0_config")) != {5}:
-        errors.append("EKF lokal harus memakai IMU yaw absolut saja")
+    if local.get("odom0") != "/esc/odom" or enabled_indices(local.get("odom0_config")) != {6}:
+        errors.append("EKF lokal harus memakai ESC longitudinal vx saja")
+    if local.get("twist0") != "/gnss/base_velocity_fusion" or enabled_indices(local.get("twist0_config")) != {6}:
+        errors.append("EKF lokal harus memakai GNSS longitudinal vx independen")
+    if (local.get("imu0") != "/imu/data" or enabled_indices(local.get("imu0_config")) != {5, 11}
+            or local.get("imu0_relative") is not True):
+        errors.append("EKF lokal harus memakai relative IMU yaw + gyro-Z")
 
     if global_.get("publish_tf") is not False or global_.get("world_frame") != "map":
         errors.append("EKF global tidak boleh publish map→odom TF")
     if global_.get("odom0") != "/odometry/gnss_map" or enabled_indices(global_.get("odom0_config")) != {0, 1}:
         errors.append("EKF global harus memakai GNSS map x/y")
     if global_.get("twist0") != "/gnss/base_velocity_fusion" or enabled_indices(global_.get("twist0_config")) != {6}:
-        errors.append("EKF global harus memakai GNSS vx saja (COG fusion memindah yaw-rate ke IMU gyro)")
-    if global_.get("imu0") != "/imu/data":
-        errors.append("EKF global IMU source changed")
-    if loc.get("enable_global_gnss_cog_fusion"):
-        if enabled_indices(global_.get("imu0_config")) != {11}:
-            errors.append("EKF global harus memakai IMU vyaw-only ketika COG fusion aktif")
-        if global_.get("pose0") != "/gnss/cog_heading_fusion":
-            errors.append("EKF global harus memiliki pose0 COG ketika COG fusion aktif")
-        if enabled_indices(global_.get("pose0_config")) != {5}:
-            errors.append("EKF global COG harus yaw-only")
-    else:
-        if enabled_indices(global_.get("imu0_config")) != {5}:
-            errors.append("EKF global harus memakai IMU yaw absolut saja ketika COG fusion off")
-        if any(isinstance(v, str) and "/gnss/cog_heading_fusion" in v for v in global_.values()):
-            errors.append("COG masih masuk EKF global padahal COG fusion off")
+        errors.append("EKF global harus memakai GNSS longitudinal vx")
+    for key, topic in (("pose0", "/gnss/cog_heading_fusion"),
+                       ("pose1", "/neo3/mag_heading_fusion"),
+                       ("pose2", "/imu/mag_heading_fusion")):
+        if global_.get(key) != topic or enabled_indices(global_.get(key + "_config")) != {5}:
+            errors.append(f"EKF global absolute heading invalid: {key} -> {topic}")
+    if (global_.get("imu0") != "/imu/data" or enabled_indices(global_.get("imu0_config")) != {5, 11}
+            or global_.get("imu0_relative") is not True):
+        errors.append("EKF global harus memakai relative IMU yaw + gyro-Z")
 
     vehicle = load_params(nav / "config/vehicle.yaml", "vehicle")
     imu = load_params(nav / "config/imu.yaml", "data_imu_node")
     esc = load_params(esc_dir / "config/ackermann.yaml", "esc_ackermann")
     gnss = load_params(nav / "config/gnss.yaml", "data_cuav_node")
+    hmi = load_params(workspace / "src/stmf4/config/hmi.yaml", "stmf4_hmi_bridge")
+
+    if str(hmi.get("serial_device", "")).lower() != "auto":
+        errors.append("F411 gateway serial_device harus default auto")
+    if str(esc.get("serial_auto_path_contains", "")).strip():
+        errors.append("legacy ESC direct mode tidak boleh memakai physical by-path fallback")
+    if str(gnss.get("auto_port_path_contains", "")).strip():
+        errors.append("legacy GNSS direct mode tidak boleh memakai physical by-path fallback")
+    if str(imu.get("auto_port_path_contains", "")).strip():
+        errors.append("IMU tidak boleh memakai topology-dependent by-path fallback")
 
     if loc.get("enable_global_gnss_velocity_fusion") is not True:
         errors.append("GNSS velocity fusion harus ON agar vx tersedia tanpa ESC")
@@ -159,26 +176,16 @@ def main() -> int:
         if not ready:
             waits.append(f"kalibrasi {name} belum PASS")
 
-    selectors = {
-        # Stable USB identities are primary. Current hardware is distinct:
-        # GNSS=CH340, IMU=CP2102, ESC=PL2303. by-path is fallback only.
-        "ESC": (str(esc.get("serial_auto_id_contains", "")), str(esc.get("serial_auto_path_contains", ""))),
-        "GNSS": (str(gnss.get("auto_port_id_contains", "")), str(gnss.get("auto_port_path_contains", ""))),
-        "IMU": (str(imu.get("auto_port_id_contains", "")), str(imu.get("auto_port_path_contains", ""))),
-    }
-    hardware_rows: list[tuple[str, str, str, list[Path]]] = []
-    for name, (id_selector, path_selector) in selectors.items():
-        matches = one_serial(id_selector, by_path=False)
-        kind, selector = "by-id", id_selector
-        if len(matches) != 1:
-            matches = one_serial(path_selector, by_path=True)
-            kind, selector = "by-path-fallback", path_selector
-        hardware_rows.append((name, kind, selector, matches))
+    hardware_rows = [
+        ("F411", "by-id:auto", "STMicroelectronics+F411+CDC", f411_serial()),
+        ("IMU", "by-id", str(imu.get("auto_port_id_contains", "")),
+         one_serial(str(imu.get("auto_port_id_contains", "")), by_path=False)),
+    ]
 
     print("MINI-PC AGV PREFLIGHT")
     print(f"workspace: {workspace}")
-    print("profile  : autonomous/gui; OFF=camera-only; ESC UART optional")
-    print("fusion   : GNSS=x/y(global)+vx | COG=yaw(abs) | IMU=vyaw(continuity) | ESC=actuator/feedback only")
+    print("profile  : NEO-3/IST8310 + VESC via F411 CDC; IMU via CP2102; perception OFF=camera-only")
+    print("fusion   : local=ESC vx + GNSS vx + relative IMU yaw/gyro | global=GNSS x/y + COG + dual-mag + relative IMU")
     print("TF       : LocalizationCore map→odom | local EKF odom→base_footprint")
     print("\nCALIBRATION GATES")
     for name, ready in gates.items():
@@ -196,17 +203,14 @@ def main() -> int:
     for name, kind, selector, matches in hardware_rows:
         resolved = str(matches[0].resolve()) if len(matches) == 1 else "--"
         access = "RW" if serial_rw(matches) else "NO-RW"
-        state = "PASS" if len(matches) == 1 and serial_rw(matches) else ("OPTIONAL" if name == "ESC" and len(matches) != 1 else "WAIT")
+        state = "PASS" if len(matches) == 1 and serial_rw(matches) else "WAIT"
         print(f"  {name:4s}: {state:8s} access={access:5s} {kind}={selector!r} -> {resolved}")
         if len(matches) == 1 and not serial_rw(matches):
             waits.append(f"permission serial {name} belum read/write untuk user aktif: {resolved}")
 
-    hardware_required_ok = all(
-        len(matches) == 1 and serial_rw(matches)
-        for name, _kind, _selector, matches in hardware_rows if name in {"GNSS", "IMU"})
-    esc_ok = next(
-        (len(matches) == 1 and serial_rw(matches)
-         for name, _kind, _selector, matches in hardware_rows if name == "ESC"), False)
+    print("  LEGACY: direct GNSS/ESC recovery remains by-id only; physical by-path fallback DISABLED")
+    hardware_required_ok = all(len(matches) == 1 and serial_rw(matches) for _n, _k, _s, matches in hardware_rows)
+    esc_ok = next((len(matches) == 1 and serial_rw(matches) for name, _k, _s, matches in hardware_rows if name == "F411"), False)
 
     if args.runtime:
         if not shutil.which("ros2"):
@@ -215,18 +219,19 @@ def main() -> int:
             nodes = set(command_lines(["ros2", "node", "list"]))
             topics = set(command_lines(["ros2", "topic", "list"]))
             required_nodes = {
-                "/data_cuav_node", "/data_imu_node", "/ekf_filter_node_odom",
-                "/ekf_filter_node_map", "/localization_core", "/map_server",
-                "/controller_server", "/planner_server", "/bt_navigator",
+                "/stmf4_hmi_bridge", "/data_imu_node", "/mag_heading_fusion",
+                "/ekf_filter_node_odom", "/ekf_filter_node_map", "/localization_core",
+                "/map_server", "/controller_server", "/planner_server", "/bt_navigator",
                 "/velocity_smoother", "/navigation_core",
             }
             if args.expect_esc_node:
                 required_nodes.add("/esc_ackermann")
             required_topics = {
-                "/map", "/imu/data", "/gnss/fix_raw", "/gnss/base_velocity_fusion",
-                "/odometry/filtered", "/odometry/filtered_map",
+                "/map", "/imu/data", "/imu/mag", "/gnss/fix_raw", "/neo3/mag",
+                "/neo3/mag_heading_fusion", "/imu/mag_heading_fusion",
+                "/gnss/base_velocity_fusion", "/odometry/filtered", "/odometry/filtered_map",
                 "/robot_description", "/system/localization_state",
-                "/system/autonomy_motion_allowed",
+                "/system/magnetic_heading_status", "/system/autonomy_motion_allowed",
             }
             for missing in sorted(required_nodes - nodes):
                 errors.append(f"runtime node hilang: {missing}")
@@ -240,10 +245,10 @@ def main() -> int:
             print(f"  - {error}")
         return 2
     if args.require_hardware and not hardware_required_ok:
-        print("\nWAIT: GNSS/IMU serial belum lengkap.")
+        print("\nWAIT: F411 gateway/IMU serial belum lengkap.")
         return 3
     if args.require_esc and not esc_ok:
-        print("\nWAIT: ESC serial diminta tetapi identity belum ditemukan.")
+        print("\nWAIT: F411 VESC gateway diminta tetapi identity belum ditemukan.")
         return 3
     if waits:
         print("\nCONFIG PASS; COMMISSIONING MASIH WAIT")

@@ -62,7 +62,7 @@ ImuNode::ImuNode(const rclcpp::NodeOptions & options)
   auto_port_id_contains_ = this->declare_parameter<std::string>(
     "auto_port_id_contains", "Silicon_Labs_CP2102");
   auto_port_path_contains_ = this->declare_parameter<std::string>(
-    "auto_port_path_contains", "usb-0:3.1:1.0");
+    "auto_port_path_contains", "");
   baudrate_ = this->declare_parameter<int>("baudrate", 9600);
   auto_baud_ = this->declare_parameter<bool>("auto_baud", true);
   baud_probe_sec_ = std::clamp(

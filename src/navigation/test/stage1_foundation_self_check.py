@@ -28,9 +28,11 @@ navcore = load_params(NAV / "config/navigation_core.yaml", "navigation_core")
 esc = load_params(ESC / "config/ackermann.yaml", "esc_ackermann")
 gnss = load_params(NAV / "config/gnss.yaml", "data_cuav_node")
 imu = load_params(NAV / "config/imu.yaml", "data_imu_node")
+hmi = load_params(ROOT / "stmf4/config/hmi.yaml", "stmf4_hmi_bridge")
+launch_text = (NAV / "launch/autonomous.launch.py").read_text(encoding="utf-8")
 
-# 1) Hardware routing must be deterministic and portable. Stable USB by-id
-# identities are primary; physical by-path values are only fail-closed fallbacks.
+# 1) Production routing: NEO-3/IST8310 + F103 VESC share one identity-checked
+# F411 CDC gateway; IMU remains direct CP2102. Legacy direct serial is by-id only.
 identities = {
     "ESC": esc["serial_auto_id_contains"],
     "GNSS": gnss["auto_port_id_contains"],
@@ -41,12 +43,14 @@ require(identities["GNSS"] == "1a86_USB_Serial", "GNSS CH340 identity changed")
 require(identities["IMU"] == "Silicon_Labs_CP2102", "IMU CP2102 identity changed")
 require(len(set(identities.values())) == len(identities), "serial by-id selectors overlap")
 selectors = {
-    "ESC": esc["serial_auto_path_contains"],
-    "GNSS": gnss["auto_port_path_contains"],
+    "ESC_RECOVERY": esc["serial_auto_path_contains"],
+    "GNSS_RECOVERY": gnss["auto_port_path_contains"],
     "IMU": imu["auto_port_path_contains"],
 }
-require(all(str(v).strip() for v in selectors.values()), "serial by-path fallback must be non-empty")
-require(len(set(selectors.values())) == len(selectors), "serial physical-path fallbacks overlap")
+require(str(hmi.get("serial_device", "")).lower() == "auto", "F411 gateway must use auto identity discovery")
+require("DeclareLaunchArgument('gnss_source', default_value='stm32'" in launch_text, "GNSS must default to F411/stm32")
+require("DeclareLaunchArgument('esc_transport_mode', default_value='stm32'" in launch_text, "ESC must default to F411/stm32")
+require(not any(str(v).strip() for v in selectors.values()), "physical by-path fallback must be disabled")
 
 # 2) Calibration state must be explicit, but this regression test must remain
 # valid both before and after real field commissioning.
@@ -144,6 +148,6 @@ for bad in (
 require("bool reload(){" in gui, "YamlStore::reload must report parse success/failure")
 
 print("STAGE1 FOUNDATION SELF-CHECK: PASS")
-print(f"serial selectors: {selectors}")
+print("serial route: F411 CDC shared GNSS/IST8310+VESC | IMU CP2102 | physical by-path disabled")
 print(f"safe fallback steering: +/-{op:.3f} deg")
 print(f"safe fallback turning radius: {actual_r:.6f} m")

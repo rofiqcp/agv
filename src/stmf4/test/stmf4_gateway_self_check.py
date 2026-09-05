@@ -32,6 +32,9 @@ for token in ('/stmf4/vesc/runtime_tx', '/stmf4/vesc/maintenance_tx', '/stmf4/ve
               '/stmf4/vesc/mode', '/stmf4/vesc/status', '/stmf4/vesc/connected',
               'VESC:MODE:RUNTIME', 'VESC:STATUS'):
     require(token in bridge, f'ROS F411 VESC bridge contract missing: {token}')
+require(str(hmi.get('serial_device', '')).lower() == 'auto', 'F411 serial_device must default to fail-safe auto discovery')
+require('STMICROELECTRONICS' in bridge and 'F411' in bridge and 'CDC' in bridge,
+        'F411 auto-discovery identity guard missing')
 require(float(hmi.get('vesc_transport_timeout_sec', 0.0)) > 0.0, 'VESC transport watchdog missing')
 require('rx_count > 0UL' in bridge, 'VESC connected state must require real F103 RX traffic')
 print('PASS stmf4_gateway_self_check')

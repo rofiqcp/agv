@@ -7,7 +7,7 @@ data_imu_node:
     baud_probe_sec: 0.5
     # Primary selector: stable USB identity (CP2102 10c4:ea60).
     auto_port_id_contains: Silicon_Labs_CP2102
-    auto_port_path_contains: usb-0:3.1:1.0
+    auto_port_path_contains: ""
     frame_id: imu_link
     poll_interval_ms: 5
     publish_rate_hz: 10

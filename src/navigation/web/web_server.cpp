@@ -65,6 +65,7 @@
 #include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/imu.hpp>
+#include <sensor_msgs/msg/magnetic_field.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <std_msgs/msg/bool.hpp>
@@ -1355,6 +1356,10 @@ class WebRosBridge {
 
     const std::vector<std::pair<const char *, const char *>> bools = {
         {"/gnss/connected", "connected.gnss"}, {"/imu/connected", "connected.imu"},
+        {"/neo3/ist8310_connected", "connected.neo3_mag"},
+        {"/neo3/mag_heading_valid", "neo3_mag_heading_valid"},
+        {"/imu/mag_heading_valid", "imu_mag_heading_valid"},
+        {"/neo3/safety_switch", "neo3_safety_switch"},
         {"/hmi/connected", "connected.hmi"},
         {"/perception/camera_connected", "connected.camera"}, {"/esc/ready", "connected.esc_ready"},
         {"/esc/armed", "connected.esc_armed"}, {"/esc/feedback_valid", "connected.esc_feedback"},
@@ -1390,7 +1395,9 @@ class WebRosBridge {
 
     const std::vector<std::pair<const char *, const char *>> strings = {
         {"/system/localization_state", "localization_state"}, {"/system/gnss_status", "gnss_status"},
-        {"/gnss/state", "gnss_driver_state"}, {"/gnss/motion_diagnostics", "gnss_motion"},
+        {"/gnss/state", "gnss_driver_state"}, {"/neo3/status", "neo3_status"},
+        {"/system/magnetic_heading_status", "magnetic_heading_status"},
+        {"/gnss/motion_diagnostics", "gnss_motion"},
         {"/gnss/motion_validation", "gnss_motion_validation"}, {"/gnss/fusion_status", "gnss_fusion_status"},
         {"/system/imu_status", "imu_status"}, {"/system/ekf_local_status", "ekf_local_status"},
         {"/system/ekf_global_status", "ekf_global_status"}, {"/system/pose_estimator", "pose_estimator"},
@@ -1490,6 +1497,39 @@ class WebRosBridge {
                                                  {"yaw_variance", msg->pose.covariance[35]},
                                                  {"measurement_stamp_sec", double(msg->header.stamp.sec) + msg->header.stamp.nanosec * 1e-9}});
         });
+
+    const auto magSubscribe = [this, sensorQos](const char *topic, const char *channel) {
+      const QString ch = QString::fromLatin1(channel);
+      subscribe<sensor_msgs::msg::MagneticField>(topic, sensorQos,
+          [this, ch](sensor_msgs::msg::MagneticField::ConstSharedPtr msg) {
+            const double x_ut = msg->magnetic_field.x * 1.0e6;
+            const double y_ut = msg->magnetic_field.y * 1.0e6;
+            const double z_ut = msg->magnetic_field.z * 1.0e6;
+            update(ch, QJsonObject{{"x_ut", x_ut}, {"y_ut", y_ut}, {"z_ut", z_ut},
+                                   {"norm_ut", std::sqrt(x_ut*x_ut + y_ut*y_ut + z_ut*z_ut)},
+                                   {"var_x_t2", msg->magnetic_field_covariance[0]},
+                                   {"var_y_t2", msg->magnetic_field_covariance[4]},
+                                   {"var_z_t2", msg->magnetic_field_covariance[8]},
+                                   {"frame_id", QString::fromStdString(msg->header.frame_id)},
+                                   {"measurement_stamp_sec", double(msg->header.stamp.sec) + msg->header.stamp.nanosec * 1e-9}});
+          });
+    };
+    magSubscribe("/neo3/mag", "neo3_mag");
+    magSubscribe("/imu/mag", "imu_mag");
+
+    const auto magneticHeadingSubscribe = [this, sensorQos](const char *topic, const char *channel) {
+      const QString ch = QString::fromLatin1(channel);
+      subscribe<geometry_msgs::msg::PoseWithCovarianceStamped>(topic, sensorQos,
+          [this, ch](geometry_msgs::msg::PoseWithCovarianceStamped::ConstSharedPtr msg) {
+            const auto &q = msg->pose.pose.orientation;
+            update(ch, QJsonObject{{"yaw_rad", yawFromQuat(q.x, q.y, q.z, q.w)},
+                                   {"yaw_variance", msg->pose.covariance[35]},
+                                   {"frame_id", QString::fromStdString(msg->header.frame_id)},
+                                   {"measurement_stamp_sec", double(msg->header.stamp.sec) + msg->header.stamp.nanosec * 1e-9}});
+          });
+    };
+    magneticHeadingSubscribe("/neo3/mag_heading_fusion", "neo3_mag_heading");
+    magneticHeadingSubscribe("/imu/mag_heading_fusion", "imu_mag_heading");
 
     subscribe<sensor_msgs::msg::Imu>("/imu/data", sensorQos, [this](sensor_msgs::msg::Imu::ConstSharedPtr msg) {
       const auto &q = msg->orientation;

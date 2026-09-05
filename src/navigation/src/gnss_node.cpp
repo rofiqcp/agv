@@ -119,7 +119,7 @@ GnssNode::GnssNode(const rclcpp::NodeOptions & options)
   // by-path dipertahankan hanya sebagai fallback fail-closed bila by-id hilang
   // atau menjadi ambigu; stream tetap wajib lolos probe NMEA/UBX sebelum diterima.
   auto_port_path_contains_ = this->declare_parameter<std::string>(
-    "auto_port_path_contains", "usb-0:3.4:1.0");
+    "auto_port_path_contains", "");
   // ROS 2 menyimpan parameter INTEGER sebagai int64_t. Gunakan tipe itu secara
   // eksplisit lalu konversi ke int setelah divalidasi agar portable di ARM64/x86_64.
   const int64_t baudrate_param =

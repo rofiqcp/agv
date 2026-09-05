@@ -50,6 +50,7 @@ constexpr std::uint8_t kHbMagic0 = 0x48;
 constexpr std::uint8_t kHbMagic1 = 0x42;
 constexpr std::uint8_t kHbVersion = 1;
 constexpr std::uint8_t kHbSetSteeringDeg = 9;
+constexpr std::uint8_t kHbGetSteeringCal = 10;
 constexpr std::uint8_t kVescForwardCan = 34;
 constexpr std::uint8_t kVescRightMotorId = 2;
 
@@ -392,7 +393,7 @@ private:
       "serial_auto_id_contains", "Prolific_Technology_Inc._USB-Serial_Controller");
     // Current ESC UART is a Prolific PL2303 (067b:2303). Unique by-id is the
     // primary selector; physical topology is only a deterministic fallback.
-    declare_parameter<std::string>("serial_auto_path_contains", "usb-0:1.1:1.0");
+    declare_parameter<std::string>("serial_auto_path_contains", "");
     declare_parameter<int>("serial_baud", 1000000);
     declare_parameter<double>("serial_tx_rate_hz", 50.0);
     declare_parameter<double>("serial_reconnect_sec", 0.25);
@@ -1818,7 +1819,7 @@ private:
     if (!std::isfinite(age) || age > command_watchdog_sec_) {
       cmd = SerialCommand{};
       cmd.left_cdeg = static_cast<std::int16_t>(
-        std::lround(stmSteeringCommandDeg(0.0) * 100.0));
+        std::lround((transport_mode_ == "stm32" ? 0.0 : stmSteeringCommandDeg(0.0)) * 100.0));
     }
     return cmd;
   }
@@ -1845,6 +1846,13 @@ private:
   {
     std::vector<std::uint8_t> payload{kVescGetValues};
     if (second) payload = wrapRightMotor(payload);
+    sendVescPayload(payload);
+  }
+
+  void requestSteeringCalibration()
+  {
+    std::vector<std::uint8_t> payload{
+      kVescCustomAppData, kHbMagic0, kHbMagic1, kHbVersion, kHbGetSteeringCal};
     sendVescPayload(payload);
   }
 
@@ -1915,7 +1923,20 @@ private:
   void handleVescPayload(const std::vector<std::uint8_t> &payload)
   {
     if (payload.empty()) return;
-    if (payload[0] == kVescGetValues) handleVescValues(payload);
+    if (payload[0] == kVescGetValues) { handleVescValues(payload); return; }
+    if (payload.size() >= 23U && payload[0] == kVescCustomAppData &&
+        payload[1] == kHbMagic0 && payload[2] == kHbMagic1 &&
+        payload[3] == kHbVersion && payload[4] == kHbGetSteeringCal && payload[5] == 0U) {
+      const std::uint8_t flags=payload[6];
+      std::lock_guard<std::mutex> lock(feedback_mutex_);
+      steering_calibrated_=(flags&0x01U)!=0U;
+      steering_homed_=(flags&0x02U)!=0U;
+      steering_encoder_synced_=(flags&0x04U)!=0U;
+      steering_span_counts_=readI32Be(&payload[7]);
+      steering_raw_count_=readI32Be(&payload[11]);
+      steering_raw_target_=readI32Be(&payload[15]);
+      measured_steering_deg_=static_cast<double>(readI32Be(&payload[19]))/1000.0;
+    }
   }
 
   void consumeVescRxBytes(const std::vector<std::uint8_t> &bytes)
@@ -1996,6 +2017,13 @@ private:
       << ",\"id_a\":" << right_id_a_ << ",\"iq_a\":" << right_iq_a_
       << ",\"duty\":" << right_duty_ << ",\"rpm\":" << measured_rpm_
       << ",\"vbus_v\":" << right_vbus_v_ << "},"
+      << "\"steering_cal\":{\"calibrated\":" << (steering_calibrated_?"true":"false")
+      << ",\"homed\":" << (steering_homed_?"true":"false")
+      << ",\"encoder_synced\":" << (steering_encoder_synced_?"true":"false")
+      << ",\"raw_left\":0,\"raw_right\":" << steering_span_counts_
+      << ",\"raw_center\":" << (steering_span_counts_/2)
+      << ",\"raw_now\":" << steering_raw_count_ << ",\"raw_target\":" << steering_raw_target_
+      << ",\"physical_min_deg\":-30,\"physical_center_deg\":0,\"physical_max_deg\":30},"
       << "\"rx_crc_errors\":" << vesc_rx_crc_error_count_
       << ",\"rx_format_errors\":" << vesc_rx_format_error_count_
       << ",\"rx_overflows\":" << vesc_rx_overflow_count_ << "}";
@@ -2017,6 +2045,7 @@ private:
       vesc_runtime_tick_ = 0U;
       requestVescValues(false);
       requestVescValues(true);
+      if (++steering_cal_tick_ >= 5U) { steering_cal_tick_ = 0U; requestSteeringCalibration(); }
     }
 
     bool timed_out = true;
@@ -2551,6 +2580,13 @@ private:
   std::uint16_t stm32_sequence_{0U};
   bool maintenance_mode_active_{false};
   std::uint32_t vesc_runtime_tick_{0U};
+  std::uint32_t steering_cal_tick_{0U};
+  bool steering_calibrated_{false};
+  bool steering_homed_{false};
+  bool steering_encoder_synced_{false};
+  std::int32_t steering_span_counts_{0};
+  std::int32_t steering_raw_count_{0};
+  std::int32_t steering_raw_target_{0};
   std::vector<std::uint8_t> vesc_rx_stream_;
   std::uint64_t vesc_rx_crc_error_count_{0U};
   std::uint64_t vesc_rx_format_error_count_{0U};
@@ -2560,7 +2596,7 @@ private:
   bool serial_enabled_{true};
   std::string serial_device_{"auto"};
   std::string serial_auto_id_contains_{"Prolific_Technology_Inc._USB-Serial_Controller"};
-  std::string serial_auto_path_contains_{"usb-0:1.1:1.0"};
+  std::string serial_auto_path_contains_{};
   int serial_baud_{1000000};
   double serial_tx_rate_hz_{50.0};
   double serial_reconnect_sec_{0.25};

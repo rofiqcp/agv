@@ -26,27 +26,30 @@ traj = load(ROOT/'config/trajectory_safety.yaml')['trajectory_safety_supervisor'
 esc = load(WS/'esc/config/ackermann.yaml')['esc_ackermann']['ros__parameters']
 gnss = load(ROOT/'config/gnss.yaml')['data_cuav_node']['ros__parameters']
 imu = load(ROOT/'config/imu.yaml')['data_imu_node']['ros__parameters']
+hmi = load(WS/'stmf4/config/hmi.yaml')['stmf4_hmi_bridge']['ros__parameters']
+launch = (ROOT/'launch/autonomous.launch.py').read_text()
 
-# Current deployment uses three distinct USB-UART families. Stable by-id
-# identity is primary; physical by-path remains only a deterministic fallback.
+# Production transport is one identity-checked F411 CDC gateway for NEO-3/IST8310
+# and F103 VESC, plus one direct CP2102 IMU. Legacy CH340/PL2303 routes are
+# recovery-only and must never use physical by-path fallback because USB topology
+# can be re-used by the F411 after reflashing/replugging.
+if str(hmi.get('serial_device','')).lower() != 'auto': fail('F411 gateway must default to auto identity discovery')
+if "DeclareLaunchArgument('gnss_source', default_value='stm32'" not in launch: fail('GNSS production source must be F411/stm32')
+if "DeclareLaunchArgument('esc_transport_mode', default_value='stm32'" not in launch: fail('ESC production transport must be F411/stm32')
 expected_ids = {
-    'ESC': (esc['serial_auto_id_contains'], 'Prolific_Technology_Inc._USB-Serial_Controller'),
-    'GNSS': (gnss['auto_port_id_contains'], '1a86_USB_Serial'),
+    'ESC_RECOVERY': (esc['serial_auto_id_contains'], 'Prolific_Technology_Inc._USB-Serial_Controller'),
+    'GNSS_RECOVERY': (gnss['auto_port_id_contains'], '1a86_USB_Serial'),
     'IMU': (imu['auto_port_id_contains'], 'Silicon_Labs_CP2102'),
 }
 for name, (actual, wanted) in expected_ids.items():
     if wanted not in str(actual): fail(f'{name} serial id selector {actual!r} does not contain {wanted!r}')
-if len({str(x[0]) for x in expected_ids.values()}) != 3:
-    fail('serial by-id selectors are not unique')
 expected_paths = {
-    'ESC': str(esc['serial_auto_path_contains']),
-    'GNSS': str(gnss['auto_port_path_contains']),
+    'ESC_RECOVERY': str(esc['serial_auto_path_contains']),
+    'GNSS_RECOVERY': str(gnss['auto_port_path_contains']),
     'IMU': str(imu['auto_port_path_contains']),
 }
-if any(not value.strip() for value in expected_paths.values()):
-    fail('serial physical-path fallback is empty')
-if len(set(expected_paths.values())) != 3:
-    fail('serial physical-path fallbacks are not unique')
+if any(value.strip() for value in expected_paths.values()):
+    fail(f'physical by-path fallback must be disabled: {expected_paths}')
 
 all_text = '\n'.join(
     p.read_text(errors='ignore') for p in WS.rglob('*')
@@ -63,18 +66,14 @@ gnss_cpp = (ROOT/'src/gnss_node.cpp').read_text()
 imu_cpp = (ROOT/'src/imu_node.cpp').read_text()
 esc_cpp = (WS/'esc/src/ackermann_controller_server.cpp').read_text()
 for text, token, name in [
-    (gnss_cpp, '"auto_port_id_contains", "1a86_USB_Serial"', 'GNSS'),
+    (gnss_cpp, '"auto_port_id_contains", "1a86_USB_Serial"', 'GNSS recovery'),
     (imu_cpp, '"auto_port_id_contains", "Silicon_Labs_CP2102"', 'IMU'),
-    (esc_cpp, '"serial_auto_id_contains", "Prolific_Technology_Inc._USB-Serial_Controller"', 'ESC'),
+    (esc_cpp, '"serial_auto_id_contains", "Prolific_Technology_Inc._USB-Serial_Controller"', 'ESC recovery'),
+    (gnss_cpp, '"auto_port_path_contains", ""', 'GNSS no by-path'),
+    (imu_cpp, '"auto_port_path_contains", ""', 'IMU no by-path'),
+    (esc_cpp, '"serial_auto_path_contains", ""', 'ESC no by-path'),
 ]:
-    if token not in text: fail(f'{name} source fallback does not match YAML')
-
-if gnss_cpp.find('globPattern("/dev/serial/by-id/*")') > gnss_cpp.find('globPattern("/dev/serial/by-path/*")'):
-    fail('GNSS must prefer by-id before by-path fallback')
-if imu_cpp.find('globPattern("/dev/serial/by-id/*")') > imu_cpp.find('globPattern("/dev/serial/by-path/*")'):
-    fail('IMU must prefer by-id before by-path fallback')
-if esc_cpp.find('directory_iterator("/dev/serial/by-id"') > esc_cpp.find('directory_iterator("/dev/serial/by-path"'):
-    fail('ESC must prefer by-id before by-path fallback')
+    if token not in text: fail(f'{name} source fallback does not match production contract')
 
 # Geometry must be self-consistent even before physical commissioning.
 L = float(vehicle['effective_wheelbase_m'])
@@ -129,5 +128,5 @@ for token in [
     if token not in gui: fail(f'GUI steering authority propagation missing {token}')
 
 print('PASS project_consistency_self_check')
-print(f'serial paths: ESC={esc["serial_auto_path_contains"]} | GNSS={gnss["auto_port_path_contains"]} | IMU={imu["auto_port_path_contains"]}')
+print('serial route: NEO-3/IST8310 + VESC via identity-checked F411 CDC | IMU via CP2102 | legacy physical by-path DISABLED')
 print(f'uncalibrated geometry: Rmin={rmin:.6f} m | vehicle yaw cap={vehicle["max_yaw_rate_rps"]:.6f} rad/s | autonomous yaw cap={nav_yaw_cap:.6f} rad/s')

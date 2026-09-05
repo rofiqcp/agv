@@ -11,7 +11,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 def generate_launch_description():
     cfg = str(Path(get_package_share_directory("stmf4")) / "config" / "hmi.yaml")
     args = [
-        DeclareLaunchArgument("serial_device", default_value="/dev/serial/by-id/usb-STMicroelectronics_BLACKPILL_F411CE_CDC_in_FS_Mode_338133833134-if00"),
+        DeclareLaunchArgument("serial_device", default_value="auto"),
         DeclareLaunchArgument("use_sim_time", default_value="false"),
     ]
     node = Node(

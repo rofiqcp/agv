@@ -97,7 +97,7 @@ esc_ackermann:
     stm32_connected_topic: /stmf4/vesc/connected
     # Direct USB serial selector is retained only as commissioning/recovery fallback.
     serial_auto_id_contains: Prolific_Technology_Inc._USB-Serial_Controller
-    serial_auto_path_contains: usb-0:1.1:1.0
+    serial_auto_path_contains: ""
     serial_baud: 1000000
     serial_tx_rate_hz: 50.0
     serial_reconnect_sec: 0.25

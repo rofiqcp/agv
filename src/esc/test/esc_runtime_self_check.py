@@ -63,10 +63,10 @@ if ack.get("stm32_connected_topic") != "/stmf4/vesc/connected":
     fail("ESC STM32F411 transport health topic is invalid")
 if "Prolific_Technology_Inc._USB-Serial_Controller" not in str(ack.get("serial_auto_id_contains", "")):
     fail("direct-serial recovery selector must remain available")
-if not str(ack.get("serial_auto_path_contains", "")).strip():
-    fail("direct-serial recovery path must remain available")
-if source.find('directory_iterator("/dev/serial/by-id"') > source.find('directory_iterator("/dev/serial/by-path"'):
-    fail("ESC must evaluate unique by-id before physical by-path fallback")
+if str(ack.get("serial_auto_path_contains", "")).strip():
+    fail("direct-serial recovery must not use topology-dependent physical by-path fallback")
+if 'declare_parameter<std::string>("serial_auto_path_contains", "")' not in source:
+    fail("ESC source default must keep physical by-path fallback disabled")
 if "configured selectors cannot resolve" not in source:
     fail("ESC auto-routing must fail closed when identity/path are unresolved")
 if "no unique serial candidate" not in source:

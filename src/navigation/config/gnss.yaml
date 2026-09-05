@@ -13,7 +13,7 @@ data_cuav_node:
     baudrate: 38400
     # Primary selector: stable USB identity (CH340 1a86:7523).
     auto_port_id_contains: 1a86_USB_Serial
-    auto_port_path_contains: usb-0:3.4:1.0
+    auto_port_path_contains: ""
     auto_baud: false
     frame_id: gnss_link
     velocity_frame_id: enu

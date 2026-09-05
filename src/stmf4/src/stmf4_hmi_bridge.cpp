@@ -159,7 +159,7 @@ private:
   }
 
   void declareParameters() {
-    declare_parameter<std::string>("serial_device", "/dev/serial/by-id/usb-STMicroelectronics_BLACKPILL_F411CE_CDC_in_FS_Mode_338133833134-if00");
+    declare_parameter<std::string>("serial_device", "auto");
     declare_parameter<int>("serial_baud", 115200);
     declare_parameter<double>("reconnect_sec", 0.5);
     declare_parameter<double>("telemetry_rate_hz", 10.0);
@@ -583,9 +583,43 @@ private:
     }
   }
 
+  std::optional<std::string> resolveSerialDevice() {
+    const std::string configured = trim(serial_device_);
+    if (!configured.empty() && upper(configured) != "AUTO") {
+      return fs::exists(configured) ? std::optional<std::string>(configured) : std::nullopt;
+    }
+
+    std::vector<std::string> candidates;
+    std::error_code ec;
+    const fs::path by_id("/dev/serial/by-id");
+    if (fs::exists(by_id, ec) && fs::is_directory(by_id, ec)) {
+      for (const auto &entry : fs::directory_iterator(by_id, ec)) {
+        if (ec) break;
+        const std::string name = upper(entry.path().filename().string());
+        if (name.find("STMICROELECTRONICS") == std::string::npos ||
+            name.find("F411") == std::string::npos ||
+            name.find("CDC") == std::string::npos) continue;
+        candidates.push_back(entry.path().string());
+      }
+    }
+    std::sort(candidates.begin(), candidates.end());
+    candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+    if (candidates.size() == 1U) return candidates.front();
+    if (candidates.size() > 1U) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+        "F411 auto-discovery ambiguous: %zu matching CDC devices; set serial_device explicitly", candidates.size());
+    } else {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+        "F411 auto-discovery: no STMicroelectronics F411 CDC endpoint under /dev/serial/by-id");
+    }
+    return std::nullopt;
+  }
+
   bool openSerial() {
-    if (!fs::exists(serial_device_)) return false;
-    const int fd = ::open(serial_device_.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
+    const auto resolved = resolveSerialDevice();
+    if (!resolved) return false;
+    const std::string device = *resolved;
+    const int fd = ::open(device.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) return false;
     // Kernel-level exclusive ownership prevents another serial monitor/uploader
     // from opening the same CDC endpoint and interleaving bytes with ROS frames.
@@ -604,6 +638,7 @@ private:
     tty.c_cflag &= static_cast<tcflag_t>(~CRTSCTS);
     if (::tcsetattr(fd, TCSANOW, &tty) != 0) { ::close(fd); return false; }
     ::tcflush(fd, TCIOFLUSH);
+    active_serial_device_ = device;
     fd_ = fd;
     rx_.clear();
     tx_cache_.clear();
@@ -613,13 +648,15 @@ private:
     const ssize_t resync_written = ::write(fd_, &resync, 1);
     if (resync_written != 1 && errno != EAGAIN && errno != EWOULDBLOCK) {
       ::close(fd_);
+      fd_ = -1;
+      active_serial_device_.clear();
       return false;
     }
     (void)::tcdrain(fd_);
     std::this_thread::sleep_for(std::chrono::milliseconds(30));
     ::tcflush(fd_, TCIFLUSH);
     publishConnected(true);
-    RCLCPP_INFO(get_logger(), "HMI USB connected: %s", serial_device_.c_str());
+    RCLCPP_INFO(get_logger(), "HMI USB connected: %s (selector=%s)", active_serial_device_.c_str(), serial_device_.c_str());
     sendLine("ROS:1");
     sendLine("PING");
     sendLine("GET:STATE");
@@ -635,6 +672,7 @@ private:
     if (fd_ >= 0) ::close(fd_);
     const bool was = connected_;
     fd_ = -1;
+    active_serial_device_.clear();
     rx_.clear();
     if (was) RCLCPP_WARN(get_logger(), "HMI USB disconnected: %s", reason);
     publishConnected(false);
@@ -1316,7 +1354,8 @@ private:
     s.data = json.str(); manual_state_pub_->publish(s);
     std::ostringstream status;
     status << "{\"serial\":\"" << (connected_ ? "connected" : "offline")
-           << "\",\"device\":\"" << serial_device_ << "\",\"baud\":" << serial_baud_
+           << "\",\"device\":\"" << (active_serial_device_.empty() ? serial_device_ : active_serial_device_)
+           << "\",\"selector\":\"" << serial_device_ << "\",\"baud\":" << serial_baud_
            << ",\"mode\":\"" << mode_ << "\",\"page\":\"" << page_
            << "\",\"camera_tab\":\"" << camera_tab_ << "\",\"navigation\":\"" << navigation_state_
            << "\",\"target\":\"" << active_target_ << "\"}";
@@ -1324,7 +1363,7 @@ private:
     publishWaypointState();
   }
 
-  std::string serial_device_;
+  std::string serial_device_, active_serial_device_;
   std::string waypoint_file_;
   int serial_baud_{115200};
   double reconnect_sec_{0.5}, telemetry_rate_hz_{10.0}, command_rate_hz_{30.0}, heartbeat_sec_{5.0};
