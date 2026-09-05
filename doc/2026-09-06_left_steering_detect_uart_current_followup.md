@@ -61,3 +61,12 @@ Tanggal: 2026-09-06
 - Bukti historis ENCHALL 2026-08-20 menunjukkan encoder_raw pernah berubah nyata selama active motor alignment, sehingga PB6/PB7/TIM4 dan encoder pernah menghasilkan count pada hardware ini.
 - Sweep manual steering output kiri->kanan yang menghasilkan delta count nol belum membuktikan encoder mati: encoder mengukur poros motor dan mekanisme reduksi steering dapat tidak back-drive poros motor/encoder.
 - Tes berikut yang valid harus memutar poros motor/encoder langsung saat LEFT high-Z, lalu membandingkan raw PB6/PB7 edges dan TIM4 CNT.
+
+## Direct shaft + GPIO/TIM4 self-test — 2026-09-06
+- Baseline sebelum direct shaft: PB6 edge=8, PB7 edge=7, TIM4=4089.
+- Setelah pengguna memutar poros encoder/motor langsung: PB6 delta=0, PB7 delta=0, TIM4 delta=0. Jadi zero-count bukan akibat linkage steering yang tidak back-drive.
+- `enc_abi_init()` sekarang dibandingkan dengan commit encoder pertama `96ae8af`; konfigurasi GPIO/TIM4 init identik.
+- GPIO MCU self-test tanpa PWM: PB6/PB7 dipaksa 00->terbaca 00, 10->10, 01->01, lalu dikembalikan ke input encoder ->11. Jalur GPIO dan pembacaan register sehat.
+- Setelah self-test, TIM4 tetap CR1=0x11, SMCR=0x3, CCMR1=0x6161, ARR=4095; CNT berubah 4089->4090 akibat transisi self-test, membuktikan TIM4 quadrature benar-benar menghitung input A/B.
+- TIM8 BDTR MOE tetap 0; LEFT tetap high-Z selama diagnosis.
+- Kesimpulan saat ini: firmware, PB6/PB7, dan TIM4 PASS; saat poros fisik diputar encoder tidak meng-drive transisi digital ke A/B. Pemeriksaan berikut harus memastikan VCC aktual di terminal encoder, common GND aktual, serta output A/B sensor fisik.
