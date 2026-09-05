@@ -30,7 +30,7 @@ for endpoint in ("/api/events", "/api/state", "/api/health", "/api/camera.jpg", 
                  "/api/global_costmap.png", "/api/local_costmap.png",
                  "/api/experiment/record/last.csv", "/api/navigation/goal", "/api/navigation/cancel",
                  "/api/localization/initial-pose", "/api/steering/calibration-mode",
-                 "/api/config/set", "/api/config/reset", "/api/config/reset-batch", "/api/experiment/record/start",
+                 "/api/esc/vesc/command", "/api/config/set", "/api/config/reset", "/api/config/reset-batch", "/api/experiment/record/start",
                  "/api/experiment/record/stop", "/api/experiment/record/status"):
     if endpoint not in cpp: fail(f"web endpoint missing {endpoint}")
 for page in ("overview", "navigation", "perception", "sensors", "esc", "calibration", "tuning", "experiments", "reports", "diagnostics", "configuration"):
@@ -96,6 +96,19 @@ for token in ("id=\"mapGoalTool\"", "id=\"mapPanTool\"", "id=\"layerGlobalCostma
 for token in ("loadCostmapImage", "zoomMap", "screenToWorld", "pointerdown", "pointermove",
               "template-only report", "saveTemplateTableServer"):
     if token not in js: fail(f"RViz-like/autosave frontend behavior missing {token}")
+
+
+# ESC/VESC gateway UI must expose real F411 transport, safe maintenance and desktop VESC Tool TCP.
+for token in ("VESC Tool Workbench", "F411 PB6/PB7", "127.0.0.1:65102",
+              "vescEnterMaintenance", "vescExitMaintenance", "vescReadMcconf",
+              "vescDetectHall", "vescDetectEncoder", "vescSendTerminal", "vescRawHex"):
+    if token not in html: fail(f"VESC Web workbench missing {token}")
+for token in ("vescCmd", "vesc_tool_status", "tcp_client", "VESC TOOL TCP",
+              "command',{command}", "renderVescTool"):
+    if token not in js: fail(f"VESC Web behavior missing {token}")
+for token in ("/esc/vesc/tool_command", "/stmf4/vesc/status", "/esc/vesc/tool_telemetry",
+              "vesc_tool.yaml"):
+    if token not in cpp: fail(f"VESC Web backend integration missing {token}")
 
 if "Content-Security-Policy" not in cpp:
     fail("HTTP response security headers missing")

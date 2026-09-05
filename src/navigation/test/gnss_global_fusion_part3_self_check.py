@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from gui_source_helper import read_gui_source
-"""Static contract for GNSS vx/vyaw + IMU yaw fusion and map TF ownership."""
+"""Static contract for GNSS vx/COG + dual-mag + relative-IMU yaw fusion and map TF ownership."""
 from pathlib import Path
 import sys, yaml
 ROOT=Path(__file__).resolve().parents[1]
@@ -34,25 +34,24 @@ for key in ('gnss_yaw_rate_min_speed_mps','gnss_yaw_rate_max_abs_rps','gnss_yaw_
 
 if l.get('publish_tf') is not True: fail('local EKF must publish odom->base TF')
 if g.get('publish_tf') is not False: fail('global EKF must not compete for map->odom TF')
-# Local EKF: short-term odom continuity — wheel/GNSS vx + IMU gyro-Z only.
-# Magnetic absolute yaw is a startup seed in LocalizationCore, not a continuous EKF input.
+# Local EKF: wheel/GNSS vx plus relative IMU yaw + gyro-Z. ESC kinematic yaw stays diagnostic.
 if l.get('twist0')!='/gnss/base_velocity_fusion' or enabled(l.get('twist0_config')) != [6]:
     fail('local EKF must fuse independent GNSS vx')
-if l.get('imu0')!='/imu/data' or enabled(l.get('imu0_config')) != [11]:
-    fail('local EKF must fuse IMU gyro-Z only; magnetic absolute yaw must not be fused continuously')
+if l.get('imu0')!='/imu/data' or enabled(l.get('imu0_config')) != [5,11] or l.get('imu0_relative') is not True:
+    fail('local EKF must fuse relative IMU yaw + gyro-Z')
 if l.get('odom0')!='/esc/odom' or enabled(l.get('odom0_config')) != [6]:
     fail('local EKF wheel odometry must remain auxiliary vx-only to avoid steering-slip yaw authority')
-# Global EKF (COG active): GNSS x/y + GNSS vx, COG absolute yaw, IMU vyaw continuity.
+# Global EKF: GNSS x/y + vx; COG and two tilt-compensated magnetometers provide
+# independent absolute yaw; IMU remains relative yaw + gyro-Z for short-term dynamics.
 if g.get('odom0')!='/odometry/gnss_map' or enabled(g.get('odom0_config')) != [0,1]:
     fail('global EKF must fuse GNSS absolute x/y')
 if g.get('twist0')!='/gnss/base_velocity_fusion' or enabled(g.get('twist0_config')) != [6]:
-    fail('global EKF must fuse GNSS vx only (yaw-rate authority moved to IMU gyro with COG active)')
-if g.get('pose0')!='/gnss/cog_heading_fusion' or enabled(g.get('pose0_config')) != [5]:
-    fail('global EKF must fuse GNSS COG absolute yaw via pose0 (yaw only)')
-if g.get('imu0')!='/imu/data' or enabled(g.get('imu0_config')) != [11]:
-    fail('global EKF must fuse IMU vyaw-only (gyro continuity) when COG is active')
-if any(isinstance(v,str) and v=='/gnss/cog_heading_fusion' for v in g.values()):
-    pass  # expected: pose0 is the COG topic
+    fail('global EKF must fuse GNSS vx only')
+for key, topic in (('pose0','/gnss/cog_heading_fusion'), ('pose1','/neo3/mag_heading_fusion'), ('pose2','/imu/mag_heading_fusion')):
+    if g.get(key)!=topic or enabled(g.get(key+'_config')) != [5]:
+        fail(f'global EKF absolute heading source invalid: {key}={topic}')
+if g.get('imu0')!='/imu/data' or enabled(g.get('imu0_config')) != [5,11] or g.get('imu0_relative') is not True:
+    fail('global EKF must fuse relative IMU yaw + gyro-Z')
 
 raw_start=cpp.find('const bool raw_cog_candidate')
 raw_end=cpp.find('const auto t = now();', raw_start)
@@ -75,4 +74,4 @@ for topic in ['/gnss/base_velocity_fusion','/gnss/fusion_status']:
     if topic not in bag: fail(f'rosbag topic missing: {topic}')
 for token in ['gnss_yaw_rate_min_speed_mps','enable_global_gnss_velocity_fusion','enable_global_gnss_cog_fusion']:
     if token not in gui: fail(f'GUI fusion setting missing: {token}')
-print('PASS GNSS COG + gyro heading fusion contract')
+print('PASS GNSS COG + dual-mag + relative-IMU heading fusion contract')

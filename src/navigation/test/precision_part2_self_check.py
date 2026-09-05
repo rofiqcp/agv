@@ -85,7 +85,7 @@ auto_launch = (ROOT / "launch/autonomous.launch.py").read_text(encoding="utf-8")
 if "AGV_PERCEPTION_CONFIG_DIR" not in auto_launch:
     fail("autonomous launch does not honor perception active config root")
 
-# Revised local EKF ownership: GNSS supplies body vx + derived vyaw; IMU supplies absolute yaw.
+# Revised local EKF ownership: GNSS and ESC supply independent vx; IMU supplies relative yaw + gyro-Z.
 ekf = load(ROOT / "config/ekf.yaml")
 local = ekf["ekf_filter_node_odom"]["ros__parameters"]
 if local.get("twist0") != "/gnss/base_velocity_fusion" or local.get("imu0") != "/imu/data":
@@ -93,8 +93,10 @@ if local.get("twist0") != "/gnss/base_velocity_fusion" or local.get("imu0") != "
 if [i for i,v in enumerate(local["twist0_config"]) if v] != [6]:
     fail("local EKF must take independent vx from GNSS velocity fusion")
 if [i for i,v in enumerate(local["imu0_config"]) if v] != [5, 11]:
-    fail("local EKF must take absolute yaw + gyro-Z from IMU")
-if local.get('odom0') != '/esc/odom' or {i for i,v in enumerate(local.get('odom0_config',[])) if v} != {6,11}:
-    fail("local EKF must accept optional ESC vx+kinematic yaw-rate")
+    fail("local EKF must take relative yaw + gyro-Z from IMU")
+if local.get('imu0_relative') is not True:
+    fail("local EKF IMU yaw must remain relative")
+if local.get('odom0') != '/esc/odom' or {i for i,v in enumerate(local.get('odom0_config',[])) if v} != {6}:
+    fail("local EKF must accept optional ESC vx only; kinematic yaw-rate stays diagnostic")
 
 print("PASS precision_part2_self_check")

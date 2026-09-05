@@ -45,6 +45,11 @@ constexpr std::size_t kFrameSize = 14;
 constexpr std::uint8_t kVescGetValues = 4;
 constexpr std::uint8_t kVescSetRpm = 8;
 constexpr std::uint8_t kVescSetPos = 9;
+constexpr std::uint8_t kVescCustomAppData = 36;
+constexpr std::uint8_t kHbMagic0 = 0x48;
+constexpr std::uint8_t kHbMagic1 = 0x42;
+constexpr std::uint8_t kHbVersion = 1;
+constexpr std::uint8_t kHbSetSteeringDeg = 9;
 constexpr std::uint8_t kVescForwardCan = 34;
 constexpr std::uint8_t kVescRightMotorId = 2;
 
@@ -388,7 +393,7 @@ private:
     // Current ESC UART is a Prolific PL2303 (067b:2303). Unique by-id is the
     // primary selector; physical topology is only a deterministic fallback.
     declare_parameter<std::string>("serial_auto_path_contains", "usb-0:1.1:1.0");
-    declare_parameter<int>("serial_baud", 2000000);
+    declare_parameter<int>("serial_baud", 1000000);
     declare_parameter<double>("serial_tx_rate_hz", 50.0);
     declare_parameter<double>("serial_reconnect_sec", 0.25);
     declare_parameter<double>("serial_ack_timeout_sec", 0.60);
@@ -1539,7 +1544,8 @@ private:
     steering_protocol_command_pub_->publish(steering_uncal_target);
 
     SerialCommand serial_cmd;
-    serial_cmd.left_cdeg = static_cast<std::int16_t>(std::lround(steering_stm_deg * 100.0));
+    const double transport_steering_deg = transport_mode_ == "stm32" ? steering_deg : steering_stm_deg;
+    serial_cmd.left_cdeg = static_cast<std::int16_t>(std::lround(transport_steering_deg * 100.0));
     serial_cmd.right_rpm_x10 = static_cast<std::int16_t>(std::lround(right_rpm * 10.0));
     serial_cmd.flags = selected.estop ? kFlagEstop : 0U;
     {
@@ -1657,9 +1663,9 @@ private:
         continue;
       }
       ::cfmakeraw(&tty);
-      speed_t baud = B2000000;
-      if (serial_baud_ != 2000000) {
-        RCLCPP_WARN_ONCE(get_logger(), "F103 protocol is fixed at 2000000 baud; forcing 2000000.");
+      speed_t baud = B1000000;
+      if (serial_baud_ != 1000000) {
+        RCLCPP_WARN_ONCE(get_logger(), "F103 protocol is fixed at 1000000 baud; forcing 1000000.");
       }
       ::cfsetispeed(&tty, baud);
       ::cfsetospeed(&tty, baud);
@@ -1819,8 +1825,12 @@ private:
 
   void sendVescSetPos(double position_deg)
   {
-    std::vector<std::uint8_t> payload{kVescSetPos};
-    appendI32Be(payload, static_cast<std::int32_t>(std::lround(position_deg * 1000000.0)));
+    /* ROS/Web path is signed physical steering. Standard COMM_SET_POS is kept
+     * exclusively for VESC Tool's 0..360 widget and is remapped in F103. */
+    position_deg = std::clamp(position_deg, -30.0, 30.0);
+    std::vector<std::uint8_t> payload{
+      kVescCustomAppData, kHbMagic0, kHbMagic1, kHbVersion, kHbSetSteeringDeg};
+    appendI32Be(payload, static_cast<std::int32_t>(std::lround(position_deg * 1000.0)));
     sendVescPayload(payload);
   }
 
@@ -2130,7 +2140,7 @@ private:
           feedback_status_ = 0U;
         }
         next_tx = t;
-        RCLCPP_INFO(get_logger(), "SERIAL CONNECT %s @ 2000000 8N1", active_path.c_str());
+        RCLCPP_INFO(get_logger(), "SERIAL CONNECT %s @ 1000000 8N1", active_path.c_str());
       }
 
       if (!drainRx(fd)) {
@@ -2551,7 +2561,7 @@ private:
   std::string serial_device_{"auto"};
   std::string serial_auto_id_contains_{"Prolific_Technology_Inc._USB-Serial_Controller"};
   std::string serial_auto_path_contains_{"usb-0:1.1:1.0"};
-  int serial_baud_{2000000};
+  int serial_baud_{1000000};
   double serial_tx_rate_hz_{50.0};
   double serial_reconnect_sec_{0.25};
   double serial_ack_timeout_sec_{0.60};

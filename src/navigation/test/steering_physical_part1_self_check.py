@@ -16,8 +16,8 @@ required=[
  'clampPhysicalSteeringDeg',
  'physical_deg / steering_physical_right_limit_deg_',
  'physical_deg / steering_physical_left_limit_deg_',
- 'steering_physical_right_limit_deg_ : steering_max_deg_',
- 'steering_physical_left_limit_deg_ : -steering_max_deg_',
+ 'return std::min(steering_max_deg_, std::abs(steering_physical_right_limit_deg_))',
+ 'return -std::min(steering_max_deg_, std::abs(steering_physical_left_limit_deg_))',
 ]
 for token in required:
     assert token in text, token

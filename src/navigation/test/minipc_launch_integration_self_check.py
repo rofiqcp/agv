@@ -80,19 +80,21 @@ need(int(per_cfg.get("cpu_threads", -1)) == 2, "CPU threads YAML must default to
 ekf = yaml.safe_load((ROOT / "config/ekf.yaml").read_text(encoding="utf-8"))
 local = ekf["ekf_filter_node_odom"]["ros__parameters"]
 global_ = ekf["ekf_filter_node_map"]["ros__parameters"]
-need(local.get("odom0") == "/esc/odom" and enabled(local.get("odom0_config")) == {6, 11}, "local EKF optional ESC vx+kinematic yaw-rate missing")
+need(local.get("odom0") == "/esc/odom" and enabled(local.get("odom0_config")) == {6},
+     "local EKF must fuse ESC vx only; kinematic yaw-rate is diagnostic")
 need(local.get("twist0") == "/gnss/base_velocity_fusion" and enabled(local.get("twist0_config")) == {6},
      "local EKF must fuse independent GNSS vx")
-need(local.get("imu0") == "/imu/data" and enabled(local.get("imu0_config")) == {5, 11},
-     "local EKF must fuse IMU yaw+gyro-Z")
+need(local.get("imu0") == "/imu/data" and enabled(local.get("imu0_config")) == {5, 11} and local.get("imu0_relative") is True,
+     "local EKF must fuse relative IMU yaw+gyro-Z")
 need(global_.get("odom0") == "/odometry/gnss_map" and enabled(global_.get("odom0_config")) == {0, 1},
      "global EKF must fuse GNSS map x/y")
 need(global_.get("twist0") == "/gnss/base_velocity_fusion" and enabled(global_.get("twist0_config")) == {6},
-     "global EKF must fuse GNSS vx while COG owns absolute yaw")
-need(global_.get("pose0") == "/gnss/cog_heading_fusion" and enabled(global_.get("pose0_config")) == {5},
-     "global EKF must fuse COG absolute yaw")
-need(global_.get("imu0") == "/imu/data" and enabled(global_.get("imu0_config")) == {11},
-     "global EKF must fuse IMU gyro-Z yaw-rate continuity")
+     "global EKF must fuse GNSS vx")
+for key, topic in (("pose0", "/gnss/cog_heading_fusion"), ("pose1", "/neo3/mag_heading_fusion"), ("pose2", "/imu/mag_heading_fusion")):
+    need(global_.get(key) == topic and enabled(global_.get(key + "_config")) == {5},
+         f"global EKF absolute heading source invalid: {key}")
+need(global_.get("imu0") == "/imu/data" and enabled(global_.get("imu0_config")) == {5, 11} and global_.get("imu0_relative") is True,
+     "global EKF must fuse relative IMU yaw+gyro-Z")
 
 esc = params(ESC / "config/ackermann.yaml", "esc_ackermann")
 esc_launch = (ESC / "launch/esc.launch.py").read_text(encoding="utf-8")

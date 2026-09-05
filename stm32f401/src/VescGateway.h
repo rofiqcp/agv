@@ -7,11 +7,12 @@ class VescGateway {
   void begin();
   void poll();
   bool handleHostCommand(const char *command);
+  bool maintenanceMode() const { return owner_ == Owner::MAINTENANCE; }
 
  private:
   enum class Owner : uint8_t { RUNTIME = 0, MAINTENANCE = 1 };
-  static constexpr uint32_t kBaud = 2000000;
-  static constexpr size_t kChunkBytes = 48;
+  static constexpr uint32_t kBaud = 1000000;
+  static constexpr size_t kChunkBytes = 512;
   static constexpr uint32_t kRxIdleFlushMs = 2;
   static constexpr uint32_t kStatusPeriodMs = 1000;
 

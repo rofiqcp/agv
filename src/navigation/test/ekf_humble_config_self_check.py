@@ -44,19 +44,26 @@ def main() -> None:
     global_ = data["ekf_filter_node_map"]["ros__parameters"]
     if local.get("publish_tf") is not True or global_.get("publish_tf") is not False:
         fail("TF ownership must be local EKF odom->base, LocalizationCore map->odom")
+    if local.get("odom0") != "/esc/odom" or enabled(local.get("odom0_config", [])) != {6}:
+        fail("local EKF must fuse ESC longitudinal vx only")
     if local.get("twist0") != "/gnss/base_velocity_fusion" or enabled(local.get("twist0_config", [])) != {6}:
         fail("local EKF must fuse independent GNSS vx")
-    if local.get("imu0") != "/imu/data" or enabled(local.get("imu0_config", [])) != {5, 11}:
-        fail("local EKF must fuse IMU absolute yaw + gyro-Z")
+    if (local.get("imu0") != "/imu/data" or enabled(local.get("imu0_config", [])) != {5, 11} or
+            local.get("imu0_relative") is not True):
+        fail("local EKF must fuse relative IMU yaw + gyro-Z")
     if global_.get("odom0") != "/odometry/gnss_map" or enabled(global_.get("odom0_config", [])) != {0, 1}:
         fail("global EKF must fuse GNSS map x/y")
     if global_.get("twist0") != "/gnss/base_velocity_fusion" or enabled(global_.get("twist0_config", [])) != {6}:
         fail("global EKF must fuse GNSS forward velocity only")
-    if global_.get("pose0") != "/gnss/cog_heading_fusion" or enabled(global_.get("pose0_config", [])) != {5}:
-        fail("global EKF must fuse GNSS COG absolute yaw")
-    if global_.get("imu0") != "/imu/data" or enabled(global_.get("imu0_config", [])) != {11}:
-        fail("global EKF must fuse IMU gyro-Z yaw-rate continuity")
-    print("PASS EKF sensor ownership: GNSS=vx+vyaw, IMU=yaw")
+    for key, topic in (("pose0", "/gnss/cog_heading_fusion"),
+                       ("pose1", "/neo3/mag_heading_fusion"),
+                       ("pose2", "/imu/mag_heading_fusion")):
+        if global_.get(key) != topic or enabled(global_.get(key + "_config", [])) != {5}:
+            fail(f"global EKF absolute heading source invalid: {key}")
+    if (global_.get("imu0") != "/imu/data" or enabled(global_.get("imu0_config", [])) != {5, 11} or
+            global_.get("imu0_relative") is not True):
+        fail("global EKF must fuse relative IMU yaw + gyro-Z")
+    print("PASS EKF sensor ownership: ESC/GNSS=vx; COG+dual-mag=absolute yaw; IMU=relative yaw+gyro-Z")
 
 if __name__ == "__main__":
     main()

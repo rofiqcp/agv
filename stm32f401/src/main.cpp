@@ -974,15 +974,23 @@ void setup() {
 }
 
 void loop() {
-  // GNSS UART/I2C/safety IO are always serviced first and are entirely
-  // non-blocking after initialization. This prevents TFT drawing from starving
-  // UBX parsing or magnetometer sampling.
-  gNeo3.poll();
-  gVesc.poll();
-
-  // Serial stays full-rate in RAM. ROS link health is independent of USB presence:
-  // if the bridge stops sending heartbeats, stale READY states fail closed.
+  // USB host commands are serviced first. In VESC MAINTENANCE the gateway owns
+  // the USB/UART bandwidth exclusively so firmware blocks cannot be dropped by
+  // GNSS/I2C/TFT traffic. Power-stage outputs remain under the F103 bootloader's
+  // safe-OFF policy during an update.
   pollSerialGui();
+  gVesc.poll();
+  if (gVesc.maintenanceMode()) {
+    static uint32_t ledMsMaintenance = 0;
+    if (millis() - ledMsMaintenance >= 500) {
+      ledMsMaintenance = millis();
+      digitalWrite(PC13, !digitalRead(PC13));
+    }
+    return;
+  }
+
+  // Normal runtime services resume only after F411 returns ownership to ROS.
+  gNeo3.poll();
   checkRosLinkTimeout();
 
   if (!splashComplete) {

@@ -86,7 +86,13 @@ void VescGateway::publishStatus(bool force) {
   Serial.print(F(",rx_lvl="));
   Serial.print(digitalRead(PB7));
   Serial.print(F(",tx_lvl="));
-  Serial.println(digitalRead(PB6));
+  Serial.print(digitalRead(PB6));
+  Serial.print(F(",brr="));
+  Serial.print(USART1->BRR, HEX);
+  Serial.print(F(",cr1="));
+  Serial.print(USART1->CR1, HEX);
+  Serial.print(F(",sr="));
+  Serial.println(USART1->SR, HEX);
 }
 
 bool VescGateway::handleHostCommand(const char *command) {
@@ -137,7 +143,7 @@ bool VescGateway::handleHostCommand(const char *command) {
 }
 
 void VescGateway::poll() {
-  size_t budget = 192U;
+  size_t budget = 640U;
   while (budget-- > 0U && uart_.available() > 0) {
     const int value = uart_.read();
     if (value < 0) break;
@@ -147,5 +153,5 @@ void VescGateway::poll() {
     if (rx_len_ >= kChunkBytes) flushRx();
   }
   if (rx_len_ > 0U && static_cast<uint32_t>(millis() - last_rx_ms_) >= kRxIdleFlushMs) flushRx();
-  publishStatus(false);
+  if (owner_ == Owner::RUNTIME) publishStatus(false);
 }

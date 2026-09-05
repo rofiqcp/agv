@@ -167,21 +167,27 @@ ekf = yaml.safe_load((ROOT / "config/ekf.yaml").read_text(encoding="utf-8"))
 local_ekf = ekf["ekf_filter_node_odom"]["ros__parameters"]
 global_ekf = ekf["ekf_filter_node_map"]["ros__parameters"]
 enabled = lambda values: {index for index, value in enumerate(values) if value}
-if local_ekf.get("odom0") != "/esc/odom" or enabled(local_ekf.get("odom0_config", [])) != {6, 11}:
-    fail("local EKF optional ESC vx+kinematic yaw-rate fusion missing")
+if local_ekf.get("odom0") != "/esc/odom" or enabled(local_ekf.get("odom0_config", [])) != {6}:
+    fail("local EKF must fuse ESC longitudinal vx only; kinematic yaw-rate stays diagnostic")
 if local_ekf["twist0"] != "/gnss/base_velocity_fusion" or enabled(local_ekf["twist0_config"]) != {6}:
     fail("local EKF must fuse independent GNSS base vx")
-if local_ekf["imu0"] != "/imu/data" or enabled(local_ekf["imu0_config"]) != {5, 11}:
-    fail("local EKF IMU must fuse absolute yaw + gyro-Z")
+if (local_ekf["imu0"] != "/imu/data" or enabled(local_ekf["imu0_config"]) != {5, 11} or
+        local_ekf.get("imu0_relative") is not True):
+    fail("local EKF IMU must fuse relative yaw + gyro-Z")
 if global_ekf["odom0"] != "/odometry/gnss_map" or enabled(global_ekf["odom0_config"]) != {0, 1}:
     fail("global EKF must fuse GNSS map x/y")
-# Global COG architecture: GNSS x/y + vx, COG absolute yaw, IMU gyro-Z continuity.
+# Global heading architecture: COG + two independent magnetic absolute-yaw observations;
+# IMU orientation is relative yaw plus gyro-Z for short-term continuity.
 if global_ekf["twist0"] != "/gnss/base_velocity_fusion" or enabled(global_ekf["twist0_config"]) != {6}:
-    fail("global EKF must fuse GNSS base vx only when COG is active")
-if global_ekf["pose0"] != "/gnss/cog_heading_fusion" or enabled(global_ekf["pose0_config"]) != {5}:
-    fail("global EKF must fuse COG absolute yaw through pose0")
-if global_ekf["imu0"] != "/imu/data" or enabled(global_ekf["imu0_config"]) != {11}:
-    fail("global EKF must fuse IMU gyro-Z (vyaw) only when COG is active")
+    fail("global EKF must fuse GNSS base vx")
+for key, topic in (("pose0", "/gnss/cog_heading_fusion"),
+                   ("pose1", "/neo3/mag_heading_fusion"),
+                   ("pose2", "/imu/mag_heading_fusion")):
+    if global_ekf.get(key) != topic or enabled(global_ekf.get(key + "_config", [])) != {5}:
+        fail(f"global EKF absolute heading source invalid: {key}={topic}")
+if (global_ekf["imu0"] != "/imu/data" or enabled(global_ekf["imu0_config"]) != {5, 11} or
+        global_ekf.get("imu0_relative") is not True):
+    fail("global EKF IMU must fuse relative yaw + gyro-Z")
 if local_ekf.get("publish_tf") is not True or global_ekf.get("publish_tf") is not False:
     fail("TF ownership must remain local EKF odom->base + LocalizationCore map->odom")
 
@@ -195,8 +201,8 @@ if loc_cfg.get("enable_global_gnss_velocity_fusion") is not True:
     fail("GNSS vx/vyaw fusion must be enabled")
 if loc_cfg.get("enable_global_gnss_cog_fusion") is not True:
     fail("GNSS COG absolute-yaw fusion must be enabled for production heading")
-if float(loc_cfg.get("cog_min_forward_speed_mps", 0.0)) < 0.35:
-    fail("COG low-speed gate must stay conservative (>=0.35 m/s)")
+if float(loc_cfg.get("cog_min_forward_speed_mps", 999.0)) > 0.18:
+    fail("COG qualification must remain reachable at commissioning speed (<=0.18 m/s)")
 if float(loc_cfg.get("cog_max_sacc_mps", 999.0)) > 0.3:
     fail("COG speed-accuracy gate must stay conservative (<=0.3 m/s)")
 for token in (
@@ -235,4 +241,4 @@ for map_yaml in sorted((ROOT / "maps").rglob("*.yaml")):
 print("PASS full-stack static re-audit")
 print("launch/YAML/XML/parameter uniqueness: PASS")
 print("command ownership + lane OFF isolation: PASS")
-print("local/global fusion GNSS=vx+vyaw, IMU=yaw; map TF ownership: PASS")
+print("fusion ESC/GNSS=vx; COG+dual-mag=absolute yaw; IMU=relative yaw+gyro-Z; TF ownership: PASS")

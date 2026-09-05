@@ -28,27 +28,19 @@ require(global_.get('publish_tf') is False,'Global EKF must not publish map->odo
 require(local.get('odom0')=='/esc/odom' and enabled(local.get('odom0_config'))=={6},'Local EKF optional ESC odom must remain vx-only; steering/encoder yaw is not heading authority')
 require(local.get('twist0')=='/gnss/base_velocity_fusion' and enabled(local.get('twist0_config'))=={6},
         'Local EKF must use independent GNSS vx')
-require(local.get('imu0')=='/imu/data' and enabled(local.get('imu0_config'))=={11},
-        'Local EKF must use IMU gyro-Z only; magnetic yaw is startup seed, not continuous fusion')
+require(local.get('imu0')=='/imu/data' and enabled(local.get('imu0_config'))=={5,11} and local.get('imu0_relative') is True,
+        'Local EKF must use relative IMU yaw + gyro-Z')
 require(global_.get('odom0')=='/odometry/gnss_map' and enabled(global_.get('odom0_config'))=={0,1},
         'Global EKF GNSS x/y source changed')
-# Global EKF twist0 depends on COG fusion: vx-only when COG active, vx+vyaw when COG off.
-if loc.get('enable_global_gnss_cog_fusion'):
-    require(global_.get('twist0')=='/gnss/base_velocity_fusion' and enabled(global_.get('twist0_config'))=={6},
-            'Global EKF must use GNSS vx only when COG active (yaw-rate from IMU gyro)')
-else:
-    require(global_.get('twist0')=='/gnss/base_velocity_fusion' and enabled(global_.get('twist0_config'))=={6,11},
-            'Global EKF must use GNSS vx+vyaw when COG disabled')
-# Global EKF yaw architecture depends on COG fusion setting
-require(global_.get('imu0')=='/imu/data','Global EKF IMU source changed')
-if loc.get('enable_global_gnss_cog_fusion'):
-    require(enabled(global_.get('imu0_config'))=={11},'Global EKF must use IMU vyaw-only when COG enabled')
-    require(global_.get('pose0')=='/gnss/cog_heading_fusion','Global EKF must have COG pose0 when fusion enabled')
-    require(enabled(global_.get('pose0_config'))=={5},'Global EKF COG must be yaw-only')
-else:
-    require(enabled(global_.get('imu0_config'))=={5},'Global EKF must use IMU absolute yaw when COG disabled')
-    require(all('/gnss/cog_heading_fusion' not in str(v) for v in global_.values()),
-            'GNSS COG must not be in global EKF when fusion disabled')
+require(global_.get('twist0')=='/gnss/base_velocity_fusion' and enabled(global_.get('twist0_config'))=={6},
+        'Global EKF must use GNSS vx only; yaw-rate authority comes from IMU gyro')
+require(global_.get('imu0')=='/imu/data' and enabled(global_.get('imu0_config'))=={5,11} and global_.get('imu0_relative') is True,
+        'Global EKF must use relative IMU yaw + gyro-Z')
+for key, topic in (('pose0','/gnss/cog_heading_fusion'),
+                   ('pose1','/neo3/mag_heading_fusion'),
+                   ('pose2','/imu/mag_heading_fusion')):
+    require(global_.get(key)==topic and enabled(global_.get(key+'_config'))=={5},
+            f'Global EKF absolute heading source invalid: {key}={topic}')
 
 # 2) Integrity gates remain, while velocity bootstrap no longer depends on ESC certification.
 require(loc.get('gnss_require_measurement_timestamp') is True,'GNSS timestamp must be mandatory')
@@ -77,8 +69,8 @@ for key in ('stage2_min_velocity_epochs','stage2_min_cog_epochs','stage2_min_vel
             'stage2_min_cog_qualified_ratio','stage2_max_sync_gap_p95_sec','stage2_max_wheel_gnss_residual_p95_mps'):
     require(key in loc,f'persistent Stage-2 evidence missing: {key}')
 
-# 4) IMU calibration remains an autonomy interlock; magnetic orientation may be published for
-# startup seeding/diagnostics, while EKF moving-yaw authority is gyro-Z + qualified COG.
+# 4) IMU calibration remains an autonomy interlock. Raw IMU orientation is fused only as
+# relative yaw + gyro-Z; COG and the two tilt-compensated magnetometers are independent absolute yaw sources.
 require(imu.get('require_fresh_gyro_for_imu_publish') is False,'IMU orientation must survive stale gyro when yaw is valid')
 for key in ('stationary_calibration_valid','stationary_calibration_saved_at','stationary_calibration_sample_count',
             'stationary_calibration_duration_sec','stationary_calibration_gyro_z_std_rps','stationary_calibration_accel_norm_error_mps2'):
@@ -113,4 +105,4 @@ for key in ('steering_calibration_valid','steering_circle_calibration_valid','dr
     require(isinstance(vehicle.get(key),bool),f'vehicle {key} missing/not bool')
 
 print('STAGE2 LOCALIZATION FOUNDATION SELF-CHECK: PASS')
-print('GNSS=vx/COG | IMU=gyro-Z + startup magnetic seed | ESC vx-only auxiliary | map bootstrap degraded-safe')
+print('GNSS=vx/COG | dual magnetic absolute yaw | IMU=relative yaw+gyro-Z | ESC vx-only auxiliary')

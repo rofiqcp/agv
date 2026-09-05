@@ -25,11 +25,12 @@ if "DeclareLaunchArgument('esc_serial_enabled', default_value='true')" not in au
 if 'serial_enabled' not in (WS/'esc/launch/esc.launch.py').read_text(): fail('ESC launch does not forward serial_enabled')
 
 ekf=yaml.safe_load((ROOT/'config/ekf.yaml').read_text()); local=ekf['ekf_filter_node_odom']['ros__parameters']; global_=ekf['ekf_filter_node_map']['ros__parameters']
-if local.get('odom0')!='/esc/odom' or enabled(local.get('odom0_config'))!={6,11}: fail('local EKF optional ESC vx+vyaw fusion missing')
+if local.get('odom0')!='/esc/odom' or enabled(local.get('odom0_config'))!={6}: fail('local EKF ESC odom must remain vx-only')
 if local.get('twist0')!='/gnss/base_velocity_fusion' or enabled(local.get('twist0_config'))!={6}: fail('local EKF must use independent GNSS vx')
-if local.get('imu0')!='/imu/data' or enabled(local.get('imu0_config'))!={5,11}: fail('local EKF must use IMU yaw+gyro-Z')
+if local.get('imu0')!='/imu/data' or enabled(local.get('imu0_config'))!={5,11} or local.get('imu0_relative') is not True: fail('local EKF must use relative IMU yaw+gyro-Z')
 if global_.get('odom0')!='/odometry/gnss_map' or enabled(global_.get('odom0_config'))!={0,1}: fail('global GNSS x/y missing')
 if global_.get('twist0')!='/gnss/base_velocity_fusion' or enabled(global_.get('twist0_config'))!={6}: fail('global GNSS vx missing')
-if global_.get('pose0')!='/gnss/cog_heading_fusion' or enabled(global_.get('pose0_config'))!={5}: fail('global COG absolute yaw missing')
-if global_.get('imu0')!='/imu/data' or enabled(global_.get('imu0_config'))!={11}: fail('global IMU gyro-Z yaw-rate missing')
+for key,topic in (('pose0','/gnss/cog_heading_fusion'),('pose1','/neo3/mag_heading_fusion'),('pose2','/imu/mag_heading_fusion')):
+    if global_.get(key)!=topic or enabled(global_.get(key+'_config'))!={5}: fail(f'global absolute heading source missing: {key}')
+if global_.get('imu0')!='/imu/data' or enabled(global_.get('imu0_config'))!={5,11} or global_.get('imu0_relative') is not True: fail('global relative IMU yaw+gyro-Z missing')
 print('PASS autonomous/gui camera-only OFF + ESC-optional localization contract')

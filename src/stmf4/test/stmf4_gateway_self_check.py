@@ -22,7 +22,7 @@ require('Uart uart_{PB7, PB6}' in vesc_h, 'VESC must use F411 USART1 RX=PB7 TX=P
 require('Uart gnss_serial_{PA3, PA2}' in neo_h, 'NEO3 GNSS must use USART2 RX=PA3 TX=PA2')
 require('Wire.setSDA(PB9)' in neo_cpp and 'Wire.setSCL(PB8)' in neo_cpp,
         'NEO3 IST8310 I2C must use SDA=PB9 SCL=PB8')
-require('static constexpr uint32_t kBaud = 2000000' in vesc_h, 'VESC UART must remain 2000000')
+require('static constexpr uint32_t kBaud = 1000000' in vesc_h, 'VESC UART must remain 1000000')
 require('gVesc.begin()' in main and 'gVesc.poll()' in main, 'F411 VESC gateway lifecycle missing')
 require('VESC:MODE:RUNTIME' in vesc_cpp and 'VESC:MODE:MAINTENANCE' in vesc_cpp,
         'F411 VESC runtime/maintenance ownership missing')

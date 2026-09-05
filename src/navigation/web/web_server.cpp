@@ -202,6 +202,7 @@ QMap<QString, QString> configCandidates() {
       {"esc", esc + "/ackermann.yaml"},
       {"teleop", esc + "/teleop.yaml"},
       {"foc_thesis", esc + "/foc_thesis.yaml"},
+      {"vesc_tool", esc + "/vesc_tool.yaml"},
       {"hmi", hmi + "/hmi.yaml"},
       {"perception", per + "/astra_yolop_gpu.yaml"},
       {"bbox_calibration", per + "/bbox_obstacle_calibration.yaml"},
@@ -1093,6 +1094,22 @@ class WebRosBridge {
     return true;
   }
 
+  bool publishVescToolCommand(const QString &command, QString *message) {
+    if (readOnly_) return rejectReadOnly(message);
+    const QString cmd = command.trimmed();
+    if (cmd.isEmpty() || cmd.size() > 512 || cmd.contains('\n') || cmd.contains('\r')) {
+      if (message) *message = "Perintah VESC Tool tidak valid";
+      return false;
+    }
+    std_msgs::msg::String msg;
+    msg.data = cmd.toStdString();
+    vescToolCommandPub_->publish(msg);
+    update("web_action", QJsonObject{{"ok", true}, {"action", "vesc_tool_command"},
+                                     {"command", cmd.left(96)}, {"at_ms", nowMs()}});
+    if (message) *message = "Perintah dikirim ke VESC maintenance bridge";
+    return true;
+  }
+
   bool setPerceptionInference(bool enabled, QString *message) {
     if (readOnly_) return rejectReadOnly(message);
     auto client = node_->create_client<rcl_interfaces::srv::SetParametersAtomically>("/perception/set_parameters_atomically");
@@ -1190,6 +1207,7 @@ class WebRosBridge {
   std::shared_ptr<tf2_ros::TransformListener> tfListener_;
   rclcpp::TimerBase::SharedPtr tfTimer_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr goalPub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr vescToolCommandPub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr initialPosePub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr hmiRequestPub_;
 
@@ -1363,6 +1381,13 @@ class WebRosBridge {
       update("system.estop", msg->data);
     });
 
+    subscribe<std_msgs::msg::Bool>("/stmf4/vesc/connected", stateQos, [this](std_msgs::msg::Bool::ConstSharedPtr msg) {
+      update("connected.vesc_transport", msg->data);
+    });
+    subscribe<std_msgs::msg::Bool>("/esc/vesc/maintenance_active", stateQos, [this](std_msgs::msg::Bool::ConstSharedPtr msg) {
+      update("vesc_maintenance_active", msg->data);
+    });
+
     const std::vector<std::pair<const char *, const char *>> strings = {
         {"/system/localization_state", "localization_state"}, {"/system/gnss_status", "gnss_status"},
         {"/gnss/state", "gnss_driver_state"}, {"/gnss/motion_diagnostics", "gnss_motion"},
@@ -1385,7 +1410,9 @@ class WebRosBridge {
         {"/hmi/camera_tab", "hmi_camera_tab"}, {"/hmi/waypoints", "hmi_waypoints"},
         {"/hmi/navigation_state", "hmi_navigation"},
         {"/hmi/manual_state", "hmi_manual"}, {"/hmi/status", "hmi_status"},
-        {"/esc/foc/telemetry", "foc_telemetry"}, {"/esc/mux/active_source", "esc_mux"}};
+        {"/esc/foc/telemetry", "foc_telemetry"}, {"/esc/mux/active_source", "esc_mux"},
+        {"/stmf4/vesc/status", "vesc_transport_status"}, {"/esc/vesc/tool_status", "vesc_tool_status"},
+        {"/esc/vesc/tool_telemetry", "vesc_tool_telemetry"}, {"/esc/vesc/raw_reply", "vesc_raw_reply"}};
     for (const auto &entry : strings) {
       const QString channel = QString::fromLatin1(entry.second);
       const QString topic = QString::fromLatin1(entry.first);
@@ -1806,6 +1833,7 @@ class WebRosBridge {
     goalPub_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>("/navigation/goal_request", 10);
     initialPosePub_ = node_->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>("/initialpose", 10);
     hmiRequestPub_ = node_->create_publisher<std_msgs::msg::String>("/hmi/request", 10);
+    vescToolCommandPub_ = node_->create_publisher<std_msgs::msg::String>("/esc/vesc/tool_command", 20);
   }
 };
 
@@ -2182,6 +2210,8 @@ class LocalHttpServer : public QObject {
       ok = bridge_->publishHmiRequest(QString("SPEED:%1").arg(pct), &message);
     } else if (request.path == "/api/hmi/sync") {
       ok = bridge_->publishHmiRequest("SYNC", &message);
+    } else if (request.path == "/api/esc/vesc/command") {
+      ok = bridge_->publishVescToolCommand(json.value("command").toString(), &message);
     } else if (request.path == "/api/localization/reset-calibration") {
       ok = bridge_->triggerService("/localization/reset_calibration_samples", "reset_localization_calibration", &message);
     } else if (request.path == "/api/steering/calibration-mode") {

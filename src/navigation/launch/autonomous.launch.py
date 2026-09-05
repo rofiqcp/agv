@@ -206,7 +206,7 @@ def _cleanup_stale_workspace_runtime(nav_share: str, esc_share: str, astra_share
         'lifecycle_manager_map', 'lifecycle_manager_smoother', 'lifecycle_manager_navigation',
         'ekf_filter_node_odom', 'ekf_filter_node_map', 'localization_core',
         'navigation_core', 'mppi_closed_loop_supervisor', 'perception',
-        'esc_ackermann', 'motor_teleop', 'stmf4_hmi_bridge',
+        'esc_ackermann', 'motor_teleop', 'vesc_tool_bridge', 'stmf4_hmi_bridge', 'mag_heading_fusion',
         'data_imu_node', 'data_cuav_node', 'robot_state_publisher', 'rviz2_autonomous',
     )
 
@@ -496,8 +496,8 @@ def generate_launch_description() -> LaunchDescription:
         # participants and can stall endpoint creation before serial/web startup.
         # A dedicated domain + localhost-only transport keeps all on-board C++
         # nodes deterministic while localhost:5000 remains reachable via SSH.
-        DeclareLaunchArgument('ros_domain_id', default_value=os.environ.get('AGV_ROS_DOMAIN_ID', '42')),
-        DeclareLaunchArgument('ros_localhost_only', default_value=os.environ.get('AGV_ROS_LOCALHOST_ONLY', '1')),
+        DeclareLaunchArgument('ros_domain_id', default_value=os.environ.get('AGV_ROS_DOMAIN_ID', os.environ.get('ROS_DOMAIN_ID', '42'))),
+        DeclareLaunchArgument('ros_localhost_only', default_value=os.environ.get('AGV_ROS_LOCALHOST_ONLY', os.environ.get('ROS_LOCALHOST_ONLY', '1'))),
         DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument('map', default_value=map_file),
         DeclareLaunchArgument('nav2_params', default_value=nav2_params),
@@ -518,8 +518,10 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('enable_joystick', default_value='true'),
         DeclareLaunchArgument('enable_keyboard', default_value='true'),
         DeclareLaunchArgument('start_esc_ackermann', default_value='true'),
+        DeclareLaunchArgument('start_vesc_tool_bridge', default_value='true'),
         DeclareLaunchArgument('start_hmi', default_value='true'),
         DeclareLaunchArgument('hmi_port', default_value='/dev/serial/by-id/usb-STMicroelectronics_BLACKPILL_F411CE_CDC_in_FS_Mode_338133833134-if00'),
+        DeclareLaunchArgument('esc_transport_mode', default_value='stm32'),
         DeclareLaunchArgument('esc_port', default_value='auto'),
         DeclareLaunchArgument('esc_serial_enabled', default_value='true'),
         DeclareLaunchArgument('start_gnss', default_value='true'),
@@ -597,16 +599,19 @@ def generate_launch_description() -> LaunchDescription:
 
     hmi_bridge = Node(
         package='stmf4', executable='stmf4_hmi_bridge', name='stmf4_hmi_bridge', output='screen',
-        condition=IfCondition(PythonExpression(["'", LaunchConfiguration('start_hmi'), "' == 'true' or ('", LaunchConfiguration('start_gnss'), "' == 'true' and '", LaunchConfiguration('gnss_source'), "'.lower() == 'stm32')"])),
+        condition=IfCondition(PythonExpression(["'", LaunchConfiguration('start_hmi'), "' == 'true' or '", LaunchConfiguration('start_esc_ackermann'), "' == 'true' or '", LaunchConfiguration('start_vesc_tool_bridge'), "' == 'true' or ('", LaunchConfiguration('start_gnss'), "' == 'true' and '", LaunchConfiguration('gnss_source'), "'.lower() == 'stm32')"])),
         respawn=True, respawn_delay=2.0,
         parameters=[hmi_params, {
             'serial_device': LaunchConfiguration('hmi_port'),
+            'publish_stm32_gnss': ParameterValue(PythonExpression([
+                "'", LaunchConfiguration('start_gnss'), "' == 'true' and '",
+                LaunchConfiguration('gnss_source'), "'.lower() == 'stm32'"]), value_type=bool),
             'use_sim_time': ParameterValue(LaunchConfiguration('use_sim_time'), value_type=bool),
         }],
     )
 
-    # ESC package now has exactly two runtime nodes: motor_teleop + esc_ackermann.
-    # esc_ackermann owns arbitration, Ackermann conversion and the STM UART.
+    # ESC runtime: motor_teleop + esc_ackermann + fail-closed VESC maintenance bridge.
+    # Physical F103 UART ownership is centralized in stmf4_hmi_bridge via the F411 gateway.
     esc_runtime = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(esc_share, 'launch', 'esc.launch.py')),
         launch_arguments={
@@ -615,6 +620,8 @@ def generate_launch_description() -> LaunchDescription:
                 "'", LaunchConfiguration('enable_keyboard'), "' == 'true' or '",
                 LaunchConfiguration('enable_joystick'), "' == 'true'"]),
             'start_ackermann': LaunchConfiguration('start_esc_ackermann'),
+            'start_vesc_tool_bridge': LaunchConfiguration('start_vesc_tool_bridge'),
+            'transport_mode': LaunchConfiguration('esc_transport_mode'),
             'serial_device': LaunchConfiguration('esc_port'),
             'serial_enabled': LaunchConfiguration('esc_serial_enabled'),
             # Manual teleop is already rate-shaped in motor_teleop.cpp. Feed it

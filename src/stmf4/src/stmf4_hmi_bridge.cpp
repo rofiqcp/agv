@@ -124,7 +124,7 @@ public:
     telemetry_timer_ = create_wall_timer(
       std::chrono::duration<double>(1.0 / telemetry_rate_hz_), std::bind(&StmF4HmiBridge::telemetryTick, this));
     heartbeat_timer_ = create_wall_timer(500ms, [this]() {
-      if (fd_ >= 0) (void)sendLine("ROS:1");
+      if (fd_ >= 0 && !vesc_maintenance_mode_) (void)sendLine("ROS:1");
       sensorWatchdogTick();
     });
     command_timer_ = create_wall_timer(
@@ -327,7 +327,10 @@ private:
           RCLCPP_WARN(get_logger(), "Rejected /stmf4/vesc/mode: %s", msg->data.c_str());
           return;
         }
-        (void)sendLine(std::string("VESC:MODE:") + (mode == "NORMAL" ? "RUNTIME" : mode));
+        const std::string route = mode == "NORMAL" ? "RUNTIME" : mode;
+        if (sendLine(std::string("VESC:MODE:") + route)) {
+          vesc_maintenance_mode_ = route == "MAINTENANCE";
+        }
       });
     boolSub("/gnss/connected", gnss_ready_);
     boolSub("/imu/connected", imu_ready_);
@@ -979,11 +982,22 @@ private:
 
   bool sendVescBytes(const std::vector<std::uint8_t> &bytes, char source) {
     if (bytes.empty() || bytes.size() > 4096U || (source != 'R' && source != 'M')) return false;
-    constexpr size_t kChunk = 48U;
+    constexpr size_t kChunk = 16U;
     for (size_t offset = 0; offset < bytes.size(); offset += kChunk) {
       const size_t count = std::min(kChunk, bytes.size() - offset);
       const std::string line = std::string("VESC:TX:") + source + ":" + bytesToHex(bytes.data() + offset, count);
-      if (!sendLine(line)) return false;
+      bool sent = false;
+      for (int attempt = 0; attempt < 100 && fd_ >= 0; ++attempt) {
+        if (sendLine(line)) { sent = true; break; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+      }
+      if (!sent) {
+        RCLCPP_ERROR(get_logger(), "VESC USB chunk send failed at offset=%zu/%zu", offset, bytes.size());
+        return false;
+      }
+      // Firmware/tuning traffic is loss-intolerant. Pace each complete USB
+      // text frame so the F411 command parser and UART TX queue drain it.
+      if (offset + count < bytes.size()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     return true;
   }
@@ -1244,7 +1258,7 @@ private:
   }
 
   void telemetryTick() {
-    if (fd_ < 0) return;
+    if (fd_ < 0 || vesc_maintenance_mode_) return;
     const auto now_steady = std::chrono::steady_clock::now();
     const bool force = now_steady - last_forced_tx_ >= std::chrono::duration<double>(heartbeat_sec_);
     if (force) last_forced_tx_ = now_steady;
@@ -1372,6 +1386,7 @@ private:
   rclcpp::Client<action_msgs::srv::CancelGoal>::SharedPtr cancel_nav_client_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr request_sub_, neo3_command_sub_, esc_status_sub_, obstacle_sub_, drivable_sub_;
   rclcpp::Subscription<std_msgs::msg::UInt8MultiArray>::SharedPtr vesc_runtime_tx_sub_, vesc_maintenance_tx_sub_;
+  bool vesc_maintenance_mode_{false};
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr vesc_mode_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr performance_sub_, nav_goal_state_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr map_pose_sub_;

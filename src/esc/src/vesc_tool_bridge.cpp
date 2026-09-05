@@ -153,6 +153,7 @@ class VescToolBridge final : public rclcpp::Node {
     tcp_port_ = static_cast<int>(std::clamp<std::int64_t>(declare_parameter<int>("tcp_port", 65102), 1024, 65535));
 
     tx_pub_ = create_publisher<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/maintenance_tx", rclcpp::QoS(100).reliable());
+    runtime_probe_pub_ = create_publisher<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/runtime_tx", rclcpp::QoS(20).reliable());
     mode_pub_ = create_publisher<std_msgs::msg::String>("/stmf4/vesc/mode", stateQos());
     active_pub_ = create_publisher<std_msgs::msg::Bool>("/esc/vesc/maintenance_active", stateQos());
     status_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/tool_status", stateQos());
@@ -184,7 +185,7 @@ class VescToolBridge final : public rclcpp::Node {
   ~VescToolBridge() override { closeTcpClient(); if (tcp_server_fd_ >= 0) ::close(tcp_server_fd_); }
 
  private:
-  enum class Transition { NONE, ENTER, EXIT_STOP, EXIT_ROUTE };
+  enum class Transition { NONE, ENTER, ENTER_ROUTE, EXIT_STOP, EXIT_ROUTE };
 
   void setupTcpServer() {
     tcp_server_fd_ = ::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
@@ -204,8 +205,22 @@ class VescToolBridge final : public rclcpp::Node {
   void closeTcpClient() {
     if (tcp_client_fd_ >= 0) { ::shutdown(tcp_client_fd_, SHUT_RDWR); ::close(tcp_client_fd_); }
     tcp_client_fd_ = -1;
+    tcp_probe_pending_ = false;
     tcp_pending_rx_.clear();
     tcp_pending_tx_.clear();
+  }
+
+  bool vehicleIdleForMaintenance() const {
+    if (std::abs(speed_mps_) > 0.03) return false;
+    return mux_source_.empty() || mux_source_ == "IDLE" || mux_source_ == "STOP" ||
+           mux_source_ == "E_STOP" || mux_source_ == "NAV2_GATE_CLOSED";
+  }
+
+  void sendRuntimeProbe() {
+    if (!runtime_probe_pub_) return;
+    std_msgs::msg::UInt8MultiArray m;
+    m.data = frame({COMM_FW_VERSION});
+    runtime_probe_pub_->publish(m);
   }
 
   void sendMaintenanceSafeStop() {
@@ -218,7 +233,7 @@ class VescToolBridge final : public rclcpp::Node {
 
   void forceRuntimeAfterTcp(const std::string &event) {
     closeTcpClient();
-    if (transition_ == Transition::ENTER) {
+    if (transition_ == Transition::ENTER || transition_ == Transition::ENTER_ROUTE) {
       publishMode("RUNTIME"); publishActive(false); transition_ = Transition::NONE;
     } else if (maintenance_active_) {
       sendMaintenanceSafeStop(); transition_ = Transition::EXIT_STOP;
@@ -261,14 +276,42 @@ class VescToolBridge final : public rclcpp::Node {
       const int fd = ::accept4(tcp_server_fd_, reinterpret_cast<sockaddr *>(&peer), &peer_len, SOCK_NONBLOCK | SOCK_CLOEXEC);
       if (fd >= 0) {
         int one = 1; (void)::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
-        if (!safeToEnter() || transition_ != Transition::NONE || maintenance_active_) {
+        if (!vehicleIdleForMaintenance() || transition_ != Transition::NONE || maintenance_active_) {
           ::close(fd); publishStatus("tcp_rejected_vehicle_not_idle_or_busy");
         } else {
-          tcp_client_fd_ = fd; beginEnter(); publishStatus("tcp_client_connected");
+          tcp_client_fd_ = fd;
+          if (transport_connected_) {
+            beginEnter();
+            publishStatus("tcp_client_connected");
+          } else {
+            // An idle VESC link is not a disconnected VESC. Probe read-only in
+            // RUNTIME before taking maintenance ownership so OTA/VESC Tool can
+            // start deterministically even when the normal controller is stopped.
+            tcp_probe_pending_ = true;
+            const auto now = std::chrono::steady_clock::now();
+            tcp_probe_deadline_ = now + 1500ms;
+            tcp_probe_next_ = now;
+            publishStatus("tcp_probe_runtime_link");
+          }
         }
       }
     }
     if (tcp_client_fd_ < 0) return;
+
+    if (tcp_probe_pending_) {
+      const auto now = std::chrono::steady_clock::now();
+      if (transport_connected_) {
+        tcp_probe_pending_ = false;
+        beginEnter();
+        publishStatus("tcp_probe_ok_entering_maintenance");
+      } else if (now >= tcp_probe_deadline_) {
+        forceRuntimeAfterTcp("tcp_probe_timeout");
+        return;
+      } else if (now >= tcp_probe_next_) {
+        sendRuntimeProbe();
+        tcp_probe_next_ = now + 150ms;
+      }
+    }
 
     std::uint8_t buf[1024];
     for (;;) {
@@ -309,10 +352,7 @@ class VescToolBridge final : public rclcpp::Node {
   }
 
   bool safeToEnter() const {
-    if (!transport_connected_) return false;
-    if (std::abs(speed_mps_) > 0.03) return false;
-    return mux_source_.empty() || mux_source_ == "IDLE" || mux_source_ == "STOP" ||
-           mux_source_ == "E_STOP" || mux_source_ == "NAV2_GATE_CLOSED";
+    return transport_connected_ && vehicleIdleForMaintenance();
   }
 
   void beginEnter() {
@@ -338,8 +378,12 @@ class VescToolBridge final : public rclcpp::Node {
     if (transition_ == Transition::NONE || std::chrono::steady_clock::now() < transition_at_) return;
     if (transition_ == Transition::ENTER) {
       publishMode("MAINTENANCE");
-      publishStatus("maintenance_active");
+      transition_ = Transition::ENTER_ROUTE;
+      transition_at_ = std::chrono::steady_clock::now() + 100ms;
+      publishStatus("maintenance_route_switch");
+    } else if (transition_ == Transition::ENTER_ROUTE) {
       transition_ = Transition::NONE;
+      publishStatus("maintenance_active");
     } else if (transition_ == Transition::EXIT_STOP) {
       publishMode("RUNTIME");
       publishStatus("runtime_route_restore");
@@ -424,7 +468,7 @@ class VescToolBridge final : public rclcpp::Node {
   }
 
   void consume(const std::vector<std::uint8_t> &bytes) {
-    if (tcp_client_fd_ >= 0 && maintenance_active_) queueTcpTx(bytes);
+    if (tcp_client_fd_ >= 0 && maintenance_active_ && transition_ == Transition::NONE && !tcp_probe_pending_) queueTcpTx(bytes);
     stream_.insert(stream_.end(), bytes.begin(), bytes.end());
     if (stream_.size() > 8192U) stream_.erase(stream_.begin(), stream_.end() - 4096);
     for (;;) {
@@ -469,15 +513,17 @@ class VescToolBridge final : public rclcpp::Node {
 
   double poll_hz_{10.0}, max_abs_duty_{0.95}, max_abs_current_a_{20.0}, max_abs_rpm_{10000.0};
   bool maintenance_active_{false}, transport_connected_{false}, tcp_enabled_{true};
+  bool tcp_probe_pending_{false};
   int tcp_port_{65102}, tcp_server_fd_{-1}, tcp_client_fd_{-1};
   double speed_mps_{0.0}; std::string mux_source_;
   Transition transition_{Transition::NONE}; std::chrono::steady_clock::time_point transition_at_{};
   std::chrono::steady_clock::time_point explicit_request_hold_until_{};
+  std::chrono::steady_clock::time_point tcp_probe_deadline_{}, tcp_probe_next_{};
   int poll_motor_{1}, last_request_motor_{1};
   std::vector<std::uint8_t> stream_, tcp_pending_rx_, tcp_pending_tx_;
   std::uint64_t crc_errors_{0}, format_errors_{0};
 
-  rclcpp::Publisher<std_msgs::msg::UInt8MultiArray>::SharedPtr tx_pub_;
+  rclcpp::Publisher<std_msgs::msg::UInt8MultiArray>::SharedPtr tx_pub_, runtime_probe_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr mode_pub_, status_pub_, telemetry_pub_, raw_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr active_pub_;
   rclcpp::Subscription<std_msgs::msg::UInt8MultiArray>::SharedPtr rx_sub_;

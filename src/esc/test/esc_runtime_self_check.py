@@ -45,8 +45,8 @@ if float(ack.get("command_watchdog_sec", 99.0)) >= float(ack.get("nav2_timeout_s
     fail("serial command watchdog must be tighter than Nav2 source timeout")
 if float(ack.get("serial_tx_rate_hz", 0.0)) != float(ack.get("command_rate_hz", 0.0)):
     fail("ROS command and STM transmit rates must match")
-if int(ack.get("serial_baud", 0)) != 2000000:
-    fail("STM protocol baud must remain 2000000")
+if int(ack.get("serial_baud", 0)) != 1000000:
+    fail("STM protocol baud must remain 1000000")
 if abs(float(ack.get("drive_wheel_radius_m", 0.0)) - 0.145) > 1e-9:
     fail("native VESC drive wheel radius must match vehicle radius 0.145 m")
 if int(ack.get("drive_motor_pole_pairs", 0)) != 15:
@@ -126,3 +126,7 @@ for token in ("/stmf4/vesc/maintenance_tx", "/esc/vesc/maintenance_active", "MOD
 print("PASS ESC runtime contract")
 print("priority: E_STOP > TELEOP > gated NAV2 > IDLE")
 print("fusion authority: ESC longitudinal speed only; kinematic yaw is diagnostic")
+
+assert "maintenance_route_switch" in (ROOT / "src/vesc_tool_bridge.cpp").read_text()
+
+assert "!tcp_probe_pending_" in (ROOT / "src/vesc_tool_bridge.cpp").read_text()
