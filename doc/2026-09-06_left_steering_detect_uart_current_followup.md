@@ -44,3 +44,12 @@ Tanggal: 2026-09-06
 - Karena target hardware adalah ABI 1024 PPR / 4096 count/rev, hasil span nol membuktikan sinyal steering aktual belum mencapai PB6/PB7 selama sweep mekanik penuh.
 - PB5/PB6/PB7 adalah jalur Hall LEFT asli; firmware memang meminjam PB6/PB7 untuk mode ABI, sehingga wiring fisik harus benar-benar membawa A/B encoder ke PB6/PB7.
 - Closed-loop steering, hard-stop calibration, dan mapping -30/0/+30 tetap fail-closed sampai edge ABI aktual terbukti mengikuti gerak steering.
+
+## Konfirmasi wiring Hall LEFT masih terhubung — 2026-09-06
+- Runtime F103 sudah benar: sensor_port_mode=ABI, foc_sensor_mode=ENCODER, encoder_counts=4096, LEFT poles=8, encoder_configured=1, TIM4 quadrature aktif; encoder_synced=0 karena belum ada ABI motion valid.
+- Tes pasif GPIO PB6/PB7: saat internal pull-up diubah menjadi pull-down, PB6 dan PB7 tetap HIGH. Artinya net dipertahankan oleh rangkaian eksternal, bukan hanya pull-up internal STM32.
+- Tes pasif PB5: pin diubah sementara dari floating input menjadi input-pullup, tetapi PB5 tetap LOW; saat pull-down juga tetap LOW. Ini membuktikan perangkat eksternal masih meng-drive PB5.
+- State fisik saat tes adalah PB5/PB6/PB7 = 0/1/1, konsisten dengan state Hall 3-fasa valid. Dengan mapping board LEFT Hall U/V/W = PB5/PB6/PB7, Hall LEFT asli masih tersambung.
+- Karena mode proyek LEFT adalah ABI, konektor Hall LEFT tidak boleh membawa Hall motor secara paralel. Encoder harus menggantikan fungsi konektor: pin1=GND, pin2=B->PB7/TIM4_CH2, pin3=A->PB6/TIM4_CH1, pin4=NC, pin5=VCC +5V sesuai skema proyek.
+- Jangan gunakan tegangan baterai/DC bus sebagai VCC encoder. Untuk output encoder push-pull 5V, gunakan level shifter; direct input hanya untuk open-collector/open-drain atau level logika 3.3V sesuai skema proyek.
+- Status tetap fail-closed: PWM LEFT high-Z dan closed-loop steering tidak diaktifkan sampai Hall LEFT dilepas dan ABI menghasilkan count nyata.
