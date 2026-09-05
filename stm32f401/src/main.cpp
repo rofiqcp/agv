@@ -16,6 +16,7 @@
 #include "Config.h"
 #include "Telemetry.h"
 #include "Neo3Sensors.h"
+#include "VescGateway.h"
 #include "Theme.h"
 #include "Icons.h"
 #include "SplashScreen.h"
@@ -32,6 +33,7 @@
 TFT_eSPI tft = TFT_eSPI();
 VehicleTelemetry gTelemetry = defaultTelemetry();
 Neo3Sensors gNeo3;
+VescGateway gVesc;
 
 static PageId currentPage = PAGE_SPLASH;
 static CameraSubPage currentCameraTab = CAM_VIEW;
@@ -604,7 +606,11 @@ static void handleSerialCommand(char* command) {
   // telemetry so an identical heartbeat does not trigger any TFT transaction.
   const VehicleTelemetry telemetryBefore = gTelemetry;
 
-  // NEO3 sensor/IO commands are handled before the HMI command namespace.
+  // Hardware gateway namespaces are handled before the HMI command namespace.
+  if (!strncmp(command, "VESC:", 5)) {
+    (void)gVesc.handleHostCommand(command);
+    return;
+  }
   if (!strncmp(command, "NEO:", 4)) {
     (void)gNeo3.handleHostCommand(command);
     return;
@@ -961,6 +967,7 @@ void setup() {
   // Sensor interfaces are initialized before the splash so GNSS acquisition
   // and IST8310 conversion run in parallel with the HMI startup animation.
   gNeo3.begin();
+  gVesc.begin();
 
   initDisplay();
   restartSplash();
@@ -971,6 +978,7 @@ void loop() {
   // non-blocking after initialization. This prevents TFT drawing from starving
   // UBX parsing or magnetometer sampling.
   gNeo3.poll();
+  gVesc.poll();
 
   // Serial stays full-rate in RAM. ROS link health is independent of USB presence:
   // if the bridge stops sending heartbeats, stale READY states fail closed.

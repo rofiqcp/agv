@@ -24,15 +24,17 @@ launch = (ROOT / "launch/esc.launch.py").read_text()
 # still receive safe C++ defaults, while autonomous.launch routes all motion
 # through cmd_vel_router -> velocity_smoother -> /cmd_vel.
 for key in ("nav2_topic", "teleop_topic", "active_source_topic",
-            "require_autonomy_gate", "serial_device", "serial_enabled"):
+            "require_autonomy_gate", "transport_mode", "serial_device", "serial_enabled"):
     if key in ack:
         fail(f"runtime routing key must not be node-scoped in ackermann.yaml: {key}")
 for token in (
     'DeclareLaunchArgument("nav2_topic", default_value="/cmd_vel")',
     'DeclareLaunchArgument("teleop_topic", default_value="/cmd_vel/teleop")',
+    'DeclareLaunchArgument("transport_mode", default_value="stm32")',
     'DeclareLaunchArgument("serial_enabled", default_value="true")',
     '"nav2_topic": LaunchConfiguration("nav2_topic")',
     '"teleop_topic": LaunchConfiguration("teleop_topic")',
+    '"transport_mode": LaunchConfiguration("transport_mode")',
     '"serial_enabled": ParameterValue(LaunchConfiguration("serial_enabled"), value_type=bool)',
 ):
     if token not in launch:
@@ -43,12 +45,26 @@ if float(ack.get("command_watchdog_sec", 99.0)) >= float(ack.get("nav2_timeout_s
     fail("serial command watchdog must be tighter than Nav2 source timeout")
 if float(ack.get("serial_tx_rate_hz", 0.0)) != float(ack.get("command_rate_hz", 0.0)):
     fail("ROS command and STM transmit rates must match")
-if int(ack.get("serial_baud", 0)) != 115200:
-    fail("STM protocol baud must remain 115200")
+if int(ack.get("serial_baud", 0)) != 2000000:
+    fail("STM protocol baud must remain 2000000")
+if abs(float(ack.get("drive_wheel_radius_m", 0.0)) - 0.145) > 1e-9:
+    fail("native VESC drive wheel radius must match vehicle radius 0.145 m")
+if int(ack.get("drive_motor_pole_pairs", 0)) != 15:
+    fail("native VESC drive pole-pair count must match F103 right motor = 15")
+if abs(float(ack.get("drive_gear_ratio", 0.0)) - 1.0) > 1e-9:
+    fail("native VESC drive gear ratio must be direct 1.0")
+for token in ("nativeDriveErpmPerMps", "rightCommandUnitsPerMps", "rightCommandLimit",
+              "COMM_SET_RPM and COMM_GET_VALUES use electrical RPM"):
+    if token not in source:
+        fail(f"native VESC eRPM conversion contract missing: {token}")
+if ack.get("stm32_tx_topic") != "/stmf4/vesc/runtime_tx" or ack.get("stm32_rx_topic") != "/stmf4/vesc/rx":
+    fail("ESC STM32F411 VESC transport topics are invalid")
+if ack.get("stm32_connected_topic") != "/stmf4/vesc/connected":
+    fail("ESC STM32F411 transport health topic is invalid")
 if "Prolific_Technology_Inc._USB-Serial_Controller" not in str(ack.get("serial_auto_id_contains", "")):
-    fail("ESC PL2303 by-id selector is invalid")
+    fail("direct-serial recovery selector must remain available")
 if not str(ack.get("serial_auto_path_contains", "")).strip():
-    fail("ESC must retain a non-empty physical by-path fallback")
+    fail("direct-serial recovery path must remain available")
 if source.find('directory_iterator("/dev/serial/by-id"') > source.find('directory_iterator("/dev/serial/by-path"'):
     fail("ESC must evaluate unique by-id before physical by-path fallback")
 if "configured selectors cannot resolve" not in source:
@@ -71,6 +87,13 @@ for token in (
     "if (nav2_fresh && gate_ok)",
     "age > command_watchdog_sec_",
     "crc16Ccitt",
+    "makeVescFrame",
+    "sendVescSetPos",
+    "sendVescSetRpm",
+    "wrapRightMotor",
+    "requestVescValues",
+    "consumeVescRxBytes",
+    "maintenance_mode_active_",
     "ack_fresh && left_ready && right_ready && !firmware_failsafe",
     "odom.twist.twist.linear.x = drive_mps",
     'create_publisher<std_msgs::msg::Float64>("/esc/kinematic_yaw_rate_rps"',
@@ -90,10 +113,15 @@ if "TransformBroadcaster" in source or "sendTransform" in source:
     fail("ESC must not publish odom->base TF; local EKF owns that transform")
 if source.count("::open(") != 1:
     fail("ESC serial device must have exactly one open owner")
-if "exactly two nodes" not in launch and "exactly two" not in launch:
-    fail("ESC launch ownership is not documented")
-if "motor_teleop" not in launch or "ackermann_controller_server" not in launch:
-    fail("ESC launch must contain teleop plus the single serial actuator owner")
+tool_source = (ROOT / "src/vesc_tool_bridge.cpp").read_text()
+if "motor_teleop" not in launch or "ackermann_controller_server" not in launch or "vesc_tool_bridge" not in launch:
+    fail("ESC launch must contain teleop, Ackermann runtime, and VESC maintenance bridge")
+for token in ("/stmf4/vesc/maintenance_tx", "/esc/vesc/maintenance_active", "MODE:MAINTENANCE",
+              "COMM_GET_MCCONF", "COMM_DETECT_HALL_FOC", "COMM_DETECT_ENCODER", "COMM_TERMINAL_CMD",
+              "127.0.0.1", "tcp_port", "SOCK_NONBLOCK", "TCP_NODELAY", "tcp_client_fd_",
+              "sendMaintenanceSafeStop", "command_rejected_tcp_client_owns_maintenance"):
+    if token not in tool_source:
+        fail(f"VESC maintenance feature missing: {token}")
 
 print("PASS ESC runtime contract")
 print("priority: E_STOP > TELEOP > gated NAV2 > IDLE")

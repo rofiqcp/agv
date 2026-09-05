@@ -13,6 +13,7 @@
 #include <sys/ioctl.h>
 #include <iomanip>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -37,6 +38,7 @@
 #include "std_msgs/msg/float64.hpp"
 #include "std_msgs/msg/float64_multi_array.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "std_msgs/msg/u_int8_multi_array.hpp"
 
 using namespace std::chrono_literals;
 namespace fs = std::filesystem;
@@ -178,6 +180,7 @@ private:
     declare_parameter<std::string>("neo3_mag_frame_id", "gnss_link");
     declare_parameter<double>("neo3_mag_sigma_ut", 3.0);
     declare_parameter<bool>("publish_stm32_gnss", true);
+    declare_parameter<double>("vesc_transport_timeout_sec", 2.0);
   }
 
   void readParameters() {
@@ -202,6 +205,7 @@ private:
     neo3_mag_frame_id_ = get_parameter("neo3_mag_frame_id").as_string();
     neo3_mag_sigma_ut_ = std::clamp(get_parameter("neo3_mag_sigma_ut").as_double(), 0.1, 100.0);
     publish_stm32_gnss_ = get_parameter("publish_stm32_gnss").as_bool();
+    vesc_transport_timeout_sec_ = std::clamp(get_parameter("vesc_transport_timeout_sec").as_double(), 0.25, 10.0);
     if (serial_baud_ != 115200) throw std::runtime_error("stmf4 currently requires serial_baud=115200");
   }
 
@@ -294,6 +298,9 @@ private:
     neo3_ist_connected_pub_ = create_publisher<std_msgs::msg::Bool>("/neo3/ist8310_connected", stateQos());
     neo3_safety_switch_pub_ = create_publisher<std_msgs::msg::Bool>("/neo3/safety_switch", stateQos());
     neo3_status_pub_ = create_publisher<std_msgs::msg::String>("/neo3/status", stateQos());
+    vesc_rx_pub_ = create_publisher<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/rx", rclcpp::QoS(100).reliable());
+    vesc_status_pub_ = create_publisher<std_msgs::msg::String>("/stmf4/vesc/status", stateQos());
+    vesc_connected_pub_ = create_publisher<std_msgs::msg::Bool>("/stmf4/vesc/connected", stateQos());
     goal_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("/navigation/goal_request", 10);
     cancel_nav_client_ = create_client<action_msgs::srv::CancelGoal>("/navigate_to_pose/_action/cancel_goal");
 
@@ -308,6 +315,19 @@ private:
         } else {
           RCLCPP_WARN(get_logger(), "Rejected /neo3/command: %s", msg->data.c_str());
         }
+      });
+    vesc_runtime_tx_sub_ = create_subscription<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/runtime_tx", rclcpp::QoS(100).reliable(),
+      [this](std_msgs::msg::UInt8MultiArray::ConstSharedPtr msg) { (void)sendVescBytes(msg->data, 'R'); });
+    vesc_maintenance_tx_sub_ = create_subscription<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/maintenance_tx", rclcpp::QoS(100).reliable(),
+      [this](std_msgs::msg::UInt8MultiArray::ConstSharedPtr msg) { (void)sendVescBytes(msg->data, 'M'); });
+    vesc_mode_sub_ = create_subscription<std_msgs::msg::String>("/stmf4/vesc/mode", 10,
+      [this](std_msgs::msg::String::ConstSharedPtr msg) {
+        const std::string mode = upper(trim(msg->data));
+        if (mode != "RUNTIME" && mode != "NORMAL" && mode != "MAINTENANCE") {
+          RCLCPP_WARN(get_logger(), "Rejected /stmf4/vesc/mode: %s", msg->data.c_str());
+          return;
+        }
+        (void)sendLine(std::string("VESC:MODE:") + (mode == "NORMAL" ? "RUNTIME" : mode));
       });
     boolSub("/gnss/connected", gnss_ready_);
     boolSub("/imu/connected", imu_ready_);
@@ -603,6 +623,8 @@ private:
     sendLine("MODE:" + mode_);
     sendLine("NEO:LED:AUTO");
     sendLine("NEO:STATUS");
+    sendLine("VESC:MODE:RUNTIME");
+    sendLine("VESC:STATUS");
     return true;
   }
 
@@ -628,6 +650,7 @@ private:
   }
 
   bool sendLine(const std::string &line) {
+    std::lock_guard<std::mutex> tx_lock(tx_mutex_);
     if (fd_ < 0) return false;
     const std::string packet = line + "\n";
     size_t offset = 0;
@@ -923,6 +946,98 @@ private:
     neo3_safety_switch_pub_->publish(b);
   }
 
+  static int vescHexNibble(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+  }
+
+  static std::string bytesToHex(const std::uint8_t *data, size_t size) {
+    static constexpr char kHex[] = "0123456789ABCDEF";
+    std::string out;
+    out.resize(size * 2U);
+    for (size_t i = 0; i < size; ++i) {
+      out[i * 2U] = kHex[data[i] >> 4U];
+      out[i * 2U + 1U] = kHex[data[i] & 0x0FU];
+    }
+    return out;
+  }
+
+  static bool hexToBytes(const std::string &hex, std::vector<std::uint8_t> *out) {
+    if (out == nullptr || hex.empty() || (hex.size() & 1U) != 0U || hex.size() > 8192U) return false;
+    out->clear();
+    out->reserve(hex.size() / 2U);
+    for (size_t i = 0; i < hex.size(); i += 2U) {
+      const int hi = vescHexNibble(hex[i]);
+      const int lo = vescHexNibble(hex[i + 1U]);
+      if (hi < 0 || lo < 0) { out->clear(); return false; }
+      out->push_back(static_cast<std::uint8_t>((hi << 4) | lo));
+    }
+    return true;
+  }
+
+  bool sendVescBytes(const std::vector<std::uint8_t> &bytes, char source) {
+    if (bytes.empty() || bytes.size() > 4096U || (source != 'R' && source != 'M')) return false;
+    constexpr size_t kChunk = 48U;
+    for (size_t offset = 0; offset < bytes.size(); offset += kChunk) {
+      const size_t count = std::min(kChunk, bytes.size() - offset);
+      const std::string line = std::string("VESC:TX:") + source + ":" + bytesToHex(bytes.data() + offset, count);
+      if (!sendLine(line)) return false;
+    }
+    return true;
+  }
+
+  void publishVescConnected(bool connected) {
+    if (vesc_connected_initialized_ && connected == vesc_connected_state_) return;
+    vesc_connected_initialized_ = true;
+    vesc_connected_state_ = connected;
+    std_msgs::msg::Bool msg;
+    msg.data = connected;
+    vesc_connected_pub_->publish(msg);
+  }
+
+  void handleVescLine(const std::string &line) {
+    last_vesc_line_time_ = std::chrono::steady_clock::now();
+    if (line.rfind("VESC:RX:", 0) == 0) {
+      std::vector<std::uint8_t> bytes;
+      if (!hexToBytes(line.substr(8), &bytes)) {
+        ++vesc_parse_errors_;
+        return;
+      }
+      std_msgs::msg::UInt8MultiArray msg;
+      msg.data = std::move(bytes);
+      vesc_rx_pub_->publish(msg);
+      last_vesc_rx_time_ = last_vesc_line_time_;
+      publishVescConnected(true);
+      return;
+    }
+    if (line.rfind("VESC:STAT:", 0) == 0) {
+      std_msgs::msg::String msg;
+      msg.data = line.substr(10);
+      vesc_status_pub_->publish(msg);
+      const std::string payload = line.substr(10);
+      const auto age_pos = payload.find("age_ms=");
+      const auto rx_pos = payload.find("rx=");
+      if (age_pos != std::string::npos && rx_pos != std::string::npos) {
+        char *age_end = nullptr;
+        char *rx_end = nullptr;
+        const unsigned long age_ms = std::strtoul(payload.c_str() + age_pos + 7, &age_end, 10);
+        const unsigned long rx_count = std::strtoul(payload.c_str() + rx_pos + 3, &rx_end, 10);
+        if (age_end != payload.c_str() + age_pos + 7 && rx_end != payload.c_str() + rx_pos + 3) {
+          publishVescConnected(rx_count > 0UL &&
+            age_ms <= static_cast<unsigned long>(vesc_transport_timeout_sec_ * 1000.0));
+        }
+      }
+      return;
+    }
+    if (line.rfind("VESC:MODE:", 0) == 0 || line.rfind("VESC:ERR:", 0) == 0) {
+      std_msgs::msg::String msg;
+      msg.data = line.substr(5);
+      vesc_status_pub_->publish(msg);
+    }
+  }
+
   void sensorWatchdogTick() {
     const auto t = std::chrono::steady_clock::now();
     if (publish_stm32_gnss_ && last_neo3_gnss_time_.time_since_epoch().count() != 0 &&
@@ -934,10 +1049,15 @@ private:
       neo3_ist_connected_state_ = false;
       std_msgs::msg::Bool b; b.data = false; neo3_ist_connected_pub_->publish(b);
     }
+    if (vesc_connected_state_ && last_vesc_line_time_.time_since_epoch().count() != 0 &&
+        t - last_vesc_line_time_ > std::chrono::duration<double>(vesc_transport_timeout_sec_)) {
+      publishVescConnected(false);
+    }
   }
 
   void handleHmiLine(const std::string &line) {
     last_rx_ = std::chrono::steady_clock::now();
+    if (line.rfind("VESC:", 0) == 0) { handleVescLine(line); return; }
     if (line.rfind("SENS:GNSS:", 0) == 0) { handleNeo3Gnss(line.substr(10)); return; }
     if (line.rfind("SENS:GNSSF:", 0) == 0) { handleNeo3GnssFallback(line.substr(11)); return; }
     if (line.rfind("SENS:MAG:", 0) == 0) { handleNeo3Mag(line.substr(9)); return; }
@@ -1196,6 +1316,7 @@ private:
   double reconnect_sec_{0.5}, telemetry_rate_hz_{10.0}, command_rate_hz_{30.0}, heartbeat_sec_{5.0};
   double waypoint_pose_timeout_sec_{2.5};
   double neo3_sensor_timeout_sec_{2.0}, neo3_mag_sigma_ut_{3.0};
+  double vesc_transport_timeout_sec_{2.0};
   bool publish_stm32_gnss_{true};
   std::string neo3_gnss_frame_id_{"gnss_link"}, neo3_mag_frame_id_{"gnss_link"};
   double manual_speed_max_mps_{1.0}, hmi_steer_full_scale_deg_{90.0}, teleop_yaw_max_rps_{80.0 * kPi / 180.0};
@@ -1203,6 +1324,7 @@ private:
   bool invert_hmi_steering_{true};
   int fd_{-1};
   int lock_fd_{-1};
+  std::mutex tx_mutex_;
   bool connected_{false};
   std::string rx_, page_{"SPLASH"}, mode_{"AUTO"}, drive_{"STOP"}, steer_{"NONE"}, control_origin_{"NONE"}, last_rejection_;
   std::string camera_tab_{"VIEW"}, navigation_state_{"IDLE"}, active_target_{"NONE"};
@@ -1225,7 +1347,10 @@ private:
   bool neo3_ist_connected_state_{false};
   bool neo3_switch_state_{false}, neo3_switch_initialized_{false};
   uint64_t neo3_parse_errors_{0};
+  uint64_t vesc_parse_errors_{0};
+  bool vesc_connected_state_{false}, vesc_connected_initialized_{false};
   std::chrono::steady_clock::time_point last_neo3_gnss_time_{}, last_neo3_mag_time_{};
+  std::chrono::steady_clock::time_point last_vesc_line_time_{}, last_vesc_rx_time_{};
   std::string nearest_object_{"NONE"};
   double nearest_distance_m_{0.0}, nearest_conf_pct_{0.0}, camera_fps_{0.0};
 
@@ -1239,10 +1364,15 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::TwistWithCovarianceStamped>::SharedPtr neo3_vel_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr neo3_quality_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr neo3_gnss_state_pub_, neo3_status_pub_;
+  rclcpp::Publisher<std_msgs::msg::UInt8MultiArray>::SharedPtr vesc_rx_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr vesc_status_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr vesc_connected_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr neo3_gnss_connected_pub_, neo3_ist_connected_pub_, neo3_safety_switch_pub_;
   rclcpp::Publisher<sensor_msgs::msg::MagneticField>::SharedPtr neo3_mag_pub_;
   rclcpp::Client<action_msgs::srv::CancelGoal>::SharedPtr cancel_nav_client_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr request_sub_, neo3_command_sub_, esc_status_sub_, obstacle_sub_, drivable_sub_;
+  rclcpp::Subscription<std_msgs::msg::UInt8MultiArray>::SharedPtr vesc_runtime_tx_sub_, vesc_maintenance_tx_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr vesc_mode_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr performance_sub_, nav_goal_state_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr map_pose_sub_;
   rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr fix_sub_;

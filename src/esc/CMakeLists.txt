@@ -43,6 +43,7 @@ endif()
 # depfile parent directory disappeared.
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/motor_teleop.dir/src")
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/ackermann_controller_server.dir/src")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/vesc_tool_bridge.dir/src")
 
 # Manual keyboard/gamepad input. This node NEVER owns the STM UART.
 add_executable(motor_teleop src/motor_teleop.cpp)
@@ -52,8 +53,11 @@ ament_target_dependencies(motor_teleop rclcpp geometry_msgs std_msgs)
 add_executable(ackermann_controller_server src/ackermann_controller_server.cpp)
 ament_target_dependencies(ackermann_controller_server rclcpp rcl_interfaces geometry_msgs nav_msgs std_msgs)
 
+add_executable(vesc_tool_bridge src/vesc_tool_bridge.cpp)
+ament_target_dependencies(vesc_tool_bridge rclcpp std_msgs)
+
 install(
-  TARGETS motor_teleop ackermann_controller_server
+  TARGETS motor_teleop ackermann_controller_server vesc_tool_bridge
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})

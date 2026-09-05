@@ -49,7 +49,7 @@ motor_teleop:
 
     # Manual teleop smoothing. Speed starts at 0.20 m/s and MUST be raised with L1.
     # Full-stick reaches the currently selected speed level; L1 can raise it to
-    # speed_max=1.0 m/s (=300 RPM).
+    # speed_max=1.0 m/s. Native VESC conversion is ~988 ERPM at r=0.145m, 15 pole-pairs, gear=1.
     teleop_velocity_smoothing_enabled: true
     teleop_accel_limit_mps2: 1.50
     teleop_decel_limit_mps2: 2.50

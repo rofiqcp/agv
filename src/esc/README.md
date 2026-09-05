@@ -72,8 +72,10 @@ source install/setup.bash
 Standalone ESC runtime:
 
 ```bash
-# Default Mini-PC: ESC PL2303 dipilih dari stable /dev/serial/by-id.
-# by-path ...usb-0:1.1:1.0 hanya fallback jika by-id unavailable/ambiguous.
+# Default runtime: Mini-PC -> STM32F411 native USB CDC -> USART1 PB6/PB7 ->
+# STM32F103 USART3 PB11/PB10. Direct USB-UART/PL2303 remains recovery-only.
+# VESC Tool desktop connects to localhost TCP 127.0.0.1:65102 through
+# vesc_tool_bridge; Web and desktop tooling share the same maintenance authority.
 # Nomor /dev/ttyUSBx tidak pernah menjadi authority otomatis.
 ros2 launch esc esc.launch.py
 

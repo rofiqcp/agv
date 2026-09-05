@@ -1,0 +1,8 @@
+vesc_tool_bridge:
+  ros__parameters:
+    maintenance_poll_hz: 10.0
+    max_abs_duty: 0.95
+    max_abs_current_a: 20.0
+    max_abs_rpm: 10000.0
+    tcp_enabled: true
+    tcp_port: 65102

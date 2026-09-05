@@ -1,0 +1,495 @@
+#include <rclcpp/rclcpp.hpp>
+#include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/float64.hpp>
+#include <std_msgs/msg/string.hpp>
+#include <std_msgs/msg/u_int8_multi_array.hpp>
+
+#include <algorithm>
+#include <cerrno>
+#include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#include <iomanip>
+#include <limits>
+#include <sstream>
+#include <string>
+#include <vector>
+
+using namespace std::chrono_literals;
+
+namespace {
+constexpr std::uint8_t COMM_FW_VERSION = 0;
+constexpr std::uint8_t COMM_GET_VALUES = 4;
+constexpr std::uint8_t COMM_SET_DUTY = 5;
+constexpr std::uint8_t COMM_SET_CURRENT = 6;
+constexpr std::uint8_t COMM_SET_CURRENT_BRAKE = 7;
+constexpr std::uint8_t COMM_SET_RPM = 8;
+constexpr std::uint8_t COMM_SET_POS = 9;
+constexpr std::uint8_t COMM_SET_HANDBRAKE = 10;
+constexpr std::uint8_t COMM_GET_MCCONF = 14;
+constexpr std::uint8_t COMM_GET_MCCONF_DEFAULT = 15;
+constexpr std::uint8_t COMM_GET_APPCONF = 17;
+constexpr std::uint8_t COMM_GET_APPCONF_DEFAULT = 18;
+constexpr std::uint8_t COMM_TERMINAL_CMD = 20;
+constexpr std::uint8_t COMM_DETECT_ENCODER = 27;
+constexpr std::uint8_t COMM_DETECT_HALL_FOC = 28;
+constexpr std::uint8_t COMM_REBOOT = 29;
+constexpr std::uint8_t COMM_ALIVE = 30;
+constexpr std::uint8_t COMM_FORWARD_CAN = 34;
+constexpr std::uint8_t RIGHT_ID = 2;
+
+rclcpp::QoS stateQos() { return rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local(); }
+
+std::uint16_t crc16(const std::uint8_t *data, std::size_t len) {
+  std::uint16_t crc = 0U;
+  for (std::size_t i = 0; i < len; ++i) {
+    crc ^= static_cast<std::uint16_t>(data[i]) << 8U;
+    for (int bit = 0; bit < 8; ++bit) {
+      crc = (crc & 0x8000U) ? static_cast<std::uint16_t>((crc << 1U) ^ 0x1021U)
+                            : static_cast<std::uint16_t>(crc << 1U);
+    }
+  }
+  return crc;
+}
+
+void appendI32(std::vector<std::uint8_t> &out, std::int32_t value) {
+  const auto u = static_cast<std::uint32_t>(value);
+  out.push_back(static_cast<std::uint8_t>(u >> 24U));
+  out.push_back(static_cast<std::uint8_t>(u >> 16U));
+  out.push_back(static_cast<std::uint8_t>(u >> 8U));
+  out.push_back(static_cast<std::uint8_t>(u));
+}
+
+std::int16_t i16(const std::uint8_t *p) {
+  return static_cast<std::int16_t>((static_cast<std::uint16_t>(p[0]) << 8U) | p[1]);
+}
+std::int32_t i32(const std::uint8_t *p) {
+  return static_cast<std::int32_t>((static_cast<std::uint32_t>(p[0]) << 24U) |
+    (static_cast<std::uint32_t>(p[1]) << 16U) | (static_cast<std::uint32_t>(p[2]) << 8U) | p[3]);
+}
+
+std::vector<std::uint8_t> frame(const std::vector<std::uint8_t> &payload) {
+  std::vector<std::uint8_t> out;
+  if (payload.empty() || payload.size() > 65535U) return out;
+  if (payload.size() <= 255U) {
+    out.reserve(payload.size() + 5U); out.push_back(2U); out.push_back(static_cast<std::uint8_t>(payload.size()));
+  } else {
+    out.reserve(payload.size() + 6U); out.push_back(3U);
+    out.push_back(static_cast<std::uint8_t>(payload.size() >> 8U)); out.push_back(static_cast<std::uint8_t>(payload.size()));
+  }
+  out.insert(out.end(), payload.begin(), payload.end());
+  const auto c = crc16(payload.data(), payload.size());
+  out.push_back(static_cast<std::uint8_t>(c >> 8U)); out.push_back(static_cast<std::uint8_t>(c)); out.push_back(3U);
+  return out;
+}
+
+std::vector<std::uint8_t> motorPayload(int motor, std::vector<std::uint8_t> inner) {
+  if (motor == 1) return inner;
+  std::vector<std::uint8_t> out{COMM_FORWARD_CAN, RIGHT_ID};
+  out.insert(out.end(), inner.begin(), inner.end());
+  return out;
+}
+
+std::string hex(const std::vector<std::uint8_t> &data) {
+  std::ostringstream o; o << std::hex << std::uppercase << std::setfill('0');
+  for (const auto b : data) o << std::setw(2) << static_cast<unsigned>(b);
+  return o.str();
+}
+
+int nibble(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+bool unhex(const std::string &s, std::vector<std::uint8_t> *out) {
+  if (!out || s.empty() || (s.size() & 1U) || s.size() > 8192U) return false;
+  out->clear(); out->reserve(s.size() / 2U);
+  for (std::size_t i = 0; i < s.size(); i += 2U) {
+    const int a = nibble(s[i]), b = nibble(s[i + 1U]);
+    if (a < 0 || b < 0) { out->clear(); return false; }
+    out->push_back(static_cast<std::uint8_t>((a << 4) | b));
+  }
+  return true;
+}
+
+std::vector<std::string> split(const std::string &s, char sep) {
+  std::vector<std::string> out; std::stringstream ss(s); std::string item;
+  while (std::getline(ss, item, sep)) out.push_back(item);
+  return out;
+}
+
+bool parseMotor(const std::string &s, int *motor) {
+  if (!motor || (s != "1" && s != "2")) return false;
+  *motor = s == "2" ? 2 : 1; return true;
+}
+
+bool parseDouble(const std::string &s, double *value) {
+  if (!value) return false;
+  char *end = nullptr;
+  errno = 0;
+  const double v = std::strtod(s.c_str(), &end);
+  if (errno || end == s.c_str() || *end != '\0' || !std::isfinite(v)) return false;
+  *value = v; return true;
+}
+}  // namespace
+
+class VescToolBridge final : public rclcpp::Node {
+ public:
+  VescToolBridge() : Node("vesc_tool_bridge") {
+    poll_hz_ = std::clamp(declare_parameter<double>("maintenance_poll_hz", 10.0), 1.0, 25.0);
+    max_abs_duty_ = std::clamp(declare_parameter<double>("max_abs_duty", 0.95), 0.01, 0.99);
+    max_abs_current_a_ = std::clamp(declare_parameter<double>("max_abs_current_a", 20.0), 0.1, 100.0);
+    max_abs_rpm_ = std::clamp(declare_parameter<double>("max_abs_rpm", 10000.0), 10.0, 200000.0);
+    tcp_enabled_ = declare_parameter<bool>("tcp_enabled", true);
+    tcp_port_ = static_cast<int>(std::clamp<std::int64_t>(declare_parameter<int>("tcp_port", 65102), 1024, 65535));
+
+    tx_pub_ = create_publisher<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/maintenance_tx", rclcpp::QoS(100).reliable());
+    mode_pub_ = create_publisher<std_msgs::msg::String>("/stmf4/vesc/mode", stateQos());
+    active_pub_ = create_publisher<std_msgs::msg::Bool>("/esc/vesc/maintenance_active", stateQos());
+    status_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/tool_status", stateQos());
+    telemetry_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/tool_telemetry", stateQos());
+    raw_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/raw_reply", rclcpp::QoS(20).reliable());
+
+    rx_sub_ = create_subscription<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/rx", rclcpp::QoS(100).reliable(),
+      [this](std_msgs::msg::UInt8MultiArray::ConstSharedPtr m) { consume(m->data); });
+    transport_sub_ = create_subscription<std_msgs::msg::Bool>("/stmf4/vesc/connected", stateQos(),
+      [this](std_msgs::msg::Bool::ConstSharedPtr m) { transport_connected_ = m->data; publishStatus(); });
+    speed_sub_ = create_subscription<std_msgs::msg::Float64>("/esc/drive_actual_mps", 10,
+      [this](std_msgs::msg::Float64::ConstSharedPtr m) { if (std::isfinite(m->data)) speed_mps_ = m->data; });
+    mux_sub_ = create_subscription<std_msgs::msg::String>("/esc/mux/active_source", stateQos(),
+      [this](std_msgs::msg::String::ConstSharedPtr m) { mux_source_ = m->data; });
+    command_sub_ = create_subscription<std_msgs::msg::String>("/esc/vesc/tool_command", 20,
+      [this](std_msgs::msg::String::ConstSharedPtr m) { command(m->data); });
+
+    transition_timer_ = create_wall_timer(20ms, [this]() { transitionTick(); });
+    poll_timer_ = create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::duration<double>(1.0 / poll_hz_)), [this]() { pollTick(); });
+    tcp_timer_ = create_wall_timer(10ms, [this]() { tcpTick(); });
+    if (tcp_enabled_) setupTcpServer();
+    publishMode("RUNTIME");
+    publishActive(false); publishStatus("runtime");
+    RCLCPP_INFO(get_logger(), "VESC Tool bridge ready; maintenance is fail-closed, TCP=%s 127.0.0.1:%d",
+      tcp_enabled_ ? "ON" : "OFF", tcp_port_);
+  }
+
+  ~VescToolBridge() override { closeTcpClient(); if (tcp_server_fd_ >= 0) ::close(tcp_server_fd_); }
+
+ private:
+  enum class Transition { NONE, ENTER, EXIT_STOP, EXIT_ROUTE };
+
+  void setupTcpServer() {
+    tcp_server_fd_ = ::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    if (tcp_server_fd_ < 0) { RCLCPP_ERROR(get_logger(), "VESC TCP socket failed: %s", std::strerror(errno)); return; }
+    int one = 1;
+    (void)::setsockopt(tcp_server_fd_, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(static_cast<std::uint16_t>(tcp_port_));
+    if (::bind(tcp_server_fd_, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0 || ::listen(tcp_server_fd_, 1) != 0) {
+      RCLCPP_ERROR(get_logger(), "VESC TCP bind/listen 127.0.0.1:%d failed: %s", tcp_port_, std::strerror(errno));
+      ::close(tcp_server_fd_); tcp_server_fd_ = -1; return;
+    }
+  }
+
+  void closeTcpClient() {
+    if (tcp_client_fd_ >= 0) { ::shutdown(tcp_client_fd_, SHUT_RDWR); ::close(tcp_client_fd_); }
+    tcp_client_fd_ = -1;
+    tcp_pending_rx_.clear();
+    tcp_pending_tx_.clear();
+  }
+
+  void sendMaintenanceSafeStop() {
+    for (int motor = 1; motor <= 2; ++motor) {
+      std::vector<std::uint8_t> p{COMM_SET_CURRENT}; appendI32(p, 0);
+      const auto packet = frame(motorPayload(motor, std::move(p)));
+      if (!packet.empty()) { std_msgs::msg::UInt8MultiArray m; m.data = packet; tx_pub_->publish(m); }
+    }
+  }
+
+  void forceRuntimeAfterTcp(const std::string &event) {
+    closeTcpClient();
+    if (transition_ == Transition::ENTER) {
+      publishMode("RUNTIME"); publishActive(false); transition_ = Transition::NONE;
+    } else if (maintenance_active_) {
+      sendMaintenanceSafeStop(); transition_ = Transition::EXIT_STOP;
+      transition_at_ = std::chrono::steady_clock::now() + 100ms;
+    }
+    publishStatus(event);
+  }
+
+  void queueTcpTx(const std::vector<std::uint8_t> &bytes) {
+    if (tcp_client_fd_ < 0 || bytes.empty()) return;
+    if (tcp_pending_tx_.size() + bytes.size() > 65536U) {
+      forceRuntimeAfterTcp("tcp_tx_overflow"); return;
+    }
+    tcp_pending_tx_.insert(tcp_pending_tx_.end(), bytes.begin(), bytes.end());
+  }
+
+  void flushTcpTx() {
+    while (tcp_client_fd_ >= 0 && !tcp_pending_tx_.empty()) {
+      const ssize_t n = ::send(tcp_client_fd_, tcp_pending_tx_.data(), tcp_pending_tx_.size(), MSG_NOSIGNAL);
+      if (n > 0) { tcp_pending_tx_.erase(tcp_pending_tx_.begin(), tcp_pending_tx_.begin() + n); continue; }
+      if (n < 0 && errno == EINTR) continue;
+      if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return;
+      forceRuntimeAfterTcp("tcp_send_disconnected"); return;
+    }
+  }
+
+  void forwardTcpPendingRx() {
+    if (tcp_client_fd_ < 0 || !maintenance_active_ || transition_ != Transition::NONE || tcp_pending_rx_.empty()) return;
+    const std::size_t n = std::min<std::size_t>(512U, tcp_pending_rx_.size());
+    std_msgs::msg::UInt8MultiArray m;
+    m.data.assign(tcp_pending_rx_.begin(), tcp_pending_rx_.begin() + static_cast<std::ptrdiff_t>(n));
+    tx_pub_->publish(m);
+    tcp_pending_rx_.erase(tcp_pending_rx_.begin(), tcp_pending_rx_.begin() + static_cast<std::ptrdiff_t>(n));
+  }
+
+  void tcpTick() {
+    if (tcp_server_fd_ < 0) return;
+    if (tcp_client_fd_ < 0) {
+      sockaddr_in peer{}; socklen_t peer_len = sizeof(peer);
+      const int fd = ::accept4(tcp_server_fd_, reinterpret_cast<sockaddr *>(&peer), &peer_len, SOCK_NONBLOCK | SOCK_CLOEXEC);
+      if (fd >= 0) {
+        int one = 1; (void)::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+        if (!safeToEnter() || transition_ != Transition::NONE || maintenance_active_) {
+          ::close(fd); publishStatus("tcp_rejected_vehicle_not_idle_or_busy");
+        } else {
+          tcp_client_fd_ = fd; beginEnter(); publishStatus("tcp_client_connected");
+        }
+      }
+    }
+    if (tcp_client_fd_ < 0) return;
+
+    std::uint8_t buf[1024];
+    for (;;) {
+      const ssize_t n = ::recv(tcp_client_fd_, buf, sizeof(buf), 0);
+      if (n > 0) {
+        if (tcp_pending_rx_.size() + static_cast<std::size_t>(n) > 65536U) { forceRuntimeAfterTcp("tcp_rx_overflow"); return; }
+        tcp_pending_rx_.insert(tcp_pending_rx_.end(), buf, buf + n);
+        continue;
+      }
+      if (n == 0) { forceRuntimeAfterTcp("tcp_client_disconnected"); return; }
+      if (errno == EINTR) continue;
+      if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+      forceRuntimeAfterTcp("tcp_recv_error"); return;
+    }
+    forwardTcpPendingRx();
+    flushTcpTx();
+  }
+
+  void publishActive(bool value) {
+    maintenance_active_ = value; std_msgs::msg::Bool m; m.data = value; active_pub_->publish(m);
+  }
+
+  void publishMode(const char *mode) {
+    std_msgs::msg::String m; m.data = mode; mode_pub_->publish(m);
+  }
+
+  void publishStatus(const std::string &event = "") {
+    std_msgs::msg::String m; std::ostringstream o;
+    o << "{\"mode\":\"" << (maintenance_active_ ? "maintenance" : "runtime")
+      << "\",\"transport_connected\":" << (transport_connected_ ? "true" : "false")
+      << ",\"speed_mps\":" << speed_mps_ << ",\"mux\":\"" << mux_source_
+      << "\",\"tcp_server\":" << (tcp_server_fd_ >= 0 ? "true" : "false")
+      << ",\"tcp_port\":" << tcp_port_ << ",\"tcp_client\":" << (tcp_client_fd_ >= 0 ? "true" : "false")
+      << ",\"rx_crc_errors\":" << crc_errors_ << ",\"rx_format_errors\":" << format_errors_
+      << ",\"last_request_motor\":" << last_request_motor_;
+    if (!event.empty()) o << ",\"event\":\"" << event << "\"";
+    o << "}"; m.data = o.str(); status_pub_->publish(m);
+  }
+
+  bool safeToEnter() const {
+    if (!transport_connected_) return false;
+    if (std::abs(speed_mps_) > 0.03) return false;
+    return mux_source_.empty() || mux_source_ == "IDLE" || mux_source_ == "STOP" ||
+           mux_source_ == "E_STOP" || mux_source_ == "NAV2_GATE_CLOSED";
+  }
+
+  void beginEnter() {
+    if (maintenance_active_ || transition_ != Transition::NONE) return;
+    if (!safeToEnter()) { publishStatus("maintenance_rejected_vehicle_not_idle"); return; }
+    publishActive(true);  // Ackermann emits its bounded safe-stop while F411 still owns RUNTIME.
+    transition_ = Transition::ENTER;
+    transition_at_ = std::chrono::steady_clock::now() + 150ms;
+    publishStatus("maintenance_safe_stop");
+  }
+
+  void beginExit() {
+    if (!maintenance_active_ || transition_ != Transition::NONE) return;
+    closeTcpClient();
+    // Stop both motors while F411 still routes MAINTENANCE, then restore RUNTIME.
+    sendMaintenanceSafeStop();
+    transition_ = Transition::EXIT_STOP;
+    transition_at_ = std::chrono::steady_clock::now() + 100ms;
+    publishStatus("maintenance_safe_stop_before_runtime");
+  }
+
+  void transitionTick() {
+    if (transition_ == Transition::NONE || std::chrono::steady_clock::now() < transition_at_) return;
+    if (transition_ == Transition::ENTER) {
+      publishMode("MAINTENANCE");
+      publishStatus("maintenance_active");
+      transition_ = Transition::NONE;
+    } else if (transition_ == Transition::EXIT_STOP) {
+      publishMode("RUNTIME");
+      publishStatus("runtime_route_restore");
+      transition_ = Transition::EXIT_ROUTE;
+      transition_at_ = std::chrono::steady_clock::now() + 150ms;
+    } else {
+      publishActive(false);
+      publishStatus("runtime_active");
+      transition_ = Transition::NONE;
+    }
+  }
+
+  void sendPayload(int motor, std::vector<std::uint8_t> payload) {
+    if (!maintenance_active_ || transition_ != Transition::NONE) { publishStatus("command_rejected_not_maintenance"); return; }
+    last_request_motor_ = motor;
+    const auto packet = frame(motorPayload(motor, std::move(payload)));
+    if (packet.empty()) return;
+    std_msgs::msg::UInt8MultiArray m; m.data = packet; tx_pub_->publish(m);
+  }
+
+  void pollTick() {
+    if (!maintenance_active_ || transition_ != Transition::NONE || tcp_client_fd_ >= 0) return;
+    if (std::chrono::steady_clock::now() < explicit_request_hold_until_) return;
+    sendPayload(poll_motor_, {COMM_GET_VALUES});
+    poll_motor_ = poll_motor_ == 1 ? 2 : 1;
+  }
+
+  void command(const std::string &raw) {
+    const auto parts = split(raw, ':');
+    if (raw == "MODE:MAINTENANCE") { beginEnter(); return; }
+    if (raw == "MODE:RUNTIME" || raw == "MODE:NORMAL") { beginExit(); return; }
+    if (!maintenance_active_ || transition_ != Transition::NONE) { publishStatus("command_rejected_not_maintenance"); return; }
+    if (tcp_client_fd_ >= 0) { publishStatus("command_rejected_tcp_client_owns_maintenance"); return; }
+
+    explicit_request_hold_until_ = std::chrono::steady_clock::now() + 500ms;
+    int motor = 0; double value = 0.0;
+    if (parts.size() == 2 && parts[0] == "FW" && parseMotor(parts[1], &motor)) { sendPayload(motor, {COMM_FW_VERSION}); return; }
+    if (parts.size() == 2 && parts[0] == "VALUES" && parseMotor(parts[1], &motor)) { sendPayload(motor, {COMM_GET_VALUES}); return; }
+    if (parts.size() == 3 && parts[0] == "MCCONF" && parseMotor(parts[2], &motor)) {
+      if (parts[1] == "GET") sendPayload(motor, {COMM_GET_MCCONF});
+      else if (parts[1] == "DEFAULT") sendPayload(motor, {COMM_GET_MCCONF_DEFAULT});
+      else publishStatus("bad_mcconf_command");
+      return;
+    }
+    if (parts.size() == 3 && parts[0] == "APPCONF" && parseMotor(parts[2], &motor)) {
+      if (parts[1] == "GET") sendPayload(motor, {COMM_GET_APPCONF});
+      else if (parts[1] == "DEFAULT") sendPayload(motor, {COMM_GET_APPCONF_DEFAULT});
+      else publishStatus("bad_appconf_command");
+      return;
+    }
+    if (parts.size() == 4 && parts[0] == "SET" && parseMotor(parts[2], &motor) && parseDouble(parts[3], &value)) {
+      std::uint8_t id = 255U; double scale = 1.0, limit = std::numeric_limits<double>::infinity();
+      if (parts[1] == "DUTY") { id = COMM_SET_DUTY; scale = 1e5; limit = max_abs_duty_; }
+      else if (parts[1] == "CURRENT") { id = COMM_SET_CURRENT; scale = 1e3; limit = max_abs_current_a_; }
+      else if (parts[1] == "BRAKE") { id = COMM_SET_CURRENT_BRAKE; scale = 1e3; limit = max_abs_current_a_; }
+      else if (parts[1] == "HANDBRAKE") { id = COMM_SET_HANDBRAKE; scale = 1e3; limit = max_abs_current_a_; }
+      else if (parts[1] == "RPM") { id = COMM_SET_RPM; scale = 1.0; limit = max_abs_rpm_; }
+      else if (parts[1] == "POS") { id = COMM_SET_POS; scale = 1e6; limit = 360.0; }
+      if (id == 255U || std::abs(value) > limit) { publishStatus("setpoint_rejected_limit"); return; }
+      std::vector<std::uint8_t> p{id}; appendI32(p, static_cast<std::int32_t>(std::lround(value * scale))); sendPayload(motor, std::move(p)); return;
+    }
+    if (parts.size() == 4 && parts[0] == "DETECT" && parseMotor(parts[2], &motor) && parseDouble(parts[3], &value)) {
+      if (value <= 0.0 || value > std::min(5.0, max_abs_current_a_)) { publishStatus("detect_current_rejected"); return; }
+      std::uint8_t id = parts[1] == "ENCODER" ? COMM_DETECT_ENCODER : (parts[1] == "HALL" ? COMM_DETECT_HALL_FOC : 255U);
+      if (id == 255U) { publishStatus("bad_detect_command"); return; }
+      explicit_request_hold_until_ = std::chrono::steady_clock::now() + 30s;
+      std::vector<std::uint8_t> p{id}; appendI32(p, static_cast<std::int32_t>(std::lround(value * 1000.0))); sendPayload(motor, std::move(p)); return;
+    }
+    if (parts.size() == 2 && parts[0] == "ALIVE" && parseMotor(parts[1], &motor)) { sendPayload(motor, {COMM_ALIVE}); return; }
+    if (parts.size() == 2 && parts[0] == "REBOOT" && parseMotor(parts[1], &motor)) { sendPayload(motor, {COMM_REBOOT}); return; }
+    if (parts.size() >= 3 && parts[0] == "TERMINAL" && parseMotor(parts[1], &motor)) {
+      const auto prefix = std::string("TERMINAL:") + parts[1] + ":";
+      const std::string text = raw.substr(prefix.size());
+      if (text.empty() || text.size() > 192U) { publishStatus("terminal_command_rejected"); return; }
+      std::vector<std::uint8_t> p{COMM_TERMINAL_CMD}; p.insert(p.end(), text.begin(), text.end()); sendPayload(motor, std::move(p)); return;
+    }
+    if (parts.size() == 3 && parts[0] == "RAW" && parseMotor(parts[1], &motor)) {
+      std::vector<std::uint8_t> payload; if (!unhex(parts[2], &payload)) { publishStatus("raw_hex_invalid"); return; }
+      sendPayload(motor, std::move(payload)); return;
+    }
+    publishStatus("unknown_tool_command");
+  }
+
+  void consume(const std::vector<std::uint8_t> &bytes) {
+    if (tcp_client_fd_ >= 0 && maintenance_active_) queueTcpTx(bytes);
+    stream_.insert(stream_.end(), bytes.begin(), bytes.end());
+    if (stream_.size() > 8192U) stream_.erase(stream_.begin(), stream_.end() - 4096);
+    for (;;) {
+      while (!stream_.empty() && stream_[0] != 2U && stream_[0] != 3U && stream_[0] != 4U) stream_.erase(stream_.begin());
+      if (stream_.size() < 2U) return;
+      const auto start = stream_[0]; std::size_t h = 0, n = 0;
+      if (start == 2U) { h = 2U; n = stream_[1]; }
+      else if (start == 3U) { if (stream_.size() < 3U) return; h = 3U; n = (std::size_t(stream_[1]) << 8U) | stream_[2]; }
+      else { if (stream_.size() < 4U) return; h = 4U; n = (std::size_t(stream_[1]) << 16U) | (std::size_t(stream_[2]) << 8U) | stream_[3]; }
+      if (!n || n > 4096U) { stream_.erase(stream_.begin()); ++format_errors_; continue; }
+      const auto total = h + n + 3U; if (stream_.size() < total) return;
+      if (stream_[total - 1U] != 3U) { stream_.erase(stream_.begin()); ++format_errors_; continue; }
+      const auto expected = static_cast<std::uint16_t>((std::uint16_t(stream_[h + n]) << 8U) | stream_[h + n + 1U]);
+      const auto actual = crc16(stream_.data() + h, n);
+      if (expected == actual) handlePayload(std::vector<std::uint8_t>(stream_.begin() + static_cast<std::ptrdiff_t>(h), stream_.begin() + static_cast<std::ptrdiff_t>(h + n)));
+      else ++crc_errors_;
+      stream_.erase(stream_.begin(), stream_.begin() + static_cast<std::ptrdiff_t>(total));
+    }
+  }
+
+  void handlePayload(const std::vector<std::uint8_t> &p) {
+    if (p.empty()) return;
+    std_msgs::msg::String raw; std::ostringstream r;
+    r << "{\"motor\":" << last_request_motor_ << ",\"command_id\":" << static_cast<unsigned>(p[0])
+      << ",\"payload_hex\":\"" << hex(p) << "\"}"; raw.data = r.str(); raw_pub_->publish(raw);
+    if (p[0] == COMM_GET_VALUES && p.size() >= 59U) {
+      const unsigned id = p[58]; std_msgs::msg::String m; std::ostringstream o;
+      o << "{\"motor\":" << id << ",\"temp_mos_c\":" << double(i16(&p[1])) / 10.0
+        << ",\"temp_motor_c\":" << double(i16(&p[3])) / 10.0
+        << ",\"current_motor_a\":" << double(i32(&p[5])) / 100.0
+        << ",\"current_in_a\":" << double(i32(&p[9])) / 100.0
+        << ",\"id_a\":" << double(i32(&p[13])) / 100.0 << ",\"iq_a\":" << double(i32(&p[17])) / 100.0
+        << ",\"duty\":" << double(i16(&p[21])) / 1000.0 << ",\"rpm\":" << i32(&p[23])
+        << ",\"vbus_v\":" << double(i16(&p[27])) / 10.0 << ",\"fault\":" << static_cast<unsigned>(p[53])
+        << ",\"position_deg\":" << double(i32(&p[54])) / 1000000.0 << "}";
+      m.data = o.str(); telemetry_pub_->publish(m);
+    } else if (p[0] == COMM_FW_VERSION && p.size() >= 4U) {
+      std::string hw(reinterpret_cast<const char *>(&p[3]));
+      publishStatus(std::string("fw_") + std::to_string(p[1]) + "." + std::to_string(p[2]) + "_" + hw);
+    }
+  }
+
+  double poll_hz_{10.0}, max_abs_duty_{0.95}, max_abs_current_a_{20.0}, max_abs_rpm_{10000.0};
+  bool maintenance_active_{false}, transport_connected_{false}, tcp_enabled_{true};
+  int tcp_port_{65102}, tcp_server_fd_{-1}, tcp_client_fd_{-1};
+  double speed_mps_{0.0}; std::string mux_source_;
+  Transition transition_{Transition::NONE}; std::chrono::steady_clock::time_point transition_at_{};
+  std::chrono::steady_clock::time_point explicit_request_hold_until_{};
+  int poll_motor_{1}, last_request_motor_{1};
+  std::vector<std::uint8_t> stream_, tcp_pending_rx_, tcp_pending_tx_;
+  std::uint64_t crc_errors_{0}, format_errors_{0};
+
+  rclcpp::Publisher<std_msgs::msg::UInt8MultiArray>::SharedPtr tx_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr mode_pub_, status_pub_, telemetry_pub_, raw_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr active_pub_;
+  rclcpp::Subscription<std_msgs::msg::UInt8MultiArray>::SharedPtr rx_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr transport_sub_;
+  rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr speed_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr mux_sub_, command_sub_;
+  rclcpp::TimerBase::SharedPtr transition_timer_, poll_timer_, tcp_timer_;
+};
+
+int main(int argc, char **argv) {
+  rclcpp::init(argc, argv);
+  rclcpp::spin(std::make_shared<VescToolBridge>());
+  rclcpp::shutdown();
+  return 0;
+}

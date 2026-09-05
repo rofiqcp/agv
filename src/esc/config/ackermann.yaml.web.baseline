@@ -15,7 +15,11 @@ esc_ackermann:
     manual_release_hold_sec: 0.5
     speed_max: 1.0
     serial_left_max_deg: 90.0
+    # Direct-serial fallback scale only. Native VESC uses physical eRPM conversion.
     serial_right_max_rpm: 300.0
+    drive_wheel_radius_m: 0.145
+    drive_motor_pole_pairs: 15
+    drive_gear_ratio: 1.0
     wheelbase_m: 0.7
     track_width_m: 0.48
     min_speed_for_nav_steering_mps: 0.05
@@ -87,10 +91,14 @@ esc_ackermann:
     steering_center_bias_from_left_deg: 0.0
     steering_center_bias_from_right_deg: 0.0
     steering_calibration_apply_token: V8.2:1787392646867559142
-    # Primary selector: stable USB identity (PL2303 067b:2303).
+    # Runtime transport: F103 USART3 <-> F411 USART1 (PB10/PB11 <-> PB7/PB6) <-> USB CDC <-> ROS.
+    stm32_tx_topic: /stmf4/vesc/runtime_tx
+    stm32_rx_topic: /stmf4/vesc/rx
+    stm32_connected_topic: /stmf4/vesc/connected
+    # Direct USB serial selector is retained only as commissioning/recovery fallback.
     serial_auto_id_contains: Prolific_Technology_Inc._USB-Serial_Controller
     serial_auto_path_contains: usb-0:1.1:1.0
-    serial_baud: 115200
+    serial_baud: 2000000
     serial_tx_rate_hz: 50.0
     serial_reconnect_sec: 0.25
     serial_ack_timeout_sec: 0.6

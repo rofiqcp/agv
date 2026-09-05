@@ -21,3 +21,4 @@ stmf4_hmi_bridge:
     neo3_mag_frame_id: gnss_link
     neo3_mag_sigma_ut: 3.0
     publish_stm32_gnss: true
+    vesc_transport_timeout_sec: 2.0

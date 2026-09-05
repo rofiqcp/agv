@@ -19,6 +19,13 @@ find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 
+if(BUILD_TESTING)
+  enable_testing()
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME stmf4_gateway_self_check
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/stmf4_gateway_self_check.py)
+endif()
+
 add_executable(stmf4_hmi_bridge src/stmf4_hmi_bridge.cpp)
 ament_target_dependencies(stmf4_hmi_bridge rclcpp action_msgs geometry_msgs nav_msgs sensor_msgs std_msgs)
 
