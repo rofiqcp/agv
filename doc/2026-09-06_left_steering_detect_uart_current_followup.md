@@ -28,3 +28,11 @@ Tanggal: 2026-09-06
 - Firmware commit/push: `9888ed5 fix: stabilize steering detect uart and current baseline`.
 - Kalibrasi hard-stop, center, dan pembuktian fisik -30/0/+30 belum dinyatakan PASS karena belum ada edge ABI terukur.
 - Safeguard remote menolak aktuasi detect berikutnya setelah instrumentasi edge terbaru; tidak dilakukan bypass.
+
+## Manual encoder pin diagnostic follow-up
+- Firmware checkpoint `a0d3bda` menambahkan edge counter PB5/PB6/PB7 dan menginisialisasi level awal dari GPIO aktual agar tidak ada false first-edge setelah boot.
+- Pole motor dipastikan kembali ke identitas hardware: LEFT 4 pole-pair (8 poles), RIGHT 15 pole-pair (30 poles), dengan migrasi speed EEPROM yang mempertahankan kecepatan mekanik.
+- `tools/run_all_checks.py`: `ALL_FINAL_HOST_CHECKS_PASS`.
+- APP_STLINK flash + verify: PASS.
+- FW probe setelah boot: VESC FW 6.00 / `motor_left` PASS.
+- Baseline hardware sesudah reboot: PB5 edge=0, PB6 edge=0, PB7 edge=0, TIM4 CNT=0. Baseline ini siap untuk uji putar manual berikutnya.
