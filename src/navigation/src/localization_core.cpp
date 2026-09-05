@@ -1557,6 +1557,8 @@ private:
       "/system/motion_localization_ready", stateQos());
     mode_pub_ = create_publisher<std_msgs::msg::String>(
       "/system/localization_state", stateQos());
+    map_yaw_offset_pub_ = create_publisher<std_msgs::msg::Float64>(
+      "/localization/map_yaw_from_enu", stateQos());
     gnss_status_pub_ = create_publisher<std_msgs::msg::String>(
       "/system/gnss_status", stateQos());
     imu_status_pub_ = create_publisher<std_msgs::msg::String>(
@@ -2624,6 +2626,7 @@ private:
     bool velocity_fusion_active_status = false;
     bool cog_fusion_active_status = false;
     bool global_yaw_fusion_fresh_status = false;
+    double map_yaw_from_enu_status = 0.0;
 
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -2743,6 +2746,8 @@ private:
       velocity_fusion_active_status = gnss_velocity_fusion_active_;
       cog_fusion_active_status = gnss_cog_fusion_active_;
       global_yaw_fusion_fresh_status = globalYawFusionFreshUnlocked();
+      map_yaw_from_enu_status = navigation_math::normalizeAngle(
+        map_yaw_from_enu_rad_ + map_calibration_.yaw);
       if (anchor_valid_ && have_odom_) map_base = navigation_math::mapBaseFromOdom(anchor_map_odom_, odom_base_);
       detail = last_reject_reason_;
     }
@@ -2756,6 +2761,10 @@ private:
       imu_ax = nan; imu_ay = nan; imu_az = nan;
     }
     if (!mag_data_fresh) { imu_mx_ut = nan; imu_my_ut = nan; imu_mz_ut = nan; }
+
+    std_msgs::msg::Float64 map_yaw_msg;
+    map_yaw_msg.data = map_yaw_from_enu_status;
+    map_yaw_offset_pub_->publish(map_yaw_msg);
 
     std_msgs::msg::Bool pmsg;
     pmsg.data = planning_ready;
@@ -3159,6 +3168,7 @@ private:
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr planning_ready_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr motion_ready_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr mode_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr map_yaw_offset_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr gnss_status_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr imu_status_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr ekf_local_status_pub_;

@@ -401,6 +401,13 @@ def _validate_operator_mode(context):
     return []
 
 
+def _validate_gnss_source(context):
+    source = LaunchConfiguration('gnss_source').perform(context).strip().lower()
+    if source not in {'stm32', 'usb'}:
+        raise RuntimeError("gnss_source wajib tepat salah satu: stm32 atau usb")
+    return []
+
+
 def generate_launch_description() -> LaunchDescription:
     _guard_single_autonomous_instance()
     nav_share = get_package_share_directory('navigation')
@@ -438,6 +445,7 @@ def generate_launch_description() -> LaunchDescription:
     navigation_core_params = os.path.join(nav_config_dir, 'navigation_core.yaml')
     vehicle_params = os.path.join(nav_config_dir, 'vehicle.yaml')
     imu_params = os.path.join(nav_config_dir, 'imu.yaml')
+    mag_heading_params = os.path.join(nav_config_dir, 'mag_heading.yaml')
     mppi_closed_loop_params = os.path.join(nav_config_dir, 'mppi_closed_loop.yaml')
     trajectory_safety_params = os.path.join(nav_config_dir, 'trajectory_safety.yaml')
     stage3_params = os.path.join(nav_config_dir, 'stage3_navigation.yaml')
@@ -515,6 +523,7 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('esc_port', default_value='auto'),
         DeclareLaunchArgument('esc_serial_enabled', default_value='true'),
         DeclareLaunchArgument('start_gnss', default_value='true'),
+        DeclareLaunchArgument('gnss_source', default_value='stm32', description='GNSS transport: stm32 | usb'),
         DeclareLaunchArgument('start_imu', default_value='true'),
         DeclareLaunchArgument('gnss_port', default_value='auto'),
         DeclareLaunchArgument('imu_port', default_value='auto'),
@@ -573,7 +582,7 @@ def generate_launch_description() -> LaunchDescription:
     )
     gnss = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(nav_share, 'launch', 'gnss.launch.py')),
-        condition=IfCondition(LaunchConfiguration('start_gnss')),
+        condition=IfCondition(PythonExpression(["'", LaunchConfiguration('start_gnss'), "' == 'true' and '", LaunchConfiguration('gnss_source'), "'.lower() == 'usb'"])),
         launch_arguments={'port': LaunchConfiguration('gnss_port'), 'baudrate': '38400',
                           'frame_id': 'gnss_link', 'velocity_frame_id': 'enu',
                           'use_sim_time': LaunchConfiguration('use_sim_time')}.items(),
@@ -588,7 +597,7 @@ def generate_launch_description() -> LaunchDescription:
 
     hmi_bridge = Node(
         package='stmf4', executable='stmf4_hmi_bridge', name='stmf4_hmi_bridge', output='screen',
-        condition=IfCondition(LaunchConfiguration('start_hmi')),
+        condition=IfCondition(PythonExpression(["'", LaunchConfiguration('start_hmi'), "' == 'true' or ('", LaunchConfiguration('start_gnss'), "' == 'true' and '", LaunchConfiguration('gnss_source'), "'.lower() == 'stm32')"])),
         respawn=True, respawn_delay=2.0,
         parameters=[hmi_params, {
             'serial_device': LaunchConfiguration('hmi_port'),
@@ -635,6 +644,11 @@ def generate_launch_description() -> LaunchDescription:
         package='navigation', executable='localization_core', name='localization_core',
         output='screen', respawn=True, respawn_delay=2.0,
         parameters=[localization_params, {'use_sim_time': LaunchConfiguration('use_sim_time')}],
+    )
+    mag_heading_fusion = Node(
+        package='navigation', executable='mag_heading_fusion', name='mag_heading_fusion',
+        output='screen', respawn=True, respawn_delay=2.0,
+        parameters=[mag_heading_params, {'use_sim_time': LaunchConfiguration('use_sim_time')}],
     )
 
     perception_mode_valid = PythonExpression([
@@ -975,12 +989,14 @@ def generate_launch_description() -> LaunchDescription:
     # Tidak ada delay buatan sehingga EKF/localization segera menerima sensor.
     return LaunchDescription(args + environment + [
         OpaqueFunction(function=_validate_operator_mode),
+        OpaqueFunction(function=_validate_gnss_source),
         OpaqueFunction(
             function=_validate_perception_request,
             args=[perception_package_available, perception_camera_executable_available,
                   perception_cpu_executable_available, perception_gpu_executable_available]),
         LogInfo(msg=['[AGV] autonomous stack | mode=', LaunchConfiguration('mode'),
                      ' | velocity smoother + measured steering calibration + safety gates enabled']),
+        LogInfo(msg=['[AGV] GNSS source=', LaunchConfiguration('gnss_source'), ' | stm32=NEO3 via HMI USB CDC; usb=legacy direct receiver']),
         LogInfo(
             condition=IfCondition(perception_requested_but_unavailable),
             msg='[AGV] ERROR: package perception/camera backend tidak tersedia.'),

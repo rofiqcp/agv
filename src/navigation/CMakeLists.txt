@@ -80,6 +80,10 @@ add_executable(imu_node src/imu_node.cpp)
 target_include_directories(imu_node PRIVATE include)
 ament_target_dependencies(imu_node rclcpp sensor_msgs std_msgs)
 
+# Tilt-compensated independent heading observations from Yahboom MAG + NEO3 IST8310.
+add_executable(mag_heading_fusion src/mag_heading_fusion_node.cpp)
+ament_target_dependencies(mag_heading_fusion rclcpp sensor_msgs std_msgs geometry_msgs)
+
 # Lightweight /joint_states bridge so robot_state_publisher can publish TF for
 # steering/wheel links and the embedded RViz always shows the complete URDF.
 add_executable(joint_state_visualizer src/joint_state_visualizer.cpp)
@@ -205,6 +209,7 @@ endif()
 install(TARGETS
     gnss_node
     imu_node
+    mag_heading_fusion
     joint_state_visualizer
     localization_core
     cmd_vel_router

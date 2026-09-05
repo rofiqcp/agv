@@ -12,6 +12,7 @@
 #include <sys/file.h>
 #include <sys/ioctl.h>
 #include <iomanip>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -24,10 +25,13 @@
 
 #include "action_msgs/srv/cancel_goal.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
+#include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
+#include "geometry_msgs/msg/twist_with_covariance_stamped.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/imu.hpp"
+#include "sensor_msgs/msg/magnetic_field.hpp"
 #include "sensor_msgs/msg/nav_sat_fix.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/float64.hpp"
@@ -119,6 +123,7 @@ public:
       std::chrono::duration<double>(1.0 / telemetry_rate_hz_), std::bind(&StmF4HmiBridge::telemetryTick, this));
     heartbeat_timer_ = create_wall_timer(500ms, [this]() {
       if (fd_ >= 0) (void)sendLine("ROS:1");
+      sensorWatchdogTick();
     });
     command_timer_ = create_wall_timer(
       std::chrono::duration<double>(1.0 / command_rate_hz_), std::bind(&StmF4HmiBridge::commandTick, this));
@@ -168,6 +173,11 @@ private:
     declare_parameter<std::string>("default_mode", "AUTO");
     declare_parameter<std::string>("waypoint_file", "/home/otomasi/ros/data/hmi_waypoints.tsv");
     declare_parameter<double>("waypoint_pose_timeout_sec", 2.5);
+    declare_parameter<double>("neo3_sensor_timeout_sec", 2.0);
+    declare_parameter<std::string>("neo3_gnss_frame_id", "gnss_link");
+    declare_parameter<std::string>("neo3_mag_frame_id", "gnss_link");
+    declare_parameter<double>("neo3_mag_sigma_ut", 3.0);
+    declare_parameter<bool>("publish_stm32_gnss", true);
   }
 
   void readParameters() {
@@ -187,6 +197,11 @@ private:
     mode_ = upper(trim(get_parameter("default_mode").as_string())) == "MANUAL" ? "MANUAL" : "AUTO";
     waypoint_file_ = get_parameter("waypoint_file").as_string();
     waypoint_pose_timeout_sec_ = std::clamp(get_parameter("waypoint_pose_timeout_sec").as_double(), 0.25, 10.0);
+    neo3_sensor_timeout_sec_ = std::clamp(get_parameter("neo3_sensor_timeout_sec").as_double(), 0.5, 10.0);
+    neo3_gnss_frame_id_ = get_parameter("neo3_gnss_frame_id").as_string();
+    neo3_mag_frame_id_ = get_parameter("neo3_mag_frame_id").as_string();
+    neo3_mag_sigma_ut_ = std::clamp(get_parameter("neo3_mag_sigma_ut").as_double(), 0.1, 100.0);
+    publish_stm32_gnss_ = get_parameter("publish_stm32_gnss").as_bool();
     if (serial_baud_ != 115200) throw std::runtime_error("stmf4 currently requires serial_baud=115200");
   }
 
@@ -269,11 +284,31 @@ private:
     status_pub_ = create_publisher<std_msgs::msg::String>("/hmi/status", stateQos());
     cmd_pub_ = create_publisher<geometry_msgs::msg::Twist>("/hmi/cmd_vel", 10);
     source_pub_ = create_publisher<std_msgs::msg::String>("/hmi/active_source", stateQos());
+    neo3_fix_raw_pub_ = create_publisher<sensor_msgs::msg::NavSatFix>("/gnss/fix_raw", rclcpp::SensorDataQoS().keep_last(5));
+    neo3_fix_pub_ = create_publisher<sensor_msgs::msg::NavSatFix>("/gnss/fix", rclcpp::SensorDataQoS().keep_last(5));
+    neo3_vel_pub_ = create_publisher<geometry_msgs::msg::TwistWithCovarianceStamped>("/gnss/vel", rclcpp::SensorDataQoS().keep_last(5));
+    neo3_quality_pub_ = create_publisher<std_msgs::msg::Float64MultiArray>("/gnss/quality", rclcpp::SensorDataQoS().keep_last(5));
+    neo3_gnss_state_pub_ = create_publisher<std_msgs::msg::String>("/gnss/state", stateQos());
+    neo3_gnss_connected_pub_ = create_publisher<std_msgs::msg::Bool>("/gnss/connected", stateQos());
+    neo3_mag_pub_ = create_publisher<sensor_msgs::msg::MagneticField>("/neo3/mag", rclcpp::SensorDataQoS().keep_last(10));
+    neo3_ist_connected_pub_ = create_publisher<std_msgs::msg::Bool>("/neo3/ist8310_connected", stateQos());
+    neo3_safety_switch_pub_ = create_publisher<std_msgs::msg::Bool>("/neo3/safety_switch", stateQos());
+    neo3_status_pub_ = create_publisher<std_msgs::msg::String>("/neo3/status", stateQos());
     goal_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("/navigation/goal_request", 10);
     cancel_nav_client_ = create_client<action_msgs::srv::CancelGoal>("/navigate_to_pose/_action/cancel_goal");
 
     request_sub_ = create_subscription<std_msgs::msg::String>("/hmi/request", 10,
       [this](std_msgs::msg::String::ConstSharedPtr msg) { handleRequest(msg->data); });
+    neo3_command_sub_ = create_subscription<std_msgs::msg::String>("/neo3/command", 10,
+      [this](std_msgs::msg::String::ConstSharedPtr msg) {
+        const std::string command = upper(trim(msg->data));
+        if (command == "LED:AUTO" || command == "LED:ON" || command == "LED:OFF" ||
+            command == "BUZZER:OFF" || command == "STATUS" || command.rfind("BEEP:", 0) == 0) {
+          (void)sendLine("NEO:" + command);
+        } else {
+          RCLCPP_WARN(get_logger(), "Rejected /neo3/command: %s", msg->data.c_str());
+        }
+      });
     boolSub("/gnss/connected", gnss_ready_);
     boolSub("/imu/connected", imu_ready_);
     boolSub("/perception/camera_connected", camera_ready_);
@@ -566,6 +601,8 @@ private:
     sendLine("PING");
     sendLine("GET:STATE");
     sendLine("MODE:" + mode_);
+    sendLine("NEO:LED:AUTO");
+    sendLine("NEO:STATUS");
     return true;
   }
 
@@ -648,8 +685,264 @@ private:
     }
   }
 
+  bool parseCsvNumbers(const std::string &payload, size_t expected_min, std::vector<double> &values) {
+    values.clear();
+    std::stringstream ss(payload);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+      item = trim(item);
+      if (item.empty()) return false;
+      char *end = nullptr;
+      errno = 0;
+      const double value = std::strtod(item.c_str(), &end);
+      if (errno != 0 || end == item.c_str() || *end != '\0' || !std::isfinite(value)) return false;
+      values.push_back(value);
+    }
+    return values.size() >= expected_min;
+  }
+
+  static double normalizeAngle(double a) {
+    while (a > kPi) a -= 2.0 * kPi;
+    while (a <= -kPi) a += 2.0 * kPi;
+    return a;
+  }
+
+  void publishNeo3Connected(bool connected) {
+    if (neo3_gnss_connected_state_ == connected && neo3_gnss_connected_initialized_) return;
+    neo3_gnss_connected_state_ = connected;
+    neo3_gnss_connected_initialized_ = true;
+    std_msgs::msg::Bool b; b.data = connected;
+    neo3_gnss_connected_pub_->publish(b);
+  }
+
+  void publishGnssState(const char *source, bool receiver_valid, int fix_type, int satellites,
+                        double hacc_m, double pdop) {
+    std_msgs::msg::String state;
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(3)
+        << "{\"source\":\"" << source << "\",\"transport\":\"stm32f411_usb_cdc\""
+        << ",\"receiver_valid\":" << (receiver_valid ? "true" : "false")
+        << ",\"fix_type\":" << fix_type << ",\"satellites\":" << satellites
+        << ",\"hacc_m\":" << hacc_m << ",\"dop\":" << pdop << "}";
+    state.data = out.str();
+    neo3_gnss_state_pub_->publish(state);
+  }
+
+  void publishGnssMeasurement(const rclcpp::Time &stamp, int source_id, int fix_type,
+                              bool receiver_valid, int satellites, double lat, double lon,
+                              double alt, double hacc, double vacc, double vel_n,
+                              double vel_e, double vel_d, double ground_speed,
+                              double course_ned_deg, double sacc, double head_acc_deg,
+                              double pdop, double itow_ms, double pvt_rate_hz,
+                              double flags2, double flags3, bool velocity_valid) {
+    if (!std::isfinite(lat) || !std::isfinite(lon) || std::abs(lat) > 90.0 ||
+        std::abs(lon) > 180.0 || (std::abs(lat) < 1.0e-12 && std::abs(lon) < 1.0e-12)) return;
+
+    sensor_msgs::msg::NavSatFix fix;
+    fix.header.stamp = stamp;
+    fix.header.frame_id = neo3_gnss_frame_id_;
+    fix.status.status = receiver_valid ? sensor_msgs::msg::NavSatStatus::STATUS_FIX :
+                                           sensor_msgs::msg::NavSatStatus::STATUS_NO_FIX;
+    fix.status.service = sensor_msgs::msg::NavSatStatus::SERVICE_GPS;
+    fix.latitude = lat;
+    fix.longitude = lon;
+    fix.altitude = std::isfinite(alt) ? alt : 0.0;
+    const double h_sigma = std::clamp(std::isfinite(hacc) && hacc > 0.0 ? hacc : 100.0, 0.02, 1000.0);
+    const double v_sigma = std::clamp(std::isfinite(vacc) && vacc > 0.0 ? vacc : h_sigma * 1.5, 0.03, 1500.0);
+    fix.position_covariance.fill(0.0);
+    fix.position_covariance[0] = h_sigma * h_sigma;
+    fix.position_covariance[4] = h_sigma * h_sigma;
+    fix.position_covariance[8] = v_sigma * v_sigma;
+    fix.position_covariance_type = sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_DIAGONAL_KNOWN;
+    neo3_fix_raw_pub_->publish(fix);
+    neo3_fix_pub_->publish(fix);
+
+    const double course_ned_rad = course_ned_deg * kPi / 180.0;
+    const double course_enu_rad = normalizeAngle(0.5 * kPi - course_ned_rad);
+    if (velocity_valid && std::isfinite(vel_n) && std::isfinite(vel_e) && std::isfinite(vel_d)) {
+      geometry_msgs::msg::TwistWithCovarianceStamped vel;
+      vel.header = fix.header;
+      vel.twist.twist.linear.x = vel_e;
+      vel.twist.twist.linear.y = vel_n;
+      vel.twist.twist.linear.z = -vel_d;  // UBX NED Down -> ROS ENU Up
+      const double sigma = std::clamp(std::isfinite(sacc) && sacc >= 0.0 ? sacc : 5.0, 0.01, 10.0);
+      vel.twist.covariance.fill(0.0);
+      vel.twist.covariance[0] = sigma * sigma;
+      vel.twist.covariance[7] = sigma * sigma;
+      vel.twist.covariance[14] = sigma * sigma * 2.0;
+      vel.twist.covariance[21] = 1.0e6;
+      vel.twist.covariance[28] = 1.0e6;
+      vel.twist.covariance[35] = 1.0e6;
+      neo3_vel_pub_->publish(vel);
+    }
+
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    std_msgs::msg::Float64MultiArray quality;
+    quality.data.assign(45, nan);
+    quality.data[0] = static_cast<double>(satellites);
+    quality.data[1] = pdop;
+    quality.data[2] = h_sigma;
+    quality.data[3] = static_cast<double>(fix_type);
+    quality.data[4] = static_cast<double>(source_id);
+    quality.data[5] = sacc;
+    quality.data[6] = ground_speed;
+    quality.data[7] = course_enu_rad;
+    quality.data[8] = head_acc_deg * kPi / 180.0;
+    quality.data[9] = itow_ms;
+    quality.data[10] = v_sigma;
+    quality.data[11] = vel_e;
+    quality.data[12] = vel_n;
+    quality.data[13] = vel_d;
+    quality.data[20] = 0.0;  // NAV-COV position not transported by compact MCU frame
+    // NAV-PVT sAcc plus the explicit velocity covariance above is a valid velocity
+    // uncertainty source even when NAV-COV is not forwarded by the MCU.
+    quality.data[21] = velocity_valid ? 1.0 : 0.0;
+    quality.data[22] = pvt_rate_hz;
+    quality.data[23] = 0.0;  // host receive age; bounded by USB frame watchdog
+    quality.data[24] = 0.0;  // arrival timestamp source
+    quality.data[25] = flags2;
+    quality.data[26] = flags3;
+    quality.data[44] = receiver_valid ? 1.0 : 0.0;
+    neo3_quality_pub_->publish(quality);
+
+    last_neo3_gnss_time_ = std::chrono::steady_clock::now();
+    publishNeo3Connected(true);
+    publishGnssState(source_id == 1 ? "STM32_UBX_NAV_PVT" : "STM32_NMEA_FALLBACK",
+                     receiver_valid, fix_type, satellites, h_sigma, pdop);
+  }
+
+  void handleNeo3Gnss(const std::string &payload) {
+    if (!publish_stm32_gnss_) return;
+    std::vector<double> v;
+    if (!parseCsvNumbers(payload, 23, v)) {
+      ++neo3_parse_errors_;
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "Malformed SENS:GNSS frame");
+      return;
+    }
+    const int fix_type = static_cast<int>(std::lround(v[3]));
+    const bool fix_ok = v[4] > 0.5;
+    const bool invalid_llh = v[5] > 0.5;
+    const bool receiver_valid = fix_ok && !invalid_llh && (fix_type == 3 || fix_type == 4);
+    publishGnssMeasurement(now(), 1, fix_type, receiver_valid,
+      static_cast<int>(std::lround(v[6])), v[7], v[8], v[9], v[10], v[11],
+      v[12], v[13], v[14], v[15], v[16], v[17], v[18], v[19], v[2], v[20],
+      v[21], v[22], true);
+  }
+
+  void handleNeo3GnssFallback(const std::string &payload) {
+    if (!publish_stm32_gnss_) return;
+    std::vector<double> v;
+    if (!parseCsvNumbers(payload, 10, v)) {
+      ++neo3_parse_errors_;
+      return;
+    }
+    const int nmea_fix = static_cast<int>(std::lround(v[2]));
+    const int sats = static_cast<int>(std::lround(v[3]));
+    const double hdop = v[7];
+    const double speed = v[8];
+    const double course_deg = v[9];
+    const bool receiver_valid = nmea_fix > 0 && sats >= 3 && std::isfinite(hdop) && hdop > 0.0;
+    const bool velocity_valid = receiver_valid && speed >= 0.0 && course_deg >= 0.0;
+    const double theta = course_deg * kPi / 180.0;
+    const double vel_n = velocity_valid ? speed * std::cos(theta) : 0.0;
+    const double vel_e = velocity_valid ? speed * std::sin(theta) : 0.0;
+    const double hacc = std::clamp(hdop * 2.5 / 1.1774, 0.5, 100.0);
+    // source=3 deliberately prevents fallback NMEA velocity/COG from entering the
+    // strict Doppler fusion gate; it remains useful for position and HMI display.
+    publishGnssMeasurement(now(), 3, nmea_fix, receiver_valid, sats, v[4], v[5], v[6],
+      hacc, hacc * 1.5, vel_n, vel_e, 0.0, speed, course_deg, 5.0, 90.0,
+      hdop, 0.0, 1.0, 0.0, 0.0, velocity_valid);
+  }
+
+  void handleNeo3Mag(const std::string &payload) {
+    std::vector<double> v;
+    if (!parseCsvNumbers(payload, 7, v)) {
+      ++neo3_parse_errors_;
+      return;
+    }
+    if (v[6] <= 0.5) return;
+    sensor_msgs::msg::MagneticField mag;
+    mag.header.stamp = now();
+    mag.header.frame_id = neo3_mag_frame_id_;
+    mag.magnetic_field.x = v[2] * 1.0e-6;
+    mag.magnetic_field.y = v[3] * 1.0e-6;
+    mag.magnetic_field.z = v[4] * 1.0e-6;
+    const double sigma_t = neo3_mag_sigma_ut_ * 1.0e-6;
+    mag.magnetic_field_covariance.fill(0.0);
+    mag.magnetic_field_covariance[0] = sigma_t * sigma_t;
+    mag.magnetic_field_covariance[4] = sigma_t * sigma_t;
+    mag.magnetic_field_covariance[8] = sigma_t * sigma_t;
+    neo3_mag_pub_->publish(mag);
+    last_neo3_mag_time_ = std::chrono::steady_clock::now();
+    if (!neo3_ist_connected_state_) {
+      neo3_ist_connected_state_ = true;
+      std_msgs::msg::Bool b; b.data = true; neo3_ist_connected_pub_->publish(b);
+    }
+  }
+
+  void handleNeo3Hardware(const std::string &payload) {
+    std::vector<double> v;
+    if (!parseCsvNumbers(payload, 8, v)) {
+      ++neo3_parse_errors_;
+      return;
+    }
+    const bool gnss_alive = v[2] > 0.5;
+    const bool gnss_ready = v[3] > 0.5;
+    const bool ist_ok = v[4] > 0.5;
+    const bool sw = v[5] > 0.5;
+    const bool led = v[6] > 0.5;
+    if (publish_stm32_gnss_) publishNeo3Connected(gnss_alive);
+    if (neo3_ist_connected_state_ != ist_ok) {
+      neo3_ist_connected_state_ = ist_ok;
+      std_msgs::msg::Bool b; b.data = ist_ok; neo3_ist_connected_pub_->publish(b);
+    }
+    if (neo3_switch_state_ != sw || !neo3_switch_initialized_) {
+      neo3_switch_state_ = sw;
+      neo3_switch_initialized_ = true;
+      std_msgs::msg::Bool b; b.data = sw; neo3_safety_switch_pub_->publish(b);
+    }
+    std_msgs::msg::String status;
+    std::ostringstream out;
+    out << "{\"gnss_alive\":" << (gnss_alive ? "true" : "false")
+        << ",\"gnss_ready\":" << (gnss_ready ? "true" : "false")
+        << ",\"ist8310\":" << (ist_ok ? "true" : "false")
+        << ",\"safety_switch\":" << (sw ? "true" : "false")
+        << ",\"safety_led\":" << (led ? "true" : "false")
+        << ",\"gnss_config_attempts\":" << static_cast<int>(std::lround(v[7]))
+        << ",\"parse_errors\":" << neo3_parse_errors_ << "}";
+    status.data = out.str();
+    neo3_status_pub_->publish(status);
+  }
+
+  void handleNeo3Switch(const std::string &payload) {
+    std::vector<double> v;
+    if (!parseCsvNumbers(payload, 3, v)) return;
+    neo3_switch_state_ = v[2] > 0.5;
+    neo3_switch_initialized_ = true;
+    std_msgs::msg::Bool b; b.data = neo3_switch_state_;
+    neo3_safety_switch_pub_->publish(b);
+  }
+
+  void sensorWatchdogTick() {
+    const auto t = std::chrono::steady_clock::now();
+    if (publish_stm32_gnss_ && last_neo3_gnss_time_.time_since_epoch().count() != 0 &&
+        t - last_neo3_gnss_time_ > std::chrono::duration<double>(neo3_sensor_timeout_sec_)) {
+      publishNeo3Connected(false);
+    }
+    if (neo3_ist_connected_state_ && last_neo3_mag_time_.time_since_epoch().count() != 0 &&
+        t - last_neo3_mag_time_ > std::chrono::duration<double>(neo3_sensor_timeout_sec_)) {
+      neo3_ist_connected_state_ = false;
+      std_msgs::msg::Bool b; b.data = false; neo3_ist_connected_pub_->publish(b);
+    }
+  }
+
   void handleHmiLine(const std::string &line) {
     last_rx_ = std::chrono::steady_clock::now();
+    if (line.rfind("SENS:GNSS:", 0) == 0) { handleNeo3Gnss(line.substr(10)); return; }
+    if (line.rfind("SENS:GNSSF:", 0) == 0) { handleNeo3GnssFallback(line.substr(11)); return; }
+    if (line.rfind("SENS:MAG:", 0) == 0) { handleNeo3Mag(line.substr(9)); return; }
+    if (line.rfind("SENS:HW:", 0) == 0) { handleNeo3Hardware(line.substr(8)); return; }
+    if (line.rfind("SENS:SW:", 0) == 0) { handleNeo3Switch(line.substr(8)); return; }
     if (line.rfind("[TOUCH]", 0) == 0) {
       RCLCPP_INFO(get_logger(), "%s", line.c_str());
       return;
@@ -902,6 +1195,9 @@ private:
   int serial_baud_{115200};
   double reconnect_sec_{0.5}, telemetry_rate_hz_{10.0}, command_rate_hz_{30.0}, heartbeat_sec_{5.0};
   double waypoint_pose_timeout_sec_{2.5};
+  double neo3_sensor_timeout_sec_{2.0}, neo3_mag_sigma_ut_{3.0};
+  bool publish_stm32_gnss_{true};
+  std::string neo3_gnss_frame_id_{"gnss_link"}, neo3_mag_frame_id_{"gnss_link"};
   double manual_speed_max_mps_{1.0}, hmi_steer_full_scale_deg_{90.0}, teleop_yaw_max_rps_{80.0 * kPi / 180.0};
   int speed_min_pct_{10}, speed_max_pct_{50}, manual_speed_pct_{20};
   bool invert_hmi_steering_{true};
@@ -925,6 +1221,11 @@ private:
   double steering_target_rad_{0.0}, steering_actual_rad_{0.0}, motor_rpm_{0.0};
   int satellites_{0}, fix_type_{0}, obstacle_count_{0};
   bool drivable_valid_{false};
+  bool neo3_gnss_connected_state_{false}, neo3_gnss_connected_initialized_{false};
+  bool neo3_ist_connected_state_{false};
+  bool neo3_switch_state_{false}, neo3_switch_initialized_{false};
+  uint64_t neo3_parse_errors_{0};
+  std::chrono::steady_clock::time_point last_neo3_gnss_time_{}, last_neo3_mag_time_{};
   std::string nearest_object_{"NONE"};
   double nearest_distance_m_{0.0}, nearest_conf_pct_{0.0}, camera_fps_{0.0};
 
@@ -934,8 +1235,14 @@ private:
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr manual_state_pub_, status_pub_, source_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr goal_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr neo3_fix_raw_pub_, neo3_fix_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::TwistWithCovarianceStamped>::SharedPtr neo3_vel_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr neo3_quality_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr neo3_gnss_state_pub_, neo3_status_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr neo3_gnss_connected_pub_, neo3_ist_connected_pub_, neo3_safety_switch_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::MagneticField>::SharedPtr neo3_mag_pub_;
   rclcpp::Client<action_msgs::srv::CancelGoal>::SharedPtr cancel_nav_client_;
-  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr request_sub_, esc_status_sub_, obstacle_sub_, drivable_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr request_sub_, neo3_command_sub_, esc_status_sub_, obstacle_sub_, drivable_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr performance_sub_, nav_goal_state_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr map_pose_sub_;
   rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr fix_sub_;

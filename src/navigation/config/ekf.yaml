@@ -1,4 +1,5 @@
-# Sensor ownership: GNSS -> vx/COG; IMU -> gyro-z during motion; magnetic yaw only seeds map heading at standstill.
+# Sensor ownership: GNSS -> vx/COG; IMU -> relative inertial yaw+gyro-z;
+# NEO3 IST8310 + Yahboom magnetometer -> independently gated absolute map yaw.
 # Local EKF owns odom->base_footprint; LocalizationCore alone owns map->odom.
 ekf_filter_node_odom:
   ros__parameters:
@@ -52,7 +53,7 @@ ekf_filter_node_odom:
     - false
     - false
     - false
-    - false
+    - true
     - false
     - false
     - false
@@ -65,7 +66,7 @@ ekf_filter_node_odom:
     imu0_queue_size: 50
     imu0_nodelay: true
     imu0_differential: false
-    imu0_relative: false
+    imu0_relative: true
     imu0_remove_gravitational_acceleration: false
     process_noise_covariance:
     - 0.05
@@ -377,9 +378,9 @@ ekf_filter_node_map:
     twist0_queue_size: 12
     twist0_nodelay: true
     twist0_rejection_threshold: 10.0
-    # GNSS COG absolute heading is the moving absolute-yaw authority.
-    # IMU contributes gyro-Z only; magnetic absolute yaw is used only by
-    # LocalizationCore as a startup seed and is not continuously fused here.
+    # GNSS COG is the motion-qualified absolute heading source. Two independent
+    # tilt-compensated magnetometers provide lower-weight absolute heading while
+    # the IMU contributes relative yaw + gyro-Z for short-term dynamics.
     pose0: /gnss/cog_heading_fusion
     pose0_config:
     - false
@@ -401,6 +402,51 @@ ekf_filter_node_map:
     pose0_nodelay: true
     pose0_differential: false
     pose0_relative: false
+    pose0_rejection_threshold: 4.0
+    pose1: /neo3/mag_heading_fusion
+    pose1_config:
+    - false
+    - false
+    - false
+    - false
+    - false
+    - true
+    - false
+    - false
+    - false
+    - false
+    - false
+    - false
+    - false
+    - false
+    - false
+    pose1_queue_size: 10
+    pose1_nodelay: true
+    pose1_differential: false
+    pose1_relative: false
+    pose1_rejection_threshold: 4.0
+    pose2: /imu/mag_heading_fusion
+    pose2_config:
+    - false
+    - false
+    - false
+    - false
+    - false
+    - true
+    - false
+    - false
+    - false
+    - false
+    - false
+    - false
+    - false
+    - false
+    - false
+    pose2_queue_size: 10
+    pose2_nodelay: true
+    pose2_differential: false
+    pose2_relative: false
+    pose2_rejection_threshold: 4.0
     imu0: /imu/data
     imu0_config:
     - false
@@ -408,7 +454,7 @@ ekf_filter_node_map:
     - false
     - false
     - false
-    - false
+    - true
     - false
     - false
     - false
@@ -421,7 +467,7 @@ ekf_filter_node_map:
     imu0_queue_size: 30
     imu0_nodelay: true
     imu0_differential: false
-    imu0_relative: false
+    imu0_relative: true
     process_noise_covariance:
     - 0.05
     - 0.0

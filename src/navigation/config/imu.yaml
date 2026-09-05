@@ -65,7 +65,7 @@ data_imu_node:
     - 0.25
     - 0.36
     mag_scale_tesla_per_lsb: 1.0e-07
-    use_magnetic_yaw: true
+    use_magnetic_yaw: false
     mag_yaw_sign: -1.0
     mag_yaw_offset_rad: 1.5451826276
     mag_yaw_filter_alpha: 0.20

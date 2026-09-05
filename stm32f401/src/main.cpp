@@ -15,6 +15,7 @@
 
 #include "Config.h"
 #include "Telemetry.h"
+#include "Neo3Sensors.h"
 #include "Theme.h"
 #include "Icons.h"
 #include "SplashScreen.h"
@@ -30,6 +31,7 @@
 
 TFT_eSPI tft = TFT_eSPI();
 VehicleTelemetry gTelemetry = defaultTelemetry();
+Neo3Sensors gNeo3;
 
 static PageId currentPage = PAGE_SPLASH;
 static CameraSubPage currentCameraTab = CAM_VIEW;
@@ -602,6 +604,12 @@ static void handleSerialCommand(char* command) {
   // telemetry so an identical heartbeat does not trigger any TFT transaction.
   const VehicleTelemetry telemetryBefore = gTelemetry;
 
+  // NEO3 sensor/IO commands are handled before the HMI command namespace.
+  if (!strncmp(command, "NEO:", 4)) {
+    (void)gNeo3.handleHostCommand(command);
+    return;
+  }
+
   // Navigation / health commands
   if (!strcmp(command, "GET:STATE")) {
     publishPage();
@@ -948,13 +956,22 @@ void setup() {
   Serial1.begin(115200);
 #endif
   delay(50);
-  Serial.println(F("ADV HMI visual precise TAP control — boot"));
+  Serial.println(F("ADV HMI + CUAV NEO3 integrated firmware — boot"));
+
+  // Sensor interfaces are initialized before the splash so GNSS acquisition
+  // and IST8310 conversion run in parallel with the HMI startup animation.
+  gNeo3.begin();
 
   initDisplay();
   restartSplash();
 }
 
 void loop() {
+  // GNSS UART/I2C/safety IO are always serviced first and are entirely
+  // non-blocking after initialization. This prevents TFT drawing from starving
+  // UBX parsing or magnetometer sampling.
+  gNeo3.poll();
+
   // Serial stays full-rate in RAM. ROS link health is independent of USB presence:
   // if the bridge stops sending heartbeats, stale READY states fail closed.
   pollSerialGui();
