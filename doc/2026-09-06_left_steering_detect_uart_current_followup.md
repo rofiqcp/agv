@@ -70,3 +70,14 @@ Tanggal: 2026-09-06
 - Setelah self-test, TIM4 tetap CR1=0x11, SMCR=0x3, CCMR1=0x6161, ARR=4095; CNT berubah 4089->4090 akibat transisi self-test, membuktikan TIM4 quadrature benar-benar menghitung input A/B.
 - TIM8 BDTR MOE tetap 0; LEFT tetap high-Z selama diagnosis.
 - Kesimpulan saat ini: firmware, PB6/PB7, dan TIM4 PASS; saat poros fisik diputar encoder tidak meng-drive transisi digital ke A/B. Pemeriksaan berikut harus memastikan VCC aktual di terminal encoder, common GND aktual, serta output A/B sensor fisik.
+
+## Restore electrical encoder interface dari firmware lama — 2026-09-06
+- Dibandingkan langsung dengan commit steering lama `a39abbc` yang membaca TIM4 PB6/PB7 sebelum migrasi VESC.
+- Firmware lama memakai PB6/PB7 sebagai floating input/NOPULL pada state final, TIM4 encoder TI12 rising/rising, input filter=3, dan hardware counter 16-bit ARR=0xFFFF.
+- Firmware VESC sebelumnya memakai internal pull-up, filter=6, dan ARR=4095. Jalur ini kini disamakan kembali ke electrical interface lama tanpa mengubah wiring fisik.
+- VESC semantics tetap 4096 count/rev: raw hardware TIM4 16-bit dinormalisasi modulo configured CPR pada `enc_abi_read_cnt()`.
+- `tools/run_all_checks.py` setelah perubahan: `ALL_FINAL_HOST_CHECKS_PASS` termasuk `ENCODER_ABI_RUNTIME_PASS`, VESC protocol, FOC, persistence, dan dual-motor tests.
+- APP_STLINK build/upload/verify PASS; OTA metadata dibersihkan setelah flash.
+- Runtime post-flash membuktikan TIM4 `CR1=0x1`, `SMCR=0x3`, `CCMR1=0x3131`, `ARR=65535`; GPIOB PB6/PB7 mode nibble `0x4` (floating input), sesuai firmware lama.
+- Firmware commit: `ed5558a` (`fix: restore proven left encoder electrical interface`).
+- Status tetap fail-closed sampai poros encoder diputar ulang dan edge PB6/PB7 nyata terukur.
