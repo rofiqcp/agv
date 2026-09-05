@@ -36,3 +36,11 @@ Tanggal: 2026-09-06
 - APP_STLINK flash + verify: PASS.
 - FW probe setelah boot: VESC FW 6.00 / `motor_left` PASS.
 - Baseline hardware sesudah reboot: PB5 edge=0, PB6 edge=0, PB7 edge=0, TIM4 CNT=0. Baseline ini siap untuk uji putar manual berikutnya.
+
+## Sweep manual hard-stop kiri ke kanan
+- Baseline hard-stop kiri: TIM4=4089, PB6 edge=8, PB7 edge=7, PB5 edge=7.
+- Setelah pengguna memutar manual sampai hard-stop kanan: TIM4=4089, PB6 edge=8, PB7 edge=7, PB5 edge=7.
+- Delta kiri->kanan: TIM4=0 count, PB6=0 edge, PB7=0 edge, PB5=0 edge.
+- Karena target hardware adalah ABI 1024 PPR / 4096 count/rev, hasil span nol membuktikan sinyal steering aktual belum mencapai PB6/PB7 selama sweep mekanik penuh.
+- PB5/PB6/PB7 adalah jalur Hall LEFT asli; firmware memang meminjam PB6/PB7 untuk mode ABI, sehingga wiring fisik harus benar-benar membawa A/B encoder ke PB6/PB7.
+- Closed-loop steering, hard-stop calibration, dan mapping -30/0/+30 tetap fail-closed sampai edge ABI aktual terbukti mengikuti gerak steering.
