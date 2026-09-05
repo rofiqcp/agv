@@ -9,6 +9,10 @@ constexpr pin_size_t PIN_NEO_SAFETY_SWITCH = PB12;
 constexpr pin_size_t PIN_NEO_SAFETY_LED = PB13;
 constexpr pin_size_t PIN_NEO_BUZZER = PA8;
 constexpr float IST8310_UT_PER_LSB = 0.30f;
+// IST8310 full-scale from the vendor-compatible ArduPilot/PX4 driver family.
+// Reject impossible raw values before they can contaminate heading fusion.
+constexpr int16_t IST8310_MAX_RAW_XY = 5334;  // ~1600 uT / 0.3 uT/LSB
+constexpr int16_t IST8310_MAX_RAW_Z  = 8334;  // ~2500 uT / 0.3 uT/LSB
 
 inline void ubxChecksumAdd(uint8_t byte, uint8_t &a, uint8_t &b) {
   a = static_cast<uint8_t>(a + byte);
@@ -484,18 +488,27 @@ bool Neo3Sensors::istRead(uint8_t reg, uint8_t *dst, uint8_t count) {
 }
 
 bool Neo3Sensors::initIst8310() {
+  // Reset before probing WHO_AM_I. IST8310's WHO_AM_I register is writable and
+  // can remain corrupted after short power cycles/bus noise; ArduPilot uses the
+  // same reset-before-probe sequence for this reason.
+  if (!istWrite(IST8310_CTRL2, 0x01)) return false;
+  delay(20);
   uint8_t who = 0;
   if (!istRead(IST8310_WHOAMI_REG, &who, 1) || who != IST8310_WHOAMI) return false;
-  if (!istWrite(IST8310_CTRL2, 0x01)) return false;  // soft reset
-  delay(20);
-  if (!istRead(IST8310_WHOAMI_REG, &who, 1) || who != IST8310_WHOAMI) return false;
 
-  // PX4/IST8310 recommended averaging and set/reset pulse settings.
+  // Recommended averaging and set/reset pulse settings.
   if (!istWrite(IST8310_AVGCNTL, 0x24)) return false; // X/Z 16x + Y 16x averaging
   if (!istWrite(IST8310_PDCNTL, 0xC0)) return false;  // normal set/reset pulse duration
-  // Keep CTRL3 at its reset value. Single-conversion mode is deterministic and
-  // avoids relying on an undocumented continuous-rate power-on state.
+  // Keep CTRL3 at its reset value. Single-conversion mode is deterministic.
   if (!istWrite(IST8310_CTRL3, 0x00)) return false;
+
+  // Read-back verification catches a marginal I2C connection that ACKs writes
+  // but does not retain the intended configuration.
+  uint8_t avg = 0, pd = 0, ctrl3 = 0;
+  if (!istRead(IST8310_AVGCNTL, &avg, 1) || avg != 0x24 ||
+      !istRead(IST8310_PDCNTL, &pd, 1) || pd != 0xC0 ||
+      !istRead(IST8310_CTRL3, &ctrl3, 1) || ctrl3 != 0x00) return false;
+
   ist_error_count_ = 0;
   startIstMeasurement();
   return true;
@@ -536,7 +549,18 @@ void Neo3Sensors::pollIst8310() {
   ist_error_count_ = 0;
   const int16_t x = static_cast<int16_t>(static_cast<uint16_t>(raw[0]) | (static_cast<uint16_t>(raw[1]) << 8));
   const int16_t y = static_cast<int16_t>(static_cast<uint16_t>(raw[2]) | (static_cast<uint16_t>(raw[3]) << 8));
-  const int16_t z = static_cast<int16_t>(static_cast<uint16_t>(raw[4]) | (static_cast<uint16_t>(raw[5]) << 8));
+  const int16_t z_sensor = static_cast<int16_t>(static_cast<uint16_t>(raw[4]) | (static_cast<uint16_t>(raw[5]) << 8));
+  if (x > IST8310_MAX_RAW_XY || x < -IST8310_MAX_RAW_XY ||
+      y > IST8310_MAX_RAW_XY || y < -IST8310_MAX_RAW_XY ||
+      z_sensor > IST8310_MAX_RAW_Z || z_sensor < -IST8310_MAX_RAW_Z) {
+    if (++ist_error_count_ >= 5) ist_ok_ = false;
+    if (ist_ok_) startIstMeasurement();
+    return;
+  }
+  ist_error_count_ = 0;
+  // IST8310's native Z sign is left-handed relative to the X/Y convention.
+  // Flip Z so /neo3/mag is a right-handed vector before ROS tilt compensation.
+  const int16_t z = static_cast<int16_t>(-z_sensor);
   if (static_cast<uint32_t>(now_ms - last_mag_publish_ms_) >= MAG_PUBLISH_MS) {
     last_mag_publish_ms_ = now_ms;
     publishMag(x, y, z);
@@ -577,8 +601,11 @@ void Neo3Sensors::pollSafetySwitch() {
 }
 
 bool Neo3Sensors::gnssAlive(uint32_t now_ms) const {
-  if (pvt_.valid && static_cast<uint32_t>(now_ms - pvt_.received_ms) <= PVT_STALE_MS) return true;
-  return nmea_.gga_valid && static_cast<uint32_t>(now_ms - nmea_.gga_ms) <= NMEA_FRESH_MS;
+  // "Alive" means the M9N receiver is actively streaming, independent of fix.
+  // This intentionally differs from gnssReady(): indoors NAV-PVT may be fresh
+  // at 10 Hz with fix_type=0/sat=0, which is CONNECTED but NOT FIXED.
+  if (pvt_.received_ms != 0U && static_cast<uint32_t>(now_ms - pvt_.received_ms) <= PVT_STALE_MS) return true;
+  return nmea_.gga_ms != 0U && static_cast<uint32_t>(now_ms - nmea_.gga_ms) <= NMEA_FRESH_MS;
 }
 
 bool Neo3Sensors::gnssReady(uint32_t now_ms) const {

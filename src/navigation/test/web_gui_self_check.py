@@ -57,6 +57,17 @@ for token in ("CONTROL ENGINEERING", "Tuning & Control", "data-exp=\"navigation\
     if token not in html: fail(f"BAB IV web workbench missing {token}")
 if 'id="yoloToggleBtn"' not in html or 'id="yoloToggleState"' not in html:
     fail("explicit YOLOPv2 perception toggle missing")
+# NEO-3 must expose GNSS receiver link/fix separately from the IST8310 compass.
+for token in ('NEO-3 GNSS M9N', 'id="gnssChip"', 'id="gnssFixChip"', 'id="gnssRate"',
+              'NEO-3 Magnetometer IST8310', 'id="neo3MagChip"', 'id="neo3MagX"',
+              'id="neo3MagY"', 'id="neo3MagZ"', 'id="neo3MagNorm"', 'id="neo3MagHeading"'):
+    if token not in html: fail(f"NEO-3 split sensor UI missing {token}")
+for token in ("connected.gnss", "qg.gnss_fix_ok", "gnssFixChip", "pvt_rate_hz",
+              "connected.neo3_mag", "neo3_mag_heading_valid", "neo3MagX", "neo3MagY", "neo3MagZ"):
+    if token not in js: fail(f"NEO-3 split sensor rendering missing {token}")
+for token in ('/gnss/connected', '/gnss/quality', '/neo3/status', '/neo3/ist8310_connected',
+              '/neo3/mag', '/neo3/mag_heading_fusion', '/neo3/mag_heading_valid'):
+    if token not in cpp: fail(f"NEO-3 web ROS binding missing {token}")
 per_start = html.find('id="page-perception"')
 per_end = html.find('id="page-sensors"', per_start)
 perception_html = html[per_start:per_end if per_end > per_start else len(html)]

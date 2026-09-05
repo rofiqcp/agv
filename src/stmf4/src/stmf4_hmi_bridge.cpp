@@ -799,31 +799,38 @@ private:
                               double course_ned_deg, double sacc, double head_acc_deg,
                               double pdop, double itow_ms, double pvt_rate_hz,
                               double flags2, double flags3, bool velocity_valid) {
-    if (!std::isfinite(lat) || !std::isfinite(lon) || std::abs(lat) > 90.0 ||
-        std::abs(lon) > 180.0 || (std::abs(lat) < 1.0e-12 && std::abs(lon) < 1.0e-12)) return;
+    // A receiver can be fully connected and streaming NAV-PVT indoors while it
+    // has no usable LLH yet. Keep quality/state telemetry alive in that case;
+    // only position/velocity fusion measurements are suppressed.
+    const bool coordinates_valid = std::isfinite(lat) && std::isfinite(lon) &&
+      std::abs(lat) <= 90.0 && std::abs(lon) <= 180.0 &&
+      !(std::abs(lat) < 1.0e-12 && std::abs(lon) < 1.0e-12);
+    const bool qualified_fix = receiver_valid && coordinates_valid;
+    const double h_sigma = std::clamp(std::isfinite(hacc) && hacc > 0.0 ? hacc : 100.0, 0.02, 1000.0);
+    const double v_sigma = std::clamp(std::isfinite(vacc) && vacc > 0.0 ? vacc : h_sigma * 1.5, 0.03, 1500.0);
 
     sensor_msgs::msg::NavSatFix fix;
     fix.header.stamp = stamp;
     fix.header.frame_id = neo3_gnss_frame_id_;
-    fix.status.status = receiver_valid ? sensor_msgs::msg::NavSatStatus::STATUS_FIX :
-                                           sensor_msgs::msg::NavSatStatus::STATUS_NO_FIX;
+    fix.status.status = qualified_fix ? sensor_msgs::msg::NavSatStatus::STATUS_FIX :
+                                       sensor_msgs::msg::NavSatStatus::STATUS_NO_FIX;
     fix.status.service = sensor_msgs::msg::NavSatStatus::SERVICE_GPS;
-    fix.latitude = lat;
-    fix.longitude = lon;
-    fix.altitude = std::isfinite(alt) ? alt : 0.0;
-    const double h_sigma = std::clamp(std::isfinite(hacc) && hacc > 0.0 ? hacc : 100.0, 0.02, 1000.0);
-    const double v_sigma = std::clamp(std::isfinite(vacc) && vacc > 0.0 ? vacc : h_sigma * 1.5, 0.03, 1500.0);
-    fix.position_covariance.fill(0.0);
-    fix.position_covariance[0] = h_sigma * h_sigma;
-    fix.position_covariance[4] = h_sigma * h_sigma;
-    fix.position_covariance[8] = v_sigma * v_sigma;
-    fix.position_covariance_type = sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_DIAGONAL_KNOWN;
-    neo3_fix_raw_pub_->publish(fix);
-    neo3_fix_pub_->publish(fix);
+    if (coordinates_valid) {
+      fix.latitude = lat;
+      fix.longitude = lon;
+      fix.altitude = std::isfinite(alt) ? alt : 0.0;
+      fix.position_covariance.fill(0.0);
+      fix.position_covariance[0] = h_sigma * h_sigma;
+      fix.position_covariance[4] = h_sigma * h_sigma;
+      fix.position_covariance[8] = v_sigma * v_sigma;
+      fix.position_covariance_type = sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_DIAGONAL_KNOWN;
+      neo3_fix_raw_pub_->publish(fix);
+      neo3_fix_pub_->publish(fix);
+    }
 
     const double course_ned_rad = course_ned_deg * kPi / 180.0;
     const double course_enu_rad = normalizeAngle(0.5 * kPi - course_ned_rad);
-    if (velocity_valid && std::isfinite(vel_n) && std::isfinite(vel_e) && std::isfinite(vel_d)) {
+    if (qualified_fix && velocity_valid && std::isfinite(vel_n) && std::isfinite(vel_e) && std::isfinite(vel_d)) {
       geometry_msgs::msg::TwistWithCovarianceStamped vel;
       vel.header = fix.header;
       vel.twist.twist.linear.x = vel_e;
@@ -866,13 +873,13 @@ private:
     quality.data[24] = 0.0;  // arrival timestamp source
     quality.data[25] = flags2;
     quality.data[26] = flags3;
-    quality.data[44] = receiver_valid ? 1.0 : 0.0;
+    quality.data[44] = qualified_fix ? 1.0 : 0.0;
     neo3_quality_pub_->publish(quality);
 
     last_neo3_gnss_time_ = std::chrono::steady_clock::now();
     publishNeo3Connected(true);
     publishGnssState(source_id == 1 ? "STM32_UBX_NAV_PVT" : "STM32_NMEA_FALLBACK",
-                     receiver_valid, fix_type, satellites, h_sigma, pdop);
+                     qualified_fix, fix_type, satellites, h_sigma, pdop);
   }
 
   void handleNeo3Gnss(const std::string &payload) {
@@ -890,7 +897,7 @@ private:
     publishGnssMeasurement(now(), 1, fix_type, receiver_valid,
       static_cast<int>(std::lround(v[6])), v[7], v[8], v[9], v[10], v[11],
       v[12], v[13], v[14], v[15], v[16], v[17], v[18], v[19], v[2], v[20],
-      v[21], v[22], true);
+      v[21], v[22], receiver_valid);
   }
 
   void handleNeo3GnssFallback(const std::string &payload) {
