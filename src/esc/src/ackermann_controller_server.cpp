@@ -167,13 +167,6 @@ std::int16_t readI16Le(const std::uint8_t * p)
   return static_cast<std::int16_t>(readU16Le(p));
 }
 
-std::string sourceName(bool estop, bool teleop, bool nav2)
-{
-  if (estop) return "E_STOP";
-  if (teleop) return "TELEOP";
-  if (nav2) return "NAV2";
-  return "IDLE";
-}
 }  // namespace
 
 class EscAckermann final : public rclcpp::Node
@@ -282,10 +275,13 @@ private:
     declare_parameter<std::string>("active_source_topic", "/esc/mux/active_source");
     declare_parameter<std::string>("autonomy_gate_topic", "/system/autonomy_motion_allowed");
     declare_parameter<std::string>("global_estop_topic", "/safety/estop");
+    declare_parameter<std::string>("maintenance_owner_topic", "/esc/vesc/maintenance_owner");
+    declare_parameter<std::string>("perception_state_topic", "/navigation/trajectory_safety_state");
 
     declare_parameter<double>("command_rate_hz", 50.0);
     declare_parameter<double>("teleop_timeout_sec", 0.30);
     declare_parameter<double>("nav2_timeout_sec", 0.60);
+    declare_parameter<double>("perception_state_timeout_sec", 0.75);
     declare_parameter<double>("manual_release_hold_sec", 0.50);
     declare_parameter<bool>("require_autonomy_gate", true);
 
@@ -426,10 +422,13 @@ private:
     active_source_topic_ = get_parameter("active_source_topic").as_string();
     autonomy_gate_topic_ = get_parameter("autonomy_gate_topic").as_string();
     global_estop_topic_ = get_parameter("global_estop_topic").as_string();
+    maintenance_owner_topic_ = get_parameter("maintenance_owner_topic").as_string();
+    perception_state_topic_ = get_parameter("perception_state_topic").as_string();
 
     command_rate_hz_ = std::clamp(get_parameter("command_rate_hz").as_double(), 10.0, 100.0);
     teleop_timeout_sec_ = std::clamp(get_parameter("teleop_timeout_sec").as_double(), 0.05, 2.0);
     nav2_timeout_sec_ = std::clamp(get_parameter("nav2_timeout_sec").as_double(), 0.05, 2.0);
+    perception_state_timeout_sec_ = std::clamp(get_parameter("perception_state_timeout_sec").as_double(), 0.05, 2.0);
     manual_release_hold_sec_ = std::clamp(get_parameter("manual_release_hold_sec").as_double(), 0.0, 2.0);
     require_autonomy_gate_ = get_parameter("require_autonomy_gate").as_bool();
 
@@ -959,6 +958,29 @@ private:
         global_estop_ = msg->data;
       });
 
+    maintenance_owner_sub_ = create_subscription<std_msgs::msg::String>(
+      maintenance_owner_topic_, stateQos(),
+      [this](std_msgs::msg::String::ConstSharedPtr msg) {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        maintenance_owner_ = msg->data.empty() ? "MAINTENANCE" : msg->data;
+      });
+
+    perception_state_sub_ = create_subscription<std_msgs::msg::String>(
+      perception_state_topic_, rclcpp::QoS(10).reliable(),
+      [this](std_msgs::msg::String::ConstSharedPtr msg) {
+        const std::string key = "decision=";
+        const auto begin = msg->data.find(key);
+        if (begin == std::string::npos) return;
+        const auto value_begin = begin + key.size();
+        const auto end = msg->data.find(';', value_begin);
+        const std::string decision = msg->data.substr(value_begin, end - value_begin);
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        perception_decision_ = decision;
+        perception_state_received_ = now();
+        perception_intervening_ = !decision.empty() &&
+          decision != "NAV2_PASS" && decision != "GUARD_ONLY_PASS";
+      });
+
     actuator_pub_ = create_publisher<geometry_msgs::msg::Twist>(output_topic_, cmd_qos);
     active_source_pub_ = create_publisher<std_msgs::msg::String>(active_source_topic_, stateQos());
     status_pub_ = create_publisher<std_msgs::msg::String>("/esc/status", stateQos());
@@ -1019,9 +1041,15 @@ private:
     maintenance_sub_ = create_subscription<std_msgs::msg::Bool>(
       "/esc/vesc/maintenance_active", stateQos(),
       [this](std_msgs::msg::Bool::ConstSharedPtr msg) {
-        if (msg->data && !maintenance_mode_active_) sendStm32SafeStop();
-        maintenance_mode_active_ = msg->data;
-        if (maintenance_mode_active_) ack_timeout_.store(true);
+        bool entering = false;
+        {
+          std::lock_guard<std::mutex> lock(state_mutex_);
+          entering = msg->data && !maintenance_mode_active_;
+          maintenance_mode_active_ = msg->data;
+          if (!msg->data) maintenance_owner_ = "RUNTIME";
+        }
+        if (entering) sendStm32SafeStop();
+        if (msg->data) ack_timeout_.store(true);
       });
     const auto transport_period = std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::duration<double>(1.0 / serial_tx_rate_hz_));
@@ -1049,6 +1077,8 @@ private:
     const bool hmi_fresh = hmi_.valid && fresh_stamp(hmi_.received, hmi_timeout_sec_);
     const bool hmi_active = hmi_source_fresh && hmi_source_ != "STOP" && hmi_source_ != "IDLE" && hmi_source_ != "";
     const bool nav2_fresh = nav2_.valid && fresh_stamp(nav2_.received, nav2_timeout_sec_);
+    const bool perception_state_fresh = perception_intervening_ &&
+      fresh_stamp(perception_state_received_, perception_state_timeout_sec_);
     const bool teleop_active = source_fresh &&
       teleop_source_ != "STOP" && teleop_source_ != "IDLE" && teleop_source_ != "E_STOP" &&
       teleop_source_ != "";
@@ -1063,25 +1093,30 @@ private:
       return selected;
     }
 
-    if (hmi_fresh && hmi_active) {
-      selected.twist = clampTwist(hmi_.cmd);
-      // HMI uses the same normalized angular.z steering encoding as manual teleop.
+    // TELEOP, physical HMI and ROS Web all belong to the same MANUAL tier.
+    // When more than one manual source is active, the freshest command wins;
+    // this avoids an arbitrary permanent priority inside the operator tier.
+    const bool hmi_manual = hmi_fresh && hmi_active;
+    const bool teleop_manual = teleop_fresh && (teleop_active || teleop_hold);
+    if (hmi_manual || teleop_manual) {
+      const bool choose_hmi = hmi_manual &&
+        (!teleop_manual || hmi_.received.nanoseconds() >= teleop_.received.nanoseconds());
+      if (choose_hmi) {
+        selected.twist = clampTwist(hmi_.cmd);
+        selected.source = hmi_source_;
+      } else {
+        selected.twist = clampTwist(teleop_.cmd);
+        selected.source = teleop_active ? "TELEOP" : "TELEOP_RELEASE_HOLD";
+      }
       selected.teleop = true;
-      selected.source = hmi_source_;
-      return selected;
-    }
-
-    if (teleop_fresh && (teleop_active || teleop_hold)) {
-      selected.twist = clampTwist(teleop_.cmd);
-      selected.teleop = true;
-      selected.source = teleop_active ? "TELEOP" : "TELEOP_RELEASE_HOLD";
       return selected;
     }
 
     if (nav2_fresh && gate_ok) {
       selected.twist = clampTwist(nav2_.cmd);
       selected.nav2 = true;
-      selected.source = "NAV2";
+      selected.source = perception_state_fresh ?
+        (std::string("PERCEPTION:") + perception_decision_) : "NAV2";
       return selected;
     }
 
@@ -1468,13 +1503,23 @@ private:
   {
     const auto t = now();
     const Selected selected = selectCommand(t);
-    const double steering_deg = steeringDegFor(selected);  // physical vehicle steering angle
+    bool maintenance_active = false;
+    std::string maintenance_owner;
+    {
+      std::lock_guard<std::mutex> lock(state_mutex_);
+      maintenance_active = maintenance_mode_active_;
+      maintenance_owner = maintenance_owner_;
+    }
+    if (maintenance_owner.empty() || maintenance_owner == "RUNTIME") maintenance_owner = "MAINTENANCE";
+    const double steering_deg = maintenance_active ? 0.0 : steeringDegFor(selected);
 
     double protocol_cmd_deg = 0.0;  // display convention; converted to STM polarity below
-    double right_rpm = rightRpmFor(selected);
-    std::string effective_source = selected.source;
+    double right_rpm = maintenance_active ? 0.0 : rightRpmFor(selected);
+    std::string effective_source = maintenance_active ? maintenance_owner : selected.source;
 
-    if (steering_calibration_mode_enabled_ && !selected.estop) {
+    if (maintenance_active) {
+      resetCenterHold();
+    } else if (steering_calibration_mode_enabled_ && !selected.estop) {
       // Direct calibration uses the freshest teleop Twist directly, not mux labels.
       double teleop_yaw = 0.0;
       bool teleop_fresh_direct = false;
@@ -1526,7 +1571,7 @@ private:
     const double steering_stm_deg = stmFromUncalibratedDeg(protocol_cmd_deg);
 
     geometry_msgs::msg::Twist actuator = selected.twist;
-    if (selected.estop || steering_calibration_mode_enabled_) actuator = geometry_msgs::msg::Twist{};
+    if (maintenance_active || selected.estop || steering_calibration_mode_enabled_) actuator = geometry_msgs::msg::Twist{};
     actuator_pub_->publish(actuator);
 
     std_msgs::msg::String source_msg;
@@ -1534,7 +1579,7 @@ private:
     active_source_pub_->publish(source_msg);
 
     std_msgs::msg::Float64 drive_target;
-    drive_target.data = (selected.estop || steering_calibration_mode_enabled_) ? 0.0 : selected.twist.linear.x;
+    drive_target.data = (maintenance_active || selected.estop || steering_calibration_mode_enabled_) ? 0.0 : selected.twist.linear.x;
     drive_target_pub_->publish(drive_target);
     std_msgs::msg::Float64 steering_target;
     steering_target.data = steering_deg * kPi / 180.0;
@@ -1555,7 +1600,7 @@ private:
       serial_command_stamp_ = std::chrono::steady_clock::now();
     }
 
-    const std::string source = steering_calibration_mode_enabled_ && !selected.estop ? effective_source : sourceName(selected.estop, selected.teleop, selected.nav2);
+    const std::string source = effective_source;
     if (source != last_logged_source_) {
       last_logged_source_ = source;
       RCLCPP_INFO(
@@ -1568,7 +1613,7 @@ private:
     }
 
     diagnostic_source_ = effective_source;
-    diagnostic_drive_target_mps_ = (selected.estop || steering_calibration_mode_enabled_) ? 0.0 : selected.twist.linear.x;
+    diagnostic_drive_target_mps_ = (maintenance_active || selected.estop || steering_calibration_mode_enabled_) ? 0.0 : selected.twist.linear.x;
     diagnostic_drive_target_rpm_ = right_rpm;
     diagnostic_steering_target_deg_ = steering_deg;
     diagnostic_steering_raw_target_deg_ = protocol_cmd_deg;
@@ -2501,10 +2546,13 @@ private:
   std::string active_source_topic_{"/esc/mux/active_source"};
   std::string autonomy_gate_topic_;
   std::string global_estop_topic_;
+  std::string maintenance_owner_topic_{"/esc/vesc/maintenance_owner"};
+  std::string perception_state_topic_{"/navigation/trajectory_safety_state"};
   double command_rate_hz_{50.0};
   double teleop_timeout_sec_{0.30};
   double hmi_timeout_sec_{0.30};
   double nav2_timeout_sec_{0.60};
+  double perception_state_timeout_sec_{0.75};
   double manual_release_hold_sec_{0.50};
   bool require_autonomy_gate_{true};
   double speed_max_mps_{1.0};
@@ -2578,7 +2626,7 @@ private:
   std::string stm32_rx_topic_{"/stmf4/vesc/rx"};
   std::string stm32_connected_topic_{"/stmf4/vesc/connected"};
   std::uint16_t stm32_sequence_{0U};
-  bool maintenance_mode_active_{false};
+  std::atomic<bool> maintenance_mode_active_{false};
   std::uint32_t vesc_runtime_tick_{0U};
   std::uint32_t steering_cal_tick_{0U};
   bool steering_calibrated_{false};
@@ -2628,6 +2676,10 @@ private:
   rclcpp::Time teleop_takeover_until_{0, 0, RCL_ROS_TIME};
   std::string hmi_source_{"STOP"};
   rclcpp::Time hmi_source_received_{0, 0, RCL_ROS_TIME};
+  std::string maintenance_owner_{"RUNTIME"};
+  std::string perception_decision_{""};
+  rclcpp::Time perception_state_received_{0, 0, RCL_ROS_TIME};
+  bool perception_intervening_{false};
   bool teleop_estop_{false};
   bool global_estop_{false};
   bool autonomy_gate_{false};
@@ -2683,6 +2735,8 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr nav2_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr autonomy_gate_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr global_estop_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr maintenance_owner_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr perception_state_sub_;
   rclcpp::Subscription<std_msgs::msg::UInt8MultiArray>::SharedPtr stm32_rx_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr stm32_connected_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr maintenance_sub_;

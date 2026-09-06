@@ -4,5 +4,7 @@ vesc_tool_bridge:
     max_abs_duty: 0.95
     max_abs_current_a: 20.0
     max_abs_rpm: 10000.0
+    python_tcp_enabled: true
+    python_tcp_port: 65101
     tcp_enabled: true
     tcp_port: 65102
