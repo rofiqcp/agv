@@ -176,45 +176,110 @@
           <div class="two-col"><article class="panel"><div class="panel-head"><div><span class="eyebrow">GNSS DRIVER</span><h2>Quality & Fusion</h2></div></div><div id="gnssDetail" class="json-pretty">Waiting...</div></article><article class="panel"><div class="panel-head"><div><span class="eyebrow">LOCALIZATION</span><h2>Estimator State</h2></div></div><div id="localizationDetail" class="json-pretty">Waiting...</div></article></div>
         </section>
 
-        <!-- ESC -->
+        <!-- ESC MOTOR WORKBENCH -->
         <section class="page" id="page-esc">
+          <article class="panel vesc-tool-panel vesc-simple" id="vescWorkbench">
+            <div class="panel-head vesc-main-head">
+              <div><span class="eyebrow">DUAL VESC 6.00 • F411 GATEWAY</span><h2>ESC Motor Workbench</h2><p class="hint">LEFT = steering encoder ABI/TIM4 • RIGHT = velocity Hall.</p></div>
+              <div class="status-pair"><span class="status-chip waiting" id="vescToolModeChip">RUNTIME</span><span class="status-chip waiting" id="vescReplyChip">NO VESC REPLY</span></div>
+            </div>
+
+            <div class="vesc-simple-top">
+              <label>Motor<select id="vescMotor"><option value="1">Motor 1 • LEFT Steering / Encoder ABI</option><option value="2">Motor 2 • RIGHT Velocity / Hall</option></select></label>
+              <div class="vesc-mini-status"><span>F411</span><b id="vescTransportState">WAIT</b></div>
+              <div class="vesc-mini-status"><span>LEFT</span><b id="vescLeftActive">WAIT</b><small id="vescLeftAge">no reply</small></div>
+              <div class="vesc-mini-status"><span>RIGHT</span><b id="vescRightActive">WAIT</b><small id="vescRightAge">no reply</small></div>
+              <div class="vesc-mini-status"><span>Owner</span><b id="vescAuthority">RUNTIME</b></div>
+              <div class="vesc-mode-actions"><button class="warning-btn" id="vescEnterMaintenance">Maintenance</button><button class="soft-btn" id="vescExitMaintenance">Runtime</button></div>
+              <span id="vescTcpState" hidden></span><span id="vescTcpDetail" hidden></span>
+            </div>
+
+            <section class="vesc-section vesc-live-simple">
+              <div class="vesc-primary-readout">
+                <div><span>Duty</span><b id="vescDuty">--</b></div><div><span>Motor Current</span><b id="vescMotorCurrent">--</b></div><div><span>eRPM</span><b id="vescRpm">--</b></div><div><span>Position</span><b id="vescPosition">--</b></div><div><span>Vbus</span><b id="vescVbus">--</b></div><div><span>Fault</span><b id="vescFault">--</b></div>
+              </div>
+              <div class="vesc-secondary-readout"><span>Iq <b id="vescIq">--</b></span><span>Id <b id="vescId">--</b></span><span>Input I <b id="vescInputCurrent">--</b></span><span>Vq <b id="vescVq">--</b></span><span>Vd <b id="vescVd">--</b></span><span>MOS <b id="vescTemp">--</b></span><span id="vescSelectedRole">LEFT / STEERING</span></div>
+              <details><summary>Semua nilai decoded motor terpilih</summary><div class="json-pretty vesc-all-vars" id="vescAllVariables">Waiting...</div></details>
+            </section>
+
+            <section class="vesc-section">
+              <div class="vesc-section-head"><div><span class="eyebrow">LIVE SCOPE</span><h3>Motor Graph</h3></div><small>Centang data yang ingin ditampilkan.</small></div>
+              <div class="vesc-chart-grid">
+                <article class="vesc-chart-card"><div class="vesc-chart-head"><div><b>LEFT • Steering</b><span id="vescChartLeftState">WAIT</span></div><div class="vesc-trace-checks" data-vesc-traces="1"></div></div><canvas id="vescChartLeft" width="1000" height="260"></canvas></article>
+                <article class="vesc-chart-card"><div class="vesc-chart-head"><div><b>RIGHT • Velocity</b><span id="vescChartRightState">WAIT</span></div><div class="vesc-trace-checks" data-vesc-traces="2"></div></div><canvas id="vescChartRight" width="1000" height="260"></canvas></article>
+              </div>
+            </section>
+
+            <section class="vesc-section">
+              <div class="vesc-section-head"><div><span class="eyebrow">MOTOR CONTROL</span><h3>Set Commands</h3></div><button class="danger-btn" id="vescSendZero">STOP BOTH</button></div>
+              <div class="vesc-command-grid">
+                <div class="vesc-command-row"><b>Duty</b><button data-vesc-nudge="vescDutyInput:-0.05">−</button><input id="vescDutyInput" type="number" min="-0.95" max="0.95" step="0.01" value="0"><button data-vesc-nudge="vescDutyInput:0.05">+</button><button class="primary-btn" id="vescSetDuty">SET</button></div>
+                <div class="vesc-command-row"><b>Current A</b><button data-vesc-nudge="vescCurrentInput:-1">−</button><input id="vescCurrentInput" type="number" min="-20" max="20" step="0.1" value="0"><button data-vesc-nudge="vescCurrentInput:1">+</button><button class="primary-btn" id="vescSetCurrent">SET</button></div>
+                <div class="vesc-command-row"><b>RIGHT RPM</b><button data-vesc-nudge="vescRpmInput:-100">−</button><input id="vescRpmInput" type="number" min="-10000" max="10000" step="100" value="0"><button data-vesc-nudge="vescRpmInput:100">+</button><button class="primary-btn" id="vescSetRpm">SET</button></div>
+                <div class="vesc-command-row"><b>LEFT Pos 0–360°</b><button data-vesc-nudge="vescPosInput:-5">−</button><input id="vescPosInput" type="number" min="0" max="360" step="1" value="180"><button data-vesc-nudge="vescPosInput:5">+</button><button class="primary-btn" id="vescSetPos">SET</button></div>
+                <div class="vesc-command-row"><b>Brake A</b><span></span><input id="vescBrakeInput" type="number" min="0" max="20" step="0.1" value="2"><span></span><button class="warning-btn" id="vescSetBrake">BRAKE</button></div>
+                <div class="vesc-command-row"><b>Handbrake A</b><span></span><input id="vescHandbrakeInput" type="number" min="0" max="20" step="0.1" value="2"><span></span><button class="warning-btn" id="vescSetHandbrake">HOLD</button></div>
+              </div>
+              <div class="button-row vesc-brake-row"><button class="danger-btn grow" id="vescFullBrake">FULL BRAKE RIGHT (nilai Brake A)</button><button class="soft-btn grow" id="vescZeroSelected">Zero Selected</button><button class="soft-btn" id="vescAlive">Alive</button><button class="soft-btn" id="vescReadValues">Refresh</button><button class="soft-btn" id="vescReadFw">FW</button><button class="soft-btn" id="vescRefreshEngineering">Read All</button></div>
+            </section>
+
+            <details class="vesc-editor" open><summary>Controller Tuning</summary>
+              <section class="vesc-section">
+                <div class="vesc-section-head"><div><h3>FOC PI • Speed PID • Position PID</h3></div><div class="status-pair"><span class="status-chip waiting" id="vescTuningStoreState">READ FIRST</span><label class="vesc-store-check"><input type="checkbox" id="vescTuningStore" checked> EEPROM</label></div></div>
+                <div class="vesc-tuning-grid">
+                  <fieldset><legend>FOC Q PI</legend><label>Kp<input id="vescTuneFocQKp" type="number" step="0.000001"></label><label>Ki<input id="vescTuneFocQKi" type="number" step="0.001"></label></fieldset>
+                  <fieldset><legend>FOC D PI</legend><label>Kp<input id="vescTuneFocDKp" type="number" step="0.000001"></label><label>Ki<input id="vescTuneFocDKi" type="number" step="0.001"></label></fieldset>
+                  <fieldset><legend>Speed PID</legend><label>Kp<input id="vescTuneSpeedKp" type="number" step="0.00001"></label><label>Ki<input id="vescTuneSpeedKi" type="number" step="0.00001"></label><label>Kd<input id="vescTuneSpeedKd" type="number" step="0.00001"></label></fieldset>
+                  <fieldset><legend>Position PID</legend><label>Kp<input id="vescTunePosKp" type="number" step="0.001"></label><label>Ki<input id="vescTunePosKi" type="number" step="0.001"></label><label>Kd<input id="vescTunePosKd" type="number" step="0.001"></label></fieldset>
+                  <fieldset><legend>Filter</legend><label>Current filter<input id="vescTuneFilter" type="number" min="0.0001" max="1" step="0.0001"></label><label>Current limit<input id="vescTuneCurrentLimit" type="text" readonly></label></fieldset>
+                </div>
+                <div class="button-row"><button class="soft-btn" id="vescReadTuning">Read</button><button class="primary-btn" id="vescWriteTuning">Write</button><button class="soft-btn" id="vescSyncTuningYaml">Sync YAML</button><span class="vesc-yaml-state" id="vescYamlSyncState">YAML mirror: --</span></div>
+              </section>
+            </details>
+
+            <details class="vesc-editor"><summary>VESC Limits / Setup</summary>
+              <section class="vesc-section"><div class="vesc-section-head"><div><h3>Current • eRPM • Duty • Watt</h3></div><label class="vesc-store-check"><input type="checkbox" id="vescLimitsStore" checked> EEPROM</label></div>
+                <div class="vesc-limit-grid"><label>Current min scale<input id="vescLimCurMin" type="number" step="0.01"></label><label>Current max scale<input id="vescLimCurMax" type="number" step="0.01"></label><label>Min eRPM<input id="vescLimErpmMin" type="number" step="1"></label><label>Max eRPM<input id="vescLimErpmMax" type="number" step="1"></label><label>Min duty<input id="vescLimDutyMin" type="number" step="0.01"></label><label>Max duty<input id="vescLimDutyMax" type="number" step="0.01"></label><label>Min Watt<input id="vescLimWattMin" type="number" step="1"></label><label>Max Watt<input id="vescLimWattMax" type="number" step="1"></label><label>Input current min<input id="vescLimInputMin" type="number" step="0.1"></label><label>Input current max<input id="vescLimInputMax" type="number" step="0.1"></label></div>
+                <div class="button-row"><button class="soft-btn" id="vescReadLimits">Read</button><button class="primary-btn" id="vescWriteLimits">Write</button><span class="vesc-persist-state" id="vescLimitsState">Read first.</span></div>
+              </section>
+            </details>
+
+            <details class="vesc-editor"><summary>MC Config / App Config</summary>
+              <section class="vesc-section"><div class="vesc-config-grid">
+                <article class="vesc-card"><div class="vesc-card-head"><b>MC Configuration</b><span class="path-tag">EEPROM</span></div><div class="vesc-config-actions"><button class="soft-btn" id="vescReadMcconf">Read</button><button class="soft-btn" id="vescReadMcconfDefault">Default</button><button class="primary-btn" id="vescWriteMcconf">Write</button><button class="danger-btn" id="vescRestoreMcconfDefault">Write Default</button></div><div class="vesc-persist-state" id="vescMcconfState">No snapshot.</div></article>
+                <article class="vesc-card"><div class="vesc-card-head"><b>App Configuration</b><span class="path-tag">EEPROM</span></div><div class="vesc-config-actions"><button class="soft-btn" id="vescReadAppconf">Read</button><button class="soft-btn" id="vescReadAppconfDefault">Default</button><button class="primary-btn" id="vescWriteAppconf">Write</button><button class="danger-btn" id="vescRestoreAppconfDefault">Write Default</button></div><div class="vesc-persist-state" id="vescAppconfState">No snapshot.</div></article>
+              </div></section>
+            </details>
+
+            <details class="vesc-editor"><summary>LEFT Encoder / Home • Position Limits • Detect</summary>
+              <section class="vesc-section"><div class="vesc-work-grid">
+                <article class="vesc-card"><div class="vesc-card-head"><b>Position Counter / Runtime Limits</b></div><div class="vesc-position-strip"><div><span>Current</span><b id="vescPosCurrent">--</b></div><div><span>Target</span><b id="vescPosTarget">--</b></div><div><span>Min</span><b id="vescPosMin">--</b></div><div><span>Max</span><b id="vescPosMax">--</b></div></div><div class="vesc-form-row"><label>Min count<input id="vescPosMinInput" type="number" step="1"></label><label>Max count<input id="vescPosMaxInput" type="number" step="1"></label></div><div class="button-row"><button class="soft-btn" id="vescReadPositionState">Read</button><button class="primary-btn" id="vescSetPositionLimits">Set Limits</button><button class="warning-btn" id="vescResetPosition">Reset 0</button></div></article>
+                <article class="vesc-card" id="vescSteeringCard"><div class="vesc-card-head"><b>LEFT Encoder ABI / TIM4</b><span class="path-tag">PB6/PB7</span></div><div class="vesc-position-strip"><div><span>Cal</span><b id="vescSteerCal">--</b></div><div><span>Home</span><b id="vescSteerHome">--</b></div><div><span>Sync</span><b id="vescSteerSync">--</b></div><div><span>Raw TIM4</span><b id="vescSteerRaw">--</b></div><div><span>Span</span><b id="vescSteerSpan">--</b></div><div><span>Fault</span><b id="vescSteerFault">--</b></div></div><div class="button-row"><button class="soft-btn" id="vescReadSteeringCal">Read</button><button class="soft-btn" id="vescEncoderDebug">Encoder Debug</button><button class="warning-btn" id="vescHomeSteering">Home</button><button class="warning-btn" id="vescResetLeftZero">Reset 0</button></div><div class="json-pretty vesc-reply" id="vescSteeringDetail">Not read.</div></article>
+              </div><div class="vesc-form-row"><label>Detect current A<input id="vescDetectCurrent" type="number" min="0.1" max="5" step="0.1" value="1.0"></label><div class="button-row compact"><button class="warning-btn" id="vescDetectEncoder">Detect LEFT Encoder</button><button class="warning-btn" id="vescDetectHall">Detect RIGHT Hall</button></div></div></section>
+            </details>
+          </article>
+        </section>
+
+        <!-- ESC STATUS -->
+        <section class="page" id="page-esc-status">
           <div class="esc-hero">
-            <article class="panel esc-status-card"><div class="panel-head"><div><span class="eyebrow">SERIAL ACTUATOR</span><h2>ESC Runtime</h2></div><span class="status-chip waiting" id="escChip">OFFLINE</span></div><div class="esc-connection"><div class="connection-orb" id="escOrb"><span>ESC</span></div><div><h3 id="escConnectionTitle">No ACK</h3><p id="escConnectionDetail">Menunggu F103 melalui STM32F411 UART gateway dan USB CDC.</p><div class="path-tag">ROUTE <b>F411 PB6/PB7 → F103 PB11/PB10</b></div></div></div><div class="metric-grid"><div><span>Drive target</span><b id="escDriveTarget">--</b></div><div><span>Drive actual</span><b id="escDriveActual">--</b></div><div><span>Steer target STM</span><b id="escSteerTarget">--</b></div><div><span>Steer feedback STM</span><b id="escSteerActual">--</b></div><div><span>Yaw rate</span><b id="escYawRate">--</b></div><div><span>MUX source</span><b id="escMuxSource">--</b></div></div></article>
-            <article class="panel"><div class="panel-head"><div><span class="eyebrow">STEERING CALIBRATION</span><h2>Calibration Control</h2></div><span class="status-chip waiting" id="calibrationChip">SAFE</span></div><p class="info-box">Mode kalibrasi memaksa drive RPM = 0. Aktifkan hanya saat kendaraan aman dan roda steering dapat bergerak bebas.</p><div class="button-row"><button class="warning-btn grow" id="calModeOn">Enable Calibration</button><button class="soft-btn grow" id="calModeOff">Disable</button></div><div class="kv-list spaced"><div><span>Controller ready</span><b id="calControllerReady">--</b></div><div><span>Raw command</span><b id="escRawCommand">--</b></div><div><span>Raw feedback</span><b id="escRawFeedback">--</b></div><div><span>Physical feedback</span><b id="escPhysicalFeedback">--</b></div></div></article>
+            <article class="panel esc-status-card"><div class="panel-head"><div><span class="eyebrow">ESC DIAGNOSTIC</span><h2>Protocol State</h2></div><span class="status-chip waiting" id="escChip">OFFLINE</span></div><div class="esc-connection"><div class="connection-orb" id="escOrb"><span>ESC</span></div><div><h3 id="escConnectionTitle">No ACK</h3><p id="escConnectionDetail">Menunggu F103 melalui STM32F411.</p></div></div><div class="metric-grid"><div><span>Drive target</span><b id="escDriveTarget">--</b></div><div><span>Drive actual</span><b id="escDriveActual">--</b></div><div><span>Steer target</span><b id="escSteerTarget">--</b></div><div><span>Steer feedback</span><b id="escSteerActual">--</b></div><div><span>Yaw rate</span><b id="escYawRate">--</b></div><div><span>MUX</span><b id="escMuxSource">--</b></div></div><div class="json-pretty" id="escStatusRaw">Waiting...</div></article>
+            <article class="panel"><div class="panel-head"><div><span class="eyebrow">VESC BRIDGE</span><h2>Tool Status / Replies</h2></div></div><div class="json-pretty" id="vescToolStatus">Waiting...</div><div class="json-pretty vesc-reply" id="vescRawReply">No reply yet.</div></article>
           </div>
+          <div id="focTelemetry" hidden></div>
+
+          <article class="panel"><div class="panel-head"><div><span class="eyebrow">STEERING SAFETY</span><h2>Calibration / Protocol Feedback</h2></div><span class="status-chip waiting" id="calibrationChip">SAFE</span></div><div class="four-metrics"><div><span>Controller</span><b id="calControllerReady">--</b></div><div><span>Raw command</span><b id="escRawCommand">--</b></div><div><span>Raw feedback</span><b id="escRawFeedback">--</b></div><div><span>Physical feedback</span><b id="escPhysicalFeedback">--</b></div></div><div class="button-row"><button class="warning-btn" id="calModeOn">Enable Calibration</button><button class="soft-btn" id="calModeOff">Disable</button><button class="soft-btn" id="escOpenTuning">Open ESC Tests</button></div><span id="hmiCommandRange" hidden></span><span id="stmProtocolRange" hidden></span><span id="wheelPhysicalRange" hidden></span></article>
+
           <article class="panel hmi-scada-panel">
-            <div class="panel-head"><div><span class="eyebrow">STM32F411 • BIDIRECTIONAL SCADA</span><h2>TFT HMI Mirror & Manual Control</h2></div><span class="status-chip waiting" id="hmiChip">OFFLINE</span></div>
-            <div class="steering-domain-strip">
-              <div><span>HMI command range</span><b id="hmiCommandRange">±90°</b><small>stmf4_hmi_bridge.hmi_steer_full_scale_deg</small></div>
-              <div><span>STM protocol limit</span><b id="stmProtocolRange">±90°</b><small>esc_ackermann.serial_left_max_deg</small></div>
-              <div><span>Physical wheel limit</span><b id="wheelPhysicalRange">calibration</b><small>separate mechanical domain</small></div>
-              <button class="soft-btn" id="escOpenTuning">Open ESC Tuning</button>
-            </div>
-            <div class="hmi-state-strip">
-              <div><span>TFT page</span><b id="hmiPage">--</b></div><div><span>Operator mode</span><b id="hmiMode">--</b></div><div><span>Camera tab</span><b id="hmiCameraTab">--</b></div><div><span>Target</span><b id="hmiTarget">--</b></div><div><span>Nav state</span><b id="hmiNavMirror">--</b></div><div><span>Control origin</span><b id="hmiOrigin">--</b></div><div><span>Manual speed</span><b id="hmiSpeed">--</b></div><div><span>Drive</span><b id="hmiDrive">--</b></div><div><span>Steering</span><b id="hmiSteer">--</b></div>
-            </div>
+            <div class="panel-head"><div><span class="eyebrow">STM32F411 HMI</span><h2>HMI Status & Manual Control</h2></div><span class="status-chip waiting" id="hmiChip">OFFLINE</span></div>
+            <div class="hmi-state-strip"><div><span>TFT page</span><b id="hmiPage">--</b></div><div><span>Mode</span><b id="hmiMode">--</b></div><div><span>Camera tab</span><b id="hmiCameraTab">--</b></div><div><span>Target</span><b id="hmiTarget">--</b></div><div><span>Nav</span><b id="hmiNavMirror">--</b></div><div><span>Origin</span><b id="hmiOrigin">--</b></div><div><span>Speed</span><b id="hmiSpeed">--</b></div><div><span>Drive</span><b id="hmiDrive">--</b></div><div><span>Steer</span><b id="hmiSteer">--</b></div></div>
             <div class="hmi-mode-row"><button class="hmi-mode-btn" id="hmiModeAuto">AUTO</button><button class="hmi-mode-btn" id="hmiModeManual">MANUAL</button><button class="soft-btn" id="hmiSyncBtn">Sync TFT</button></div>
-            <div class="hmi-control-grid" aria-label="Manual HMI control">
-              <span></span><button data-hmi-control="FWD">▲<small>MAJU</small></button><span></span>
-              <button data-hmi-control="LEFT">◀<small>KIRI</small></button><button data-hmi-control="CENTER">●<small>0°</small></button><button data-hmi-control="RIGHT">▶<small>KANAN</small></button>
-              <span></span><button data-hmi-control="REV">▼<small>MUNDUR</small></button><button class="stop" data-hmi-control="STOP">■<small>STOP</small></button>
-            </div>
+            <div class="hmi-control-grid"><span></span><button data-hmi-control="FWD">▲<small>MAJU</small></button><span></span><button data-hmi-control="LEFT">◀<small>KIRI</small></button><button data-hmi-control="CENTER">●<small>0°</small></button><button data-hmi-control="RIGHT">▶<small>KANAN</small></button><span></span><button data-hmi-control="REV">▼<small>MUNDUR</small></button><button class="stop" data-hmi-control="STOP">■<small>STOP</small></button></div>
             <div class="hmi-speed-row"><span>Speed preset</span><div><button data-hmi-speed="10">10%</button><button data-hmi-speed="20">20%</button><button data-hmi-speed="30">30%</button><button data-hmi-speed="40">40%</button><button data-hmi-speed="50">50%</button></div></div>
-            <p class="hint">Semua tombol memakai jalur <b>/hmi/cmd_vel → ESC mux</b>. Perintah gerak ditolak bila bukan MANUAL, HMI/ESC tidak ready, feedback tidak fresh, atau E-STOP aktif. State tombol TFT dan Web mengikuti sumber state ROS yang sama.</p>
+            <div class="hmi-camera-mirror" hidden><span>Camera</span><b id="hmiCameraMirror">--</b><div><button data-hmi-camera-tab="VIEW">VIEW</button><button data-hmi-camera-tab="DETECT">DETECT</button></div></div>
           </article>
-          <article class="panel vesc-tool-panel">
-            <div class="panel-head"><div><span class="eyebrow">F103 • VESC 6.00 PROTOCOL</span><h2>VESC Tool Workbench</h2></div><span class="status-chip waiting" id="vescToolModeChip">RUNTIME</span></div>
-            <div class="vesc-tool-banner"><div><span>Transport</span><b id="vescTransportState">WAIT</b><small>F411 PB6/PB7 ↔ F103 PB11/PB10 @1 Mbps</small></div><div><span>Authority</span><b id="vescAuthority">RUNTIME</b><small>maintenance is mutually exclusive with autonomous control</small></div><div><span>VESC Tool TCP</span><b id="vescTcpState">127.0.0.1:65102</b><small id="vescTcpDetail">single-client localhost proxy</small></div><div class="vesc-mode-actions"><button class="warning-btn" id="vescEnterMaintenance">Enter Maintenance</button><button class="soft-btn" id="vescExitMaintenance">Return Runtime</button></div></div>
-            <p class="info-box">Maintenance hanya dapat masuk saat kendaraan berhenti dan mux IDLE/STOP. Saat aktif, Ackermann runtime dihentikan lalu UART dialihkan ke VESC Tool bridge. VESC Tool desktop dapat memilih koneksi TCP <b>127.0.0.1:65102</b>; ketika client TCP terhubung, auto-poll Web dihentikan dan TCP menjadi pemilik tunggal jalur maintenance. Keluar/disconnect melakukan current=0 pada kedua motor sebelum routing dikembalikan ke runtime.</p>
-            <div class="vesc-tool-grid">
-              <section class="vesc-card"><div class="vesc-card-head"><b>Live Values</b><select id="vescMotor"><option value="1">Motor 1 • LEFT / Steering</option><option value="2">Motor 2 • RIGHT / Drive</option></select></div><div class="vesc-metrics"><div><span>Vbus</span><b id="vescVbus">--</b></div><div><span>eRPM</span><b id="vescRpm">--</b></div><div><span>Position</span><b id="vescPosition">--</b></div><div><span>Duty</span><b id="vescDuty">--</b></div><div><span>Iq</span><b id="vescIq">--</b></div><div><span>Id</span><b id="vescId">--</b></div><div><span>Motor I</span><b id="vescMotorCurrent">--</b></div><div><span>Input I</span><b id="vescInputCurrent">--</b></div><div><span>MOS Temp</span><b id="vescTemp">--</b></div><div><span>Fault</span><b id="vescFault">--</b></div></div><div class="button-row"><button class="soft-btn grow" id="vescReadFw">FW Version</button><button class="soft-btn grow" id="vescReadValues">Refresh Values</button><button class="soft-btn grow" id="vescReadMcconf">Read MC Config</button><button class="soft-btn grow" id="vescReadAppconf">Read App Config</button></div></section>
-              <section class="vesc-card"><div class="vesc-card-head"><b>Motor Control</b><span class="path-tag">MAINTENANCE ONLY</span></div><div class="vesc-form-row"><label>Mode<select id="vescControlType"><option value="RPM">RPM</option><option value="POS">Position °</option><option value="CURRENT">Current A</option><option value="DUTY">Duty</option><option value="BRAKE">Brake A</option><option value="HANDBRAKE">Handbrake A</option></select></label><label>Setpoint<input id="vescControlValue" type="number" step="any" value="0"></label></div><div class="button-row"><button class="primary-btn grow" id="vescSendSetpoint">Send Setpoint</button><button class="danger-btn grow" id="vescSendZero">Zero / Stop</button></div><div class="vesc-form-row"><label>Detect current A<input id="vescDetectCurrent" type="number" min="0.1" max="5" step="0.1" value="1.0"></label><div class="button-row compact"><button class="warning-btn" id="vescDetectHall">Detect Hall</button><button class="warning-btn" id="vescDetectEncoder">Detect Encoder</button></div></div></section>
-              <section class="vesc-card"><div class="vesc-card-head"><b>Terminal & Raw Protocol</b><span class="path-tag">ADVANCED</span></div><label class="vesc-wide-label">Terminal command<input id="vescTerminal" type="text" maxlength="192" placeholder="faults / help / custom command"></label><div class="button-row"><button class="soft-btn grow" id="vescSendTerminal">Run Terminal</button><button class="soft-btn grow" id="vescAlive">Send Alive</button></div><label class="vesc-wide-label">Raw payload hex<input id="vescRawHex" type="text" maxlength="8192" placeholder="e.g. 0E = COMM_GET_MCCONF"></label><div class="button-row"><button class="soft-btn grow" id="vescSendRaw">Send Raw Payload</button><button class="danger-btn grow" id="vescReboot">Reboot Selected Motor MCU</button></div></section>
-              <section class="vesc-card"><div class="vesc-card-head"><b>Tool Status / Replies</b><span class="path-tag">RAW + DECODED</span></div><div class="json-pretty" id="vescToolStatus">Waiting...</div><div class="json-pretty vesc-reply" id="vescRawReply">No reply yet.</div></section>
-            </div>
-          </article>
-          <div class="two-col"><article class="panel"><div class="panel-head"><div><span class="eyebrow">ESC DIAGNOSTIC</span><h2>Protocol State</h2></div></div><div class="json-pretty" id="escStatusRaw">Waiting...</div></article><article class="panel"><div class="panel-head"><div><span class="eyebrow">FOC TELEMETRY</span><h2>Electrical Data</h2></div></div><div class="json-pretty" id="focTelemetry">Topic /esc/foc/telemetry belum tersedia.</div></article></div>
-          <article class="panel troubleshooting"><div class="panel-head"><div><span class="eyebrow">ESC TROUBLESHOOTING</span><h2>Why Motor Is Not Moving</h2></div></div><div class="checklist" id="escChecklist"></div></article>
+
+          <article class="panel troubleshooting"><div class="panel-head"><div><span class="eyebrow">ESC TROUBLESHOOTING</span><h2>Readiness Checklist</h2></div></div><div class="checklist" id="escChecklist"></div></article>
         </section>
 
         <!-- CALIBRATION -->
@@ -413,6 +478,7 @@
   <div class="toast-stack" id="toastStack" aria-live="polite"></div>
   <div class="modal-backdrop" id="confirmModal"><div class="modal"><span class="eyebrow">CONFIRM ACTION</span><h2 id="confirmTitle">Confirm</h2><p id="confirmText"></p><div class="button-row"><button class="soft-btn grow" id="confirmNo">Cancel</button><button class="danger-btn grow" id="confirmYes">Continue</button></div></div></div>
   <script src="/app.js?v=20260904-sse-fallback-v1-bab4-report-v2" defer></script>
+  <script src="/vesc_workbench.js?v=20260906-vesc-engineering-v5" defer></script>
   <script src="/export_tools.js?v=20260904-bab4-report-v1" defer></script>
 </body>
 </html>

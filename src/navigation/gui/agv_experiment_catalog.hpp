@@ -2420,333 +2420,149 @@ inline QVector<ExperimentSpec> buildExperimentCatalog(const QString &subsystem) 
       "Speed scale", "trajectory_safety_state.speed_scale"
     }
   });
-  /* ------------------------- STEERING / FOC ------------------------- */
-  add("steering", QStringLiteral("4.1"), QStringLiteral("4.1 Alur Pengujian Bertahap dan Aturan Penguncian Parameter"), "4.1",
-  QStringLiteral("4.1 Alur Pengujian Bertahap dan Aturan Penguncian Parameter"),
-  {
-  },
-  {
-    {
-      "Tahap", "Jenis kegiatan", "Masukan yang dikunci", "Variasi/proses", "Keluaran untuk tahap berikutnya"
-    }
-  },
-  {
-    {
-      "Target", "esc_steer_target"
-    }, {
-      "Actual", "esc_steer_actual"
-    },
-    {
-      "Error", "derived.steering_error_rad"
-    }, {
-      "Iq", "foc_telemetry.iq_a"
-    }
-  });
-  add("steering", QStringLiteral("4.2"), QStringLiteral("4.2 Tahap Kalibrasi Awal"), "4.2.1",
-  QStringLiteral("4.2.1 Kalibrasi Offset Arus, Gain Arus, dan Tegangan Bus"),
-  {
-    "Rekaman offset arus saat PWM nonaktif"
-  },
-  {
-    {
-      "Kanal", "Mean ADC", "Std ADC", "Arus setelah koreksi", "Status"
-    }
-  },
-  {
-    {
-      "Iq ref", "foc_telemetry.iq_ref_a"
-    }, {
-      "Iq", "foc_telemetry.iq_a"
-    },
-    {
-      "Id", "foc_telemetry.id_a"
-    }, {
-      "Vbus", "foc_telemetry.vbus_v"
-    }
-  });
-  add("steering", QStringLiteral("4.2"), QStringLiteral("4.2 Tahap Kalibrasi Awal"), "4.2.2",
-  QStringLiteral("4.2.2 Validasi Encoder A/B dan Kalibrasi Mekanik Steering"),
-  {
-    "Linearitas konversi encoder ke sudut steering"
-  },
-  {
-    {
-      "Sudut referensi", "Feedback encoder", "Error", "Arah pendekatan"
-    }
-  },
-  {
-    {
-      "Target", "esc_steer_target"
-    }, {
-      "Actual", "esc_steer_actual"
-    },
-    {
-      "Error", "derived.steering_error_rad"
-    }, {
-      "Iq", "foc_telemetry.iq_a"
-    }
-  });
-  add("steering", QStringLiteral("4.2"), QStringLiteral("4.2 Tahap Kalibrasi Awal"), "4.2.3",
-  QStringLiteral("4.2.3 Pemetaan Enam Sektor dan Kalibrasi Sudut Elektrik"),
-  {
-    "Pemetaan enam sektor terhadap encoder"
-  },
-  {
-    {
-      "Sektor", "Count relatif", "Δ dari sektor sebelumnya", "Status"
-    }
-  },
-  {
-    {
-      "Iq ref", "foc_telemetry.iq_ref_a"
-    }, {
-      "Iq", "foc_telemetry.iq_a"
-    },
-    {
-      "Id", "foc_telemetry.id_a"
-    }, {
-      "Vbus", "foc_telemetry.vbus_v"
-    }
-  });
-  add("steering", QStringLiteral("4.3"), QStringLiteral("4.3 Tahap Tuning Loop Arus FOC"), "4.3",
-  QStringLiteral("4.3 Tahap Tuning Loop Arus FOC"),
-  {
-    "Respons loop arus untuk tiga set gain"
-  },
-  {
-    {
-      "Set", "Kp_i", "Ki_i", "Rise time", "Overshoot", "Ripple Iq", "Status"
-    }
-  },
-  {
-    {
-      "Iq ref", "foc_telemetry.iq_ref_a"
-    }, {
-      "Iq", "foc_telemetry.iq_a"
-    },
-    {
-      "Id", "foc_telemetry.id_a"
-    }, {
-      "Vbus", "foc_telemetry.vbus_v"
-    }
-  });
-  add("steering", QStringLiteral("4.4"), QStringLiteral("4.4 Pengujian 1 — Tuning Gain Kendali Posisi"), "4.4",
-  QStringLiteral("4.4 Pengujian 1 — Tuning Gain Kendali Posisi"),
-  {
-    "Tuning gain loop posisi pada target 20°"
-  },
-  {
-    {
-      "Set", "Kp_pos", "Ki_pos", "Rise time", "Settling", "Overshoot", "e_ss", "Iq peak"
-    }
-  },
-  {
-    {
-      "Target", "esc_steer_target"
-    }, {
-      "Actual", "esc_steer_actual"
-    },
-    {
-      "Error", "derived.steering_error_rad"
-    }, {
-      "Iq", "foc_telemetry.iq_a"
-    }
-  });
-  add("steering", QStringLiteral("4.5"), QStringLiteral("4.5 Pengujian 2 — Respons Step Posisi dan Akuisisi Data Terpadu"), "4.5",
-  QStringLiteral("4.5 Pengujian 2 — Respons Step Posisi dan Akuisisi Data Terpadu"),
-  {
-    "Respons step 10°", "Respons step 20°", "Respons step 30°", "Ringkasan respons step"
-  },
-  {
-    {
-      "Target", "Rise time", "Settling time", "Overshoot", "e_ss", "Iq peak", "Status"
-    }
-  },
-  {
-    {
-      "Target", "esc_steer_target"
-    }, {
-      "Actual", "esc_steer_actual"
-    },
-    {
-      "Error", "derived.steering_error_rad"
-    }, {
-      "Iq", "foc_telemetry.iq_a"
-    }
-  });
-  add("steering", QStringLiteral("4.6"), QStringLiteral("4.6 Analisis Simetri, Repeatability, dan Ackermann dari Data Step"), "4.6.1",
-  QStringLiteral("4.6.1 Simetri Arah Kiri dan Kanan"),
-  {
-    "Simetri arah kiri dan kanan"
-  },
-  {
-    {
-      "|Target|", "e ss kiri", "e ss kanan", "Selisih rise time", "Kesimpulan"
-    }
-  },
-  {
-    {
-      "Target", "esc_steer_target"
-    }, {
-      "Actual", "esc_steer_actual"
-    },
-    {
-      "Error", "derived.steering_error_rad"
-    }, {
-      "Iq", "foc_telemetry.iq_a"
-    }
-  });
-  add("steering", QStringLiteral("4.6"), QStringLiteral("4.6 Analisis Simetri, Repeatability, dan Ackermann dari Data Step"), "4.6.2",
-  QStringLiteral("4.6.2 Repeatability"),
-  {
-    "Repeatability delapan pengulangan"
-  },
-  {
-    {
-      "Target", "Mean |error|", "Std", "Maksimum", "Jumlah run"
-    }
-  },
-  {
-    {
-      "Target", "esc_steer_target"
-    }, {
-      "Actual", "esc_steer_actual"
-    },
-    {
-      "Error", "derived.steering_error_rad"
-    }, {
-      "Iq", "foc_telemetry.iq_a"
-    }
-  });
-  add("steering", QStringLiteral("4.6"), QStringLiteral("4.6 Analisis Simetri, Repeatability, dan Ackermann dari Data Step"), "4.6.3",
-  QStringLiteral("4.6.3 Validasi Geometri Ackermann"),
-  {
-    "Validasi geometri Ackermann"
-  },
-  {
-    {
-      "δ_in", "δ_out ideal", "δ_out terukur", "Error Ackermann"
-    }
-  },
-  {
-    {
-      "Target", "esc_steer_target"
-    }, {
-      "Actual", "esc_steer_actual"
-    },
-    {
-      "Error", "derived.steering_error_rad"
-    }, {
-      "Iq", "foc_telemetry.iq_a"
-    }
-  });
-  add("steering", QStringLiteral("4.7"), QStringLiteral("4.7 Pengujian 3 — Tracking Referensi Sinusoidal"), "4.7",
-  QStringLiteral("4.7 Pengujian 3 — Tracking Referensi Sinusoidal"),
-  {
-    "Tracking sinus 0,1 Hz", "Tracking sinus 0,5 Hz", "Tracking sinus 1,0 Hz", "Pengaruh frekuensi terhadap tracking"
-  },
-  {
-    {
-      "Frekuensi", "RMSE", "Gain amplitudo", "Phase lag", "Iq_rms", "Iq_peak", "Status"
-    }
-  },
-  {
-    {
-      "Target", "esc_steer_target"
-    }, {
-      "Actual", "esc_steer_actual"
-    },
-    {
-      "Error", "derived.steering_error_rad"
-    }, {
-      "Iq", "foc_telemetry.iq_a"
-    }
-  });
-  add("steering", QStringLiteral("4.8"), QStringLiteral("4.8 Pengujian 4 — Penolakan Gangguan Beban"), "4.8",
-  QStringLiteral("4.8 Pengujian 4 — Penolakan Gangguan Beban"),
-  {
-    "Penolakan gangguan tanpa beban", "Penolakan gangguan beban sedang", "Penolakan gangguan beban maksimum", "Ringkasan penolakan gangguan"
-  },
-  {
-    {
-      "Kondisi", "Deviasi maksimum", "Recovery time", "e_ss sesudah gangguan", "Iq_peak", "Status"
-    }
-  },
-  {
-    {
-      "Target", "esc_steer_target"
-    }, {
-      "Actual", "esc_steer_actual"
-    },
-    {
-      "Error", "derived.steering_error_rad"
-    }, {
-      "Iq", "foc_telemetry.iq_a"
-    }
-  });
-  add("steering", QStringLiteral("4.9"), QStringLiteral("4.9 Rekapitulasi Konfigurasi Akhir dan Gerbang Final"), "4.9",
-  QStringLiteral("4.9 Rekapitulasi Konfigurasi Akhir dan Gerbang Final"),
-  {
-  },
-  {
-    {
-      "Kelompok", "Parameter", "Kandidat aktual", "Sumber keputusan"
-    }
-  },
-  {
-    {
-      "Target", "esc_steer_target"
-    }, {
-      "Actual", "esc_steer_actual"
-    },
-    {
-      "Error", "derived.steering_error_rad"
-    }, {
-      "Iq", "foc_telemetry.iq_a"
-    }
-  });
-  add("steering", QStringLiteral("4.10"), QStringLiteral("4.10 Ringkasan Handoff Antar-Tahap"), "4.10",
-  QStringLiteral("4.10 Ringkasan Handoff Antar-Tahap"),
-  {
-  },
-  {
-    {
-      "Tahap", "Tiga variasi/proses", "Keluaran yang dikunci", "Dipakai pada"
-    }
-  },
-  {
-    {
-      "Target", "esc_steer_target"
-    }, {
-      "Actual", "esc_steer_actual"
-    },
-    {
-      "Error", "derived.steering_error_rad"
-    }, {
-      "Iq", "foc_telemetry.iq_a"
-    }
-  });
-  add("steering", QStringLiteral("4.11"), QStringLiteral("4.11 Checklist Penggantian Data Estimasi"), "4.11",
-  QStringLiteral("4.11 Checklist Penggantian Data Estimasi"),
-  {
-  },
-  {
-    {
-      "Item", "Yang harus diganti/dilengkapi", "Status sebelum final"
-    }
-  },
-  {
-    {
-      "Target", "esc_steer_target"
-    }, {
-      "Actual", "esc_steer_actual"
-    },
-    {
-      "Error", "derived.steering_error_rad"
-    }, {
-      "Iq", "foc_telemetry.iq_a"
-    }
-  });
+  /* -------------------- VESC / ACKERMANN ACTUATION -------------------- */
+  // Ordered by physical dependency. LEFT is steering with ABI encoder on TIM4
+  // PB6/PB7; RIGHT is traction/velocity with Hall feedback. Do not tune an
+  // outer loop before its sensor and inner FOC loop have passed the prior gate.
+  add("steering", QStringLiteral("4.1"), QStringLiteral("4.1 Metode Pengujian VESC Ackermann"), "4.1",
+      QStringLiteral("4.1 Alur Pengujian Ackermann dan Aturan Penguncian Parameter"), {},
+      {{"Tahap","Motor / fungsi","Prasyarat PASS","Parameter yang boleh diubah","Parameter yang dikunci","Keluaran / handoff"}}, {}, {});
+
+  add("steering", QStringLiteral("4.2"), QStringLiteral("4.2 Kalibrasi Dasar dan Validasi Sensor Motor"), "4.2.1",
+      QStringLiteral("4.2.1 Verifikasi Link F411, FW VESC LEFT/RIGHT, dan Snapshot Konfigurasi"), {},
+      {{"Variasi","LEFT Vbus","LEFT Fault","RIGHT Vbus","RIGHT Fault","LEFT Reply","RIGHT Reply"}},
+      {{"LEFT Vbus","vesc_left_values.vbus_v"},{"LEFT Fault","vesc_left_values.fault"},{"RIGHT Vbus","vesc_right_values.vbus_v"},{"RIGHT Fault","vesc_right_values.fault"}}, {});
+
+  add("steering", QStringLiteral("4.2"), QStringLiteral("4.2 Kalibrasi Dasar dan Validasi Sensor Motor"), "4.2.2",
+      QStringLiteral("4.2.2 Kalibrasi Sensor Arus dan Tegangan Bus Dual Motor"),
+      {"Arus dan Vbus LEFT/RIGHT saat validasi zero-current"},
+      {{"Variasi","LEFT Motor Current","LEFT Input Current","LEFT Vbus","RIGHT Motor Current","RIGHT Input Current","RIGHT Vbus","Status"}},
+      {{"LEFT Motor Current","vesc_left_values.current_motor_a"},{"LEFT Input Current","vesc_left_values.current_in_a"},{"LEFT Vbus","vesc_left_values.vbus_v"},{"RIGHT Motor Current","vesc_right_values.current_motor_a"},{"RIGHT Input Current","vesc_right_values.current_in_a"},{"RIGHT Vbus","vesc_right_values.vbus_v"}}, {},
+      {{"time_series",{"LEFT Motor Current","LEFT Input Current","RIGHT Motor Current","RIGHT Input Current","LEFT Vbus","RIGHT Vbus"},{},{},"Time [s]","A / V"}});
+
+  add("steering", QStringLiteral("4.2"), QStringLiteral("4.2 Kalibrasi Dasar dan Validasi Sensor Motor"), "4.2.3",
+      QStringLiteral("4.2.3 LEFT — Validasi Encoder ABI TIM4, Hard Stop, Center, dan Home"),
+      {"Raw TIM4 dan posisi steering terhadap waktu"},
+      {{"Variasi","Raw TIM4","LEFT Position","Steering target","Steering actual","Span","Encoder synced","Status"}},
+      {{"Raw TIM4","vesc_steering_state.raw_encoder"},{"LEFT Position","vesc_left_values.position_deg"},{"Steering target","esc_steer_target"},{"Steering actual","esc_steer_actual"},{"Span","vesc_steering_state.span"}}, {},
+      {{"time_series",{"Raw TIM4","LEFT Position","Steering target","Steering actual"},{},{},"Time [s]","count / deg"}});
+
+  add("steering", QStringLiteral("4.2"), QStringLiteral("4.2 Kalibrasi Dasar dan Validasi Sensor Motor"), "4.2.4",
+      QStringLiteral("4.2.4 LEFT — Deteksi Encoder FOC dan Kalibrasi Sudut Elektrik"),
+      {"Respons D/Q saat alignment encoder LEFT"},
+      {{"Variasi","LEFT Id","LEFT Iq","LEFT Vd","LEFT Vq","LEFT Position","Raw TIM4","Status"}},
+      {{"LEFT Id","vesc_left_values.id_a"},{"LEFT Iq","vesc_left_values.iq_a"},{"LEFT Vd","vesc_left_values.vd_v"},{"LEFT Vq","vesc_left_values.vq_v"},{"LEFT Position","vesc_left_values.position_deg"},{"Raw TIM4","vesc_steering_state.raw_encoder"}}, {},
+      {{"time_series",{"LEFT Id","LEFT Iq","LEFT Vd","LEFT Vq","LEFT Position"},{},{},"Time [s]","A / V / deg"}});
+
+  add("steering", QStringLiteral("4.2"), QStringLiteral("4.2 Kalibrasi Dasar dan Validasi Sensor Motor"), "4.2.5",
+      QStringLiteral("4.2.5 RIGHT — Validasi Hall, Detect Hall, Arah, dan Pole Pair"),
+      {"Respons Hall RIGHT pada putaran commissioning rendah"},
+      {{"Variasi","Command value","RIGHT RPM","RIGHT Duty","RIGHT Motor Current","RIGHT Iq","RIGHT Fault","Status"}},
+      {{"Command value","vesc_command_state.value"},{"RIGHT RPM","vesc_right_values.rpm"},{"RIGHT Duty","vesc_right_values.duty"},{"RIGHT Motor Current","vesc_right_values.current_motor_a"},{"RIGHT Iq","vesc_right_values.iq_a"},{"RIGHT Fault","vesc_right_values.fault"}}, {},
+      {{"time_series",{"Command value","RIGHT RPM","RIGHT Duty","RIGHT Motor Current","RIGHT Iq"},{},{},"Time [s]","command / feedback"}});
+
+  add("steering", QStringLiteral("4.3"), QStringLiteral("4.3 Tuning Loop Arus FOC per Motor"), "4.3.1",
+      QStringLiteral("4.3.1 LEFT — Tuning PI Arus FOC Steering"),
+      {"LEFT Iq reference dan feedback","LEFT Id terhadap waktu"},
+      {{"Variasi","LEFT Iq","LEFT Id","LEFT Motor Current","LEFT Duty","LEFT Vbus","Status"}},
+      {{"LEFT Iq","vesc_left_values.iq_a"},{"LEFT Id","vesc_left_values.id_a"},{"LEFT Motor Current","vesc_left_values.current_motor_a"},{"LEFT Duty","vesc_left_values.duty"},{"LEFT Vbus","vesc_left_values.vbus_v"}}, {},
+      {{"time_series",{"LEFT Iq","LEFT Motor Current","LEFT Duty"},{},{},"Time [s]","A / duty"},{"time_series",{"LEFT Id"},{},{},"Time [s]","Id [A]"}});
+
+  add("steering", QStringLiteral("4.3"), QStringLiteral("4.3 Tuning Loop Arus FOC per Motor"), "4.3.2",
+      QStringLiteral("4.3.2 RIGHT — Tuning PI Arus FOC Drive"),
+      {"RIGHT Iq dan motor current","RIGHT duty dan Vbus"},
+      {{"Variasi","RIGHT Iq","RIGHT Id","RIGHT Motor Current","RIGHT Duty","RIGHT RPM","RIGHT Vbus","Status"}},
+      {{"RIGHT Iq","vesc_right_values.iq_a"},{"RIGHT Id","vesc_right_values.id_a"},{"RIGHT Motor Current","vesc_right_values.current_motor_a"},{"RIGHT Duty","vesc_right_values.duty"},{"RIGHT RPM","vesc_right_values.rpm"},{"RIGHT Vbus","vesc_right_values.vbus_v"}}, {},
+      {{"time_series",{"RIGHT Iq","RIGHT Motor Current","RIGHT Duty"},{},{},"Time [s]","A / duty"},{"time_series",{"RIGHT RPM","RIGHT Vbus"},{},{},"Time [s]","eRPM / V"}});
+
+  add("steering", QStringLiteral("4.4"), QStringLiteral("4.4 Tuning Outer Loop Steering dan Velocity"), "4.4.1",
+      QStringLiteral("4.4.1 LEFT — Tuning PID Posisi Steering"),
+      {"Target dan feedback steering","Error steering dan Iq"},
+      {{"Variasi","Steering target","Steering actual","Steering error","LEFT Iq","LEFT Duty","Status"}},
+      {{"Steering target","esc_steer_target"},{"Steering actual","esc_steer_actual"},{"Steering error","derived.steering_error_rad"},{"LEFT Iq","vesc_left_values.iq_a"},{"LEFT Duty","vesc_left_values.duty"}}, {},
+      {{"time_series",{"Steering target","Steering actual"},{},{},"Time [s]","Steering [rad]"},{"time_series",{"Steering error","LEFT Iq"},{},{},"Time [s]","error / A"}});
+
+  add("steering", QStringLiteral("4.4"), QStringLiteral("4.4 Tuning Outer Loop Steering dan Velocity"), "4.4.2",
+      QStringLiteral("4.4.2 RIGHT — Tuning PID Speed Velocity"),
+      {"RIGHT RPM command dan feedback","RIGHT current saat speed control"},
+      {{"Variasi","Command value","RIGHT RPM","RIGHT Motor Current","RIGHT Iq","RIGHT Duty","Status"}},
+      {{"Command value","vesc_command_state.value"},{"RIGHT RPM","vesc_right_values.rpm"},{"RIGHT Motor Current","vesc_right_values.current_motor_a"},{"RIGHT Iq","vesc_right_values.iq_a"},{"RIGHT Duty","vesc_right_values.duty"}}, {},
+      {{"time_series",{"Command value","RIGHT RPM"},{},{},"Time [s]","eRPM"},{"time_series",{"RIGHT Motor Current","RIGHT Iq","RIGHT Duty"},{},{},"Time [s]","A / duty"}});
+
+  add("steering", QStringLiteral("4.5"), QStringLiteral("4.5 Respons Step Aktuator"), "4.5.1",
+      QStringLiteral("4.5.1 LEFT — Respons Step Posisi Steering ±10°, ±20°, ±30°"),
+      {"Target dan feedback step steering","Error steering","Iq dan duty steering","Raw encoder TIM4"},
+      {{"Variasi","Steering target","Steering actual","Steering error","LEFT Iq","LEFT Duty","Raw TIM4","Status"}},
+      {{"Steering target","esc_steer_target"},{"Steering actual","esc_steer_actual"},{"Steering error","derived.steering_error_rad"},{"LEFT Iq","vesc_left_values.iq_a"},{"LEFT Duty","vesc_left_values.duty"},{"Raw TIM4","vesc_steering_state.raw_encoder"}}, {},
+      {{"time_series",{"Steering target","Steering actual"},{},{},"Time [s]","Steering [rad]"},{"time_series",{"Steering error"},{},{},"Time [s]","Error [rad]"},{"time_series",{"LEFT Iq","LEFT Duty"},{},{},"Time [s]","A / duty"},{"time_series",{"Raw TIM4"},{},{},"Time [s]","TIM4 count"}});
+
+  add("steering", QStringLiteral("4.5"), QStringLiteral("4.5 Respons Step Aktuator"), "4.5.2",
+      QStringLiteral("4.5.2 RIGHT — Respons Step Duty, Current, dan RPM"),
+      {"RIGHT command dan RPM","RIGHT current","RIGHT duty dan Vbus"},
+      {{"Variasi","Command mode","Command value","RIGHT RPM","RIGHT Duty","RIGHT Motor Current","RIGHT Input Current","RIGHT Iq","RIGHT Vbus","Status"}},
+      {{"Command value","vesc_command_state.value"},{"RIGHT RPM","vesc_right_values.rpm"},{"RIGHT Duty","vesc_right_values.duty"},{"RIGHT Motor Current","vesc_right_values.current_motor_a"},{"RIGHT Input Current","vesc_right_values.current_in_a"},{"RIGHT Iq","vesc_right_values.iq_a"},{"RIGHT Vbus","vesc_right_values.vbus_v"}}, {},
+      {{"time_series",{"Command value","RIGHT RPM"},{},{},"Time [s]","command / eRPM"},{"time_series",{"RIGHT Motor Current","RIGHT Input Current","RIGHT Iq"},{},{},"Time [s]","Current [A]"},{"time_series",{"RIGHT Duty","RIGHT Vbus"},{},{},"Time [s]","duty / V"}});
+
+  add("steering", QStringLiteral("4.6"), QStringLiteral("4.6 Validasi Steering dan Geometri Ackermann"), "4.6.1",
+      QStringLiteral("4.6.1 Simetri Steering Kiri dan Kanan"),
+      {"Simetri target dan feedback steering"},
+      {{"Variasi","Steering target","Steering actual","Steering error","Raw TIM4","LEFT Iq"}},
+      {{"Steering target","esc_steer_target"},{"Steering actual","esc_steer_actual"},{"Steering error","derived.steering_error_rad"},{"Raw TIM4","vesc_steering_state.raw_encoder"},{"LEFT Iq","vesc_left_values.iq_a"}}, {},
+      {{"time_series",{"Steering target","Steering actual","Steering error"},{},{},"Time [s]","Steering [rad]"}});
+
+  add("steering", QStringLiteral("4.6"), QStringLiteral("4.6 Validasi Steering dan Geometri Ackermann"), "4.6.2",
+      QStringLiteral("4.6.2 Repeatability Steering pada Pengulangan Kiri/Center/Kanan"),
+      {"Repeatability steering dan raw encoder"},
+      {{"Variasi","Steering target","Steering actual","Steering error","Raw TIM4","LEFT Iq","Status"}},
+      {{"Steering target","esc_steer_target"},{"Steering actual","esc_steer_actual"},{"Steering error","derived.steering_error_rad"},{"Raw TIM4","vesc_steering_state.raw_encoder"},{"LEFT Iq","vesc_left_values.iq_a"}}, {},
+      {{"time_series",{"Steering target","Steering actual","Raw TIM4"},{},{},"Time [s]","rad / count"}});
+
+  add("steering", QStringLiteral("4.6"), QStringLiteral("4.6 Validasi Steering dan Geometri Ackermann"), "4.6.3",
+      QStringLiteral("4.6.3 Validasi Geometri Ackermann dengan Steering LEFT dan Velocity RIGHT"),
+      {"Yaw-rate aktual terhadap model Ackermann","Steering dan kecepatan kendaraan"},
+      {{"Variasi","Steering actual","Vehicle speed","Yaw rate actual","Yaw rate Ackermann","Yaw-rate error","RIGHT RPM","Status"}},
+      {{"Steering actual","esc_steer_actual"},{"Vehicle speed","esc_drive_actual"},{"Yaw rate actual","esc_yaw_rate"},{"Yaw rate Ackermann","esc_kinematic_yaw_rate"},{"Yaw-rate error","derived.ackermann_yaw_error"},{"RIGHT RPM","vesc_right_values.rpm"}}, {},
+      {{"time_series",{"Yaw rate actual","Yaw rate Ackermann"},{},{},"Time [s]","Yaw-rate [rad/s]"},{"time_series",{"Steering actual","Vehicle speed"},{},{},"Time [s]","steer / m/s"}});
+
+  add("steering", QStringLiteral("4.7"), QStringLiteral("4.7 Tracking Dinamis"), "4.7.1",
+      QStringLiteral("4.7.1 LEFT — Tracking Referensi Steering Sinusoidal"),
+      {"Tracking steering sinusoidal","Error tracking steering","Iq steering","Duty steering"},
+      {{"Variasi","Steering target","Steering actual","Steering error","LEFT Iq","LEFT Duty","Raw TIM4"}},
+      {{"Steering target","esc_steer_target"},{"Steering actual","esc_steer_actual"},{"Steering error","derived.steering_error_rad"},{"LEFT Iq","vesc_left_values.iq_a"},{"LEFT Duty","vesc_left_values.duty"},{"Raw TIM4","vesc_steering_state.raw_encoder"}}, {},
+      {{"time_series",{"Steering target","Steering actual"},{},{},"Time [s]","Steering [rad]"},{"time_series",{"Steering error"},{},{},"Time [s]","Error [rad]"},{"time_series",{"LEFT Iq"},{},{},"Time [s]","Iq [A]"},{"time_series",{"LEFT Duty"},{},{},"Time [s]","Duty"}});
+
+  add("steering", QStringLiteral("4.7"), QStringLiteral("4.7 Tracking Dinamis"), "4.7.2",
+      QStringLiteral("4.7.2 RIGHT — Tracking Referensi Velocity"),
+      {"RIGHT command dan RPM","RIGHT current","RIGHT duty"},
+      {{"Variasi","Command value","RIGHT RPM","RIGHT Motor Current","RIGHT Iq","RIGHT Duty","RIGHT Vbus"}},
+      {{"Command value","vesc_command_state.value"},{"RIGHT RPM","vesc_right_values.rpm"},{"RIGHT Motor Current","vesc_right_values.current_motor_a"},{"RIGHT Iq","vesc_right_values.iq_a"},{"RIGHT Duty","vesc_right_values.duty"},{"RIGHT Vbus","vesc_right_values.vbus_v"}}, {},
+      {{"time_series",{"Command value","RIGHT RPM"},{},{},"Time [s]","eRPM"},{"time_series",{"RIGHT Motor Current","RIGHT Iq"},{},{},"Time [s]","A"},{"time_series",{"RIGHT Duty"},{},{},"Time [s]","Duty"}});
+
+  add("steering", QStringLiteral("4.8"), QStringLiteral("4.8 Penolakan Gangguan Beban"), "4.8.1",
+      QStringLiteral("4.8.1 LEFT — Penolakan Gangguan Beban Steering"),
+      {"Posisi steering saat gangguan","Error saat gangguan","Iq saat gangguan","Duty saat gangguan"},
+      {{"Kondisi","Steering target","Steering actual","Steering error","LEFT Iq","LEFT Motor Current","LEFT Duty","Status"}},
+      {{"Steering target","esc_steer_target"},{"Steering actual","esc_steer_actual"},{"Steering error","derived.steering_error_rad"},{"LEFT Iq","vesc_left_values.iq_a"},{"LEFT Motor Current","vesc_left_values.current_motor_a"},{"LEFT Duty","vesc_left_values.duty"}}, {},
+      {{"time_series",{"Steering target","Steering actual"},{},{},"Time [s]","Steering [rad]"},{"time_series",{"Steering error"},{},{},"Time [s]","Error [rad]"},{"time_series",{"LEFT Iq","LEFT Motor Current"},{},{},"Time [s]","A"},{"time_series",{"LEFT Duty"},{},{},"Time [s]","Duty"}});
+
+  add("steering", QStringLiteral("4.8"), QStringLiteral("4.8 Penolakan Gangguan Beban"), "4.8.2",
+      QStringLiteral("4.8.2 RIGHT — Penolakan Gangguan Beban Drive"),
+      {"RIGHT RPM saat gangguan","RIGHT current saat gangguan","RIGHT duty saat gangguan","Vbus saat gangguan"},
+      {{"Kondisi","Command value","RIGHT RPM","RIGHT Motor Current","RIGHT Input Current","RIGHT Iq","RIGHT Duty","RIGHT Vbus","Status"}},
+      {{"Command value","vesc_command_state.value"},{"RIGHT RPM","vesc_right_values.rpm"},{"RIGHT Motor Current","vesc_right_values.current_motor_a"},{"RIGHT Input Current","vesc_right_values.current_in_a"},{"RIGHT Iq","vesc_right_values.iq_a"},{"RIGHT Duty","vesc_right_values.duty"},{"RIGHT Vbus","vesc_right_values.vbus_v"}}, {},
+      {{"time_series",{"Command value","RIGHT RPM"},{},{},"Time [s]","eRPM"},{"time_series",{"RIGHT Motor Current","RIGHT Input Current","RIGHT Iq"},{},{},"Time [s]","A"},{"time_series",{"RIGHT Duty"},{},{},"Time [s]","Duty"},{"time_series",{"RIGHT Vbus"},{},{},"Time [s]","Vbus [V]"}});
+
+  add("steering", QStringLiteral("4.9"), QStringLiteral("4.9 Konfigurasi Akhir dan Gerbang Final"), "4.9",
+      QStringLiteral("4.9 Rekapitulasi Konfigurasi Akhir LEFT/RIGHT dan Gerbang Final Ackermann"), {},
+      {{"Kelompok","Parameter","Nilai final","Motor","Persistensi","Sumber keputusan","Status"}}, {}, {});
+
+  add("steering", QStringLiteral("4.10"), QStringLiteral("4.10 Handoff Antar-Tahap"), "4.10",
+      QStringLiteral("4.10 Ringkasan Handoff Sensor → FOC → Outer Loop → Ackermann"), {},
+      {{"Tahap","Input yang sudah PASS","Parameter dikunci","Output / handoff","Dipakai pada"}}, {}, {});
+
+  add("steering", QStringLiteral("4.11"), QStringLiteral("4.11 Checklist Data Laporan"), "4.11",
+      QStringLiteral("4.11 Checklist Kelengkapan Data Aktual dan Penggantian Data Estimasi"), {},
+      {{"Item","Subbab sumber","Data aktual wajib","File CSV / grafik","Status final"}}, {}, {});
   // Navigation BAB-IV tuning metadata. Every requested leaf gets a live
   // parameter panel backed by the SAME YAML files consumed by autonomous.launch.py.
   // Validation leaves expose the final values read-only; tuning leaves are editable.

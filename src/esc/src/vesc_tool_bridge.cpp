@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -34,17 +35,53 @@ constexpr std::uint8_t COMM_SET_CURRENT_BRAKE = 7;
 constexpr std::uint8_t COMM_SET_RPM = 8;
 constexpr std::uint8_t COMM_SET_POS = 9;
 constexpr std::uint8_t COMM_SET_HANDBRAKE = 10;
+constexpr std::uint8_t COMM_SET_MCCONF = 13;
 constexpr std::uint8_t COMM_GET_MCCONF = 14;
 constexpr std::uint8_t COMM_GET_MCCONF_DEFAULT = 15;
 constexpr std::uint8_t COMM_GET_APPCONF = 17;
 constexpr std::uint8_t COMM_GET_APPCONF_DEFAULT = 18;
+constexpr std::uint8_t COMM_SET_APPCONF = 16;
 constexpr std::uint8_t COMM_TERMINAL_CMD = 20;
 constexpr std::uint8_t COMM_DETECT_ENCODER = 27;
 constexpr std::uint8_t COMM_DETECT_HALL_FOC = 28;
 constexpr std::uint8_t COMM_REBOOT = 29;
 constexpr std::uint8_t COMM_ALIVE = 30;
 constexpr std::uint8_t COMM_FORWARD_CAN = 34;
+constexpr std::uint8_t COMM_CUSTOM_APP_DATA = 36;
+constexpr std::uint8_t COMM_SET_MCCONF_TEMP = 48;
+constexpr std::uint8_t COMM_GET_MCCONF_TEMP = 91;
+constexpr std::uint8_t COMM_GET_DECODED_PPM = 31;
+constexpr std::uint8_t COMM_GET_DECODED_ADC = 32;
+constexpr std::uint8_t COMM_GET_DECODED_CHUK = 33;
+constexpr std::uint8_t COMM_GET_VALUES_SETUP = 47;
+constexpr std::uint8_t COMM_GET_VALUES_SELECTIVE = 50;
+constexpr std::uint8_t COMM_GET_VALUES_SETUP_SELECTIVE = 51;
+constexpr std::uint8_t COMM_PING_CAN = 62;
+constexpr std::uint8_t COMM_GET_IMU_DATA = 65;
+constexpr std::uint8_t COMM_GET_IMU_CALIBRATION = 90;
+constexpr std::uint8_t COMM_GET_CUSTOM_CONFIG_XML = 92;
+constexpr std::uint8_t COMM_GET_CUSTOM_CONFIG = 93;
+constexpr std::uint8_t COMM_GET_CUSTOM_CONFIG_DEFAULT = 94;
+constexpr std::uint8_t COMM_BMS_GET_VALUES = 96;
+constexpr std::uint8_t COMM_PSW_GET_STATUS = 111;
+constexpr std::uint8_t COMM_GET_BATTERY_CUT = 115;
+constexpr std::uint8_t COMM_GET_QML_UI_HW = 117;
+constexpr std::uint8_t COMM_GET_QML_UI_APP = 118;
+constexpr std::uint8_t COMM_IO_BOARD_GET_ALL = 122;
+constexpr std::uint8_t COMM_GET_EXT_HUM_TMP = 127;
+constexpr std::uint8_t COMM_GET_STATS = 128;
 constexpr std::uint8_t RIGHT_ID = 2;
+constexpr std::uint8_t HB_MAGIC0 = 0x48;
+constexpr std::uint8_t HB_MAGIC1 = 0x42;
+constexpr std::uint8_t HB_VERSION = 1;
+constexpr std::uint8_t HB_GET_POS_STATE = 2;
+constexpr std::uint8_t HB_SET_POS_LIMITS = 3;
+constexpr std::uint8_t HB_RESET_POSITION = 5;
+constexpr std::uint8_t HB_GET_TUNING = 6;
+constexpr std::uint8_t HB_SET_TUNING = 7;
+constexpr std::uint8_t HB_GET_STEERING_CAL = 10;
+constexpr std::uint8_t HB_STEERING_HOME = 13;
+constexpr std::uint8_t HB_ENCODER_DEBUG = 14;
 
 rclcpp::QoS stateQos() { return rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local(); }
 
@@ -66,6 +103,33 @@ void appendI32(std::vector<std::uint8_t> &out, std::int32_t value) {
   out.push_back(static_cast<std::uint8_t>(u >> 16U));
   out.push_back(static_cast<std::uint8_t>(u >> 8U));
   out.push_back(static_cast<std::uint8_t>(u));
+}
+
+void appendU16(std::vector<std::uint8_t> &out, std::uint16_t value) {
+  out.push_back(static_cast<std::uint8_t>(value >> 8U));
+  out.push_back(static_cast<std::uint8_t>(value));
+}
+
+void appendFloat32Auto(std::vector<std::uint8_t> &out, float value) {
+  std::uint32_t bits = 0U;
+  static_assert(sizeof(bits) == sizeof(value), "float32 size mismatch");
+  std::memcpy(&bits, &value, sizeof(bits));
+  out.push_back(static_cast<std::uint8_t>(bits >> 24U));
+  out.push_back(static_cast<std::uint8_t>(bits >> 16U));
+  out.push_back(static_cast<std::uint8_t>(bits >> 8U));
+  out.push_back(static_cast<std::uint8_t>(bits));
+}
+
+float readFloat32Auto(const std::uint8_t *p) {
+  const std::uint32_t bits = (static_cast<std::uint32_t>(p[0]) << 24U) |
+    (static_cast<std::uint32_t>(p[1]) << 16U) | (static_cast<std::uint32_t>(p[2]) << 8U) | p[3];
+  float value = 0.0f;
+  std::memcpy(&value, &bits, sizeof(value));
+  return value;
+}
+
+std::uint16_t u16(const std::uint8_t *p) {
+  return static_cast<std::uint16_t>((static_cast<std::uint16_t>(p[0]) << 8U) | p[1]);
 }
 
 std::int16_t i16(const std::uint8_t *p) {
@@ -158,6 +222,87 @@ bool popValidVescFrame(std::vector<std::uint8_t> &bytes, std::vector<std::uint8_
   return false;
 }
 
+bool decodeVescFramePayload(const std::vector<std::uint8_t> &packet,
+                            std::vector<std::uint8_t> *payload) {
+  if (!payload || packet.size() < 5U) return false;
+  payload->clear();
+  const std::uint8_t start = packet[0];
+  std::size_t h = 0U, n = 0U;
+  if (start == 2U) {
+    h = 2U; n = packet[1];
+  } else if (start == 3U) {
+    if (packet.size() < 6U) return false;
+    h = 3U; n = (std::size_t(packet[1]) << 8U) | packet[2];
+  } else if (start == 4U) {
+    if (packet.size() < 7U) return false;
+    h = 4U; n = (std::size_t(packet[1]) << 16U) |
+                (std::size_t(packet[2]) << 8U) | packet[3];
+  } else {
+    return false;
+  }
+  const std::size_t total = h + n + 3U;
+  if (n == 0U || n > 4096U || packet.size() != total || packet[total - 1U] != 3U) return false;
+  const auto expected = static_cast<std::uint16_t>(
+    (std::uint16_t(packet[h + n]) << 8U) | packet[h + n + 1U]);
+  if (crc16(packet.data() + h, n) != expected) return false;
+  payload->assign(packet.begin() + static_cast<std::ptrdiff_t>(h),
+                  packet.begin() + static_cast<std::ptrdiff_t>(h + n));
+  return true;
+}
+
+bool isMonitorReadCommand(std::uint8_t id) {
+  switch (id) {
+    case COMM_FW_VERSION:
+    case COMM_GET_VALUES:
+    case COMM_GET_MCCONF:
+    case COMM_GET_MCCONF_DEFAULT:
+    case COMM_GET_APPCONF:
+    case COMM_GET_APPCONF_DEFAULT:
+    case COMM_GET_DECODED_PPM:
+    case COMM_GET_DECODED_ADC:
+    case COMM_GET_DECODED_CHUK:
+    case COMM_GET_VALUES_SETUP:
+    case COMM_GET_VALUES_SELECTIVE:
+    case COMM_GET_VALUES_SETUP_SELECTIVE:
+    case COMM_PING_CAN:
+    case COMM_GET_IMU_DATA:
+    case COMM_GET_IMU_CALIBRATION:
+    case COMM_GET_MCCONF_TEMP:
+    case COMM_GET_CUSTOM_CONFIG_XML:
+    case COMM_GET_CUSTOM_CONFIG:
+    case COMM_GET_CUSTOM_CONFIG_DEFAULT:
+    case COMM_BMS_GET_VALUES:
+    case COMM_PSW_GET_STATUS:
+    case COMM_GET_BATTERY_CUT:
+    case COMM_GET_QML_UI_HW:
+    case COMM_GET_QML_UI_APP:
+    case COMM_IO_BOARD_GET_ALL:
+    case COMM_GET_EXT_HUM_TMP:
+    case COMM_GET_STATS:
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool monitorReadRequestInfo(const std::vector<std::uint8_t> &packet,
+                            std::uint8_t *expected_reply, int *motor) {
+  if (!expected_reply || !motor) return false;
+  std::vector<std::uint8_t> payload;
+  if (!decodeVescFramePayload(packet, &payload) || payload.empty()) return false;
+  std::uint8_t id = payload[0];
+  int target = 1;
+  if (id == COMM_FORWARD_CAN) {
+    if (payload.size() < 3U || payload[1] != RIGHT_ID) return false;
+    target = 2;
+    id = payload[2];
+  }
+  if (!isMonitorReadCommand(id)) return false;
+  *expected_reply = id;
+  *motor = target;
+  return true;
+}
+
 std::vector<std::uint8_t> motorPayload(int motor, std::vector<std::uint8_t> inner) {
   if (motor == 1) return inner;
   std::vector<std::uint8_t> out{COMM_FORWARD_CAN, RIGHT_ID};
@@ -231,6 +376,13 @@ class VescToolBridge final : public rclcpp::Node {
     owner_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/maintenance_owner", stateQos());
     status_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/tool_status", stateQos());
     telemetry_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/tool_telemetry", stateQos());
+    left_values_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/left_values", stateQos());
+    right_values_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/right_values", stateQos());
+    config_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/config_state", stateQos());
+    tuning_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/tuning_state", stateQos());
+    position_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/position_state", stateQos());
+    steering_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/steering_state", stateQos());
+    command_state_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/command_state", stateQos());
     raw_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/raw_reply", rclcpp::QoS(20).reliable());
 
     rx_sub_ = create_subscription<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/rx", rclcpp::QoS(100).reliable(),
@@ -254,7 +406,7 @@ class VescToolBridge final : public rclcpp::Node {
     publishMode("RUNTIME");
     publishActive(false); publishOwner("RUNTIME"); publishStatus("runtime");
     RCLCPP_INFO(get_logger(),
-      "VESC maintenance arbiter ready | Python(priority=100)=%s 127.0.0.1:%d | VESC Tool(priority=90)=%s 127.0.0.1:%d",
+      "VESC arbiter ready | Python MAINTENANCE=%s 127.0.0.1:%d | VESC Tool MONITOR_ONLY=%s 127.0.0.1:%d",
       python_tcp_enabled_ ? "ON" : "OFF", python_tcp_port_, tcp_enabled_ ? "ON" : "OFF", tcp_port_);
   }
 
@@ -318,7 +470,6 @@ class VescToolBridge final : public rclcpp::Node {
 
   const char *maintenanceOwner() const {
     if (python_tcp_client_armed_) return "PYTHON_MAINTENANCE";
-    if (tcp_client_armed_) return "VESC_TOOL";
     return maintenance_active_ ? "MAINTENANCE_API" : "RUNTIME";
   }
 
@@ -349,34 +500,18 @@ class VescToolBridge final : public rclcpp::Node {
     }
   }
 
-  void forceRuntimeAfterTcp(const std::string &event) {
-    const bool was_armed = tcp_client_armed_;
+  void closeMonitorClient(const std::string &event) {
     closeTcpClient();
-    if (!was_armed) {
-      publishOwner();
-      publishStatus(event + "_unarmed");
-      return;
-    }
-    // Python maintenance is a higher-priority owner. Losing the lower-priority
-    // VESC Tool socket must never tear Python out of MAINTENANCE.
-    if (python_tcp_client_armed_) {
-      publishOwner("PYTHON_MAINTENANCE");
-      publishStatus(event + "_python_kept");
-      return;
-    }
-    if (transition_ == Transition::ENTER || transition_ == Transition::ENTER_ROUTE) {
-      publishMode("RUNTIME"); publishActive(false); publishOwner("RUNTIME"); transition_ = Transition::NONE;
-    } else if (maintenance_active_) {
-      sendMaintenanceSafeStop(); transition_ = Transition::EXIT_STOP;
-      transition_at_ = std::chrono::steady_clock::now() + 100ms;
-    }
+    monitor_request_queue_.clear();
+    monitor_request_in_flight_ = false;
+    publishOwner();
     publishStatus(event);
   }
 
   void queueTcpTx(const std::vector<std::uint8_t> &bytes) {
     if (tcp_client_fd_ < 0 || bytes.empty()) return;
     if (tcp_pending_tx_.size() + bytes.size() > 65536U) {
-      forceRuntimeAfterTcp("tcp_tx_overflow"); return;
+      closeMonitorClient("vesc_tcp_monitor_tx_overflow"); return;
     }
     tcp_pending_tx_.insert(tcp_pending_tx_.end(), bytes.begin(), bytes.end());
   }
@@ -387,22 +522,54 @@ class VescToolBridge final : public rclcpp::Node {
       if (n > 0) { tcp_pending_tx_.erase(tcp_pending_tx_.begin(), tcp_pending_tx_.begin() + n); continue; }
       if (n < 0 && errno == EINTR) continue;
       if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return;
-      forceRuntimeAfterTcp("tcp_send_disconnected"); return;
+      closeMonitorClient("vesc_tcp_monitor_send_disconnected"); return;
     }
   }
 
+  void dispatchNextMonitorRequest() {
+    if (tcp_client_fd_ < 0 || !tcp_client_armed_ || maintenance_active_ ||
+        transition_ != Transition::NONE || monitor_request_in_flight_ ||
+        monitor_request_queue_.empty() || !transport_connected_) return;
+    auto packet = std::move(monitor_request_queue_.front());
+    monitor_request_queue_.pop_front();
+    std::uint8_t expected = 0U;
+    int motor = 1;
+    if (!monitorReadRequestInfo(packet, &expected, &motor)) return;
+    std_msgs::msg::UInt8MultiArray m;
+    m.data = std::move(packet);
+    runtime_probe_pub_->publish(m);
+    monitor_expected_reply_ = expected;
+    monitor_expected_motor_ = motor;
+    monitor_request_in_flight_ = true;
+    monitor_reply_deadline_ = std::chrono::steady_clock::now() + 900ms;
+    ++monitor_read_requests_;
+  }
+
   void forwardTcpPendingRx() {
-    if (python_tcp_client_armed_) { tcp_pending_rx_.clear(); return; }
-    if (tcp_client_fd_ < 0 || !tcp_client_armed_ || !maintenance_active_ ||
-        transition_ != Transition::NONE || tcp_pending_rx_.empty()) return;
-    // Preserve VESC packet boundaries. Bound each 10-ms service slice so a
-    // firmware/config burst cannot starve ROS callbacks, while realtime small
-    // frames (50-Hz control/telemetry) normally drain in the same slice.
+    if (tcp_client_fd_ < 0 || !tcp_client_armed_ || tcp_pending_rx_.empty()) return;
     for (std::size_t budget = 0U; budget < 32U; ++budget) {
       std::vector<std::uint8_t> packet;
       if (!popValidVescFrame(tcp_pending_rx_, &packet)) break;
-      std_msgs::msg::UInt8MultiArray m; m.data = std::move(packet); tx_pub_->publish(m);
+      std::uint8_t expected = 0U;
+      int motor = 1;
+      if (!monitorReadRequestInfo(packet, &expected, &motor)) {
+        ++monitor_write_rejections_;
+        publishStatus("vesc_tool_monitor_write_blocked");
+        continue;
+      }
+      // Port 65102 is monitor-only. During Python maintenance, discard monitor
+      // reads instead of stealing ownership or replaying stale requests later.
+      if (maintenance_active_ || transition_ != Transition::NONE) {
+        ++monitor_suppressed_reads_;
+        continue;
+      }
+      if (monitor_request_queue_.size() >= 64U) {
+        closeMonitorClient("vesc_tool_monitor_queue_overflow");
+        return;
+      }
+      monitor_request_queue_.push_back(std::move(packet));
     }
+    dispatchNextMonitorRequest();
   }
 
   void tcpTick() {
@@ -417,9 +584,10 @@ class VescToolBridge final : public rclcpp::Node {
         tcp_client_armed_ = false;
         tcp_probe_pending_ = false;
         tcp_pending_rx_.clear(); tcp_pending_tx_.clear();
-        tcp_client_handshake_deadline_ = std::chrono::steady_clock::now() + 500ms;
+        monitor_request_queue_.clear(); monitor_request_in_flight_ = false;
+        tcp_client_handshake_deadline_ = std::chrono::steady_clock::now() + 1000ms;
         publishOwner();
-        publishStatus("vesc_tcp_connected_waiting_valid_frame");
+        publishStatus("vesc_tcp_monitor_connected_waiting_valid_frame");
       }
     }
     if (tcp_client_fd_ < 0) return;
@@ -429,65 +597,36 @@ class VescToolBridge final : public rclcpp::Node {
       const ssize_t n = ::recv(tcp_client_fd_, buf, sizeof(buf), 0);
       if (n > 0) {
         if (tcp_pending_rx_.size() + static_cast<std::size_t>(n) > 65536U) {
-          forceRuntimeAfterTcp("tcp_rx_overflow"); return;
+          closeMonitorClient("vesc_tcp_monitor_rx_overflow"); return;
         }
         tcp_pending_rx_.insert(tcp_pending_rx_.end(), buf, buf + n);
         continue;
       }
-      if (n == 0) { forceRuntimeAfterTcp("tcp_client_disconnected"); return; }
+      if (n == 0) { closeMonitorClient("vesc_tcp_monitor_disconnected"); return; }
       if (errno == EINTR) continue;
       if (errno == EAGAIN || errno == EWOULDBLOCK) break;
-      forceRuntimeAfterTcp("tcp_recv_error"); return;
+      closeMonitorClient("vesc_tcp_monitor_recv_error"); return;
     }
 
     const auto now = std::chrono::steady_clock::now();
     if (!tcp_client_armed_) {
       if (containsValidVescFrame(tcp_pending_rx_)) {
-        if (python_tcp_client_armed_ && maintenance_active_) {
-          // Valid VESC Tool client may remain connected underneath Python, but
-          // its first packet and every packet during Python ownership are dropped.
-          tcp_client_armed_ = true;
-          tcp_pending_rx_.clear(); tcp_pending_tx_.clear();
-          publishOwner();
-          publishStatus("vesc_tcp_valid_suspended_by_python");
-        } else if (!vehicleIdleForMaintenance() || transition_ != Transition::NONE || maintenance_active_) {
-          forceRuntimeAfterTcp("tcp_valid_frame_rejected_vehicle_not_idle_or_busy");
-          return;
-        } else {
-          tcp_client_armed_ = true;
-          publishOwner();
-          if (transport_connected_) {
-            beginEnter();
-            publishStatus("tcp_valid_frame_entering_maintenance");
-          } else {
-            tcp_probe_pending_ = true;
-            tcp_probe_deadline_ = now + 1500ms;
-            tcp_probe_next_ = now;
-            publishStatus("tcp_valid_frame_probe_runtime_link");
-          }
-        }
+        tcp_client_armed_ = true;
+        publishOwner("RUNTIME");
+        publishStatus("vesc_tcp_monitor_active_runtime_unchanged");
       } else if (now >= tcp_client_handshake_deadline_) {
-        forceRuntimeAfterTcp("tcp_handshake_timeout");
+        closeMonitorClient("vesc_tcp_monitor_handshake_timeout");
         return;
       }
     }
 
-    if (tcp_probe_pending_) {
-      if (transport_connected_) {
-        tcp_probe_pending_ = false;
-        beginEnter();
-        publishStatus("tcp_probe_ok_entering_maintenance");
-      } else if (now >= tcp_probe_deadline_) {
-        forceRuntimeAfterTcp("tcp_probe_timeout");
-        return;
-      } else if (now >= tcp_probe_next_) {
-        sendRuntimeProbe();
-        tcp_probe_next_ = now + 150ms;
-      }
+    if (monitor_request_in_flight_ && now >= monitor_reply_deadline_) {
+      monitor_request_in_flight_ = false;
+      ++monitor_reply_timeouts_;
+      publishStatus("vesc_tcp_monitor_reply_timeout");
     }
-
-    if (python_tcp_client_armed_) tcp_pending_rx_.clear();
     forwardTcpPendingRx();
+    dispatchNextMonitorRequest();
     flushTcpTx();
   }
 
@@ -499,16 +638,8 @@ class VescToolBridge final : public rclcpp::Node {
       publishStatus(event + "_unarmed");
       return;
     }
-    // If VESC Tool stayed connected while Python had priority, hand maintenance
-    // back to it in-place after a zero-current barrier. No runtime command is
-    // allowed between the two maintenance owners.
-    if (tcp_client_armed_ && maintenance_active_ && transition_ == Transition::NONE) {
-      tcp_pending_rx_.clear(); tcp_pending_tx_.clear();
-      sendMaintenanceSafeStop();
-      publishOwner("VESC_TOOL");
-      publishStatus(event + "_resume_vesc_tool");
-      return;
-    }
+    // Port 65102 is monitor-only and never inherits maintenance. Python release
+    // always returns the actuator route to RUNTIME, even if VESC Tool stays connected.
     if (transition_ == Transition::ENTER || transition_ == Transition::ENTER_ROUTE) {
       publishMode("RUNTIME"); publishActive(false); transition_ = Transition::NONE;
       publishOwner("RUNTIME");
@@ -655,6 +786,13 @@ class VescToolBridge final : public rclcpp::Node {
       << ",\"tcp_server\":" << (tcp_server_fd_ >= 0 ? "true" : "false")
       << ",\"tcp_port\":" << tcp_port_ << ",\"tcp_client\":" << (tcp_client_fd_ >= 0 ? "true" : "false")
       << ",\"tcp_armed\":" << (tcp_client_armed_ ? "true" : "false")
+      << ",\"tcp_role\":\"MONITOR_ONLY\""
+      << ",\"monitor_pending\":" << monitor_request_queue_.size()
+      << ",\"monitor_in_flight\":" << (monitor_request_in_flight_ ? "true" : "false")
+      << ",\"monitor_reads\":" << monitor_read_requests_
+      << ",\"monitor_write_rejections\":" << monitor_write_rejections_
+      << ",\"monitor_suppressed_reads\":" << monitor_suppressed_reads_
+      << ",\"monitor_reply_timeouts\":" << monitor_reply_timeouts_
       << ",\"rx_crc_errors\":" << crc_errors_ << ",\"rx_format_errors\":" << format_errors_
       << ",\"last_request_motor\":" << last_request_motor_;
     if (!event.empty()) o << ",\"event\":\"" << event << "\"";
@@ -668,6 +806,8 @@ class VescToolBridge final : public rclcpp::Node {
   void beginEnter() {
     if (maintenance_active_ || transition_ != Transition::NONE) return;
     if (!safeToEnter()) { publishStatus("maintenance_rejected_vehicle_not_idle"); return; }
+    monitor_request_queue_.clear();
+    monitor_request_in_flight_ = false;
     publishActive(true);  // Ackermann emits its bounded safe-stop while F411 still owns RUNTIME.
     publishOwner();
     transition_ = Transition::ENTER;
@@ -717,8 +857,13 @@ class VescToolBridge final : public rclcpp::Node {
     std_msgs::msg::UInt8MultiArray m; m.data = packet; tx_pub_->publish(m);
   }
 
+  void sendCustom(int motor, std::uint8_t op, const std::vector<std::uint8_t> &data = {}) {
+    std::vector<std::uint8_t> p{COMM_CUSTOM_APP_DATA, HB_MAGIC0, HB_MAGIC1, HB_VERSION, op};
+    p.insert(p.end(), data.begin(), data.end()); sendPayload(motor, std::move(p));
+  }
+
   void pollTick() {
-    if (!maintenance_active_ || transition_ != Transition::NONE || tcp_client_armed_ || python_tcp_client_armed_) return;
+    if (!maintenance_active_ || transition_ != Transition::NONE || python_tcp_client_armed_) return;
     if (std::chrono::steady_clock::now() < explicit_request_hold_until_) return;
     sendPayload(poll_motor_, {COMM_GET_VALUES});
     poll_motor_ = poll_motor_ == 1 ? 2 : 1;
@@ -730,24 +875,71 @@ class VescToolBridge final : public rclcpp::Node {
     if (raw == "MODE:RUNTIME" || raw == "MODE:NORMAL") { beginExit(); return; }
     if (!maintenance_active_ || transition_ != Transition::NONE) { publishStatus("command_rejected_not_maintenance"); return; }
     if (python_tcp_client_armed_) { publishStatus("command_rejected_python_has_priority"); return; }
-    if (tcp_client_armed_) { publishStatus("command_rejected_tcp_client_owns_maintenance"); return; }
 
     explicit_request_hold_until_ = std::chrono::steady_clock::now() + 500ms;
     int motor = 0; double value = 0.0;
     if (parts.size() == 2 && parts[0] == "FW" && parseMotor(parts[1], &motor)) { sendPayload(motor, {COMM_FW_VERSION}); return; }
     if (parts.size() == 2 && parts[0] == "VALUES" && parseMotor(parts[1], &motor)) { sendPayload(motor, {COMM_GET_VALUES}); return; }
     if (parts.size() == 3 && parts[0] == "MCCONF" && parseMotor(parts[2], &motor)) {
+      const auto idx = static_cast<std::size_t>(motor - 1);
       if (parts[1] == "GET") sendPayload(motor, {COMM_GET_MCCONF});
       else if (parts[1] == "DEFAULT") sendPayload(motor, {COMM_GET_MCCONF_DEFAULT});
-      else publishStatus("bad_mcconf_command");
+      else if (parts[1] == "WRITE" && !mc_active_[idx].empty()) {
+        auto payload = std::vector<std::uint8_t>{COMM_SET_MCCONF}; payload.insert(payload.end(), mc_active_[idx].begin(), mc_active_[idx].end());
+        pending_mc_verify_[idx] = mc_active_[idx]; sendPayload(motor, std::move(payload)); explicit_request_hold_until_ = std::chrono::steady_clock::now() + 3s;
+      } else if ((parts[1] == "WRITE_DEFAULT" || parts[1] == "RESTORE_DEFAULT") && !mc_default_[idx].empty()) {
+        auto payload = std::vector<std::uint8_t>{COMM_SET_MCCONF}; payload.insert(payload.end(), mc_default_[idx].begin(), mc_default_[idx].end());
+        pending_mc_verify_[idx] = mc_default_[idx]; sendPayload(motor, std::move(payload)); explicit_request_hold_until_ = std::chrono::steady_clock::now() + 3s;
+      } else publishStatus("bad_or_uncached_mcconf_command");
       return;
     }
     if (parts.size() == 3 && parts[0] == "APPCONF" && parseMotor(parts[2], &motor)) {
+      const auto idx = static_cast<std::size_t>(motor - 1);
       if (parts[1] == "GET") sendPayload(motor, {COMM_GET_APPCONF});
       else if (parts[1] == "DEFAULT") sendPayload(motor, {COMM_GET_APPCONF_DEFAULT});
-      else publishStatus("bad_appconf_command");
+      else if (parts[1] == "WRITE" && !app_active_[idx].empty()) {
+        auto payload = std::vector<std::uint8_t>{COMM_SET_APPCONF}; payload.insert(payload.end(), app_active_[idx].begin(), app_active_[idx].end());
+        pending_app_verify_[idx] = app_active_[idx]; sendPayload(motor, std::move(payload)); explicit_request_hold_until_ = std::chrono::steady_clock::now() + 3s;
+      } else if ((parts[1] == "WRITE_DEFAULT" || parts[1] == "RESTORE_DEFAULT") && !app_default_[idx].empty()) {
+        auto payload = std::vector<std::uint8_t>{COMM_SET_APPCONF}; payload.insert(payload.end(), app_default_[idx].begin(), app_default_[idx].end());
+        pending_app_verify_[idx] = app_default_[idx]; sendPayload(motor, std::move(payload)); explicit_request_hold_until_ = std::chrono::steady_clock::now() + 3s;
+      } else publishStatus("bad_or_uncached_appconf_command");
       return;
     }
+    if (parts.size() == 3 && parts[0] == "MCTEMP" && parts[1] == "GET" && parseMotor(parts[2], &motor)) {
+      sendPayload(motor, {COMM_GET_MCCONF_TEMP}); return;
+    }
+    if (parts.size() == 14 && parts[0] == "MCTEMP" && parts[1] == "SET" && parseMotor(parts[2], &motor)) {
+      double v[10]{}; bool ok = true; for (int z=0; z<10; ++z) ok = ok && parseDouble(parts[3+z], &v[z]);
+      const bool store = parts[13] == "1" || parts[13] == "true" || parts[13] == "STORE";
+      if (!ok || v[0] < 0.0 || v[0] > 1.0 || v[1] < 0.0 || v[1] > 1.0 || v[4] < -1.0 || v[4] > 0.0 || v[5] < 0.0 || v[5] > 1.0) { publishStatus("mc_temp_rejected_range"); return; }
+      std::vector<std::uint8_t> p{COMM_SET_MCCONF_TEMP, static_cast<std::uint8_t>(store), 0U, 1U, 0U};
+      for (double x : v) appendFloat32Auto(p, static_cast<float>(x));
+      pending_mc_temp_store_[static_cast<std::size_t>(motor - 1)] = store;
+      sendPayload(motor, std::move(p)); explicit_request_hold_until_ = std::chrono::steady_clock::now() + 3s; return;
+    }
+    if (parts.size() == 3 && parts[0] == "TUNING" && parts[1] == "GET" && parseMotor(parts[2], &motor)) {
+      sendCustom(motor, HB_GET_TUNING); return;
+    }
+    if (parts.size() == 15 && parts[0] == "TUNING" && parts[1] == "SET" && parseMotor(parts[2], &motor)) {
+      double v[11]{}; bool ok = true; for (int z=0; z<11; ++z) ok = ok && parseDouble(parts[3+z], &v[z]);
+      const bool store = parts[14] == "1" || parts[14] == "true" || parts[14] == "STORE";
+      if (!ok) { publishStatus("tuning_rejected_parse"); return; }
+      const double scales[11]={1536.0,4.608,1536.0,4.608,100000.0,100000.0,100000.0,1000.0,1000.0,1000.0,65535.0};
+      std::vector<std::uint8_t> d; d.reserve(23);
+      for (int z=0; z<11; ++z) { const long q=std::lround(v[z]*scales[z]); if(q<0 || q>65535){publishStatus("tuning_rejected_range"); return;} appendU16(d,static_cast<std::uint16_t>(q)); }
+      pending_tuning_store_[static_cast<std::size_t>(motor - 1)] = store;
+      d.push_back(static_cast<std::uint8_t>(store)); sendCustom(motor, HB_SET_TUNING, d); explicit_request_hold_until_ = std::chrono::steady_clock::now() + 3s; return;
+    }
+    if (parts.size() == 3 && parts[0] == "POSSTATE" && parts[1] == "GET" && parseMotor(parts[2], &motor)) { sendCustom(motor, HB_GET_POS_STATE); return; }
+    if (parts.size() == 5 && parts[0] == "POSLIMITS" && parts[1] == "SET" && parseMotor(parts[2], &motor)) {
+      double lo=0,hi=0; if(!parseDouble(parts[3],&lo)||!parseDouble(parts[4],&hi)||lo>hi||lo<std::numeric_limits<std::int32_t>::min()||hi>std::numeric_limits<std::int32_t>::max()){publishStatus("position_limits_rejected");return;}
+      std::vector<std::uint8_t> d; appendI32(d,static_cast<std::int32_t>(std::lround(lo))); appendI32(d,static_cast<std::int32_t>(std::lround(hi))); sendCustom(motor,HB_SET_POS_LIMITS,d); return;
+    }
+    if (parts.size() == 3 && parts[0] == "POSRESET" && parts[1] == "ZERO" && parseMotor(parts[2], &motor)) { sendCustom(motor, HB_RESET_POSITION); return; }
+    if (parts.size() == 2 && parts[0] == "STEERING" && parts[1] == "HOME") { sendCustom(1, HB_STEERING_HOME); explicit_request_hold_until_ = std::chrono::steady_clock::now() + 25s; return; }
+    if (parts.size() == 2 && parts[0] == "STEERING" && parts[1] == "CAL") { sendCustom(1, HB_GET_STEERING_CAL); return; }
+    if (parts.size() == 2 && parts[0] == "STEERING" && parts[1] == "ENCDEBUG") { sendCustom(1, HB_ENCODER_DEBUG); return; }
     if (parts.size() == 4 && parts[0] == "SET" && parseMotor(parts[2], &motor) && parseDouble(parts[3], &value)) {
       std::uint8_t id = 255U; double scale = 1.0, limit = std::numeric_limits<double>::infinity();
       if (parts[1] == "DUTY") { id = COMM_SET_DUTY; scale = 1e5; limit = max_abs_duty_; }
@@ -757,6 +949,7 @@ class VescToolBridge final : public rclcpp::Node {
       else if (parts[1] == "RPM") { id = COMM_SET_RPM; scale = 1.0; limit = max_abs_rpm_; }
       else if (parts[1] == "POS") { id = COMM_SET_POS; scale = 1e6; limit = 360.0; }
       if (id == 255U || std::abs(value) > limit) { publishStatus("setpoint_rejected_limit"); return; }
+      { std_msgs::msg::String cm; std::ostringstream co; co << "{\"motor\":" << motor << ",\"mode\":\"" << parts[1] << "\",\"value\":" << std::setprecision(9) << value << "}"; cm.data=co.str(); command_state_pub_->publish(cm); }
       std::vector<std::uint8_t> p{id}; appendI32(p, static_cast<std::int32_t>(std::lround(value * scale))); sendPayload(motor, std::move(p)); return;
     }
     if (parts.size() == 4 && parts[0] == "DETECT" && parseMotor(parts[2], &motor) && parseDouble(parts[3], &value)) {
@@ -785,9 +978,23 @@ class VescToolBridge final : public rclcpp::Node {
     if (python_tcp_client_armed_ && maintenance_active_ && transition_ == Transition::NONE && !python_probe_pending_) {
       queuePythonTx(bytes);
       flushPythonTx();
-    } else if (tcp_client_armed_ && maintenance_active_ && transition_ == Transition::NONE && !tcp_probe_pending_) {
-      queueTcpTx(bytes);
-      flushTcpTx();
+    } else if (tcp_client_armed_ && !maintenance_active_ && transition_ == Transition::NONE &&
+               monitor_request_in_flight_) {
+      std::vector<std::uint8_t> payload;
+      if (decodeVescFramePayload(bytes, &payload) && !payload.empty() &&
+          payload[0] == monitor_expected_reply_) {
+        bool motor_matches = true;
+        if (monitor_expected_reply_ == COMM_GET_VALUES && payload.size() >= 59U) {
+          const int reply_motor = payload[58] == RIGHT_ID ? 2 : 1;
+          motor_matches = reply_motor == monitor_expected_motor_;
+        }
+        if (motor_matches) {
+          queueTcpTx(bytes);
+          flushTcpTx();
+          monitor_request_in_flight_ = false;
+          dispatchNextMonitorRequest();
+        }
+      }
     }
     stream_.insert(stream_.end(), bytes.begin(), bytes.end());
     if (stream_.size() > 8192U) stream_.erase(stream_.begin(), stream_.end() - 4096);
@@ -809,26 +1016,106 @@ class VescToolBridge final : public rclcpp::Node {
     }
   }
 
+  void publishJson(const rclcpp::Publisher<std_msgs::msg::String>::SharedPtr &pub, const std::string &json) {
+    if (!pub) return;
+    std_msgs::msg::String m;
+    m.data = json;
+    pub->publish(m);
+  }
+
+  void publishConfigState(int motor, const char *kind, const char *event, std::size_t bytes, bool verified=false) {
+    std::ostringstream o; o << "{\"motor\":" << motor << ",\"kind\":\"" << kind << "\",\"event\":\"" << event
+      << "\",\"bytes\":" << bytes << ",\"persistent_write\":" << ((std::string(event).find("write")!=std::string::npos)?"true":"false")
+      << ",\"readback_verified\":" << (verified?"true":"false") << "}"; publishJson(config_pub_,o.str());
+  }
+
+  void handleCustom(int motor, const std::vector<std::uint8_t> &p) {
+    if (p.size() < 6U || p[1] != HB_MAGIC0 || p[2] != HB_MAGIC1 || p[3] != HB_VERSION) return;
+    const auto op=p[4], status=p[5];
+    if ((op==HB_GET_POS_STATE || op==HB_SET_POS_LIMITS || op==HB_RESET_POSITION) && p.size()>=22U) {
+      std::ostringstream o; o << "{\"motor\":"<<motor<<",\"op\":"<<unsigned(op)<<",\"status\":"<<unsigned(status)
+        <<",\"current\":"<<i32(&p[6])<<",\"target\":"<<i32(&p[10])<<",\"minimum\":"<<i32(&p[14])<<",\"maximum\":"<<i32(&p[18])
+        <<",\"persistent\":false}"; publishJson(position_pub_,o.str()); return;
+    }
+    if ((op==HB_GET_TUNING || op==HB_SET_TUNING) && p.size()>=30U) {
+      const double kpq=u16(&p[6])/1536.0, kiq=u16(&p[8])/4.608, kpd=u16(&p[10])/1536.0, kid=u16(&p[12])/4.608;
+      const double kps=u16(&p[14])/100000.0, kis=u16(&p[16])/100000.0, kds=u16(&p[18])/100000.0;
+      const double kpp=u16(&p[20])/1000.0, kip=u16(&p[22])/1000.0, kdp=u16(&p[24])/1000.0, filt=u16(&p[26])/65535.0;
+      std::ostringstream o; o<<std::setprecision(9)<<"{\"motor\":"<<motor<<",\"op\":"<<unsigned(op)<<",\"status\":"<<unsigned(status)
+        <<",\"foc_q_kp\":"<<kpq<<",\"foc_q_ki\":"<<kiq<<",\"foc_d_kp\":"<<kpd<<",\"foc_d_ki\":"<<kid
+        <<",\"speed_kp\":"<<kps<<",\"speed_ki\":"<<kis<<",\"speed_kd\":"<<kds
+        <<",\"pos_kp\":"<<kpp<<",\"pos_ki\":"<<kip<<",\"pos_kd\":"<<kdp<<",\"current_filter\":"<<filt
+        <<",\"current_limit_a\":"<<(double(i16(&p[28]))/800.0)<<",\"store_requested\":"<<((op==HB_SET_TUNING && pending_tuning_store_[static_cast<std::size_t>(motor-1)])?"true":"false")<<"}";
+      if (op==HB_SET_TUNING) pending_tuning_store_[static_cast<std::size_t>(motor-1)] = false;
+      publishJson(tuning_pub_,o.str()); return;
+    }
+    if (op==HB_GET_STEERING_CAL && p.size()>=31U) {
+      const auto flags=p[6]; std::ostringstream o; o<<"{\"motor\":1,\"op\":"<<unsigned(op)<<",\"status\":"<<unsigned(status)
+        <<",\"calibrated\":"<<((flags&1)?"true":"false")<<",\"homed\":"<<((flags&2)?"true":"false")<<",\"encoder_synced\":"<<((flags&4)?"true":"false")
+        <<",\"span\":"<<i32(&p[7])<<",\"position\":"<<i32(&p[11])<<",\"target\":"<<i32(&p[15])<<",\"steering_deg\":"<<(double(i32(&p[19]))/1000.0)
+        <<",\"sensor_port_mode\":"<<unsigned(p[23])<<",\"foc_sensor_mode\":"<<unsigned(p[24])<<",\"encoder_configured\":"<<(p[25]?"true":"false")
+        <<",\"fault\":"<<unsigned(p[26])<<",\"raw_encoder\":"<<static_cast<std::uint32_t>(i32(&p[27]))<<"}"; publishJson(steering_pub_,o.str()); return;
+    }
+    if (op==HB_STEERING_HOME && p.size()>=11U) {
+      const auto flags=p[6]; std::ostringstream o; o<<"{\"motor\":1,\"op\":"<<unsigned(op)<<",\"status\":"<<unsigned(status)
+        <<",\"calibrated\":"<<((flags&1)?"true":"false")<<",\"homed\":"<<((flags&2)?"true":"false")<<",\"encoder_synced\":"<<((flags&4)?"true":"false")
+        <<",\"span\":"<<i32(&p[7])<<"}"; publishJson(steering_pub_,o.str()); return;
+    }
+    if (op==HB_ENCODER_DEBUG && p.size()>=82U) {
+      std::ostringstream o; o<<"{\"motor\":1,\"op\":"<<unsigned(op)<<",\"status\":"<<unsigned(status)
+        <<",\"align_stage\":"<<unsigned(p[6])<<",\"steering_stage\":"<<unsigned(p[7])<<",\"detect_stage\":"<<unsigned(p[8])
+        <<",\"inverted\":"<<(p[9]?"true":"false")<<",\"configured\":"<<(p[10]?"true":"false")<<",\"synced\":"<<(p[11]?"true":"false")
+        <<",\"raw_encoder\":"<<static_cast<std::uint32_t>(i32(&p[20]))<<",\"edge_a\":"<<static_cast<std::uint32_t>(i32(&p[52]))
+        <<",\"edge_b\":"<<static_cast<std::uint32_t>(i32(&p[56]))<<",\"span\":"<<i32(&p[70])<<",\"position\":"<<i32(&p[74])<<",\"target\":"<<i32(&p[78])<<"}";
+      publishJson(steering_pub_,o.str()); return;
+    }
+  }
+
   void handlePayload(const std::vector<std::uint8_t> &p) {
     if (p.empty()) return;
+    const int motor=last_request_motor_; const auto idx=static_cast<std::size_t>(motor-1);
     std_msgs::msg::String raw; std::ostringstream r;
-    r << "{\"motor\":" << last_request_motor_ << ",\"command_id\":" << static_cast<unsigned>(p[0])
+    r << "{\"motor\":" << motor << ",\"command_id\":" << static_cast<unsigned>(p[0])
       << ",\"payload_hex\":\"" << hex(p) << "\"}"; raw.data = r.str(); raw_pub_->publish(raw);
     if (p[0] == COMM_GET_VALUES && p.size() >= 59U) {
-      const unsigned id = p[58]; std_msgs::msg::String m; std::ostringstream o;
-      o << "{\"motor\":" << id << ",\"temp_mos_c\":" << double(i16(&p[1])) / 10.0
-        << ",\"temp_motor_c\":" << double(i16(&p[3])) / 10.0
-        << ",\"current_motor_a\":" << double(i32(&p[5])) / 100.0
-        << ",\"current_in_a\":" << double(i32(&p[9])) / 100.0
-        << ",\"id_a\":" << double(i32(&p[13])) / 100.0 << ",\"iq_a\":" << double(i32(&p[17])) / 100.0
-        << ",\"duty\":" << double(i16(&p[21])) / 1000.0 << ",\"rpm\":" << i32(&p[23])
-        << ",\"vbus_v\":" << double(i16(&p[27])) / 10.0 << ",\"fault\":" << static_cast<unsigned>(p[53])
-        << ",\"position_deg\":" << double(i32(&p[54])) / 1000000.0 << "}";
-      m.data = o.str(); telemetry_pub_->publish(m);
+      std_msgs::msg::String m; std::ostringstream o; o<<std::setprecision(9);
+      o << "{\"motor\":" << unsigned(p[58]) << ",\"temp_mos_c\":" << double(i16(&p[1])) / 10.0
+        << ",\"temp_motor_c\":" << double(i16(&p[3])) / 10.0 << ",\"current_motor_a\":" << double(i32(&p[5])) / 100.0
+        << ",\"current_in_a\":" << double(i32(&p[9])) / 100.0 << ",\"id_a\":" << double(i32(&p[13])) / 100.0 << ",\"iq_a\":" << double(i32(&p[17])) / 100.0
+        << ",\"duty\":" << double(i16(&p[21])) / 1000.0 << ",\"rpm\":" << i32(&p[23]) << ",\"vbus_v\":" << double(i16(&p[27])) / 10.0
+        << ",\"amp_hours\":"<<double(i32(&p[29]))/10000.0<<",\"amp_hours_charged\":"<<double(i32(&p[33]))/10000.0
+        << ",\"watt_hours\":"<<double(i32(&p[37]))/10000.0<<",\"watt_hours_charged\":"<<double(i32(&p[41]))/10000.0
+        << ",\"tachometer\":"<<i32(&p[45])<<",\"tachometer_abs\":"<<i32(&p[49])<<",\"fault\":" << static_cast<unsigned>(p[53])
+        << ",\"position_deg\":" << double(i32(&p[54])) / 1000000.0;
+      if(p.size()>=74U) o<<",\"temp_mos_1_c\":"<<double(i16(&p[59]))/10.0<<",\"temp_mos_2_c\":"<<double(i16(&p[61]))/10.0<<",\"temp_mos_3_c\":"<<double(i16(&p[63]))/10.0
+        <<",\"vd_v\":"<<double(i32(&p[65]))/1000.0<<",\"vq_v\":"<<double(i32(&p[69]))/1000.0<<",\"timeout_kill\":"<<unsigned(p[73]);
+      o<<"}"; m.data=o.str(); telemetry_pub_->publish(m);
+      if (unsigned(p[58]) == 2U) right_values_pub_->publish(m); else left_values_pub_->publish(m);
     } else if (p[0] == COMM_FW_VERSION && p.size() >= 4U) {
-      std::string hw(reinterpret_cast<const char *>(&p[3]));
-      publishStatus(std::string("fw_") + std::to_string(p[1]) + "." + std::to_string(p[2]) + "_" + hw);
-    }
+      std::string hw(reinterpret_cast<const char *>(&p[3])); publishStatus(std::string("fw_") + std::to_string(p[1]) + "." + std::to_string(p[2]) + "_" + hw);
+      std::ostringstream o; o<<"{\"motor\":"<<motor<<",\"kind\":\"firmware\",\"event\":\"reply\",\"fw\":\""<<unsigned(p[1])<<"."<<unsigned(p[2])<<"\",\"hw\":\""<<hw<<"\"}"; publishJson(config_pub_,o.str());
+    } else if (p[0] == COMM_GET_MCCONF || p[0] == COMM_GET_MCCONF_DEFAULT) {
+      auto data=std::vector<std::uint8_t>(p.begin()+1,p.end()); const bool def=p[0]==COMM_GET_MCCONF_DEFAULT; if(def)mc_default_[idx]=data; else mc_active_[idx]=data;
+      bool verified=false; if(!def&&!pending_mc_verify_[idx].empty()){verified=data==pending_mc_verify_[idx];pending_mc_verify_[idx].clear();}
+      publishConfigState(motor,"mcconf",def?"default_read":"active_read",data.size(),verified);
+    } else if (p[0] == COMM_GET_APPCONF || p[0] == COMM_GET_APPCONF_DEFAULT) {
+      auto data=std::vector<std::uint8_t>(p.begin()+1,p.end()); const bool def=p[0]==COMM_GET_APPCONF_DEFAULT; if(def)app_default_[idx]=data; else app_active_[idx]=data;
+      bool verified=false; if(!def&&!pending_app_verify_[idx].empty()){verified=data==pending_app_verify_[idx];pending_app_verify_[idx].clear();}
+      publishConfigState(motor,"appconf",def?"default_read":"active_read",data.size(),verified);
+    } else if (p[0] == COMM_SET_MCCONF && p.size()==1U) {
+      publishConfigState(motor,"mcconf","write_ack",pending_mc_verify_[idx].size(),false); sendPayload(motor,{COMM_GET_MCCONF});
+    } else if (p[0] == COMM_SET_APPCONF && p.size()==1U) {
+      publishConfigState(motor,"appconf","write_ack",pending_app_verify_[idx].size(),false); sendPayload(motor,{COMM_GET_APPCONF});
+    } else if (p[0] == COMM_GET_MCCONF_TEMP && p.size()>=50U) {
+      std::size_t q=1; double v[10]{}; for(auto &x:v){x=readFloat32Auto(&p[q]);q+=4;} const unsigned poles=p[q++]; const double gear=readFloat32Auto(&p[q]);q+=4; const double wheel=readFloat32Auto(&p[q]);
+      std::ostringstream o; o<<std::setprecision(9)<<"{\"motor\":"<<motor<<",\"kind\":\"mc_setup\",\"current_min_scale\":"<<v[0]<<",\"current_max_scale\":"<<v[1]
+        <<",\"min_erpm\":"<<v[2]<<",\"max_erpm\":"<<v[3]<<",\"min_duty\":"<<v[4]<<",\"max_duty\":"<<v[5]<<",\"watt_min\":"<<v[6]<<",\"watt_max\":"<<v[7]
+        <<",\"input_current_min\":"<<v[8]<<",\"input_current_max\":"<<v[9]<<",\"motor_poles\":"<<poles<<",\"gear_ratio\":"<<gear<<",\"wheel_diameter_m\":"<<wheel<<"}"; publishJson(config_pub_,o.str());
+    } else if (p[0] == COMM_SET_MCCONF_TEMP && p.size()==1U) {
+      const bool stored = pending_mc_temp_store_[idx]; pending_mc_temp_store_[idx] = false;
+      std::ostringstream o; o << "{\"motor\":" << motor << ",\"kind\":\"mc_setup_ack\",\"event\":\"write_ack\",\"persistent_write\":" << (stored?"true":"false") << "}";
+      publishJson(config_pub_, o.str()); sendPayload(motor,{COMM_GET_MCCONF_TEMP});
+    } else if (p[0] == COMM_CUSTOM_APP_DATA) handleCustom(motor,p);
   }
 
   double poll_hz_{10.0}, tcp_service_hz_{1000.0};
@@ -836,6 +1123,13 @@ class VescToolBridge final : public rclcpp::Node {
   bool maintenance_active_{false}, transport_connected_{false}, tcp_enabled_{true}, python_tcp_enabled_{true};
   bool tcp_probe_pending_{false}, python_probe_pending_{false};
   bool tcp_client_armed_{false}, python_tcp_client_armed_{false};
+  std::deque<std::vector<std::uint8_t>> monitor_request_queue_;
+  bool monitor_request_in_flight_{false};
+  std::uint8_t monitor_expected_reply_{0U};
+  int monitor_expected_motor_{1};
+  std::chrono::steady_clock::time_point monitor_reply_deadline_{};
+  std::uint64_t monitor_read_requests_{0U}, monitor_write_rejections_{0U};
+  std::uint64_t monitor_suppressed_reads_{0U}, monitor_reply_timeouts_{0U};
   int tcp_port_{65102}, tcp_server_fd_{-1}, tcp_client_fd_{-1};
   int python_tcp_port_{65101}, python_tcp_server_fd_{-1}, python_tcp_client_fd_{-1};
   double speed_mps_{0.0}; std::string mux_source_;
@@ -846,10 +1140,12 @@ class VescToolBridge final : public rclcpp::Node {
   std::chrono::steady_clock::time_point python_probe_deadline_{}, python_probe_next_{};
   int poll_motor_{1}, last_request_motor_{1};
   std::vector<std::uint8_t> stream_, tcp_pending_rx_, tcp_pending_tx_, python_pending_rx_, python_pending_tx_;
+  std::vector<std::uint8_t> mc_active_[2], mc_default_[2], app_active_[2], app_default_[2], pending_mc_verify_[2], pending_app_verify_[2];
+  bool pending_tuning_store_[2]{false,false}, pending_mc_temp_store_[2]{false,false};
   std::uint64_t crc_errors_{0}, format_errors_{0};
 
   rclcpp::Publisher<std_msgs::msg::UInt8MultiArray>::SharedPtr tx_pub_, runtime_probe_pub_;
-  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr mode_pub_, owner_pub_, status_pub_, telemetry_pub_, raw_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr mode_pub_, owner_pub_, status_pub_, telemetry_pub_, left_values_pub_, right_values_pub_, config_pub_, tuning_pub_, position_pub_, steering_pub_, command_state_pub_, raw_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr active_pub_;
   rclcpp::Subscription<std_msgs::msg::UInt8MultiArray>::SharedPtr rx_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr transport_sub_;

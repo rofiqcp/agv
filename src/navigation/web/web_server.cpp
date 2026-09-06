@@ -1419,7 +1419,9 @@ class WebRosBridge {
         {"/hmi/manual_state", "hmi_manual"}, {"/hmi/status", "hmi_status"},
         {"/esc/foc/telemetry", "foc_telemetry"}, {"/esc/mux/active_source", "esc_mux"},
         {"/stmf4/vesc/status", "vesc_transport_status"}, {"/esc/vesc/tool_status", "vesc_tool_status"},
-        {"/esc/vesc/tool_telemetry", "vesc_tool_telemetry"}, {"/esc/vesc/raw_reply", "vesc_raw_reply"}};
+        {"/esc/vesc/tool_telemetry", "vesc_tool_telemetry"}, {"/esc/vesc/left_values", "vesc_left_values"}, {"/esc/vesc/right_values", "vesc_right_values"}, {"/esc/vesc/config_state", "vesc_config_state"},
+        {"/esc/vesc/tuning_state", "vesc_tuning_state"}, {"/esc/vesc/position_state", "vesc_position_state"},
+        {"/esc/vesc/steering_state", "vesc_steering_state"}, {"/esc/vesc/command_state", "vesc_command_state"}, {"/esc/vesc/raw_reply", "vesc_raw_reply"}};
     for (const auto &entry : strings) {
       const QString channel = QString::fromLatin1(entry.second);
       const QString topic = QString::fromLatin1(entry.first);
@@ -1934,6 +1936,7 @@ class LocalHttpServer : public QObject {
   QString recordingLabel_;
   QString recordingSectionLabel_;
   QMap<QString, QString> recordingTuningConfig_;
+  QStringList recordingPaths_;
   QString recordingVariation_;
   QString recordingCondition_;
   QString recordingStartedIso_;
@@ -2269,7 +2272,7 @@ class LocalHttpServer : public QObject {
                        {"variation", recordingVariation_}, {"condition", recordingCondition_},
                        {"started_at", recordingStartedIso_}, {"sample_rate_hz", recordingRateHz_},
                        {"elapsed_s", recording_ && recordingStartedMs_ > 0 ? (nowMs() - recordingStartedMs_) / 1000.0 : 0.0},
-                       {"samples", recordingRows_.size()},
+                       {"samples", recordingRows_.size()}, {"record_paths", QJsonArray::fromStringList(recordingPaths_)},
                        {"report_root", QStringLiteral("/home/otomasi/ros/data")}};
   }
 
@@ -2293,6 +2296,11 @@ class LocalHttpServer : public QObject {
     recordingSectionLabel_ = json.value("section_label").toString().trimmed();
     if (recordingSectionLabel_.isEmpty()) recordingSectionLabel_ = recordingLabel_;
     recordingTuningConfig_.clear();
+    recordingPaths_.clear();
+    for (const QJsonValue &v : json.value("record_paths").toArray()) {
+      const QString path = v.toString().trimmed();
+      if (!path.isEmpty() && !recordingPaths_.contains(path)) recordingPaths_ << path;
+    }
     const QJsonObject tuningConfig = json.value("tuning_config").toObject();
     for (auto it = tuningConfig.constBegin(); it != tuningConfig.constEnd(); ++it) {
       flattenJson(QStringLiteral("tuning_yaml.") + it.key(), it.value(), recordingTuningConfig_);
@@ -2324,9 +2332,21 @@ class LocalHttpServer : public QObject {
     row["condition"] = recordingCondition_;
     for (auto it = recordingTuningConfig_.cbegin(); it != recordingTuningConfig_.cend(); ++it) row[it.key()] = it.value();
     const QJsonObject snap = bridge_->snapshot();
+    QMap<QString, QString> flatSnapshot;
     for (auto it = snap.constBegin(); it != snap.constEnd(); ++it) {
       if (it.key().startsWith(QStringLiteral("__"))) continue;
-      flattenJson(it.key(), it.value(), row);
+      flattenJson(it.key(), it.value(), flatSnapshot);
+    }
+    if (recordingPaths_.isEmpty()) {
+      for (auto it = flatSnapshot.cbegin(); it != flatSnapshot.cend(); ++it) row[it.key()] = it.value();
+    } else {
+      for (const QString &path : recordingPaths_) {
+        auto exact = flatSnapshot.constFind(path);
+        if (exact != flatSnapshot.cend()) row[path] = exact.value();
+        const QString prefix = path + QStringLiteral(".");
+        for (auto it = flatSnapshot.cbegin(); it != flatSnapshot.cend(); ++it)
+          if (it.key().startsWith(prefix)) row[it.key()] = it.value();
+      }
     }
     recordingRows_.push_back(row);
     if (recordingRows_.size() > 250000) {
@@ -2471,6 +2491,8 @@ class LocalHttpServer : public QObject {
     recordingTimer_.stop();
     const bool saved = saveRecordingFiles(result, message);
     recordingRows_.clear();
+    recordingTuningConfig_.clear();
+    recordingPaths_.clear();
     return saved;
   }
 

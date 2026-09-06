@@ -105,6 +105,61 @@ foc_thesis:
     overtemperature_c: 0.0
     isr_budget_us: 62.5
 
+  # Mirror of values deliberately written from the ESC/VESC Web workbench.
+  # MC/App raw blobs stay authoritative inside VESC EEPROM; these scalar mirrors
+  # make commissioning/tuning values reviewable and reproducible from ROS logs.
+  vesc_runtime_mirror:
+    left:
+      foc_q_kp: 0.0
+      foc_q_ki: 0.0
+      foc_d_kp: 0.0
+      foc_d_ki: 0.0
+      speed_kp: 0.0
+      speed_ki: 0.0
+      speed_kd: 0.0
+      pos_kp: 0.0
+      pos_ki: 0.0
+      pos_kd: 0.0
+      current_filter: 0.1
+      position_min_counts: -2147483648
+      position_max_counts: 2147483647
+      current_min_scale: 1.0
+      current_max_scale: 1.0
+      min_erpm: -10000.0
+      max_erpm: 10000.0
+      min_duty: -0.95
+      max_duty: 0.95
+      watt_min: -10000.0
+      watt_max: 10000.0
+      input_current_min: -15.0
+      input_current_max: 15.0
+      last_persistence: "UNVERIFIED"
+    right:
+      foc_q_kp: 0.0
+      foc_q_ki: 0.0
+      foc_d_kp: 0.0
+      foc_d_ki: 0.0
+      speed_kp: 0.0
+      speed_ki: 0.0
+      speed_kd: 0.0
+      pos_kp: 0.0
+      pos_ki: 0.0
+      pos_kd: 0.0
+      current_filter: 0.1
+      position_min_counts: -2147483648
+      position_max_counts: 2147483647
+      current_min_scale: 1.0
+      current_max_scale: 1.0
+      min_erpm: -10000.0
+      max_erpm: 10000.0
+      min_duty: -0.95
+      max_duty: 0.95
+      watt_min: -10000.0
+      watt_max: 10000.0
+      input_current_min: -15.0
+      input_current_max: 15.0
+      last_persistence: "UNVERIFIED"
+
   acquisition:
     csv_columns:
       - timestamp_us

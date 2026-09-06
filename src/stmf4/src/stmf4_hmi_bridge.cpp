@@ -323,7 +323,7 @@ private:
       [this](std_msgs::msg::UInt8MultiArray::ConstSharedPtr msg) { (void)sendVescBytes(msg->data, 'R'); });
     vesc_maintenance_tx_sub_ = create_subscription<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/maintenance_tx", rclcpp::QoS(100).reliable(),
       [this](std_msgs::msg::UInt8MultiArray::ConstSharedPtr msg) { (void)sendVescBytes(msg->data, 'M'); });
-    vesc_mode_sub_ = create_subscription<std_msgs::msg::String>("/stmf4/vesc/mode", 10,
+    vesc_mode_sub_ = create_subscription<std_msgs::msg::String>("/stmf4/vesc/mode", stateQos(),
       [this](std_msgs::msg::String::ConstSharedPtr msg) {
         const std::string mode = upper(trim(msg->data));
         if (mode != "RUNTIME" && mode != "NORMAL" && mode != "MAINTENANCE") {
@@ -331,9 +331,11 @@ private:
           return;
         }
         const std::string route = mode == "NORMAL" ? "RUNTIME" : mode;
-        if (sendLine(std::string("VESC:MODE:") + route)) {
-          vesc_maintenance_mode_ = route == "MAINTENANCE";
-        }
+        // Cache desired ownership even while USB is temporarily disconnected.
+        // reconnectSerial() will restore this exact route instead of forcing RUNTIME.
+        vesc_desired_mode_ = route;
+        vesc_maintenance_mode_ = route == "MAINTENANCE";
+        (void)sendLine(std::string("VESC:MODE:") + route);
       });
     boolSub("/gnss/connected", gnss_ready_);
     boolSub("/imu/connected", imu_ready_);
@@ -666,7 +668,7 @@ private:
     sendLine("MODE:" + mode_);
     sendLine("NEO:LED:AUTO");
     sendLine("NEO:STATUS");
-    sendLine("VESC:MODE:RUNTIME");
+    sendLine("VESC:MODE:" + vesc_desired_mode_);
     sendLine("VESC:STATUS");
     return true;
   }
@@ -1322,7 +1324,7 @@ private:
   }
 
   void telemetryTick() {
-    if (fd_ < 0) return;
+    if (fd_ < 0 || vesc_maintenance_mode_) return;
     const auto now_steady = std::chrono::steady_clock::now();
     const bool force = now_steady - last_forced_tx_ >= std::chrono::duration<double>(heartbeat_sec_);
     if (force) last_forced_tx_ = now_steady;
@@ -1406,6 +1408,7 @@ private:
   std::mutex tx_mutex_;
   bool connected_{false};
   std::string rx_, page_{"SPLASH"}, mode_{"AUTO"}, drive_{"STOP"}, steer_{"NONE"}, control_origin_{"NONE"}, last_rejection_;
+  std::string vesc_desired_mode_{"RUNTIME"};
   std::string camera_tab_{"VIEW"}, navigation_state_{"IDLE"}, active_target_{"NONE"};
   std::string navigation_origin_{"NONE"}, last_goal_state_{"IDLE"};
   double steering_hmi_target_deg_{0.0};

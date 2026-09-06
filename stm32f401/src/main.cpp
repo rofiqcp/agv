@@ -983,6 +983,18 @@ void loop() {
   pollSerialGui();
   gVesc.poll();
 
+  // Maintenance is entered only after the ROS arbiter verifies the vehicle is idle.
+  // Give the VESC request/reply path exclusive loop priority while a maintenance
+  // owner is active. This prevents TFT, GNSS/I2C and HMI telemetry from adding
+  // millisecond-scale jitter to VESC Tool RT data. Runtime mode is unchanged.
+  if (gVesc.maintenanceMode()) {
+    for (uint8_t i = 0; i < 4U; ++i) {
+      pollSerialGui();
+      gVesc.poll();
+    }
+    return;
+  }
+
   // VESC traffic has first service priority, but maintenance must not suspend
   // unrelated F411 functions. GNSS, IST8310, safety I/O, touch/HMI and actuator
   // state continue to run while VESC Tool owns the motor link. This mirrors the
