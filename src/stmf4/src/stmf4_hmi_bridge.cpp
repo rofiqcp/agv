@@ -1027,6 +1027,17 @@ private:
 
   bool sendVescBytes(const std::vector<std::uint8_t> &bytes, char source) {
     if (bytes.empty() || bytes.size() > 4096U || (source != 'R' && source != 'M')) return false;
+    /* Make VESC gateway ownership atomic with the data path. Previously the
+     * /mode and /maintenance_tx subscriptions were independent DDS callbacks,
+     * so a maintenance frame could reach the F411 before VESC:MODE:MAINTENANCE
+     * and get rejected as OWNER:RUNTIME. Select the required owner immediately
+     * before forwarding each transaction; the F411 command parser services this
+     * line before the following TX line on the same ordered CDC stream. */
+    const bool maintenance = source == 'M';
+    if (maintenance != vesc_maintenance_mode_) {
+      if (!sendLine(maintenance ? "VESC:MODE:MAINTENANCE" : "VESC:MODE:RUNTIME")) return false;
+      vesc_maintenance_mode_ = maintenance;
+    }
     constexpr size_t kChunk = 16U;
     for (size_t offset = 0; offset < bytes.size(); offset += kChunk) {
       const size_t count = std::min(kChunk, bytes.size() - offset);
