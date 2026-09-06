@@ -27,6 +27,11 @@ const char *VescGateway::ownerName(Owner owner) {
 
 void VescGateway::begin() {
   uart_.begin(kBaud);
+  // STM32 Arduino defaults UART and USB CDC to the same NVIC priority (1).
+  // At 1 Mbaud a new byte arrives every ~10 us, so USB must not delay USART1
+  // byte service. VESC transport gets the highest peripheral priority; USB stays
+  // at 1 and I2C at 2. This only affects the F411 bridge, not F103 motor timing.
+  HAL_NVIC_SetPriority(USART1_IRQn, 0, 0);
   owner_ = Owner::RUNTIME;
   last_rx_ms_ = millis();
   last_status_ms_ = 0;
@@ -67,93 +72,97 @@ bool VescGateway::forwardHex(const char *hex, Owner source) {
 }
 
 void VescGateway::publishRxFrame(const uint8_t *data, size_t len) {
-  if (data == nullptr || len == 0U) return;
+  if (data == nullptr || len == 0U || len > kRxFrameBytes) return;
   static const char hex[] = "0123456789ABCDEF";
-  Serial.print(F("VESC:RX:"));
+  // Keep the raw VESC packet intact and only envelope it for the shared USB CDC.
+  // The previous implementation issued two Serial.write() calls per VESC byte;
+  // at 50-Hz RT polling that created thousands of tiny USB writes per second and
+  // competed with GNSS/HMI traffic. Build one line and submit it in one call.
+  static char line[8U + (kRxFrameBytes * 2U) + 2U];
+  memcpy(line, "VESC:RX:", 8U);
+  size_t out = 8U;
   for (size_t i = 0; i < len; ++i) {
     const uint8_t b = data[i];
-    Serial.write(hex[b >> 4]);
-    Serial.write(hex[b & 0x0F]);
+    line[out++] = hex[b >> 4];
+    line[out++] = hex[b & 0x0F];
   }
-  Serial.println();
-  ++rx_frames_;
+  line[out++] = '\n';
+  const size_t written = Serial.write(reinterpret_cast<const uint8_t *>(line), out);
+  if (written == out) ++rx_frames_;
+  else rx_frame_errors_ += static_cast<uint32_t>(out - written);
 }
 
 void VescGateway::serviceRxFrames() {
-  // Search for complete CRC-valid VESC frames anywhere in the UART stream.
-  // The F103 UART is shared with a legacy transport, so occasional non-VESC
-  // bytes must not poison the next binary packet. This mirrors the resync
-  // behaviour of VESC Tool's Packet decoder.
+  // Port of upstream VESC comm/packet.c packet_process_byte()/try_decode_packet
+  // semantics. Decode only from the current read pointer. On invalid framing,
+  // discard exactly one byte and retry; on a plausible partial frame, preserve
+  // it until more UART bytes arrive. This avoids the previous "scan all offsets"
+  // heuristic, which could mistake payload bytes for a new partial header and
+  // discard a complete following RT-data reply.
   while (rx_len_ > 0U) {
-    bool emitted = false;
-    size_t earliestIncomplete = rx_len_;
+    const uint8_t start = rx_chunk_[0];
+    size_t data_start = 0U;
+    size_t payload = 0U;
 
-    for (size_t start = 0U; start < rx_len_; ++start) {
-      const uint8_t sof = rx_chunk_[start];
-      size_t header = 0U;
-      size_t payload = 0U;
-      if (sof == 2U) {
-        header = 2U;
-        if (rx_len_ - start < header) { earliestIncomplete = min(earliestIncomplete, start); continue; }
-        payload = rx_chunk_[start + 1U];
-      } else if (sof == 3U) {
-        header = 3U;
-        if (rx_len_ - start < header) { earliestIncomplete = min(earliestIncomplete, start); continue; }
-        payload = (static_cast<size_t>(rx_chunk_[start + 1U]) << 8U) | rx_chunk_[start + 2U];
-      } else if (sof == 4U) {
-        header = 4U;
-        if (rx_len_ - start < header) { earliestIncomplete = min(earliestIncomplete, start); continue; }
-        payload = (static_cast<size_t>(rx_chunk_[start + 1U]) << 16U) |
-                  (static_cast<size_t>(rx_chunk_[start + 2U]) << 8U) | rx_chunk_[start + 3U];
-      } else {
+    if (start == 2U) {
+      data_start = 2U;
+      if (rx_len_ < data_start) return;
+      payload = rx_chunk_[1];
+      if (payload < 1U) {
+        ++rx_frame_errors_;
+        memmove(rx_chunk_, rx_chunk_ + 1U, --rx_len_);
         continue;
       }
-
-      if (payload == 0U) continue;
-      const size_t total = header + payload + 3U;
-      if (total > kRxFrameBytes) continue;
-      if (rx_len_ - start < total) {
-        earliestIncomplete = min(earliestIncomplete, start);
+    } else if (start == 3U) {
+      data_start = 3U;
+      if (rx_len_ < data_start) return;
+      payload = (static_cast<size_t>(rx_chunk_[1]) << 8U) | rx_chunk_[2];
+      // Upstream rejects a long header for a short payload.
+      if (payload < 255U) {
+        ++rx_frame_errors_;
+        memmove(rx_chunk_, rx_chunk_ + 1U, --rx_len_);
         continue;
       }
-      if (rx_chunk_[start + total - 1U] != 3U) continue;
-      const uint16_t expected = static_cast<uint16_t>(
-        (static_cast<uint16_t>(rx_chunk_[start + header + payload]) << 8U) |
-        rx_chunk_[start + header + payload + 1U]);
-      const uint16_t actual = crc16(&rx_chunk_[start + header], payload);
-      if (expected != actual) continue;
-
-      if (start > 0U) rx_frame_errors_ += static_cast<uint32_t>(start);
-      publishRxFrame(&rx_chunk_[start], total);
-      const size_t consumed = start + total;
-      const size_t remain = rx_len_ - consumed;
-      if (remain > 0U) memmove(rx_chunk_, &rx_chunk_[consumed], remain);
-      rx_len_ = remain;
-      emitted = true;
-      break;
-    }
-
-    if (emitted) continue;
-    if (earliestIncomplete < rx_len_) {
-      if (earliestIncomplete > 0U) {
-        rx_frame_errors_ += static_cast<uint32_t>(earliestIncomplete);
-        const size_t remain = rx_len_ - earliestIncomplete;
-        memmove(rx_chunk_, &rx_chunk_[earliestIncomplete], remain);
-        rx_len_ = remain;
+    } else if (start == 4U) {
+      data_start = 4U;
+      if (rx_len_ < data_start) return;
+      payload = (static_cast<size_t>(rx_chunk_[1]) << 16U) |
+                (static_cast<size_t>(rx_chunk_[2]) << 8U) | rx_chunk_[3];
+      // F103 VESC_MAX_PAYLOAD is far below the 24-bit packet range. Keeping the
+      // upstream short-header rule also makes random legacy byte streams resync.
+      if (payload < 65535U) {
+        ++rx_frame_errors_;
+        memmove(rx_chunk_, rx_chunk_ + 1U, --rx_len_);
+        continue;
       }
-      return;
+    } else {
+      ++rx_frame_errors_;
+      memmove(rx_chunk_, rx_chunk_ + 1U, --rx_len_);
+      continue;
     }
 
-    // No complete or plausible partial VESC frame. Keep a tiny suffix so a
-    // start/header split across polls can still be reconstructed.
-    const size_t keep = min<size_t>(rx_len_, 3U);
-    const size_t drop = rx_len_ - keep;
-    if (drop > 0U) {
-      rx_frame_errors_ += static_cast<uint32_t>(drop);
-      memmove(rx_chunk_, &rx_chunk_[drop], keep);
-      rx_len_ = keep;
+    const size_t total = data_start + payload + 3U;
+    if (total > kRxFrameBytes) {
+      ++rx_frame_errors_;
+      memmove(rx_chunk_, rx_chunk_ + 1U, --rx_len_);
+      continue;
     }
-    return;
+    if (rx_len_ < total) return;
+
+    const uint16_t expected = static_cast<uint16_t>(
+      (static_cast<uint16_t>(rx_chunk_[data_start + payload]) << 8U) |
+      rx_chunk_[data_start + payload + 1U]);
+    if (rx_chunk_[total - 1U] != 3U ||
+        crc16(rx_chunk_ + data_start, payload) != expected) {
+      ++rx_frame_errors_;
+      memmove(rx_chunk_, rx_chunk_ + 1U, --rx_len_);
+      continue;
+    }
+
+    publishRxFrame(rx_chunk_, total);
+    const size_t remain = rx_len_ - total;
+    if (remain > 0U) memmove(rx_chunk_, rx_chunk_ + total, remain);
+    rx_len_ = remain;
   }
 }
 

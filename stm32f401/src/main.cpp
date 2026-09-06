@@ -57,12 +57,14 @@ static bool rosHeartbeatStable = false;
 static ControlAction activeDriveControl = CTRL_NONE;   // FWD / REV / NONE
 static ControlAction activeSteerControl = CTRL_NONE;   // LEFT / RIGHT / CENTER / NONE
 
-static char serialRx[128];
-static uint8_t serialRxLen = 0;
+// Long VESC config/firmware frames are transported as hexadecimal commands.
+// 640 bytes safely holds a 240-byte raw chunk plus namespace/terminator.
+static char serialRx[640];
+static size_t serialRxLen = 0;
 static bool serialRxDiscarding = false;
 #if HMI_LEGACY_UART
 static char serial1Rx[128];
-static uint8_t serial1RxLen = 0;
+static size_t serial1RxLen = 0;
 static bool serial1RxDiscarding = false;
 #endif
 
@@ -837,7 +839,7 @@ static void handleSerialCommand(char* command) {
   }
 }
 
-static void pollSerialStream(Stream& io, char* rx, uint8_t& rxLen, bool& discarding) {
+static void pollSerialStream(Stream& io, char* rx, size_t capacity, size_t& rxLen, bool& discarding) {
   while (io.available() > 0) {
     const char c = (char)io.read();
     if (c == '\r') continue;
@@ -849,7 +851,7 @@ static void pollSerialStream(Stream& io, char* rx, uint8_t& rxLen, bool& discard
       rx[rxLen] = '\0';
       if (rxLen > 0) handleSerialCommand(rx);
       rxLen = 0;
-    } else if (rxLen < sizeof(serialRx) - 1) {
+    } else if (rxLen + 1U < capacity) {
       rx[rxLen++] = c;
     } else {
       rxLen = 0;
@@ -860,9 +862,9 @@ static void pollSerialStream(Stream& io, char* rx, uint8_t& rxLen, bool& discard
 }
 
 static void pollSerialGui() {
-  pollSerialStream(Serial, serialRx, serialRxLen, serialRxDiscarding);
+  pollSerialStream(Serial, serialRx, sizeof(serialRx), serialRxLen, serialRxDiscarding);
 #if HMI_LEGACY_UART
-  pollSerialStream(Serial1, serial1Rx, serial1RxLen, serial1RxDiscarding);
+  pollSerialStream(Serial1, serial1Rx, sizeof(serial1Rx), serial1RxLen, serial1RxDiscarding);
 #endif
 }
 
@@ -980,17 +982,17 @@ void loop() {
   // safe-OFF policy during an update.
   pollSerialGui();
   gVesc.poll();
-  if (gVesc.maintenanceMode()) {
-    static uint32_t ledMsMaintenance = 0;
-    if (millis() - ledMsMaintenance >= 500) {
-      ledMsMaintenance = millis();
-      digitalWrite(PC13, !digitalRead(PC13));
-    }
-    return;
-  }
 
-  // Normal runtime services resume only after F411 returns ownership to ROS.
+  // VESC traffic has first service priority, but maintenance must not suspend
+  // unrelated F411 functions. GNSS, IST8310, safety I/O, touch/HMI and actuator
+  // state continue to run while VESC Tool owns the motor link. This mirrors the
+  // official VESC design where UART packet processing is a communication task,
+  // not a global mode that blocks other application tasks.
   gNeo3.poll();
+  // Cooperative equivalent of the dedicated UART thread in upstream VESC:
+  // immediately drain any F103 reply that arrived while sensor work ran.
+  gVesc.poll();
+  pollSerialGui();
   checkRosLinkTimeout();
 
   if (!splashComplete) {

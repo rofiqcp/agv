@@ -1043,7 +1043,10 @@ private:
       else ++vesc_runtime_tx_rejected_;
       return false;
     }
-    constexpr size_t kChunk = 48U;
+    // F411 line parser accepts 640 bytes. 240 raw VESC bytes become 480 hex
+    // chars plus the namespace, reducing USB/ROS scheduling overhead by 5x while
+    // preserving the original native VESC byte stream on USART1.
+    constexpr size_t kChunk = 240U;
     for (size_t offset = 0; offset < bytes.size(); offset += kChunk) {
       const size_t count = std::min(kChunk, bytes.size() - offset);
       const std::string line = std::string("VESC:TX:") + source + ":" + bytesToHex(bytes.data() + offset, count);
@@ -1319,7 +1322,7 @@ private:
   }
 
   void telemetryTick() {
-    if (fd_ < 0 || vesc_maintenance_mode_) return;
+    if (fd_ < 0) return;
     const auto now_steady = std::chrono::steady_clock::now();
     const bool force = now_steady - last_forced_tx_ >= std::chrono::duration<double>(heartbeat_sec_);
     if (force) last_forced_tx_ = now_steady;

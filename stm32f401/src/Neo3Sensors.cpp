@@ -18,6 +18,41 @@ inline void ubxChecksumAdd(uint8_t byte, uint8_t &a, uint8_t &b) {
   a = static_cast<uint8_t>(a + byte);
   b = static_cast<uint8_t>(b + a);
 }
+
+
+// Buffer Arduino Print formatting in RAM and submit a complete sensor record to
+// USB CDC with one write. This preserves Serial.print float formatting exactly
+// while avoiding dozens of tiny USB writes that can delay VESC packet service.
+class CdcLineBuffer : public Print {
+ public:
+  CdcLineBuffer(char *buffer, size_t capacity) : buffer_(buffer), capacity_(capacity) {}
+  size_t write(uint8_t value) override {
+    if (length_ >= capacity_) { overflow_ = true; return 0; }
+    buffer_[length_++] = static_cast<char>(value); return 1;
+  }
+  size_t write(const uint8_t *data, size_t size) override {
+    if (data == nullptr || size == 0U) return 0U;
+    const size_t room = capacity_ > length_ ? capacity_ - length_ : 0U;
+    const size_t copy = size < room ? size : room;
+    if (copy) { memcpy(buffer_ + length_, data, copy); length_ += copy; }
+    if (copy != size) overflow_ = true;
+    return copy;
+  }
+  bool flushToUsb() {
+    if (overflow_ || length_ == 0U) return false;
+    // Sensor telemetry is low-priority relative to the VESC request/reply path.
+    // Never spin inside USBSerial::write waiting for CDC space: if the complete
+    // record cannot be queued atomically now, skip this sample and publish the
+    // next fresh one. Sensor acquisition itself continues at full rate.
+    if (Serial.availableForWrite() < static_cast<int>(length_)) return false;
+    return Serial.write(reinterpret_cast<const uint8_t *>(buffer_), length_) == length_;
+  }
+ private:
+  char *buffer_;
+  size_t capacity_;
+  size_t length_{0U};
+  bool overflow_{false};
+};
 }
 
 void Neo3Sensors::begin() {
@@ -266,30 +301,32 @@ void Neo3Sensors::parseNavPvt() {
 
 void Neo3Sensors::publishPvt() {
   ++gnss_sequence_;
-  Serial.print(F("SENS:GNSS:"));
-  Serial.print(gnss_sequence_); Serial.print(',');
-  Serial.print(pvt_.received_ms); Serial.print(',');
-  Serial.print(pvt_.itow_ms); Serial.print(',');
-  Serial.print(pvt_.fix_type); Serial.print(',');
-  Serial.print(pvt_.fix_ok ? 1 : 0); Serial.print(',');
-  Serial.print(pvt_.invalid_llh ? 1 : 0); Serial.print(',');
-  Serial.print(pvt_.satellites); Serial.print(',');
-  Serial.print(pvt_.latitude, 7); Serial.print(',');
-  Serial.print(pvt_.longitude, 7); Serial.print(',');
-  Serial.print(pvt_.altitude_m, 3); Serial.print(',');
-  Serial.print(pvt_.hacc_m, 3); Serial.print(',');
-  Serial.print(pvt_.vacc_m, 3); Serial.print(',');
-  Serial.print(pvt_.vel_n_mps, 4); Serial.print(',');
-  Serial.print(pvt_.vel_e_mps, 4); Serial.print(',');
-  Serial.print(pvt_.vel_d_mps, 4); Serial.print(',');
-  Serial.print(pvt_.ground_speed_mps, 4); Serial.print(',');
-  Serial.print(normalize360(pvt_.course_deg_ned), 3); Serial.print(',');
-  Serial.print(pvt_.sacc_mps, 4); Serial.print(',');
-  Serial.print(pvt_.course_acc_deg, 3); Serial.print(',');
-  Serial.print(pvt_.pdop, 2); Serial.print(',');
-  Serial.print(pvt_.rate_hz, 2); Serial.print(',');
-  Serial.print(pvt_.flags2); Serial.print(',');
-  Serial.println(pvt_.flags3);
+  char line[320]; CdcLineBuffer out(line, sizeof(line));
+  out.print(F("SENS:GNSS:"));
+  out.print(gnss_sequence_); out.print(',');
+  out.print(pvt_.received_ms); out.print(',');
+  out.print(pvt_.itow_ms); out.print(',');
+  out.print(pvt_.fix_type); out.print(',');
+  out.print(pvt_.fix_ok ? 1 : 0); out.print(',');
+  out.print(pvt_.invalid_llh ? 1 : 0); out.print(',');
+  out.print(pvt_.satellites); out.print(',');
+  out.print(pvt_.latitude, 7); out.print(',');
+  out.print(pvt_.longitude, 7); out.print(',');
+  out.print(pvt_.altitude_m, 3); out.print(',');
+  out.print(pvt_.hacc_m, 3); out.print(',');
+  out.print(pvt_.vacc_m, 3); out.print(',');
+  out.print(pvt_.vel_n_mps, 4); out.print(',');
+  out.print(pvt_.vel_e_mps, 4); out.print(',');
+  out.print(pvt_.vel_d_mps, 4); out.print(',');
+  out.print(pvt_.ground_speed_mps, 4); out.print(',');
+  out.print(normalize360(pvt_.course_deg_ned), 3); out.print(',');
+  out.print(pvt_.sacc_mps, 4); out.print(',');
+  out.print(pvt_.course_acc_deg, 3); out.print(',');
+  out.print(pvt_.pdop, 2); out.print(',');
+  out.print(pvt_.rate_hz, 2); out.print(',');
+  out.print(pvt_.flags2); out.print(',');
+  out.println(pvt_.flags3);
+  (void)out.flushToUsb();
 }
 
 void Neo3Sensors::consumeNmeaByte(char c) {
@@ -399,17 +436,19 @@ void Neo3Sensors::publishNmeaFallback() {
   const uint32_t now_ms = millis();
   const bool rmc_fresh = nmea_.rmc_valid && static_cast<uint32_t>(now_ms - nmea_.rmc_ms) <= 2000;
   ++gnss_sequence_;
-  Serial.print(F("SENS:GNSSF:"));
-  Serial.print(gnss_sequence_); Serial.print(',');
-  Serial.print(now_ms); Serial.print(',');
-  Serial.print(nmea_.fix_quality); Serial.print(',');
-  Serial.print(nmea_.satellites); Serial.print(',');
-  Serial.print(nmea_.latitude, 7); Serial.print(',');
-  Serial.print(nmea_.longitude, 7); Serial.print(',');
-  Serial.print(nmea_.altitude_m, 3); Serial.print(',');
-  Serial.print(nmea_.hdop, 2); Serial.print(',');
-  Serial.print(rmc_fresh ? nmea_.speed_mps : -1.0f, 4); Serial.print(',');
-  Serial.println(rmc_fresh ? nmea_.course_deg_ned : -1.0f, 3);
+  char line[192]; CdcLineBuffer out(line, sizeof(line));
+  out.print(F("SENS:GNSSF:"));
+  out.print(gnss_sequence_); out.print(',');
+  out.print(now_ms); out.print(',');
+  out.print(nmea_.fix_quality); out.print(',');
+  out.print(nmea_.satellites); out.print(',');
+  out.print(nmea_.latitude, 7); out.print(',');
+  out.print(nmea_.longitude, 7); out.print(',');
+  out.print(nmea_.altitude_m, 3); out.print(',');
+  out.print(nmea_.hdop, 2); out.print(',');
+  out.print(rmc_fresh ? nmea_.speed_mps : -1.0f, 4); out.print(',');
+  out.println(rmc_fresh ? nmea_.course_deg_ned : -1.0f, 3);
+  (void)out.flushToUsb();
 }
 
 void Neo3Sensors::appendU32(uint8_t *payload, uint16_t &pos, uint32_t value) {
@@ -579,14 +618,16 @@ void Neo3Sensors::publishMag(int16_t x, int16_t y, int16_t z) {
   const float mz = static_cast<float>(z) * IST8310_UT_PER_LSB;
   const float norm = sqrtf(mx * mx + my * my + mz * mz);
   ++mag_sequence_;
-  Serial.print(F("SENS:MAG:"));
-  Serial.print(mag_sequence_); Serial.print(',');
-  Serial.print(millis()); Serial.print(',');
-  Serial.print(mx, 2); Serial.print(',');
-  Serial.print(my, 2); Serial.print(',');
-  Serial.print(mz, 2); Serial.print(',');
-  Serial.print(norm, 2); Serial.print(',');
-  Serial.println(ist_ok_ ? 1 : 0);
+  char line[128]; CdcLineBuffer out(line, sizeof(line));
+  out.print(F("SENS:MAG:"));
+  out.print(mag_sequence_); out.print(',');
+  out.print(millis()); out.print(',');
+  out.print(mx, 2); out.print(',');
+  out.print(my, 2); out.print(',');
+  out.print(mz, 2); out.print(',');
+  out.print(norm, 2); out.print(',');
+  out.println(ist_ok_ ? 1 : 0);
+  (void)out.flushToUsb();
 }
 
 void Neo3Sensors::pollSafetySwitch() {
@@ -598,10 +639,12 @@ void Neo3Sensors::pollSafetySwitch() {
   }
   if (raw != switch_pressed_ && static_cast<uint32_t>(now_ms - switch_changed_ms_) >= SWITCH_DEBOUNCE_MS) {
     switch_pressed_ = raw;
-    Serial.print(F("SENS:SW:"));
-    Serial.print(++hw_sequence_); Serial.print(',');
-    Serial.print(now_ms); Serial.print(',');
-    Serial.println(switch_pressed_ ? 1 : 0);
+    char line[64]; CdcLineBuffer out(line, sizeof(line));
+    out.print(F("SENS:SW:"));
+    out.print(++hw_sequence_); out.print(',');
+    out.print(now_ms); out.print(',');
+    out.println(switch_pressed_ ? 1 : 0);
+    (void)out.flushToUsb();
   }
 }
 
@@ -645,15 +688,17 @@ void Neo3Sensors::publishHardwareStatus(bool force) {
   const uint32_t now_ms = millis();
   if (!force && static_cast<uint32_t>(now_ms - last_hw_publish_ms_) < HW_PUBLISH_MS) return;
   last_hw_publish_ms_ = now_ms;
-  Serial.print(F("SENS:HW:"));
-  Serial.print(++hw_sequence_); Serial.print(',');
-  Serial.print(now_ms); Serial.print(',');
-  Serial.print(gnssAlive(now_ms) ? 1 : 0); Serial.print(',');
-  Serial.print(gnssReady(now_ms) ? 1 : 0); Serial.print(',');
-  Serial.print(ist_ok_ ? 1 : 0); Serial.print(',');
-  Serial.print(switch_pressed_ ? 1 : 0); Serial.print(',');
-  Serial.print(safety_led_on_ ? 1 : 0); Serial.print(',');
-  Serial.println(config_attempts_);
+  char line[96]; CdcLineBuffer out(line, sizeof(line));
+  out.print(F("SENS:HW:"));
+  out.print(++hw_sequence_); out.print(',');
+  out.print(now_ms); out.print(',');
+  out.print(gnssAlive(now_ms) ? 1 : 0); out.print(',');
+  out.print(gnssReady(now_ms) ? 1 : 0); out.print(',');
+  out.print(ist_ok_ ? 1 : 0); out.print(',');
+  out.print(switch_pressed_ ? 1 : 0); out.print(',');
+  out.print(safety_led_on_ ? 1 : 0); out.print(',');
+  out.println(config_attempts_);
+  (void)out.flushToUsb();
 }
 
 int32_t Neo3Sensors::readI32LE(const uint8_t *p) {
