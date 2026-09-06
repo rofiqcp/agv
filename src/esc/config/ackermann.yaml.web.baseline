@@ -13,7 +13,7 @@ esc_ackermann:
     teleop_timeout_sec: 0.3
     nav2_timeout_sec: 0.6
     manual_release_hold_sec: 0.5
-    speed_max: 1.0
+    speed_max: 0.5
     serial_left_max_deg: 90.0
     # Direct-serial fallback scale only. Native VESC uses physical eRPM conversion.
     serial_right_max_rpm: 300.0

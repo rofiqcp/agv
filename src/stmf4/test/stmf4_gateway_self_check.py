@@ -35,8 +35,13 @@ require('VESC:MODE:RUNTIME' in vesc_cpp and 'VESC:MODE:MAINTENANCE' in vesc_cpp,
 # ROS must be the single USB CDC owner and safely multiplex raw VESC bytes.
 for token in ('/stmf4/vesc/runtime_tx', '/stmf4/vesc/maintenance_tx', '/stmf4/vesc/rx',
               '/stmf4/vesc/mode', '/stmf4/vesc/status', '/stmf4/vesc/connected',
-              'VESC:MODE:RUNTIME', 'VESC:STATUS'):
+              '/stmf4/vesc/mode', 'VESC:STATUS'):
     require(token in bridge, f'ROS F411 VESC bridge contract missing: {token}')
+require('mode != "RUNTIME" && mode != "NORMAL" && mode != "MAINTENANCE"' in bridge and
+        'sendLine(std::string("VESC:MODE:") + route)' in bridge,
+        'ROS F411 bridge must validate and forward RUNTIME/MAINTENANCE ownership dynamically')
+require('VESC:MODE:RUNTIME' in vesc_cpp and 'VESC:MODE:MAINTENANCE' in vesc_cpp,
+        'F411 firmware must explicitly implement both VESC ownership modes')
 require(str(hmi.get('serial_device', '')).lower() == 'auto', 'F411 serial_device must default to fail-safe auto discovery')
 require('STMICROELECTRONICS' in bridge and 'F411' in bridge and 'CDC' in bridge,
         'F411 auto-discovery identity guard missing')

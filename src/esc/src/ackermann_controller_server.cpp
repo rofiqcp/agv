@@ -286,7 +286,7 @@ private:
     declare_parameter<bool>("require_autonomy_gate", true);
 
     // Injected by esc.launch.py from the single esc/config/teleop.yaml source of truth.
-    declare_parameter<double>("speed_max", 1.0);
+    declare_parameter<double>("speed_max", 0.5);
     declare_parameter<double>("yaw_max_deg_s", 80.0);
     declare_parameter<double>("serial_left_max_deg", 90.0);
     // Legacy direct-serial command scale. Native VESC transport derives ERPM
@@ -2555,7 +2555,7 @@ private:
   double perception_state_timeout_sec_{0.75};
   double manual_release_hold_sec_{0.50};
   bool require_autonomy_gate_{true};
-  double speed_max_mps_{1.0};
+  double speed_max_mps_{0.5};
   double yaw_max_deg_s_{80.0};
   double steering_max_deg_{90.0};
   double right_max_rpm_{300.0};  // direct-serial fallback scale only

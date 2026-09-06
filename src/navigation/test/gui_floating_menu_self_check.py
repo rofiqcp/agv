@@ -21,7 +21,7 @@ checks = {
     'no permanent report tree': 'reportTree' not in MAIN and 'buildReportTree' not in MAIN,
     'catalog still has navigation 4.1': '4.1 Pengujian Sensor' in CAT,
     'catalog still has perception 4.1': '4.1 Pengujian Pipeline Kamera dan YOLOPv2' in CAT,
-    'catalog still has esc/foc 4.1': '4.1 Alur Pengujian Bertahap dan Aturan Penguncian Parameter' in CAT,
+    'catalog has ESC Ackermann 4.1': '4.1 Alur Pengujian Ackermann dan Aturan Penguncian Parameter' in CAT,
 }
 for name, ok in checks.items():
     print(('PASS' if ok else 'FAIL'), name)

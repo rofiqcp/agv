@@ -311,7 +311,7 @@ private:
     declare_parameter<double>("speed_initial", 0.20);
     declare_parameter<double>("speed_step", 0.10);
     declare_parameter<double>("speed_min", 0.10);
-    declare_parameter<double>("speed_max", 1.00);
+    declare_parameter<double>("speed_max", 0.50);
 
     declare_parameter<double>("yaw_initial_deg_s", 80.0);
     declare_parameter<double>("yaw_step_deg_s", 5.0);
@@ -1344,7 +1344,7 @@ private:
   double max_speed_{1.00};
   double speed_step_{0.10};
   double speed_min_{0.10};
-  double speed_max_{1.00};
+  double speed_max_{0.50};
   double max_yaw_deg_s_{80.0};
   double yaw_step_deg_s_{5.0};
   double yaw_min_deg_s_{5.0};

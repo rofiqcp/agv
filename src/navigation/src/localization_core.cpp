@@ -113,7 +113,7 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "LocalizationCore C++ aktif: local=wheel/GNSS vx + IMU gyro-z; magnetic yaw=startup seed; GNSS COG=moving heading correction; fusion vel=%s(cert=%s) COG=%s(cert=%s); direct COG fallback=%s; degraded planning=%s; strict hAcc<=%.2fm DOP<=%.2f sat>=%d",
+      "LocalizationCore C++ aktif: local=wheel/GNSS vx + relative IMU yaw/gyro-z; magnetic yaw=startup seed; GNSS COG=moving heading correction; fusion vel=%s(cert=%s) COG=%s(cert=%s); direct COG fallback=%s; degraded planning=%s; strict hAcc<=%.2fm DOP<=%.2f sat>=%d",
       enable_global_gnss_velocity_fusion_ ? "on" : "off",
       gnss_velocity_calibration_valid_ ? "PASS" : "WAIT",
       enable_global_gnss_cog_fusion_ ? "on" : "off",
@@ -331,9 +331,9 @@ private:
 
     declare_parameter<int>("strict_min_satellites", 8);
     declare_parameter<double>("strict_max_dop", 2.0);
-    declare_parameter<double>("strict_max_hacc_m", 3.0);
+    declare_parameter<double>("strict_max_hacc_m", 2.5);
     declare_parameter<double>("strict_quality_hold_sec", 1.5);
-    // Hysteresis motion: acquire pada strict <=3 m, lalu boleh HOLD dengan
+    // Hysteresis motion: acquire pada strict <=2.5 m, lalu boleh HOLD dengan
     // fix sehat sampai 4.5 m. Di atas HOLD diberi grace singkat, sedangkan
     // no-fix / hAcc sangat buruk menutup gate segera.
     declare_parameter<double>("motion_hold_max_hacc_m", 4.5);
@@ -1125,8 +1125,9 @@ private:
     gnss_cog_fusion_active_ = false;
     if (!fusionStampFreshUnlocked(stamp)) return;
 
-    // Feed GNSS-derived base-frame vx + vyaw to both EKFs. vy remains diagnostic.
-    // Absolute yaw is intentionally NOT sourced from GNSS; ekf.yaml uses IMU yaw.
+    // Feed qualified GNSS-derived base-frame vx to both EKFs. vy and GNSS-derived
+    // yaw-rate remain diagnostic. Absolute GNSS heading is published separately as
+    // motion-qualified COG and is fused only by the global EKF.
     if (enable_global_gnss_velocity_fusion_ && velocityCertificationAllowsFusionUnlocked() &&
         gnss_velocity_qualified_ && have_last_base_velocity_msg_) {
       auto fused = last_base_velocity_msg_;
@@ -1797,7 +1798,7 @@ private:
   }
 
   // Heading visual/map yang cepat: before anchor, IMU orientation can seed map yaw.
-  // After anchor, live heading follows local EKF odom (GNSS vx/vyaw + IMU yaw). Optional
+  // After anchor, live heading follows local EKF odom (wheel/GNSS vx + relative IMU yaw/gyro-z). Optional
   // gated GNSS COG below only adjusts map->odom slowly for long-term yaw drift.
   double fastMapHeadingUnlocked()
   {
@@ -3007,7 +3008,7 @@ private:
   double global_odom_map_reference_max_error_m_{15.0};
   int strict_min_satellites_{8};
   double strict_max_dop_{2.0};
-  double strict_max_hacc_m_{3.0};
+  double strict_max_hacc_m_{2.5};
   double strict_quality_hold_sec_{1.5};
   double motion_hold_max_hacc_m_{4.5};
   double motion_hold_max_dop_{2.5};

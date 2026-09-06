@@ -13,6 +13,8 @@ cpp = (ROOT / "web/web_server.cpp").read_text(encoding="utf-8")
 html = (ROOT / "web/static/index.html").read_text(encoding="utf-8")
 css = (ROOT / "web/static/styles.css").read_text(encoding="utf-8")
 js = (ROOT / "web/static/app.js").read_text(encoding="utf-8")
+vesc_js = (ROOT / "web/static/vesc_workbench.js").read_text(encoding="utf-8")
+web_js = js + "\n" + vesc_js
 cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
 auto = (ROOT / "launch/autonomous.launch.py").read_text(encoding="utf-8")
 gui = (ROOT / "launch/gui.launch.py").read_text(encoding="utf-8")
@@ -33,7 +35,7 @@ for endpoint in ("/api/events", "/api/state", "/api/health", "/api/camera.jpg", 
                  "/api/esc/vesc/command", "/api/config/set", "/api/config/reset", "/api/config/reset-batch", "/api/experiment/record/start",
                  "/api/experiment/record/stop", "/api/experiment/record/status"):
     if endpoint not in cpp: fail(f"web endpoint missing {endpoint}")
-for page in ("overview", "navigation", "perception", "sensors", "esc", "calibration", "tuning", "experiments", "reports", "diagnostics", "configuration"):
+for page in ("overview", "navigation", "perception", "sensors", "esc", "esc-status", "calibration", "tuning", "experiments", "reports", "diagnostics", "configuration"):
     if f'id="page-{page}"' not in html: fail(f"frontend page missing {page}")
 for bad in ("https://", "http://cdn", "unpkg.com", "cdnjs", "jsdelivr"):
     if bad in html or bad in js or bad in css: fail(f"web GUI must remain offline/self-contained: {bad}")
@@ -110,13 +112,19 @@ for token in ("loadCostmapImage", "zoomMap", "screenToWorld", "pointerdown", "po
 
 
 # ESC/VESC gateway UI must expose real F411 transport, safe maintenance and desktop VESC Tool TCP.
-for token in ("VESC Tool Workbench", "F411 PB6/PB7", "127.0.0.1:65102",
+if 'src="/vesc_workbench.js' not in html:
+    fail("ESC workbench JS module is not loaded")
+for token in ("ESC Motor Workbench", 'id="page-esc-status"', "F411 GATEWAY",
               "vescEnterMaintenance", "vescExitMaintenance", "vescReadMcconf",
-              "vescDetectHall", "vescDetectEncoder", "vescSendTerminal", "vescRawHex"):
+              "vescReadMcconfDefault", "vescWriteMcconf", "vescRestoreMcconfDefault",
+              "vescReadAppconf", "vescReadAppconfDefault", "vescWriteAppconf",
+              "vescChartLeft", "vescChartRight", "vescSetDuty", "vescSetCurrent",
+              "vescSetRpm", "vescSetPos", "vescSetBrake", "vescSetHandbrake",
+              "vescFullBrake", "vescDetectHall", "vescDetectEncoder"):
     if token not in html: fail(f"VESC Web workbench missing {token}")
 for token in ("vescCmd", "vesc_tool_status", "tcp_client", "VESC TOOL TCP",
               "command',{command}", "renderVescTool"):
-    if token not in js: fail(f"VESC Web behavior missing {token}")
+    if token not in web_js: fail(f"VESC Web behavior missing {token}")
 for token in ("/esc/vesc/tool_command", "/stmf4/vesc/status", "/esc/vesc/tool_telemetry",
               "vesc_tool.yaml"):
     if token not in cpp: fail(f"VESC Web backend integration missing {token}")

@@ -102,7 +102,7 @@ localization_core:
     global_odom_map_reference_max_error_m: 15.0
     strict_min_satellites: 8
     strict_max_dop: 2.0
-    strict_max_hacc_m: 3.0
+    strict_max_hacc_m: 2.5
     strict_quality_hold_sec: 1.5
     motion_hold_max_hacc_m: 4.5
     motion_hold_max_dop: 2.5

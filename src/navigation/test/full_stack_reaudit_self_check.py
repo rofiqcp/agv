@@ -191,14 +191,52 @@ if (global_ekf["imu0"] != "/imu/data" or enabled(global_ekf["imu0_config"]) != {
 if local_ekf.get("publish_tf") is not True or global_ekf.get("publish_tf") is not False:
     fail("TF ownership must remain local EKF odom->base + LocalizationCore map->odom")
 
+mppi_feedback = yaml.safe_load((ROOT / "config/mppi_closed_loop.yaml").read_text(encoding="utf-8"))[
+    "mppi_closed_loop_supervisor"]["ros__parameters"]
+local_rate_hz = float(local_ekf.get("frequency", 0.0))
+min_feedback_rate_hz = float(mppi_feedback.get("min_odom_rate_hz", 0.0))
+if local_rate_hz <= 0.0 or min_feedback_rate_hz <= 0.0 or min_feedback_rate_hz > 0.9 * local_rate_hz:
+    fail(
+        f"MPPI CLOSED_LOOP qualification is unreachable/too tight: local EKF={local_rate_hz:.2f} Hz "
+        f"but minimum odom={min_feedback_rate_hz:.2f} Hz")
+
 loc_cfg = yaml.safe_load((ROOT / "config/localization_cpp.yaml").read_text(encoding="utf-8"))[
     "localization_core"]["ros__parameters"]
+if loc_cfg.get("raw_gnss_topic") != "/gnss/fix_raw":
+    fail("LocalizationCore must consume receiver-valid /gnss/fix_raw and own STRICT/HOLD quality gating")
+
+gnss_cfg = yaml.safe_load((ROOT / "config/gnss.yaml").read_text(encoding="utf-8"))[
+    "data_cuav_node"]["ros__parameters"]
+if abs(float(loc_cfg.get("strict_max_hacc_m", -1.0)) - float(gnss_cfg.get("max_hacc_m", -2.0))) > 1.0e-9:
+    fail("Localization STRICT hAcc must match GNSS autonomous-grade hAcc acquire threshold")
+if float(loc_cfg.get("motion_hold_max_hacc_m", 0.0)) <= float(loc_cfg.get("strict_max_hacc_m", 0.0)):
+    fail("Localization motion HOLD must remain a real hysteresis band above STRICT acquire")
+
+vehicle_cfg = yaml.safe_load((ROOT / "config/vehicle.yaml").read_text(encoding="utf-8"))[
+    "vehicle"]["ros__parameters"]
+navcore_cfg = yaml.safe_load((ROOT / "config/navigation_core.yaml").read_text(encoding="utf-8"))[
+    "navigation_core"]["ros__parameters"]
+nav2_cfg = yaml.safe_load((ROOT / "config/nav2_ackermann.yaml").read_text(encoding="utf-8"))
+esc_cfg = yaml.safe_load((SRC / "esc/config/ackermann.yaml").read_text(encoding="utf-8"))[
+    "esc_ackermann"]["ros__parameters"]
+teleop_cfg = yaml.safe_load((SRC / "esc/config/teleop.yaml").read_text(encoding="utf-8"))[
+    "/**"]["ros__parameters"]
+follow = nav2_cfg["controller_server"]["ros__parameters"]["FollowPath"]
+smoother = nav2_cfg["velocity_smoother"]["ros__parameters"]
+speed_envelope = [
+    float(vehicle_cfg["max_forward_speed_mps"]), float(navcore_cfg["max_forward_speed_mps"]),
+    float(follow["vx_max"]), float(smoother["max_velocity"][0]),
+    float(esc_cfg["speed_max"]), float(teleop_cfg["speed_max"]),
+]
+if max(speed_envelope) - min(speed_envelope) > 1.0e-9:
+    fail(f"runtime forward-speed envelope disagrees across Vehicle/Nav2/ESC/Teleop: {speed_envelope}")
+
 if loc_cfg.get("gnss_require_measurement_timestamp") is not True:
     fail("GNSS measurement timestamps must stay mandatory")
 if loc_cfg.get("require_gnss_velocity_certification_for_fusion") is not False:
     fail("localization bootstrap must not require ESC-dependent GNSS velocity certification")
 if loc_cfg.get("enable_global_gnss_velocity_fusion") is not True:
-    fail("GNSS vx/vyaw fusion must be enabled")
+    fail("GNSS base-vx fusion must be enabled")
 if loc_cfg.get("enable_global_gnss_cog_fusion") is not True:
     fail("GNSS COG absolute-yaw fusion must be enabled for production heading")
 if float(loc_cfg.get("cog_min_forward_speed_mps", 999.0)) > 0.18:
