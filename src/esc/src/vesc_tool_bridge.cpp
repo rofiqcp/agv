@@ -91,6 +91,73 @@ std::vector<std::uint8_t> frame(const std::vector<std::uint8_t> &payload) {
   return out;
 }
 
+bool containsValidVescFrame(const std::vector<std::uint8_t> &bytes) {
+  for (std::size_t s = 0; s < bytes.size(); ++s) {
+    const std::uint8_t start = bytes[s];
+    std::size_t h = 0, n = 0;
+    if (start == 2U) {
+      if (bytes.size() - s < 2U) continue;
+      h = 2U; n = bytes[s + 1U];
+    } else if (start == 3U) {
+      if (bytes.size() - s < 3U) continue;
+      h = 3U; n = (std::size_t(bytes[s + 1U]) << 8U) | bytes[s + 2U];
+    } else if (start == 4U) {
+      if (bytes.size() - s < 4U) continue;
+      h = 4U; n = (std::size_t(bytes[s + 1U]) << 16U) |
+                  (std::size_t(bytes[s + 2U]) << 8U) | bytes[s + 3U];
+    } else {
+      continue;
+    }
+    if (n == 0U || n > 4096U) continue;
+    const std::size_t total = h + n + 3U;
+    if (bytes.size() - s < total || bytes[s + total - 1U] != 3U) continue;
+    const auto expected = static_cast<std::uint16_t>((std::uint16_t(bytes[s + h + n]) << 8U) |
+                                                     bytes[s + h + n + 1U]);
+    if (crc16(bytes.data() + s + h, n) == expected) return true;
+  }
+  return false;
+}
+
+// Extract exactly one complete VESC frame from a TCP byte stream. Keeping packet
+// boundaries intact is important for realtime traffic: the F411 text gateway can
+// then forward small control/telemetry frames in one USB command instead of
+// re-chunking an arbitrary aggregate and inserting pacing delays mid-packet.
+bool popValidVescFrame(std::vector<std::uint8_t> &bytes, std::vector<std::uint8_t> *out) {
+  if (!out) return false;
+  out->clear();
+  while (!bytes.empty()) {
+    const std::uint8_t start = bytes[0];
+    std::size_t h = 0U, n = 0U;
+    if (start == 2U) {
+      if (bytes.size() < 2U) return false;
+      h = 2U; n = bytes[1];
+    } else if (start == 3U) {
+      if (bytes.size() < 3U) return false;
+      h = 3U; n = (std::size_t(bytes[1]) << 8U) | bytes[2];
+    } else if (start == 4U) {
+      if (bytes.size() < 4U) return false;
+      h = 4U; n = (std::size_t(bytes[1]) << 16U) |
+                  (std::size_t(bytes[2]) << 8U) | bytes[3];
+    } else {
+      bytes.erase(bytes.begin());
+      continue;
+    }
+    if (n == 0U || n > 4096U) { bytes.erase(bytes.begin()); continue; }
+    const std::size_t total = h + n + 3U;
+    if (bytes.size() < total) return false;
+    const auto expected = static_cast<std::uint16_t>((std::uint16_t(bytes[h + n]) << 8U) |
+                                                     bytes[h + n + 1U]);
+    if (bytes[total - 1U] != 3U || crc16(bytes.data() + h, n) != expected) {
+      bytes.erase(bytes.begin());
+      continue;
+    }
+    out->assign(bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(total));
+    bytes.erase(bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(total));
+    return true;
+  }
+  return false;
+}
+
 std::vector<std::uint8_t> motorPayload(int motor, std::vector<std::uint8_t> inner) {
   if (motor == 1) return inner;
   std::vector<std::uint8_t> out{COMM_FORWARD_CAN, RIGHT_ID};
@@ -147,6 +214,7 @@ class VescToolBridge final : public rclcpp::Node {
  public:
   VescToolBridge() : Node("vesc_tool_bridge") {
     poll_hz_ = std::clamp(declare_parameter<double>("maintenance_poll_hz", 10.0), 1.0, 25.0);
+    tcp_service_hz_ = std::clamp(declare_parameter<double>("tcp_service_hz", 1000.0), 100.0, 2000.0);
     max_abs_duty_ = std::clamp(declare_parameter<double>("max_abs_duty", 0.95), 0.01, 0.99);
     max_abs_current_a_ = std::clamp(declare_parameter<double>("max_abs_current_a", 20.0), 0.1, 100.0);
     max_abs_rpm_ = std::clamp(declare_parameter<double>("max_abs_rpm", 10000.0), 10.0, 200000.0);
@@ -179,7 +247,8 @@ class VescToolBridge final : public rclcpp::Node {
     transition_timer_ = create_wall_timer(20ms, [this]() { transitionTick(); });
     poll_timer_ = create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::duration<double>(1.0 / poll_hz_)), [this]() { pollTick(); });
-    tcp_timer_ = create_wall_timer(10ms, [this]() { tcpTick(); pythonTcpTick(); });
+    tcp_timer_ = create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::duration<double>(1.0 / tcp_service_hz_)), [this]() { tcpTick(); pythonTcpTick(); });
     if (tcp_enabled_) setupTcpServer();
     if (python_tcp_enabled_) setupPythonTcpServer();
     publishMode("RUNTIME");
@@ -207,7 +276,7 @@ class VescToolBridge final : public rclcpp::Node {
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     addr.sin_port = htons(static_cast<std::uint16_t>(tcp_port_));
-    if (::bind(tcp_server_fd_, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0 || ::listen(tcp_server_fd_, 1) != 0) {
+    if (::bind(tcp_server_fd_, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0 || ::listen(tcp_server_fd_, 16) != 0) {
       RCLCPP_ERROR(get_logger(), "VESC TCP bind/listen 127.0.0.1:%d failed: %s", tcp_port_, std::strerror(errno));
       ::close(tcp_server_fd_); tcp_server_fd_ = -1; return;
     }
@@ -223,7 +292,7 @@ class VescToolBridge final : public rclcpp::Node {
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     addr.sin_port = htons(static_cast<std::uint16_t>(python_tcp_port_));
     if (::bind(python_tcp_server_fd_, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0 ||
-        ::listen(python_tcp_server_fd_, 1) != 0) {
+        ::listen(python_tcp_server_fd_, 16) != 0) {
       RCLCPP_ERROR(get_logger(), "Python maintenance TCP bind/listen 127.0.0.1:%d failed: %s", python_tcp_port_, std::strerror(errno));
       ::close(python_tcp_server_fd_); python_tcp_server_fd_ = -1;
     }
@@ -232,6 +301,7 @@ class VescToolBridge final : public rclcpp::Node {
   void closeTcpClient() {
     if (tcp_client_fd_ >= 0) { ::shutdown(tcp_client_fd_, SHUT_RDWR); ::close(tcp_client_fd_); }
     tcp_client_fd_ = -1;
+    tcp_client_armed_ = false;
     tcp_probe_pending_ = false;
     tcp_pending_rx_.clear();
     tcp_pending_tx_.clear();
@@ -240,13 +310,15 @@ class VescToolBridge final : public rclcpp::Node {
   void closePythonTcpClient() {
     if (python_tcp_client_fd_ >= 0) { ::shutdown(python_tcp_client_fd_, SHUT_RDWR); ::close(python_tcp_client_fd_); }
     python_tcp_client_fd_ = -1;
+    python_tcp_client_armed_ = false;
+    python_probe_pending_ = false;
     python_pending_rx_.clear();
     python_pending_tx_.clear();
   }
 
   const char *maintenanceOwner() const {
-    if (python_tcp_client_fd_ >= 0) return "PYTHON_MAINTENANCE";
-    if (tcp_client_fd_ >= 0) return "VESC_TOOL";
+    if (python_tcp_client_armed_) return "PYTHON_MAINTENANCE";
+    if (tcp_client_armed_) return "VESC_TOOL";
     return maintenance_active_ ? "MAINTENANCE_API" : "RUNTIME";
   }
 
@@ -256,9 +328,10 @@ class VescToolBridge final : public rclcpp::Node {
   }
 
   bool vehicleIdleForMaintenance() const {
-    if (std::abs(speed_mps_) > 0.03) return false;
-    return mux_source_.empty() || mux_source_ == "IDLE" || mux_source_ == "STOP" ||
-           mux_source_ == "E_STOP" || mux_source_ == "NAV2_GATE_CLOSED";
+    // Maintenance is intentionally above VESC Tool/manual/perception/Nav2.
+    // A lower-priority source may remain logically selected while commanding
+    // zero; ownership is safe to preempt when measured vehicle speed is stopped.
+    return std::abs(speed_mps_) <= 0.03;
   }
 
   void sendRuntimeProbe() {
@@ -277,10 +350,16 @@ class VescToolBridge final : public rclcpp::Node {
   }
 
   void forceRuntimeAfterTcp(const std::string &event) {
+    const bool was_armed = tcp_client_armed_;
     closeTcpClient();
+    if (!was_armed) {
+      publishOwner();
+      publishStatus(event + "_unarmed");
+      return;
+    }
     // Python maintenance is a higher-priority owner. Losing the lower-priority
     // VESC Tool socket must never tear Python out of MAINTENANCE.
-    if (python_tcp_client_fd_ >= 0) {
+    if (python_tcp_client_armed_) {
       publishOwner("PYTHON_MAINTENANCE");
       publishStatus(event + "_python_kept");
       return;
@@ -313,55 +392,87 @@ class VescToolBridge final : public rclcpp::Node {
   }
 
   void forwardTcpPendingRx() {
-    if (python_tcp_client_fd_ >= 0) { tcp_pending_rx_.clear(); return; }
-    if (tcp_client_fd_ < 0 || !maintenance_active_ || transition_ != Transition::NONE || tcp_pending_rx_.empty()) return;
-    const std::size_t n = std::min<std::size_t>(512U, tcp_pending_rx_.size());
-    std_msgs::msg::UInt8MultiArray m;
-    m.data.assign(tcp_pending_rx_.begin(), tcp_pending_rx_.begin() + static_cast<std::ptrdiff_t>(n));
-    tx_pub_->publish(m);
-    tcp_pending_rx_.erase(tcp_pending_rx_.begin(), tcp_pending_rx_.begin() + static_cast<std::ptrdiff_t>(n));
+    if (python_tcp_client_armed_) { tcp_pending_rx_.clear(); return; }
+    if (tcp_client_fd_ < 0 || !tcp_client_armed_ || !maintenance_active_ ||
+        transition_ != Transition::NONE || tcp_pending_rx_.empty()) return;
+    // Preserve VESC packet boundaries. Bound each 10-ms service slice so a
+    // firmware/config burst cannot starve ROS callbacks, while realtime small
+    // frames (50-Hz control/telemetry) normally drain in the same slice.
+    for (std::size_t budget = 0U; budget < 32U; ++budget) {
+      std::vector<std::uint8_t> packet;
+      if (!popValidVescFrame(tcp_pending_rx_, &packet)) break;
+      std_msgs::msg::UInt8MultiArray m; m.data = std::move(packet); tx_pub_->publish(m);
+    }
   }
 
   void tcpTick() {
     if (tcp_server_fd_ < 0) return;
     if (tcp_client_fd_ < 0) {
       sockaddr_in peer{}; socklen_t peer_len = sizeof(peer);
-      const int fd = ::accept4(tcp_server_fd_, reinterpret_cast<sockaddr *>(&peer), &peer_len, SOCK_NONBLOCK | SOCK_CLOEXEC);
+      const int fd = ::accept4(tcp_server_fd_, reinterpret_cast<sockaddr *>(&peer), &peer_len,
+                               SOCK_NONBLOCK | SOCK_CLOEXEC);
       if (fd >= 0) {
         int one = 1; (void)::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
-        if (python_tcp_client_fd_ >= 0 && maintenance_active_) {
-          // VESC Tool may stay connected while Python owns the actuator. Its
-          // incoming packets are drained/discarded until Python releases, so
-          // stale setpoints can never replay after the priority handoff.
-          tcp_client_fd_ = fd;
-          tcp_pending_rx_.clear(); tcp_pending_tx_.clear();
-          publishOwner();
-          publishStatus("vesc_tcp_connected_suspended_by_python");
-        } else if (!vehicleIdleForMaintenance() || transition_ != Transition::NONE || maintenance_active_) {
-          ::close(fd); publishStatus("tcp_rejected_vehicle_not_idle_or_busy");
-        } else {
-          tcp_client_fd_ = fd;
-          publishOwner();
-          if (transport_connected_) {
-            beginEnter();
-            publishStatus("tcp_client_connected");
-          } else {
-            // An idle VESC link is not a disconnected VESC. Probe read-only in
-            // RUNTIME before taking maintenance ownership so OTA/VESC Tool can
-            // start deterministically even when the normal controller is stopped.
-            tcp_probe_pending_ = true;
-            const auto now = std::chrono::steady_clock::now();
-            tcp_probe_deadline_ = now + 1500ms;
-            tcp_probe_next_ = now;
-            publishStatus("tcp_probe_runtime_link");
-          }
-        }
+        tcp_client_fd_ = fd;
+        tcp_client_armed_ = false;
+        tcp_probe_pending_ = false;
+        tcp_pending_rx_.clear(); tcp_pending_tx_.clear();
+        tcp_client_handshake_deadline_ = std::chrono::steady_clock::now() + 500ms;
+        publishOwner();
+        publishStatus("vesc_tcp_connected_waiting_valid_frame");
       }
     }
     if (tcp_client_fd_ < 0) return;
 
+    std::uint8_t buf[1024];
+    for (;;) {
+      const ssize_t n = ::recv(tcp_client_fd_, buf, sizeof(buf), 0);
+      if (n > 0) {
+        if (tcp_pending_rx_.size() + static_cast<std::size_t>(n) > 65536U) {
+          forceRuntimeAfterTcp("tcp_rx_overflow"); return;
+        }
+        tcp_pending_rx_.insert(tcp_pending_rx_.end(), buf, buf + n);
+        continue;
+      }
+      if (n == 0) { forceRuntimeAfterTcp("tcp_client_disconnected"); return; }
+      if (errno == EINTR) continue;
+      if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+      forceRuntimeAfterTcp("tcp_recv_error"); return;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    if (!tcp_client_armed_) {
+      if (containsValidVescFrame(tcp_pending_rx_)) {
+        if (python_tcp_client_armed_ && maintenance_active_) {
+          // Valid VESC Tool client may remain connected underneath Python, but
+          // its first packet and every packet during Python ownership are dropped.
+          tcp_client_armed_ = true;
+          tcp_pending_rx_.clear(); tcp_pending_tx_.clear();
+          publishOwner();
+          publishStatus("vesc_tcp_valid_suspended_by_python");
+        } else if (!vehicleIdleForMaintenance() || transition_ != Transition::NONE || maintenance_active_) {
+          forceRuntimeAfterTcp("tcp_valid_frame_rejected_vehicle_not_idle_or_busy");
+          return;
+        } else {
+          tcp_client_armed_ = true;
+          publishOwner();
+          if (transport_connected_) {
+            beginEnter();
+            publishStatus("tcp_valid_frame_entering_maintenance");
+          } else {
+            tcp_probe_pending_ = true;
+            tcp_probe_deadline_ = now + 1500ms;
+            tcp_probe_next_ = now;
+            publishStatus("tcp_valid_frame_probe_runtime_link");
+          }
+        }
+      } else if (now >= tcp_client_handshake_deadline_) {
+        forceRuntimeAfterTcp("tcp_handshake_timeout");
+        return;
+      }
+    }
+
     if (tcp_probe_pending_) {
-      const auto now = std::chrono::steady_clock::now();
       if (transport_connected_) {
         tcp_probe_pending_ = false;
         beginEnter();
@@ -375,34 +486,23 @@ class VescToolBridge final : public rclcpp::Node {
       }
     }
 
-    std::uint8_t buf[1024];
-    for (;;) {
-      const ssize_t n = ::recv(tcp_client_fd_, buf, sizeof(buf), 0);
-      if (n > 0) {
-        if (python_tcp_client_fd_ >= 0) {
-          // Higher-priority Python owner is active: consume and discard VESC
-          // Tool bytes rather than buffering commands that could replay later.
-          continue;
-        }
-        if (tcp_pending_rx_.size() + static_cast<std::size_t>(n) > 65536U) { forceRuntimeAfterTcp("tcp_rx_overflow"); return; }
-        tcp_pending_rx_.insert(tcp_pending_rx_.end(), buf, buf + n);
-        continue;
-      }
-      if (n == 0) { forceRuntimeAfterTcp("tcp_client_disconnected"); return; }
-      if (errno == EINTR) continue;
-      if (errno == EAGAIN || errno == EWOULDBLOCK) break;
-      forceRuntimeAfterTcp("tcp_recv_error"); return;
-    }
+    if (python_tcp_client_armed_) tcp_pending_rx_.clear();
     forwardTcpPendingRx();
     flushTcpTx();
   }
 
   void forceRuntimeAfterPython(const std::string &event) {
+    const bool was_armed = python_tcp_client_armed_;
     closePythonTcpClient();
+    if (!was_armed) {
+      publishOwner();
+      publishStatus(event + "_unarmed");
+      return;
+    }
     // If VESC Tool stayed connected while Python had priority, hand maintenance
     // back to it in-place after a zero-current barrier. No runtime command is
     // allowed between the two maintenance owners.
-    if (tcp_client_fd_ >= 0 && maintenance_active_ && transition_ == Transition::NONE) {
+    if (tcp_client_armed_ && maintenance_active_ && transition_ == Transition::NONE) {
       tcp_pending_rx_.clear(); tcp_pending_tx_.clear();
       sendMaintenanceSafeStop();
       publishOwner("VESC_TOOL");
@@ -438,66 +538,33 @@ class VescToolBridge final : public rclcpp::Node {
   }
 
   void forwardPythonPendingRx() {
-    if (python_tcp_client_fd_ < 0 || !maintenance_active_ || transition_ != Transition::NONE ||
-        python_probe_pending_ || python_pending_rx_.empty()) return;
-    const std::size_t n = std::min<std::size_t>(512U, python_pending_rx_.size());
-    std_msgs::msg::UInt8MultiArray m;
-    m.data.assign(python_pending_rx_.begin(), python_pending_rx_.begin() + static_cast<std::ptrdiff_t>(n));
-    tx_pub_->publish(m);
-    python_pending_rx_.erase(python_pending_rx_.begin(), python_pending_rx_.begin() + static_cast<std::ptrdiff_t>(n));
+    if (python_tcp_client_fd_ < 0 || !python_tcp_client_armed_ || !maintenance_active_ ||
+        transition_ != Transition::NONE || python_probe_pending_ || python_pending_rx_.empty()) return;
+    for (std::size_t budget = 0U; budget < 32U; ++budget) {
+      std::vector<std::uint8_t> packet;
+      if (!popValidVescFrame(python_pending_rx_, &packet)) break;
+      std_msgs::msg::UInt8MultiArray m; m.data = std::move(packet); tx_pub_->publish(m);
+    }
   }
 
   void pythonTcpTick() {
     if (python_tcp_server_fd_ < 0) return;
     if (python_tcp_client_fd_ < 0) {
       sockaddr_in peer{}; socklen_t peer_len = sizeof(peer);
-      const int fd = ::accept4(python_tcp_server_fd_, reinterpret_cast<sockaddr *>(&peer), &peer_len, SOCK_NONBLOCK | SOCK_CLOEXEC);
+      const int fd = ::accept4(python_tcp_server_fd_, reinterpret_cast<sockaddr *>(&peer), &peer_len,
+                               SOCK_NONBLOCK | SOCK_CLOEXEC);
       if (fd >= 0) {
         int one = 1; (void)::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
-        if (transition_ == Transition::EXIT_STOP || transition_ == Transition::EXIT_ROUTE) {
-          ::close(fd); publishStatus("python_tcp_retry_runtime_transition");
-        } else if (maintenance_active_) {
-          // Highest-priority maintenance preempts VESC Tool/API, but always zeroes
-          // both motors before accepting Python packets. The VESC Tool socket may
-          // stay connected, while its lower-priority packets are drained/discarded.
-          tcp_pending_rx_.clear(); tcp_pending_tx_.clear();
-          sendMaintenanceSafeStop();
-          python_tcp_client_fd_ = fd;
-          python_probe_pending_ = false;
-          publishOwner();
-          publishStatus("python_preempted_lower_maintenance");
-        } else if (!vehicleIdleForMaintenance()) {
-          ::close(fd); publishStatus("python_tcp_rejected_vehicle_not_idle");
-        } else {
-          python_tcp_client_fd_ = fd;
-          publishOwner();
-          if (transport_connected_) {
-            beginEnter();
-            publishStatus("python_tcp_client_connected");
-          } else {
-            python_probe_pending_ = true;
-            const auto now = std::chrono::steady_clock::now();
-            python_probe_deadline_ = now + 1500ms;
-            python_probe_next_ = now;
-            publishStatus("python_tcp_probe_runtime_link");
-          }
-        }
+        python_tcp_client_fd_ = fd;
+        python_tcp_client_armed_ = false;
+        python_probe_pending_ = false;
+        python_pending_rx_.clear(); python_pending_tx_.clear();
+        python_client_handshake_deadline_ = std::chrono::steady_clock::now() + 500ms;
+        publishOwner();
+        publishStatus("python_tcp_connected_waiting_valid_frame");
       }
     }
     if (python_tcp_client_fd_ < 0) return;
-
-    if (python_probe_pending_) {
-      const auto now = std::chrono::steady_clock::now();
-      if (transport_connected_) {
-        python_probe_pending_ = false;
-        beginEnter();
-        publishStatus("python_probe_ok_entering_maintenance");
-      } else if (now >= python_probe_deadline_) {
-        forceRuntimeAfterPython("python_tcp_probe_timeout"); return;
-      } else if (now >= python_probe_next_) {
-        sendRuntimeProbe(); python_probe_next_ = now + 150ms;
-      }
-    }
 
     std::uint8_t buf[1024];
     for (;;) {
@@ -514,6 +581,56 @@ class VescToolBridge final : public rclcpp::Node {
       if (errno == EAGAIN || errno == EWOULDBLOCK) break;
       forceRuntimeAfterPython("python_tcp_recv_error"); return;
     }
+
+    const auto now = std::chrono::steady_clock::now();
+    if (!python_tcp_client_armed_) {
+      if (containsValidVescFrame(python_pending_rx_)) {
+        if (transition_ == Transition::EXIT_STOP || transition_ == Transition::EXIT_ROUTE) {
+          forceRuntimeAfterPython("python_valid_frame_retry_runtime_transition");
+          return;
+        }
+        if (!vehicleIdleForMaintenance()) {
+          forceRuntimeAfterPython("python_valid_frame_rejected_vehicle_not_idle");
+          return;
+        }
+        python_tcp_client_armed_ = true;
+        if (maintenance_active_) {
+          // Highest-priority Python client preempts VESC Tool/API. Drop all
+          // lower-priority bytes and put a zero-current barrier in front of it.
+          tcp_pending_rx_.clear(); tcp_pending_tx_.clear();
+          sendMaintenanceSafeStop();
+          publishOwner();
+          publishStatus("python_valid_frame_preempted_lower_maintenance");
+        } else {
+          publishOwner();
+          if (transport_connected_) {
+            beginEnter();
+            publishStatus("python_valid_frame_entering_maintenance");
+          } else {
+            python_probe_pending_ = true;
+            python_probe_deadline_ = now + 1500ms;
+            python_probe_next_ = now;
+            publishStatus("python_valid_frame_probe_runtime_link");
+          }
+        }
+      } else if (now >= python_client_handshake_deadline_) {
+        forceRuntimeAfterPython("python_handshake_timeout");
+        return;
+      }
+    }
+
+    if (python_probe_pending_) {
+      if (transport_connected_) {
+        python_probe_pending_ = false;
+        beginEnter();
+        publishStatus("python_probe_ok_entering_maintenance");
+      } else if (now >= python_probe_deadline_) {
+        forceRuntimeAfterPython("python_tcp_probe_timeout"); return;
+      } else if (now >= python_probe_next_) {
+        sendRuntimeProbe(); python_probe_next_ = now + 150ms;
+      }
+    }
+
     forwardPythonPendingRx();
     flushPythonTx();
   }
@@ -534,8 +651,10 @@ class VescToolBridge final : public rclcpp::Node {
       << "\",\"owner\":\"" << maintenanceOwner() << "\""
       << ",\"python_tcp_server\":" << (python_tcp_server_fd_ >= 0 ? "true" : "false")
       << ",\"python_tcp_port\":" << python_tcp_port_ << ",\"python_tcp_client\":" << (python_tcp_client_fd_ >= 0 ? "true" : "false")
+      << ",\"python_tcp_armed\":" << (python_tcp_client_armed_ ? "true" : "false")
       << ",\"tcp_server\":" << (tcp_server_fd_ >= 0 ? "true" : "false")
       << ",\"tcp_port\":" << tcp_port_ << ",\"tcp_client\":" << (tcp_client_fd_ >= 0 ? "true" : "false")
+      << ",\"tcp_armed\":" << (tcp_client_armed_ ? "true" : "false")
       << ",\"rx_crc_errors\":" << crc_errors_ << ",\"rx_format_errors\":" << format_errors_
       << ",\"last_request_motor\":" << last_request_motor_;
     if (!event.empty()) o << ",\"event\":\"" << event << "\"";
@@ -599,7 +718,7 @@ class VescToolBridge final : public rclcpp::Node {
   }
 
   void pollTick() {
-    if (!maintenance_active_ || transition_ != Transition::NONE || tcp_client_fd_ >= 0 || python_tcp_client_fd_ >= 0) return;
+    if (!maintenance_active_ || transition_ != Transition::NONE || tcp_client_armed_ || python_tcp_client_armed_) return;
     if (std::chrono::steady_clock::now() < explicit_request_hold_until_) return;
     sendPayload(poll_motor_, {COMM_GET_VALUES});
     poll_motor_ = poll_motor_ == 1 ? 2 : 1;
@@ -610,8 +729,8 @@ class VescToolBridge final : public rclcpp::Node {
     if (raw == "MODE:MAINTENANCE") { beginEnter(); return; }
     if (raw == "MODE:RUNTIME" || raw == "MODE:NORMAL") { beginExit(); return; }
     if (!maintenance_active_ || transition_ != Transition::NONE) { publishStatus("command_rejected_not_maintenance"); return; }
-    if (python_tcp_client_fd_ >= 0) { publishStatus("command_rejected_python_has_priority"); return; }
-    if (tcp_client_fd_ >= 0) { publishStatus("command_rejected_tcp_client_owns_maintenance"); return; }
+    if (python_tcp_client_armed_) { publishStatus("command_rejected_python_has_priority"); return; }
+    if (tcp_client_armed_) { publishStatus("command_rejected_tcp_client_owns_maintenance"); return; }
 
     explicit_request_hold_until_ = std::chrono::steady_clock::now() + 500ms;
     int motor = 0; double value = 0.0;
@@ -663,10 +782,12 @@ class VescToolBridge final : public rclcpp::Node {
   }
 
   void consume(const std::vector<std::uint8_t> &bytes) {
-    if (python_tcp_client_fd_ >= 0 && maintenance_active_ && transition_ == Transition::NONE && !python_probe_pending_) {
+    if (python_tcp_client_armed_ && maintenance_active_ && transition_ == Transition::NONE && !python_probe_pending_) {
       queuePythonTx(bytes);
-    } else if (tcp_client_fd_ >= 0 && maintenance_active_ && transition_ == Transition::NONE && !tcp_probe_pending_) {
+      flushPythonTx();
+    } else if (tcp_client_armed_ && maintenance_active_ && transition_ == Transition::NONE && !tcp_probe_pending_) {
       queueTcpTx(bytes);
+      flushTcpTx();
     }
     stream_.insert(stream_.end(), bytes.begin(), bytes.end());
     if (stream_.size() > 8192U) stream_.erase(stream_.begin(), stream_.end() - 4096);
@@ -710,14 +831,17 @@ class VescToolBridge final : public rclcpp::Node {
     }
   }
 
-  double poll_hz_{10.0}, max_abs_duty_{0.95}, max_abs_current_a_{20.0}, max_abs_rpm_{10000.0};
+  double poll_hz_{10.0}, tcp_service_hz_{1000.0};
+  double max_abs_duty_{0.95}, max_abs_current_a_{20.0}, max_abs_rpm_{10000.0};
   bool maintenance_active_{false}, transport_connected_{false}, tcp_enabled_{true}, python_tcp_enabled_{true};
   bool tcp_probe_pending_{false}, python_probe_pending_{false};
+  bool tcp_client_armed_{false}, python_tcp_client_armed_{false};
   int tcp_port_{65102}, tcp_server_fd_{-1}, tcp_client_fd_{-1};
   int python_tcp_port_{65101}, python_tcp_server_fd_{-1}, python_tcp_client_fd_{-1};
   double speed_mps_{0.0}; std::string mux_source_;
   Transition transition_{Transition::NONE}; std::chrono::steady_clock::time_point transition_at_{};
   std::chrono::steady_clock::time_point explicit_request_hold_until_{};
+  std::chrono::steady_clock::time_point tcp_client_handshake_deadline_{}, python_client_handshake_deadline_{};
   std::chrono::steady_clock::time_point tcp_probe_deadline_{}, tcp_probe_next_{};
   std::chrono::steady_clock::time_point python_probe_deadline_{}, python_probe_next_{};
   int poll_motor_{1}, last_request_motor_{1};

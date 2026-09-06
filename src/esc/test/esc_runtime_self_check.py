@@ -83,8 +83,11 @@ if float(shared.get("speed_max", -1.0)) != float(ack.get("speed_max", -2.0)):
 
 for token in (
     "if (estop)",
-    "if (teleop_fresh && (teleop_active || teleop_hold))",
+    "const bool hmi_manual = hmi_fresh && hmi_active",
+    "const bool teleop_manual = teleop_fresh && (teleop_active || teleop_hold)",
+    "hmi_.received.nanoseconds() >= teleop_.received.nanoseconds()",
     "if (nav2_fresh && gate_ok)",
+    "PERCEPTION:",
     "age > command_watchdog_sec_",
     "crc16Ccitt",
     "makeVescFrame",
@@ -116,15 +119,17 @@ if source.count("::open(") != 1:
 tool_source = (ROOT / "src/vesc_tool_bridge.cpp").read_text()
 if "motor_teleop" not in launch or "ackermann_controller_server" not in launch or "vesc_tool_bridge" not in launch:
     fail("ESC launch must contain teleop, Ackermann runtime, and VESC maintenance bridge")
-for token in ("/stmf4/vesc/maintenance_tx", "/esc/vesc/maintenance_active", "MODE:MAINTENANCE",
-              "COMM_GET_MCCONF", "COMM_DETECT_HALL_FOC", "COMM_DETECT_ENCODER", "COMM_TERMINAL_CMD",
-              "127.0.0.1", "tcp_port", "SOCK_NONBLOCK", "TCP_NODELAY", "tcp_client_fd_",
-              "sendMaintenanceSafeStop", "command_rejected_tcp_client_owns_maintenance"):
+for token in ("/stmf4/vesc/maintenance_tx", "/esc/vesc/maintenance_active", "/esc/vesc/maintenance_owner",
+              "MODE:MAINTENANCE", "COMM_GET_MCCONF", "COMM_DETECT_HALL_FOC", "COMM_DETECT_ENCODER",
+              "COMM_TERMINAL_CMD", "127.0.0.1", "tcp_port", "python_tcp_port", "PYTHON_MAINTENANCE",
+              "SOCK_NONBLOCK", "TCP_NODELAY", "tcp_client_fd_", "python_tcp_client_fd_",
+              "sendMaintenanceSafeStop", "command_rejected_python_has_priority",
+              "command_rejected_tcp_client_owns_maintenance"):
     if token not in tool_source:
         fail(f"VESC maintenance feature missing: {token}")
 
 print("PASS ESC runtime contract")
-print("priority: E_STOP > TELEOP > gated NAV2 > IDLE")
+print("priority: E_STOP > PYTHON_MAINTENANCE > VESC_TOOL > MANUAL(HMI/ROSWEB/TELEOP freshest) > PERCEPTION > gated NAV2 > IDLE")
 print("fusion authority: ESC longitudinal speed only; kinematic yaw is diagnostic")
 
 assert "maintenance_route_switch" in (ROOT / "src/vesc_tool_bridge.cpp").read_text()

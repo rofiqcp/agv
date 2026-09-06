@@ -120,7 +120,8 @@ public:
     loadWaypoints();
     createRosInterfaces();
     reconnect_timer_ = create_wall_timer(250ms, std::bind(&StmF4HmiBridge::reconnectTick, this));
-    serial_timer_ = create_wall_timer(10ms, std::bind(&StmF4HmiBridge::serialTick, this));
+    serial_timer_ = create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::duration<double>(1.0 / serial_poll_hz_)), std::bind(&StmF4HmiBridge::serialTick, this));
     telemetry_timer_ = create_wall_timer(
       std::chrono::duration<double>(1.0 / telemetry_rate_hz_), std::bind(&StmF4HmiBridge::telemetryTick, this));
     heartbeat_timer_ = create_wall_timer(500ms, [this]() {
@@ -163,6 +164,7 @@ private:
     declare_parameter<int>("serial_baud", 115200);
     declare_parameter<double>("reconnect_sec", 0.5);
     declare_parameter<double>("telemetry_rate_hz", 10.0);
+    declare_parameter<double>("serial_poll_hz", 1000.0);
     declare_parameter<double>("command_rate_hz", 30.0);
     declare_parameter<double>("heartbeat_sec", 5.0);
     declare_parameter<double>("manual_speed_max_mps", 1.0);
@@ -188,6 +190,7 @@ private:
     serial_baud_ = static_cast<int>(get_parameter("serial_baud").as_int());
     reconnect_sec_ = std::clamp(get_parameter("reconnect_sec").as_double(), 0.1, 5.0);
     telemetry_rate_hz_ = std::clamp(get_parameter("telemetry_rate_hz").as_double(), 2.0, 30.0);
+    serial_poll_hz_ = std::clamp(get_parameter("serial_poll_hz").as_double(), 100.0, 2000.0);
     command_rate_hz_ = std::clamp(get_parameter("command_rate_hz").as_double(), 10.0, 50.0);
     heartbeat_sec_ = std::clamp(get_parameter("heartbeat_sec").as_double(), 0.25, 5.0);
     manual_speed_max_mps_ = std::clamp(get_parameter("manual_speed_max_mps").as_double(), 0.05, 3.0);
@@ -1027,18 +1030,20 @@ private:
 
   bool sendVescBytes(const std::vector<std::uint8_t> &bytes, char source) {
     if (bytes.empty() || bytes.size() > 4096U || (source != 'R' && source != 'M')) return false;
-    /* Make VESC gateway ownership atomic with the data path. Previously the
-     * /mode and /maintenance_tx subscriptions were independent DDS callbacks,
-     * so a maintenance frame could reach the F411 before VESC:MODE:MAINTENANCE
-     * and get rejected as OWNER:RUNTIME. Select the required owner immediately
-     * before forwarding each transaction; the F411 command parser services this
-     * line before the following TX line on the same ordered CDC stream. */
+    /* /stmf4/vesc/mode is the ONLY ownership authority. Data packets must never
+     * switch the F411 route themselves: the runtime controller keeps publishing
+     * zero/telemetry traffic while maintenance owns the actuator, and allowing
+     * those packets to toggle the route creates a 100+ Hz ownership race.
+     * The arbiter intentionally changes mode before opening the maintenance data
+     * gate and inserts a safe-stop transition, so source mismatch means stale or
+     * lower-priority traffic and is dropped rather than replayed later. */
     const bool maintenance = source == 'M';
     if (maintenance != vesc_maintenance_mode_) {
-      if (!sendLine(maintenance ? "VESC:MODE:MAINTENANCE" : "VESC:MODE:RUNTIME")) return false;
-      vesc_maintenance_mode_ = maintenance;
+      if (maintenance) ++vesc_maintenance_tx_rejected_;
+      else ++vesc_runtime_tx_rejected_;
+      return false;
     }
-    constexpr size_t kChunk = 16U;
+    constexpr size_t kChunk = 48U;
     for (size_t offset = 0; offset < bytes.size(); offset += kChunk) {
       const size_t count = std::min(kChunk, bytes.size() - offset);
       const std::string line = std::string("VESC:TX:") + source + ":" + bytesToHex(bytes.data() + offset, count);
@@ -1053,7 +1058,7 @@ private:
       }
       // Firmware/tuning traffic is loss-intolerant. Pace each complete USB
       // text frame so the F411 command parser and UART TX queue drain it.
-      if (offset + count < bytes.size()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      if (offset + count < bytes.size()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     return true;
   }
@@ -1384,7 +1389,7 @@ private:
   std::string serial_device_, active_serial_device_;
   std::string waypoint_file_;
   int serial_baud_{115200};
-  double reconnect_sec_{0.5}, telemetry_rate_hz_{10.0}, command_rate_hz_{30.0}, heartbeat_sec_{5.0};
+  double reconnect_sec_{0.5}, telemetry_rate_hz_{10.0}, serial_poll_hz_{1000.0}, command_rate_hz_{30.0}, heartbeat_sec_{5.0};
   double waypoint_pose_timeout_sec_{2.5};
   double neo3_sensor_timeout_sec_{2.0}, neo3_mag_sigma_ut_{3.0};
   double vesc_transport_timeout_sec_{2.0};
@@ -1444,6 +1449,7 @@ private:
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr request_sub_, neo3_command_sub_, esc_status_sub_, obstacle_sub_, drivable_sub_;
   rclcpp::Subscription<std_msgs::msg::UInt8MultiArray>::SharedPtr vesc_runtime_tx_sub_, vesc_maintenance_tx_sub_;
   bool vesc_maintenance_mode_{false};
+  std::uint64_t vesc_runtime_tx_rejected_{0}, vesc_maintenance_tx_rejected_{0};
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr vesc_mode_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr performance_sub_, nav_goal_state_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr map_pose_sub_;
