@@ -38,10 +38,10 @@ foc_thesis:
     gear_ratio: 1.0
     # STM steering command / encoder target domain. Physical Ackermann wheel
     # angle remains separately calibrated in esc/config/ackermann.yaml.
-    hard_limit_left_deg: -90.0
-    hard_limit_right_deg: 90.0
-    soft_limit_left_deg: -90.0
-    soft_limit_right_deg: 90.0
+    hard_limit_left_deg: -30.0
+    hard_limit_right_deg: 30.0
+    soft_limit_left_deg: -28.0
+    soft_limit_right_deg: 28.0
     invalid_transition_limit: 0
 
   electrical_alignment:
