@@ -959,7 +959,7 @@ void setup() {
   pinMode(PC13, OUTPUT);
   digitalWrite(PC13, HIGH);
 
-  Serial.begin(115200);
+  Serial.begin(1000000);
 #if HMI_LEGACY_UART
   Serial1.begin(115200);
 #endif

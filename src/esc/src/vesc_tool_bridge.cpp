@@ -516,9 +516,6 @@ class VescToolBridge final : public rclcpp::Node {
             publishStatus("tcp_valid_frame_probe_runtime_link");
           }
         }
-      } else if (now >= tcp_client_handshake_deadline_) {
-        forceRuntimeAfterTcp("tcp_handshake_timeout");
-        return;
       }
     }
 
@@ -527,10 +524,10 @@ class VescToolBridge final : public rclcpp::Node {
         tcp_probe_pending_ = false;
         beginEnter();
         publishStatus("tcp_probe_ok_entering_maintenance");
-      } else if (now >= tcp_probe_deadline_) {
-        forceRuntimeAfterTcp("tcp_probe_timeout");
-        return;
       } else if (now >= tcp_probe_next_) {
+        // Keep a standards-compatible TCP client connected while the F411/F103
+        // runtime link is coming up. Do not turn startup latency into a false
+        // TCP timeout; ownership remains RUNTIME until the probe succeeds.
         sendRuntimeProbe();
         tcp_probe_next_ = now + 150ms;
       }
@@ -663,9 +660,6 @@ class VescToolBridge final : public rclcpp::Node {
             publishStatus("python_valid_frame_probe_runtime_link");
           }
         }
-      } else if (now >= python_client_handshake_deadline_) {
-        forceRuntimeAfterPython("python_handshake_timeout");
-        return;
       }
     }
 
@@ -674,9 +668,10 @@ class VescToolBridge final : public rclcpp::Node {
         python_probe_pending_ = false;
         beginEnter();
         publishStatus("python_probe_ok_entering_maintenance");
-      } else if (now >= python_probe_deadline_) {
-        forceRuntimeAfterPython("python_tcp_probe_timeout"); return;
       } else if (now >= python_probe_next_) {
+        // Python maintenance has the same raw-VESC TCP semantics as port 65102.
+        // Keep the socket alive while transport reconnects; do not manufacture
+        // an application-visible timeout for a recoverable USB startup delay.
         sendRuntimeProbe(); python_probe_next_ = now + 150ms;
       }
     }

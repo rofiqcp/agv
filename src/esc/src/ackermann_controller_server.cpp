@@ -295,6 +295,9 @@ private:
     declare_parameter<double>("drive_wheel_radius_m", 0.145);
     declare_parameter<int>("drive_motor_pole_pairs", 15);
     declare_parameter<double>("drive_gear_ratio", 1.0);
+    // Multiplicative calibration from raw wheel-model speed to measured ground speed.
+    // scale = V_GNSS / V_raw_ESC. This is runtime-adjustable after N2.1 trials.
+    declare_parameter<double>("drive_odometry_calibration_scale", 1.0);
     declare_parameter<double>("wheelbase_m", 0.70);
     declare_parameter<double>("track_width_m", 0.48);
     declare_parameter<double>("min_speed_for_nav_steering_mps", 0.05);
@@ -439,6 +442,8 @@ private:
     drive_wheel_radius_m_ = std::clamp(get_parameter("drive_wheel_radius_m").as_double(), 0.01, 1.0);
     drive_motor_pole_pairs_ = std::clamp(static_cast<int>(get_parameter("drive_motor_pole_pairs").as_int()), 1, 100);
     drive_gear_ratio_ = std::clamp(get_parameter("drive_gear_ratio").as_double(), 0.01, 100.0);
+    drive_odometry_calibration_scale_ = std::clamp(
+      get_parameter("drive_odometry_calibration_scale").as_double(), 0.20, 5.0);
     wheelbase_m_ = std::max(0.05, get_parameter("wheelbase_m").as_double());
     track_width_m_ = std::max(0.0, get_parameter("track_width_m").as_double());
     min_speed_for_nav_steering_mps_ = std::max(
@@ -657,12 +662,16 @@ private:
     bool touched = false;
     bool serial_enabled_requested = serial_enabled_;
     bool serial_enabled_touched = false;
+    double drive_scale = drive_odometry_calibration_scale_;
+    bool drive_scale_touched = false;
 
     try {
       for (const auto & parameter : parameters) {
         const std::string & name = parameter.get_name();
         if (name == "serial_enabled") {
           serial_enabled_requested = parameter.as_bool(); serial_enabled_touched = true;
+        } else if (name == "drive_odometry_calibration_scale") {
+          drive_scale = parameter.as_double(); drive_scale_touched = true;
         } else if (name == "steering_feedback_calibration_enabled") {
           enabled = parameter.as_bool(); touched = true;
         } else if (name == "steering_calibration_mode_enabled") {
@@ -726,6 +735,15 @@ private:
       return result;
     }
 
+    if (drive_scale_touched) {
+      if (!std::isfinite(drive_scale) || drive_scale < 0.20 || drive_scale > 5.0) {
+        result.reason = "drive_odometry_calibration_scale harus finite dan 0.20..5.00";
+        return result;
+      }
+      drive_odometry_calibration_scale_ = drive_scale;
+      RCLCPP_INFO(get_logger(), "Drive velocity scale runtime updated: %.8f", drive_odometry_calibration_scale_);
+    }
+
     if (!touched) {
       if (serial_enabled_touched) {
         setSerialEnabled(serial_enabled_requested);
@@ -736,7 +754,9 @@ private:
         return result;
       }
       result.successful = true;
-      result.reason = "parameter tidak terkait steering calibration/serial";
+      result.reason = drive_scale_touched ?
+        "drive odometry scale diterapkan live" :
+        "parameter tidak terkait steering calibration/serial";
       return result;
     }
     if (force_symmetric) {
@@ -1000,6 +1020,7 @@ private:
     speed_pub_ = create_publisher<std_msgs::msg::Float64>("/esc/speed", 10);
     drive_target_pub_ = create_publisher<std_msgs::msg::Float64>("/esc/drive_target_mps", 10);
     drive_actual_pub_ = create_publisher<std_msgs::msg::Float64>("/esc/drive_actual_mps", 10);
+    drive_raw_pub_ = create_publisher<std_msgs::msg::Float64>("/esc/drive_raw_mps", 10);
     steering_target_pub_ = create_publisher<std_msgs::msg::Float64>("/esc/steering_target_rad", 10);
     // Command target in the same uncalibrated convention used by saved CENTER/RIGHT/LEFT.
     steering_uncal_target_pub_ =
@@ -1481,7 +1502,17 @@ private:
 
   double rightCommandUnitsPerMps() const
   {
-    return transport_mode_ == "stm32" ? nativeDriveErpmPerMps() : (right_max_rpm_ / speed_max_mps_);
+    // If measured ground speed is raw_model_speed * scale, command ERPM for a
+    // requested ground speed must be divided by the same scale.
+    return transport_mode_ == "stm32" ?
+      (nativeDriveErpmPerMps() / drive_odometry_calibration_scale_) :
+      (right_max_rpm_ / speed_max_mps_);
+  }
+
+  double rawDriveMpsFromErpm(double erpm) const
+  {
+    if (transport_mode_ != "stm32") return erpm / (right_max_rpm_ / speed_max_mps_);
+    return erpm / nativeDriveErpmPerMps();
   }
 
   double rightCommandLimit() const
@@ -2464,7 +2495,8 @@ private:
     if (!ack_fresh || !feedback_updated) return;
 
     // The command mapping intentionally defines speed_max_mps <-> right_max_rpm.
-    const double drive_mps = (rpm / rightCommandUnitsPerMps()) * (invert_drive_ ? -1.0 : 1.0);
+    const double drive_raw_mps = rawDriveMpsFromErpm(rpm) * (invert_drive_ ? -1.0 : 1.0);
+    const double drive_mps = drive_raw_mps * drive_odometry_calibration_scale_;
     const double steering_rad = steering_calibrated_deg * kPi / 180.0;
     // steering_rad adalah sudut roda DALAM Ackermann (RIGHT-positive).
     // R_center = track/2 + L/tan(|delta_inner|).
@@ -2484,6 +2516,8 @@ private:
     scalar.data = drive_mps;
     speed_pub_->publish(scalar);
     drive_actual_pub_->publish(scalar);
+    scalar.data = drive_raw_mps;
+    drive_raw_pub_->publish(scalar);
     scalar.data = steering_uncalibrated_deg * kPi / 180.0;
     steering_uncalibrated_pub_->publish(scalar);
     steering_feedback_raw_pub_->publish(scalar);
@@ -2562,6 +2596,7 @@ private:
   double drive_wheel_radius_m_{0.145};
   int drive_motor_pole_pairs_{15};
   double drive_gear_ratio_{1.0};
+  double drive_odometry_calibration_scale_{1.0};
   double wheelbase_m_{0.70};
   double track_width_m_{0.48};
   double min_speed_for_nav_steering_mps_{0.05};
@@ -2754,6 +2789,7 @@ private:
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr speed_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr drive_target_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr drive_actual_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr drive_raw_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr steering_target_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr steering_uncal_target_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr steering_uncalibrated_pub_;

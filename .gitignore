@@ -36,3 +36,5 @@ data/
 .gpt_web_review/
 vesc/
 vesc_tool/
+px4/
+autoware/

@@ -37,6 +37,7 @@
 #include <QList>
 #include <QMap>
 #include <QPointer>
+#include <QProcess>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
@@ -195,6 +196,7 @@ QMap<QString, QString> configCandidates() {
       {"localization", nav + "/localization_cpp.yaml"},
       {"gnss", nav + "/gnss.yaml"},
       {"imu", nav + "/imu.yaml"},
+      {"imu_speed", nav + "/imu_speed.yaml"},
       {"stage3", nav + "/stage3_navigation.yaml"},
       {"trajectory_safety", nav + "/trajectory_safety.yaml"},
       {"collision", nav + "/collision_monitor_production.yaml"},
@@ -1141,6 +1143,75 @@ class WebRosBridge {
     return true;
   }
 
+  bool setDriveOdometryScale(double scale, QString *message) {
+    if (readOnly_) return rejectReadOnly(message);
+    if (!std::isfinite(scale) || scale < 0.20 || scale > 5.0) {
+      if (message) *message = "Drive scale harus finite dan 0.20..5.00";
+      return false;
+    }
+    const double speed = scalarState("esc_drive_actual").value_or(0.0);
+    if (std::abs(speed) > 0.03) {
+      if (message) *message = QString("Apply scale ditolak: kendaraan masih bergerak (%1 m/s)").arg(speed,0,'f',3);
+      return false;
+    }
+    auto client=node_->create_client<rcl_interfaces::srv::SetParametersAtomically>(
+      "/esc_ackermann/set_parameters_atomically");
+    if (!client->wait_for_service(700ms)) {
+      if (message) *message = "Parameter service /esc_ackermann belum tersedia";
+      return false;
+    }
+    auto req=std::make_shared<rcl_interfaces::srv::SetParametersAtomically::Request>();
+    rcl_interfaces::msg::Parameter p; p.name="drive_odometry_calibration_scale";
+    p.value.type=rcl_interfaces::msg::ParameterType::PARAMETER_DOUBLE; p.value.double_value=scale;
+    req->parameters.push_back(p);
+    auto future=client->async_send_request(req);
+    if (future.wait_for(1200ms)!=std::future_status::ready) {
+      if (message) *message = "Timeout apply drive scale ke runtime";
+      return false;
+    }
+    try {
+      const auto result=future.get();
+      if (!result->result.successful) { if(message)*message=QString::fromStdString(result->result.reason); return false; }
+    } catch (const std::exception &e) { if(message)*message=QString::fromUtf8(e.what()); return false; }
+    if (message) *message=QString("Drive scale %.8f aktif live").arg(scale,0,'f',8);
+    return true;
+  }
+
+  bool publishTrialMotion(double erpm, double steeringDeg, bool active, QString *message) {
+    if (readOnly_) return rejectReadOnly(message);
+    if (!trialTwistPub_ || !trialSourcePub_) { if (message) *message = "Trial motion publisher belum siap"; return false; }
+    if (!std::isfinite(erpm) || !std::isfinite(steeringDeg)) { if (message) *message = "Trial motion value tidak finite"; return false; }
+    if (boolState("vesc_maintenance_active")) { if (message) *message = "Keluar dari VESC maintenance sebelum trial ROS"; return false; }
+    const double wheelR = sourceConfigNumber("esc", "esc_ackermann.ros__parameters.drive_wheel_radius_m", 0.145);
+    const double polePairs = sourceConfigNumber("esc", "esc_ackermann.ros__parameters.drive_motor_pole_pairs", 15.0);
+    const double gear = sourceConfigNumber("esc", "esc_ackermann.ros__parameters.drive_gear_ratio", 1.0);
+    const double scale = sourceConfigNumber("esc", "esc_ackermann.ros__parameters.drive_odometry_calibration_scale", 1.0);
+    const double speedMax = sourceConfigNumber("esc", "esc_ackermann.ros__parameters.speed_max", 0.5);
+    const double yawMaxDeg = sourceConfigNumber("teleop", "motor_teleop.ros__parameters.yaw_max_deg_s", 80.0);
+    const double steerLimit = sourceConfigNumber("esc", "esc_ackermann.ros__parameters.steering_physical_operational_limit_deg", 28.0);
+    const double erpmPerMps = (60.0 * gear * polePairs) / (2.0 * kPi * std::max(0.01, wheelR));
+    const double speed = erpm / erpmPerMps * scale;
+    if (std::abs(speed) > speedMax + 1.0e-6) {
+      if (message) *message = QString("Trial ditolak: %1 eRPM = %2 m/s > speed_max %3 m/s").arg(erpm,0,'f',1).arg(speed,0,'f',3).arg(speedMax,0,'f',3);
+      return false;
+    }
+    if (std::abs(steeringDeg) > steerLimit + 1.0e-6) {
+      if (message) *message = QString("Trial ditolak: steering %1 deg > operational limit %2 deg").arg(steeringDeg,0,'f',2).arg(steerLimit,0,'f',2);
+      return false;
+    }
+    geometry_msgs::msg::Twist cmd;
+    if (active) {
+      cmd.linear.x = speed;
+      const double frac = steerLimit > 1.0e-9 ? steeringDeg / steerLimit : 0.0;
+      cmd.angular.z = std::clamp(frac, -1.0, 1.0) * yawMaxDeg * kPi / 180.0;
+    }
+    std_msgs::msg::String src; src.data = active ? "WEB_TRIAL" : "STOP";
+    trialTwistPub_->publish(cmd); trialSourcePub_->publish(src);
+    update("web_trial_motion", QJsonObject{{"active",active},{"erpm",erpm},{"speed_mps",active?speed:0.0},{"steering_deg",active?steeringDeg:0.0},{"at_ms",nowMs()}});
+    if (message) *message = active ? QString("WEB_TRIAL active: %1 eRPM, %2 deg").arg(erpm,0,'f',1).arg(steeringDeg,0,'f',2) : "WEB_TRIAL stop";
+    return true;
+  }
+
   bool setSteeringCalibrationMode(bool enabled, QString *message) {
     if (readOnly_) return rejectReadOnly(message);
     if (enabled) {
@@ -1211,6 +1282,8 @@ class WebRosBridge {
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr vescToolCommandPub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr initialPosePub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr hmiRequestPub_;
+  rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr trialTwistPub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr trialSourcePub_;
 
   QVector<QPair<QString,QString>> runtimeTargetsForChange(const QString &fileKey, const QString &path) const {
     QVector<QPair<QString,QString>> out;
@@ -1221,6 +1294,7 @@ class WebRosBridge {
     } else if (fileKey == QStringLiteral("localization")) add(QStringLiteral("localization_core"),QStringLiteral("/localization_core"));
     else if (fileKey == QStringLiteral("gnss")) add(QStringLiteral("data_cuav_node"),QStringLiteral("/data_cuav_node"));
     else if (fileKey == QStringLiteral("imu")) add(QStringLiteral("data_imu_node"),QStringLiteral("/data_imu_node"));
+    else if (fileKey == QStringLiteral("imu_speed")) add(QStringLiteral("imu_speed_diagnostic"),QStringLiteral("/imu_speed_diagnostic"));
     else if (fileKey == QStringLiteral("navigation_core")) add(QStringLiteral("navigation_core"),QStringLiteral("/navigation_core"));
     else if (fileKey == QStringLiteral("trajectory_safety")) add(QStringLiteral("trajectory_safety_supervisor"),QStringLiteral("/trajectory_safety_supervisor"));
     else if (fileKey == QStringLiteral("perception")) add(QStringLiteral("perception"),QStringLiteral("/perception"));
@@ -1335,6 +1409,23 @@ class WebRosBridge {
     const QJsonValue value = state_.value(key);
     if (!value.isDouble()) return std::nullopt;
     return value.toDouble();
+  }
+
+  bool boolState(const QString &key) const {
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    return state_.value(key).toBool(false);
+  }
+
+  double sourceConfigNumber(const QString &fileKey, const QString &path, double fallback) const {
+    try {
+      const auto candidates = configCandidates();
+      if (!candidates.contains(fileKey) || !QFileInfo::exists(candidates.value(fileKey))) return fallback;
+      const YAML::Node root = YAML::LoadFile(candidates.value(fileKey).toStdString());
+      const QJsonValue value = yamlPathValue(root, path.split('.', Qt::SkipEmptyParts));
+      return value.isDouble() && std::isfinite(value.toDouble()) ? value.toDouble() : fallback;
+    } catch (...) {
+      return fallback;
+    }
   }
 
   void update(const QString &channel, const QJsonValue &value) {
@@ -1666,6 +1757,8 @@ class WebRosBridge {
 
     const std::vector<std::pair<const char *, const char *>> floats = {
         {"/esc/drive_target_mps", "esc_drive_target"}, {"/esc/drive_actual_mps", "esc_drive_actual"},
+        {"/esc/drive_raw_mps", "esc_drive_raw"}, {"/imu/speed_kalman", "imu_speed_kalman"},
+        {"/imu/forward_accel_filtered", "imu_forward_accel_filtered"}, {"/imu/forward_accel_bias", "imu_forward_accel_bias"},
         {"/esc/steering_target_rad", "esc_steer_target"},
         {"/esc/steering_command_uncalibrated_rad", "esc_steer_uncal_target"},
         {"/esc/steering_uncalibrated_rad", "esc_steer_uncalibrated"},
@@ -1876,6 +1969,8 @@ class WebRosBridge {
     initialPosePub_ = node_->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>("/initialpose", 10);
     hmiRequestPub_ = node_->create_publisher<std_msgs::msg::String>("/hmi/request", 10);
     vescToolCommandPub_ = node_->create_publisher<std_msgs::msg::String>("/esc/vesc/tool_command", 20);
+    trialTwistPub_ = node_->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel/teleop", 10);
+    trialSourcePub_ = node_->create_publisher<std_msgs::msg::String>("/teleop/active_source", 10);
   }
 };
 
@@ -1945,6 +2040,12 @@ class LocalHttpServer : public QObject {
   QVector<QMap<QString, QString>> recordingRows_;
   QByteArray lastDownloadCsv_;
   QString lastDownloadName_;
+  QJsonObject recordingTrialInputs_;
+  QJsonObject recordingLiveSeries_;
+  QJsonArray recordingGraphs_;
+  QString lastXlsxPath_;
+  QString lastXlsxName_;
+  QStringList lastGraphPaths_;
 
   void acceptConnections() {
     while (server_.hasPendingConnections()) {
@@ -2011,6 +2112,9 @@ class LocalHttpServer : public QObject {
     if (request.method == "GET" && request.path == "/api/experiment/record/status") {
       return sendJson(socket, 200, recordingStatus());
     }
+    if (request.method == "GET" && request.path == "/api/experiment/trials") {
+      return sendJson(socket, 200, loadTrialStore());
+    }
     if (request.method == "GET" && request.path == "/api/camera.jpg") {
       const QByteArray bytes = bridge_->cameraJpeg();
       if (bytes.isEmpty()) return sendText(socket, 503, "text/plain; charset=utf-8", "Camera frame belum tersedia");
@@ -2036,6 +2140,18 @@ class LocalHttpServer : public QObject {
       const QByteArray disposition = QByteArray("attachment; filename=\"") + lastDownloadName_.toUtf8() + "\"";
       return sendBytes(socket, 200, "text/csv; charset=utf-8", lastDownloadCsv_,
                        {{"Cache-Control", "no-store"}, {"Content-Disposition", disposition}});
+    }
+    if (request.method == "GET" && request.path == "/api/experiment/record/last.xlsx") {
+      QFile f(lastXlsxPath_); if(lastXlsxPath_.isEmpty()||!f.open(QIODevice::ReadOnly)) return sendText(socket,404,"text/plain; charset=utf-8","Belum ada XLSX hasil Stop");
+      const QByteArray disposition=QByteArray("attachment; filename=\"")+lastXlsxName_.toUtf8()+"\"";
+      return sendBytes(socket,200,"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",f.readAll(),{{"Cache-Control","no-store"},{"Content-Disposition",disposition}});
+    }
+    if (request.method == "GET" && request.path.startsWith("/api/experiment/record/last-graph-") && request.path.endsWith(".png")) {
+      const QString mid=request.path.mid(QString("/api/experiment/record/last-graph-").size()); bool okIndex=false;const int idx=mid.left(mid.size()-4).toInt(&okIndex)-1;
+      if(!okIndex||idx<0||idx>=lastGraphPaths_.size())return sendText(socket,404,"text/plain; charset=utf-8","Graph PNG tidak ditemukan");
+      QFile f(lastGraphPaths_[idx]);if(!f.open(QIODevice::ReadOnly))return sendText(socket,404,"text/plain; charset=utf-8","Graph PNG tidak ditemukan");
+      const QByteArray disposition=QByteArray("attachment; filename=\"")+QFileInfo(lastGraphPaths_[idx]).fileName().toUtf8()+"\"";
+      return sendBytes(socket,200,"image/png",f.readAll(),{{"Cache-Control","no-store"},{"Content-Disposition",disposition}});
     }
     if (request.method == "POST") return handlePost(socket, request);
     if (request.method == "GET") return serveStatic(socket, request.path);
@@ -2195,6 +2311,27 @@ class LocalHttpServer : public QObject {
       ok = saveTemplateTable(json, &message, &result);
       result["ok"] = ok; result["message"] = message; result["at_ms"] = nowMs();
       return sendJson(socket, ok ? 200 : 409, result);
+    } else if (request.path == "/api/experiment/trial/delete") {
+      if (bridge_->readOnly()) return sendJson(socket,403,QJsonObject{{"ok",false},{"message","Web GUI read-only; hapus trial ditolak"}});
+      QJsonObject result; ok=deleteTrial(json,&message,&result);result["ok"]=ok;result["message"]=message;result["at_ms"]=nowMs();
+      return sendJson(socket,ok?200:409,result);
+    } else if (request.path == "/api/experiment/trial/optimal-scale") {
+      if (bridge_->readOnly() && json.value("apply").toBool(false)) return sendJson(socket,403,QJsonObject{{"ok",false},{"message","Web GUI read-only; apply scale ditolak"}});
+      QJsonObject result;ok=calculateOptimalScale(json.value("apply").toBool(false),&message,&result);result["ok"]=ok;result["message"]=message;result["at_ms"]=nowMs();
+      return sendJson(socket,ok?200:409,result);
+    } else if (request.path == "/api/experiment/trial/motion") {
+      const bool active = json.value("active").toBool(false);
+      const QString subsystem = json.value("subsystem").toString();
+      if (active && subsystem == QStringLiteral("navigation") && trialList(QStringLiteral("steering"), QStringLiteral("4.9")).isEmpty()) {
+        return sendJson(socket,409,QJsonObject{{"ok",false},{"message","Commissioning gate: ESC 4.9 final evidence belum tersedia"},{"at_ms",nowMs()}});
+      }
+      if (active && subsystem == QStringLiteral("perception")) {
+        const bool esc_ready = !trialList(QStringLiteral("steering"), QStringLiteral("4.9")).isEmpty();
+        const bool nav_ready = !trialList(QStringLiteral("navigation"), QStringLiteral("N16.1")).isEmpty() || !trialList(QStringLiteral("navigation"), QStringLiteral("N17.1")).isEmpty();
+        if (!esc_ready || !nav_ready) return sendJson(socket,409,QJsonObject{{"ok",false},{"message","Commissioning gate belum memenuhi ESC → Navigasi → Persepsi"},{"at_ms",nowMs()}});
+      }
+      ok=bridge_->publishTrialMotion(json.value("erpm").toDouble(0.0),json.value("steering_deg").toDouble(0.0),active,&message);
+      return sendJson(socket,ok?200:409,QJsonObject{{"ok",ok},{"message",message},{"at_ms",nowMs()}});
     } else if (request.path == "/api/perception/inference") {
       ok = bridge_->setPerceptionInference(json.value("enabled").toBool(false), &message);
     } else if (request.path == "/api/navigation/goal") {
@@ -2287,6 +2424,21 @@ class LocalHttpServer : public QObject {
       if (message) *message = QStringLiteral("subsystem/id recording tidak valid");
       return false;
     }
+    if (subsystem == QStringLiteral("navigation") && trialList(QStringLiteral("steering"), QStringLiteral("4.9")).isEmpty()) {
+      if (message) *message = QStringLiteral("Commissioning gate: selesaikan ESC 4.9 Final Gate sebelum recording Navigasi");
+      return false;
+    }
+    if (subsystem == QStringLiteral("perception")) {
+      const bool esc_ready = !trialList(QStringLiteral("steering"), QStringLiteral("4.9")).isEmpty();
+      const bool nav_ready = !trialList(QStringLiteral("navigation"), QStringLiteral("N16.1")).isEmpty() ||
+                             !trialList(QStringLiteral("navigation"), QStringLiteral("N17.1")).isEmpty();
+      if (!esc_ready || !nav_ready) {
+        if (message) *message = !esc_ready ?
+          QStringLiteral("Commissioning gate: ESC 4.9 belum memiliki final evidence") :
+          QStringLiteral("Commissioning gate: Navigasi N16.1/N17.1 belum memiliki final evidence");
+        return false;
+      }
+    }
     recordingSubsystem_ = subsystem;
     recordingId_ = id;
     recordingSourceExperimentId_ = json.value("source_experiment_id").toString().trimmed();
@@ -2305,6 +2457,9 @@ class LocalHttpServer : public QObject {
     for (auto it = tuningConfig.constBegin(); it != tuningConfig.constEnd(); ++it) {
       flattenJson(QStringLiteral("tuning_yaml.") + it.key(), it.value(), recordingTuningConfig_);
     }
+    recordingTrialInputs_ = json.value("trial_inputs").toObject();
+    recordingLiveSeries_ = json.value("live_series").toObject();
+    recordingGraphs_ = json.value("graphs").toArray();
     recordingVariation_ = json.value("variation").toString().trimmed();
     recordingCondition_ = json.value("condition").toString().trimmed();
     recordingRateHz_ = std::clamp(json.value("sample_rate_hz").toDouble(5.0), 1.0, 20.0);
@@ -2396,6 +2551,194 @@ class LocalHttpServer : public QObject {
     return true;
   }
 
+  QString trialStorePath() const {
+    return QStringLiteral("/home/otomasi/ros/data/experiment_trials.yaml");
+  }
+
+  QJsonObject loadTrialStore() const {
+    QFile f(trialStorePath());
+    if (!f.open(QIODevice::ReadOnly)) return QJsonObject{{"version",1}};
+    QJsonParseError e{}; const auto doc=QJsonDocument::fromJson(f.readAll(),&e);
+    if (e.error!=QJsonParseError::NoError || !doc.isObject()) return QJsonObject{{"version",1}};
+    return doc.object();
+  }
+
+  bool saveTrialStore(const QJsonObject &store, QString *message=nullptr) const {
+    QDir().mkpath(QFileInfo(trialStorePath()).absolutePath());
+    QSaveFile f(trialStorePath());
+    if (!f.open(QIODevice::WriteOnly|QIODevice::Text)) { if(message)*message="Gagal membuka trial YAML"; return false; }
+    f.write(QJsonDocument(store).toJson(QJsonDocument::Indented));
+    if (!f.commit()) { if(message)*message="Gagal commit trial YAML"; return false; }
+    return true;
+  }
+
+  QJsonArray trialList(const QString &subsystem, const QString &id) const {
+    const auto store=loadTrialStore();
+    return store.value(subsystem).toObject().value(id).toArray();
+  }
+
+  static std::optional<double> rowNumber(const QMap<QString,QString> &row,const QString &key) {
+    bool ok=false; const double v=row.value(key).toDouble(&ok);
+    if(!ok || !std::isfinite(v)) return std::nullopt;
+    return v;
+  }
+
+  std::optional<double> meanRecording(const QString &key,bool stable=true) const {
+    if(recordingRows_.empty()) return std::nullopt;
+    int a=0,b=recordingRows_.size();
+    if(stable && b>=5){a=static_cast<int>(std::floor(b*0.20));b=static_cast<int>(std::ceil(b*0.80));}
+    double sum=0.0; int n=0;
+    for(int i=a;i<b;++i) if(auto v=rowNumber(recordingRows_[i],key)){sum+=*v;++n;}
+    if (!n) return std::nullopt;
+    return sum / static_cast<double>(n);
+  }
+
+  std::optional<QPair<double,double>> firstLastRecording(const QString &key) const {
+    std::optional<double> first,last;
+    for(const auto &r:recordingRows_) if(auto v=rowNumber(r,key)){if(!first)first=*v;last=*v;}
+    if (!first || !last) return std::nullopt;
+    return qMakePair(*first, *last);
+  }
+
+  static double wrapAngle(double v) {
+    while (v > kPi) v -= 2.0 * kPi;
+    while (v <= -kPi) v += 2.0 * kPi;
+    return v;
+  }
+
+  double configNumber(const QString &fileKey,const QString &path,double fallback) const {
+    try {
+      const auto c=configCandidates(); if(!c.contains(fileKey)) return fallback;
+      const YAML::Node root=YAML::LoadFile(c.value(fileKey).toStdString());
+      const QJsonValue v=yamlPathValue(root,path.split('.',Qt::SkipEmptyParts));
+      return v.isDouble() && std::isfinite(v.toDouble()) ? v.toDouble() : fallback;
+    } catch (...) { return fallback; }
+  }
+
+  static void putNumber(QJsonObject &o,const QString &key,const std::optional<double> &v) {
+    if(v && std::isfinite(*v)) o[key]=*v;
+  }
+
+  double maxLateralDeviation() const {
+    QVector<QPair<double,double>> pts;
+    for(const auto&r:recordingRows_){auto x=rowNumber(r,"gnss_map_odom.x"),y=rowNumber(r,"gnss_map_odom.y");if(x&&y)pts.push_back({*x,*y});}
+    if(pts.size()<3) return 0.0;
+    const double x0=pts.front().first,y0=pts.front().second,x1=pts.back().first,y1=pts.back().second;
+    const double dx=x1-x0,dy=y1-y0,n=std::hypot(dx,dy); if(n<1e-6)return 0.0;
+    double m=0.0; for(const auto&p:pts)m=std::max(m,std::abs(dy*(p.first-x0)-dx*(p.second-y0))/n); return m;
+  }
+
+  QJsonObject buildTrialSummary(int trialNo) const {
+    QJsonObject o{{"trial_no",trialNo},{"trial_id",QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz")},
+      {"subsystem",recordingSubsystem_},{"experiment_id",recordingSourceExperimentId_},{"variation",recordingVariation_},
+      {"condition",recordingCondition_},{"started_at",recordingStartedIso_},{"stopped_at",QDateTime::currentDateTime().toString(Qt::ISODateWithMs)},
+      {"samples",recordingRows_.size()},{"sample_rate_hz",recordingRateHz_},{"inputs",recordingTrialInputs_}};
+    auto input=[&](const char*k)->std::optional<double>{const QJsonValue v=recordingTrialInputs_.value(k); if(v.isDouble())return v.toDouble(); bool ok=false;double x=v.toString().toDouble(&ok);return ok?std::optional<double>(x):std::nullopt;};
+    putNumber(o,"rpm_set",input("test_erpm")); putNumber(o,"steering_set_deg",input("test_steering_deg"));
+    const auto rpm=meanRecording("vesc_right_values.rpm"),raw=meanRecording("esc_drive_raw"),esc=meanRecording("esc_odom.v"),
+      gnss=meanRecording("gnss_vel.speed"),imu=meanRecording("imu_speed_kalman"),hacc=meanRecording("gnss_quality.hacc_m");
+    putNumber(o,"mean_rpm_esc",rpm);putNumber(o,"mean_v_esc_raw_mps",raw);putNumber(o,"mean_v_esc_mps",esc);
+    putNumber(o,"mean_v_gnss_mps",gnss);putNumber(o,"mean_v_imu_mps",imu);putNumber(o,"mean_hacc_m",hacc);
+    const auto xp=firstLastRecording("gnss_map_odom.x"),yp=firstLastRecording("gnss_map_odom.y");
+    if(xp&&yp){const double dx=xp->second-xp->first,dy=yp->second-yp->first;o["delta_x_m"]=dx;o["delta_y_m"]=dy;o["distance_gnss_m"]=std::hypot(dx,dy);}
+    if(raw&&gnss&&std::abs(*raw)>0.02)o["scale_candidate"]=std::abs(*gnss)/std::abs(*raw);
+    if(recordingSourceExperimentId_=="N3.1"||recordingSourceExperimentId_=="N3.2"){
+      putNumber(o,"mean_steering_actual_rad",meanRecording("esc_steer_actual"));putNumber(o,"mean_gyro_z_rps",meanRecording("imu.gz"));
+      putNumber(o,"mean_yaw_rate_model_rps",meanRecording("esc_kinematic_yaw_rate"));o["max_lateral_deviation_m"]=maxLateralDeviation();
+      for(const auto &pair:QVector<QPair<QString,QString>>{{"delta_yaw_imu_rad","imu.yaw_rad"},{"delta_yaw_imu_mag_rad","imu_mag_heading.yaw_rad"},{"delta_yaw_neo3_mag_rad","neo3_mag_heading.yaw_rad"},{"delta_cog_gnss_rad","gnss_cog_fusion.yaw_rad"}})
+        if(auto q=firstLastRecording(pair.second))o[pair.first]=wrapAngle(q->second-q->first);
+    }
+    if(recordingSourceExperimentId_=="N3.1"){
+      const auto w=meanRecording("imu.gz"); const double wb=configNumber("esc","esc_ackermann.ros__parameters.wheelbase_m",0.7);
+      if(w&&gnss&&std::abs(*gnss)>0.05)o["zero_steer_correction_candidate_deg"]=-std::atan(wb*(*w)/std::max(0.05,std::abs(*gnss)))*180.0/kPi;
+    }
+    if(recordingSourceExperimentId_=="N3.2"){
+      const auto w=meanRecording("imu.gz"),wm=meanRecording("esc_kinematic_yaw_rate"),st=meanRecording("esc_steer_actual");
+      if(w&&gnss&&std::abs(*w)>0.02)o["radius_gnss_gyro_m"]=std::abs(*gnss/(*w));
+      if(wm&&esc&&std::abs(*wm)>0.02)o["radius_model_m"]=std::abs(*esc/(*wm));
+      if(st&&w&&gnss&&std::abs(*w)>0.02){const double track=configNumber("esc","esc_ackermann.ros__parameters.track_width_m",0.48);const double r=std::abs(*gnss/(*w));const double l=(r-0.5*track)*std::tan(std::abs(*st));if(std::isfinite(l)&&l>0)o["effective_wheelbase_candidate_m"]=l;}
+    }
+    return o;
+  }
+
+  bool appendCurrentTrial(QJsonObject *summary,QJsonArray *trials,QString *message) {
+    QJsonObject store=loadTrialStore(); QJsonObject domain=store.value(recordingSubsystem_).toObject();
+    QJsonArray list=domain.value(recordingSourceExperimentId_).toArray();
+    QJsonObject one=buildTrialSummary(list.size()+1); list.append(one);
+    domain[recordingSourceExperimentId_]=list; store[recordingSubsystem_]=domain;
+    store["updated_at"]=QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
+    if(!saveTrialStore(store,message))return false;
+    if (summary) *summary = one;
+    if (trials) *trials = list;
+    return true;
+  }
+
+  bool deleteTrial(const QJsonObject &json,QString *message,QJsonObject *result) {
+    const QString subsystem=json.value("subsystem").toString(),id=json.value("id").toString(),trialId=json.value("trial_id").toString();
+    if(subsystem.isEmpty()||id.isEmpty()||trialId.isEmpty()){if(message)*message="Identitas trial tidak lengkap";return false;}
+    QJsonObject store=loadTrialStore(),domain=store.value(subsystem).toObject();const QJsonArray old=domain.value(id).toArray();QJsonArray list;
+    bool removed=false;for(const auto&v:old){const auto o=v.toObject();if(o.value("trial_id").toString()==trialId){removed=true;continue;}list.append(o);}
+    if(!removed){if(message)*message="Trial tidak ditemukan";return false;}
+    for(int i=0;i<list.size();++i){auto o=list[i].toObject();o["trial_no"]=i+1;list[i]=o;}
+    domain[id]=list;store[subsystem]=domain;store["updated_at"]=QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
+    if(!saveTrialStore(store,message))return false;
+    if (result) *result = QJsonObject{{"trials", list}, {"trial_count", list.size()}};
+    if (message) *message = "Trial dihapus dari YAML";
+    return true;
+  }
+
+  static double median(QVector<double> v){if(v.empty())return std::numeric_limits<double>::quiet_NaN();std::sort(v.begin(),v.end());const int n=v.size();return n%2?v[n/2]:0.5*(v[n/2-1]+v[n/2]);}
+
+  bool calculateOptimalScale(bool apply,QString *message,QJsonObject *result) {
+    const QJsonArray list=trialList("navigation","N2.1");
+    struct P{double raw,gnss,scale;QString id;}; QVector<P> valid; QVector<double> scales;
+    for(const auto&v:list){const auto o=v.toObject();const double raw=std::abs(o.value("mean_v_esc_raw_mps").toDouble()),gnss=std::abs(o.value("mean_v_gnss_mps").toDouble());
+      if(raw>0.03&&gnss>0.03){const double k=gnss/raw;if(std::isfinite(k)&&k>=0.2&&k<=5.0){valid.push_back({raw,gnss,k,o.value("trial_id").toString()});scales.push_back(k);}}}
+    if(valid.size()<3){if(message)*message="Butuh minimal 3 trial valid N2.1 untuk scale optimal";return false;}
+    const double med=median(scales);QVector<double> dev;for(double k:scales)dev.push_back(std::abs(k-med));const double mad=median(dev);
+    const double tol=std::max(0.05*std::abs(med),3.0*1.4826*mad);double xy=0.0,xx=0.0;int accepted=0;QJsonArray rejected;
+    for(const auto&p:valid){if(std::abs(p.scale-med)>tol){rejected.append(p.id);continue;}xy+=p.raw*p.gnss;xx+=p.raw*p.raw;++accepted;}
+    if(accepted<2||xx<=1e-9){if(message)*message="Trial valid setelah outlier rejection tidak cukup";return false;}
+    const double scale=std::clamp(xy/xx,0.20,5.0);QString runtimeMessage;bool runtimeOk=true;
+    if(apply){QJsonValue saved;QString m;const QString iso=QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
+      runtimeOk=setYamlValueAtomic("esc","esc_ackermann.ros__parameters.drive_odometry_calibration_scale",scale,&m,&saved)&&
+        setYamlValueAtomic("vehicle","vehicle.ros__parameters.drive_odometry_calibration_scale",scale,&m,&saved)&&
+        setYamlValueAtomic("vehicle","vehicle.ros__parameters.drive_odometry_calibration_valid",true,&m,&saved)&&
+        setYamlValueAtomic("vehicle","vehicle.ros__parameters.drive_odometry_calibration_saved_at",iso,&m,&saved)&&
+        bridge_->setDriveOdometryScale(scale,&runtimeMessage);
+    }
+    QJsonObject store=loadTrialStore(),results=store.value("calibration_results").toObject(),nav=results.value("navigation").toObject();
+    nav["N2.1"]=QJsonObject{{"optimal_scale",scale},{"accepted_trials",accepted},{"total_valid_trials",valid.size()},{"median_candidate",med},{"mad",mad},{"rejected_trial_ids",rejected},{"applied",apply&&runtimeOk},{"updated_at",QDateTime::currentDateTime().toString(Qt::ISODateWithMs)} };
+    results["navigation"]=nav;store["calibration_results"]=results;saveTrialStore(store,nullptr);
+    if(result)*result=QJsonObject{{"scale",scale},{"accepted_trials",accepted},{"valid_trials",valid.size()},{"rejected_trial_ids",rejected},{"applied",apply&&runtimeOk},{"runtime_message",runtimeMessage}};
+    if (message) {
+      *message = apply ?
+        (runtimeOk ? "Scale optimal tersimpan dan aktif live" : "Scale dihitung tetapi apply runtime gagal: " + runtimeMessage) :
+        "Scale optimal berhasil dihitung";
+    }
+    return !apply || runtimeOk;
+  }
+
+  bool exportTrialArtifacts(const QString &csvPath,const QJsonObject &summary,const QJsonArray &trials,QJsonObject *result,QString *message) {
+    const QString token=QString::number(QCoreApplication::applicationPid())+"_"+QString::number(QDateTime::currentMSecsSinceEpoch());
+    const QString tmpSummary="/tmp/agv_trial_summary_"+token+".json",tmpTrials="/tmp/agv_trial_trials_"+token+".json",tmpSpec="/tmp/agv_trial_spec_"+token+".json";
+    auto writeJson=[](const QString&path,const QJsonDocument&doc){QSaveFile f(path);if(!f.open(QIODevice::WriteOnly))return false;f.write(doc.toJson(QJsonDocument::Compact));return f.commit();};
+    QJsonObject spec{{"live_series",recordingLiveSeries_},{"graphs",recordingGraphs_}};
+    if(!writeJson(tmpSummary,QJsonDocument(summary))||!writeJson(tmpTrials,QJsonDocument(trials))||!writeJson(tmpSpec,QJsonDocument(spec))){if(message)*message="Gagal menulis temporary export spec";return false;}
+    QString base=csvPath;if(base.endsWith(".csv"))base.chop(4);const QString xlsx=base+".xlsx";
+    QProcess proc;proc.setProgram(QStringLiteral("/home/otomasi/.hermes/venv/bin/python3"));
+    proc.setArguments({QStringLiteral("/home/otomasi/ros/src/navigation/tools/export_trial_artifacts.py"),"--csv",csvPath,"--summary",tmpSummary,"--trials",tmpTrials,"--spec",tmpSpec,"--xlsx",xlsx,"--png-prefix",base});
+    proc.start();const bool started=proc.waitForStarted(3000);const bool done=started&&proc.waitForFinished(60000);
+    const QByteArray out=proc.readAllStandardOutput(),err=proc.readAllStandardError();QFile::remove(tmpSummary);QFile::remove(tmpTrials);QFile::remove(tmpSpec);
+    if(!done||proc.exitStatus()!=QProcess::NormalExit||proc.exitCode()!=0){if(message)*message=QStringLiteral("Exporter gagal: ")+QString::fromUtf8(err).left(600);return false;}
+    QJsonParseError pe{};const auto doc=QJsonDocument::fromJson(out.trimmed(),&pe);if(pe.error!=QJsonParseError::NoError||!doc.isObject()){if(message)*message="Output exporter tidak valid";return false;}
+    const auto artifacts=doc.object();lastXlsxPath_=artifacts.value("xlsx").toString();lastXlsxName_=QFileInfo(lastXlsxPath_).fileName();lastGraphPaths_.clear();
+    for(const auto&v:artifacts.value("pngs").toArray())if(QFileInfo::exists(v.toString()))lastGraphPaths_<<v.toString();
+    if(result){(*result)["xlsx_path"]=lastXlsxPath_;(*result)["xlsx_download_url"]="/api/experiment/record/last.xlsx";QJsonArray urls,paths;for(int i=0;i<lastGraphPaths_.size();++i){urls.append(QString("/api/experiment/record/last-graph-%1.png").arg(i+1));paths.append(lastGraphPaths_[i]);}(*result)["graph_download_urls"]=urls;(*result)["graph_png_paths"]=paths;}
+    if (message) *message = "XLSX dan PNG Matplotlib berhasil dibuat";
+    return true;
+  }
+
   bool saveRecordingFiles(QJsonObject *result, QString *message) {
     if (recordingRows_.isEmpty()) {
       if (message) *message = QStringLiteral("Tidak ada sampel untuk disimpan");
@@ -2483,17 +2826,30 @@ class LocalHttpServer : public QObject {
 
   bool stopRecording(QString *message, QJsonObject *result) {
     if (!recording_) {
-      if (message) *message = QStringLiteral("Tidak ada CSV recording aktif");
+      if (message) *message = QStringLiteral("Tidak ada recording aktif");
       return false;
     }
     captureRecordingSample();
     recording_ = false;
     recordingTimer_.stop();
-    const bool saved = saveRecordingFiles(result, message);
-    recordingRows_.clear();
-    recordingTuningConfig_.clear();
-    recordingPaths_.clear();
-    return saved;
+    QString csvMessage;
+    const bool csvSaved = saveRecordingFiles(result, &csvMessage);
+    QJsonObject summary; QJsonArray trials; QString trialMessage;
+    const bool trialSaved = appendCurrentTrial(&summary, &trials, &trialMessage);
+    bool artifactsSaved = false; QString artifactMessage;
+    if (csvSaved && result) {
+      const QString csvPath = result->value("primary_csv").toString();
+      artifactsSaved = exportTrialArtifacts(csvPath, summary, trials, result, &artifactMessage);
+      (*result)["trial_summary"] = summary;
+      (*result)["trials"] = trials;
+      (*result)["trial_yaml"] = trialStorePath();
+      (*result)["trial_saved"] = trialSaved;
+      (*result)["artifacts_saved"] = artifactsSaved;
+    }
+    if (message) *message = csvMessage + QStringLiteral(" | ") + trialMessage + QStringLiteral(" | ") + artifactMessage;
+    recordingRows_.clear(); recordingTuningConfig_.clear(); recordingPaths_.clear();
+    recordingTrialInputs_=QJsonObject(); recordingLiveSeries_=QJsonObject(); recordingGraphs_=QJsonArray();
+    return csvSaved && trialSaved && artifactsSaved;
   }
 
   void openSse(QTcpSocket *socket) {

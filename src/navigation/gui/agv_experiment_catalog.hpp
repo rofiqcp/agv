@@ -156,47 +156,61 @@ inline QVector<ExperimentSpec> buildExperimentCatalog(const QString &subsystem) 
          RO("max_fwd","Max forward speed (m/s)","vehicle","vehicle.ros__parameters.max_forward_speed_mps","SAFETY CEILING"),
          RO("max_rev","Max reverse speed (m/s)","vehicle","vehicle.ros__parameters.max_reverse_speed_mps","SAFETY CEILING") }));
 
-    // N2 — steering calibration before planner/controller geometry.
-    add("navigation",QStringLiteral("N2"),QStringLiteral("N2 Steering & Ackermann Calibration"),"N2.1",
-      QStringLiteral("N2.1 Linearitas, Center, Hysteresis dan Step Steering"),
-      {"Steering target vs feedback terhadap Time [s]","Linearitas target vs feedback"},
-      {{"Variasi","Mean Steer target","Mean Steer actual","RMSE Steering error","Max Steering error"},{"Parameter","Nilai YAML","Fungsi"}},
-      {{"Steer target","esc_steer_target"},{"Steer actual","esc_steer_actual"},{"Steering error","derived.steering_error_rad"}},
-      P({F("center","Feedback center (deg)","float","esc","esc_ackermann.ros__parameters.steering_feedback_center_deg","0","Center Calibration"),
-         F("straight_deadband","Straight deadband (deg)","float","esc","esc_ackermann.ros__parameters.steering_straight_deadband_deg","1.0","Center Calibration"),
-         F("physical_left","Physical left limit (deg)","float","esc","esc_ackermann.ros__parameters.steering_physical_left_limit_deg","-30","Physical Limits"),
-         F("physical_right","Physical right limit (deg)","float","esc","esc_ackermann.ros__parameters.steering_physical_right_limit_deg","30","Physical Limits"),
-         F("operational","Operational limit (deg)","float","esc","esc_ackermann.ros__parameters.steering_physical_operational_limit_deg","28","Physical Limits"),
-         F("lut_enabled","Physical LUT enabled","bool","esc","esc_ackermann.ros__parameters.steering_physical_lut_enabled","false","Hysteresis / LUT"),
-         RO("lut_physical","LUT physical points","esc","esc_ackermann.ros__parameters.steering_lut_physical_deg","Hysteresis / LUT")}),
-      {{"time_series",{"Steer target","Steer actual"},{},{},"Time [s]","Steering [rad]"},
-       {"scatter",{},"esc_steer_target","esc_steer_actual","Target steering [rad]","Feedback steering [rad]"}});
+    // N2 — longitudinal velocity/distance scale MUST be calibrated before steering/yaw trials.
+    add("navigation",QStringLiteral("N2"),QStringLiteral("N2 Drive Odometry Calibration"),"N2.1",
+      QStringLiteral("N2.1 RPM, Velocity dan Distance Scale"),
+      {"RPM ESC selama trial","Velocity ESC raw/calibrated, GNSS, dan IMU diagnostic","Perpindahan GNSS X-Y","Scale candidate per trial"},
+      {{"Pengujian","RPM set","Mean RPM ESC","Mean V ESC raw","Mean V GNSS","Mean V ESC calibrated","Mean V IMU","Delta X","Delta Y","Distance GNSS","Scale candidate","Mean hAcc","Samples"},
+       {"Parameter","Nilai final","Status / sumber"}},
+      {{"RPM ESC","vesc_right_values.rpm"},{"V ESC raw","esc_drive_raw"},{"V ESC calibrated","esc_odom.v"},
+       {"V GNSS","gnss_vel.speed"},{"V IMU","imu_speed_kalman"},{"GNSS X","gnss_map_odom.x"},{"GNSS Y","gnss_map_odom.y"},
+       {"hAcc","gnss_quality.hacc_m"}},
+      P({F("test_erpm","RPM/eRPM ESC RIGHT untuk trial","float",{}, {},"200","VARIASI TRIAL"),
+         F("trial_duration","Durasi rekomendasi per trial (s)","float",{}, {},"15","VARIASI TRIAL"),
+         F("odom_scale","Drive odometry scale (live)","float","esc","esc_ackermann.ros__parameters.drive_odometry_calibration_scale","1.0","HASIL KALIBRASI"),
+         RO("vehicle_scale","Vehicle scale authority","vehicle","vehicle.ros__parameters.drive_odometry_calibration_scale","PERSISTENT RESULT"),
+         RO("odom_valid","Drive odometry calibration valid","vehicle","vehicle.ros__parameters.drive_odometry_calibration_valid","CERTIFICATION"),
+         F("imu_speed_alpha","IMU accel LPF alpha","float","imu_speed","imu_speed_diagnostic.ros__parameters.accel_lpf_alpha","0.18","IMU SPEED DIAGNOSTIC"),
+         F("imu_speed_gyro_gate","IMU speed gyro-assisted ZUPT","bool","imu_speed","imu_speed_diagnostic.ros__parameters.gyro_assisted_stationary_gate","true","IMU SPEED DIAGNOSTIC")}),
+      {{"time_series",{"RPM ESC"},{},{},"Time [s]","VESC eRPM"},
+       {"time_series",{"V ESC raw","V ESC calibrated","V GNSS","V IMU"},{},{},"Time [s]","Velocity [m/s]"},
+       {"scatter",{},"gnss_map_odom.x","gnss_map_odom.y","Map X [m]","Map Y [m]"},
+       {"time_series",{"hAcc"},{},{},"Time [s]","GNSS hAcc [m]"}});
 
-    add("navigation",QStringLiteral("N2"),QStringLiteral("N2 Steering & Ackermann Calibration"),"N2.2",
-      QStringLiteral("N2.2 Circle Test, Effective Wheelbase dan Minimum Turning Radius"),
-      {"Steering actual selama circle test","Yaw-rate kinematic vs actual selama circle test"},
-      {{"Variasi","Steering test","Radius aktual [m]","Effective wheelbase [m]","RMSE fit [m]"},{"Parameter","Nilai final","Status"}},
-      {{"Steer actual","esc_steer_actual"},{"Yaw-rate kinematic","esc_kinematic_yaw_rate"},{"Yaw-rate actual","esc_yaw_rate"}},
-      P({F("gt_radius","GT Radius circle (m)","float",{}, {},"2.0",{},false),
+    // N3 — steering/yaw calibration uses the already-calibrated longitudinal speed.
+    add("navigation",QStringLiteral("N3"),QStringLiteral("N3 Steering & Ackermann Calibration"),"N3.1",
+      QStringLiteral("N3.1 Straight Steering Zero dengan Gyro, Dual Magnetometer dan GNSS"),
+      {"Steering target/actual saat lurus","Heading IMU, Yahboom MAG, NEO3 MAG, dan GNSS COG","Yaw-rate gyro dan model","Lintasan GNSS X-Y"},
+      {{"Pengujian","RPM set","Mean V GNSS","Steering target","Mean Steering actual","Mean Gyro Z","Delta Yaw IMU","Delta Yaw IMU MAG","Delta Yaw NEO3 MAG","Delta COG GNSS","Delta X","Delta Y","Lateral drift","Center candidate","Samples"}},
+      {{"Steer target","esc_steer_target"},{"Steer actual","esc_steer_actual"},{"Gyro Z","imu.gz"},{"Yaw IMU","imu.yaw_rad"},
+       {"Yaw IMU MAG","imu_mag_heading.yaw_rad"},{"Yaw NEO3 MAG","neo3_mag_heading.yaw_rad"},{"Yaw GNSS COG","gnss_cog_fusion.yaw_rad"},
+       {"V GNSS","gnss_vel.speed"},{"GNSS X","gnss_map_odom.x"},{"GNSS Y","gnss_map_odom.y"}},
+      P({F("test_erpm","RPM/eRPM ESC RIGHT","float",{}, {},"200","VARIASI SPEED"),
+         F("test_steering_deg","Steering test (deg)","float",{}, {},"0","LOCK STRAIGHT"),
+         F("center","Feedback center command (deg)","float","esc","esc_ackermann.ros__parameters.steering_feedback_center_deg","0","CENTER CALIBRATION"),
+         F("straight_deadband","Straight deadband (deg)","float","esc","esc_ackermann.ros__parameters.steering_straight_deadband_deg","1.0","CENTER CALIBRATION")}),
+      {{"time_series",{"Steer target","Steer actual"},{},{},"Time [s]","Steering [rad]"},
+       {"time_series",{"Yaw IMU","Yaw IMU MAG","Yaw NEO3 MAG","Yaw GNSS COG"},{},{},"Time [s]","Heading [rad]"},
+       {"time_series",{"Gyro Z"},{},{},"Time [s]","Yaw-rate [rad/s]"},
+       {"scatter",{},"gnss_map_odom.x","gnss_map_odom.y","Map X [m]","Map Y [m]"}});
+
+    add("navigation",QStringLiteral("N3"),QStringLiteral("N3 Steering & Ackermann Calibration"),"N3.2",
+      QStringLiteral("N3.2 Turning Steering Angle, Radius, Effective Wheelbase dan Scale"),
+      {"Steering target/actual","Heading multi-sensor saat turning","Yaw-rate gyro vs Ackermann","Lintasan circle GNSS X-Y"},
+      {{"Pengujian","RPM set","Steering set [deg]","Mean Steering actual","Mean V GNSS","Mean V ESC","Mean Gyro Z","Mean Yaw-rate model","Radius GNSS","Radius model","Effective wheelbase candidate","Scale steering candidate","Delta COG","Mean hAcc","Samples"},
+       {"Parameter","Nilai final","Status"}},
+      {{"Steer target","esc_steer_target"},{"Steer actual","esc_steer_actual"},{"V GNSS","gnss_vel.speed"},{"V ESC","esc_odom.v"},
+       {"Gyro Z","imu.gz"},{"Yaw-rate model","esc_kinematic_yaw_rate"},{"Yaw IMU","imu.yaw_rad"},{"Yaw IMU MAG","imu_mag_heading.yaw_rad"},
+       {"Yaw NEO3 MAG","neo3_mag_heading.yaw_rad"},{"Yaw GNSS COG","gnss_cog_fusion.yaw_rad"},{"GNSS X","gnss_map_odom.x"},{"GNSS Y","gnss_map_odom.y"}},
+      P({F("test_erpm","RPM/eRPM ESC RIGHT","float",{}, {},"200","VARIASI SPEED"),
+         F("test_steering_deg","Steering test (deg)","float",{}, {},"10","VARIASI STEERING"),
          RO("effective_wb","Effective wheelbase (m)","vehicle","vehicle.ros__parameters.effective_wheelbase_m","CALIBRATION RESULT"),
          LOCK("rmin","Minimum turning radius (m)","vehicle","vehicle.ros__parameters.minimum_turning_radius_m","CALIBRATION AUTHORITY"),
          RO("circle_valid","Circle calibration valid","vehicle","vehicle.ros__parameters.steering_circle_calibration_valid","CERTIFICATION")}),
-      {{"time_series",{"Steer actual"},{},{},"Time [s]","Steering [rad]"},
-       {"time_series",{"Yaw-rate kinematic","Yaw-rate actual"},{},{},"Time [s]","Yaw-rate [rad/s]"}});
-
-    // N3 — longitudinal scale before fusion.
-    add("navigation",QStringLiteral("N3"),QStringLiteral("N3 Drive Odometry Calibration"),"N3.1",
-      QStringLiteral("N3.1 RPM, Velocity dan Distance Scale"),
-      {"Velocity command/ESC/GNSS terhadap Time [s]","Yaw-rate odometry terhadap Time [s]"},
-      {{"Variasi","GT distance [m]","Odom distance [m]","Error distance [m]","Scale candidate"},{"Variasi","RMSE Velocity error","Mean V ESC","Mean V GNSS"}},
-      {{"V target","esc_drive_target"},{"V ESC","esc_odom.v"},{"V GNSS","gnss_base_vel_fusion.vx"},{"Velocity error","derived.velocity_error_mps"},{"Yaw-rate ESC","esc_odom.w"}},
-      P({F("gt_distance","GT Distance (m)","float",{}, {},"10.0",{},false),
-         F("odom_scale","Drive odometry scale","float","vehicle","vehicle.ros__parameters.drive_odometry_calibration_scale","1.0","Linear Calibration"),
-         RO("odom_valid","Drive odometry calibration valid","vehicle","vehicle.ros__parameters.drive_odometry_calibration_valid","Certification"),
-         F("r_v_base","R ESC vx base variance","float","esc","esc_ackermann.ros__parameters.odom_v_variance_base","0.03","Measurement Covariance R"),
-         F("r_v_gain","R ESC vx RPM-error gain","float","esc","esc_ackermann.ros__parameters.odom_v_variance_rpm_error_gain","0.2","Measurement Covariance R")}),
-      {{"time_series",{"V target","V ESC","V GNSS"},{},{},"Time [s]","Velocity [m/s]"},
-       {"time_series",{"Yaw-rate ESC"},{},{},"Time [s]","Yaw-rate [rad/s]"}});
+      {{"time_series",{"Steer target","Steer actual"},{},{},"Time [s]","Steering [rad]"},
+       {"time_series",{"Yaw IMU","Yaw IMU MAG","Yaw NEO3 MAG","Yaw GNSS COG"},{},{},"Time [s]","Heading [rad]"},
+       {"time_series",{"Gyro Z","Yaw-rate model"},{},{},"Time [s]","Yaw-rate [rad/s]"},
+       {"scatter",{},"gnss_map_odom.x","gnss_map_odom.y","Map X [m]","Map Y [m]"}});
 
     // N4 — IMU calibration and dynamic consistency.
     add("navigation",QStringLiteral("N4"),QStringLiteral("N4 IMU Calibration"),"N4.1",
@@ -2490,7 +2504,7 @@ inline QVector<ExperimentSpec> buildExperimentCatalog(const QString &subsystem) 
       {{"time_series",{"Command value","RIGHT RPM"},{},{},"Time [s]","eRPM"},{"time_series",{"RIGHT Motor Current","RIGHT Iq","RIGHT Duty"},{},{},"Time [s]","A / duty"}});
 
   add("steering", QStringLiteral("4.5"), QStringLiteral("4.5 Respons Step Aktuator"), "4.5.1",
-      QStringLiteral("4.5.1 LEFT — Respons Step Posisi Steering ±10°, ±20°, ±30°"),
+      QStringLiteral("4.5.1 LEFT — Respons Step Posisi Steering ±10°, ±20°, ±28°"),
       {"Target dan feedback step steering","Error steering","Iq dan duty steering","Raw encoder TIM4"},
       {{"Variasi","Steering target","Steering actual","Steering error","LEFT Iq","LEFT Duty","Raw TIM4","Status"}},
       {{"Steering target","esc_steer_target"},{"Steering actual","esc_steer_actual"},{"Steering error","derived.steering_error_rad"},{"LEFT Iq","vesc_left_values.iq_a"},{"LEFT Duty","vesc_left_values.duty"},{"Raw TIM4","vesc_steering_state.raw_encoder"}}, {},

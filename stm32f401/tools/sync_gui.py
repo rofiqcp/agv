@@ -25,7 +25,7 @@ except ImportError:
     print("pyserial belum terinstall. Jalankan: python3 -m pip install pyserial")
     raise
 
-BAUD = 115200
+BAUD = 1000000
 PAGES = ["SPLASH", "HOME", "CAMERA", "GPS", "ACTUATOR"]
 PAGE_LABELS = {
     "SPLASH": "SPLASH",

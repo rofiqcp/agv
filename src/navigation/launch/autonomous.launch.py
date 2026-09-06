@@ -445,6 +445,7 @@ def generate_launch_description() -> LaunchDescription:
     navigation_core_params = os.path.join(nav_config_dir, 'navigation_core.yaml')
     vehicle_params = os.path.join(nav_config_dir, 'vehicle.yaml')
     imu_params = os.path.join(nav_config_dir, 'imu.yaml')
+    imu_speed_params = os.path.join(nav_config_dir, 'imu_speed.yaml')
     mag_heading_params = os.path.join(nav_config_dir, 'mag_heading.yaml')
     mppi_closed_loop_params = os.path.join(nav_config_dir, 'mppi_closed_loop.yaml')
     trajectory_safety_params = os.path.join(nav_config_dir, 'trajectory_safety.yaml')
@@ -656,6 +657,11 @@ def generate_launch_description() -> LaunchDescription:
         package='navigation', executable='mag_heading_fusion', name='mag_heading_fusion',
         output='screen', respawn=True, respawn_delay=2.0,
         parameters=[mag_heading_params, {'use_sim_time': LaunchConfiguration('use_sim_time')}],
+    )
+    imu_speed_diagnostic = Node(
+        package='navigation', executable='imu_speed_diagnostic', name='imu_speed_diagnostic',
+        output='screen', respawn=True, respawn_delay=2.0,
+        parameters=[imu_speed_params, {'use_sim_time': LaunchConfiguration('use_sim_time')}],
     )
 
     perception_mode_valid = PythonExpression([
@@ -1031,7 +1037,7 @@ def generate_launch_description() -> LaunchDescription:
             condition=IfCondition(camera_only_enabled),
             msg='[AGV] PERCEPTION OFF: camera-only aktif; raw/preview kamera jalan, model/inference OFF.'),
         robot_state, joint_state_visualizer, gnss, imu, hmi_bridge, esc_runtime,
-        local_ekf, global_ekf, localization_core, mag_heading_fusion,
+        local_ekf, global_ekf, localization_core, mag_heading_fusion, imu_speed_diagnostic,
         camera_only, perception_cpu, perception_gpu, semantic_obstacle,
         map_server, lifecycle_map, controller, planner, behavior, cmd_vel_router, smoother, collision, navigator,
         lifecycle_smoother, lifecycle_with_collision, lifecycle_without_collision,

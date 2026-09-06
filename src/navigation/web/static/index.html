@@ -34,9 +34,9 @@
         <div class="page-heading"><span id="pageEyebrow">SYSTEM MONITOR</span><h1 id="pageTitle">Overview</h1></div>
         <nav class="top-domain-tabs" aria-label="Domain utama">
           <button class="top-domain active" data-domain="overview">Overview</button>
-          <button class="top-domain" data-domain="navigation">Navigasi</button>
-          <button class="top-domain" data-domain="perception">Persepsi</button>
-          <button class="top-domain" data-domain="esc">ESC</button>
+          <button class="top-domain" data-domain="esc">1 • ESC</button>
+          <button class="top-domain" data-domain="navigation">2 • Navigasi</button>
+          <button class="top-domain" data-domain="perception">3 • Persepsi</button>
         </nav>
         <div class="top-status">
           <div class="runtime-pill"><i id="rosDot"></i><span>ROS2</span><strong id="rosStatus">--</strong></div>
@@ -311,15 +311,23 @@
             <div>
               <span class="eyebrow">CONTROL ENGINEERING</span>
               <h2>Tuning & Control</h2>
-              <p>Urutan tuning dan validasi langsung dari source ROS. Parameter editable menulis YAML source-of-truth secara atomik; telemetry aktual direkam server-side ke CSV.</p>
+              <p>Commissioning berurutan: ESC/FOC total → Navigasi → Persepsi. Parameter editable menulis YAML source-of-truth secara atomik; setiap trial menyimpan CSV, YAML recap, XLSX, dan PNG grafik.</p>
             </div>
             <div class="lab-stat-strip">
-              <div><span>Domain</span><b>3</b><small>NAV • VISION • ESC</small></div>
+              <div><span>Domain</span><b>3</b><small>ESC • NAV • VISION</small></div>
               <div><span>Pengujian</span><b id="labLeafCount">100</b><small>current domain</small></div>
               <div><span>Recorder</span><b id="labRecorderState">IDLE</b><small id="labRecorderSamples">0 samples</small></div>
               <div><span>YAML</span><b id="labYamlMode">WRITE</b><small>atomic + backup</small></div>
             </div>
           </div>
+
+          <article class="panel commissioning-roadmap" id="commissioningRoadmap">
+            <div class="commissioning-step" data-phase="esc"><i>1</i><div><span>FIRST</span><b>ESC / FOC Total</b><small>Sensor motor → FOC current → outer loop → step → repeatability → load → final gate</small></div><em id="phaseEscState">REQUIRED</em></div>
+            <div class="commissioning-arrow">→</div>
+            <div class="commissioning-step" data-phase="navigation"><i>2</i><div><span>AFTER ESC</span><b>Navigasi</b><small>RPM↔m/s → steering/yaw → IMU/GNSS → EKF → Nav2 planner/controller → safety → end-to-end</small></div><em id="phaseNavState">LOCKED</em></div>
+            <div class="commissioning-arrow">→</div>
+            <div class="commissioning-step" data-phase="perception"><i>3</i><div><span>LAST</span><b>Persepsi</b><small>Camera → detection → metric calibration → drivable/lane → near-field → trajectory safety → end-to-end</small></div><em id="phasePerState">LOCKED</em></div>
+          </article>
 
           <div class="domain-switch legacy-domain-switch" role="tablist" aria-label="Domain tuning" hidden>
             <button class="domain-tab active" data-exp="navigation"><span class="domain-icon">N</span><div><b>Navigasi</b><small>Sensor → EKF → Localization → Costmap → Smac → MPPI → Goal</small></div><em id="navTestCount">50</em></button>
@@ -344,6 +352,11 @@
                   <div class="test-badges"><span id="experimentTableBadge">0 TABLE</span><span id="experimentGraphBadge">0 GRAPH</span><span id="experimentSourceBadge">WAITING</span></div>
                 </div>
                 <div id="experimentDetail" class="sr-only">Metadata source catalog.</div>
+              </article>
+
+              <article class="panel trial-guide" id="trialGuidePanel">
+                <div class="panel-head"><div><span class="eyebrow">PANDUAN PERCOBAAN</span><h2 id="trialGuideTitle">Procedure & Recommended Variation</h2></div><span class="status-chip waiting" id="trialGuideSafety">GUIDE</span></div>
+                <div id="trialGuideBody" class="trial-guide-body"></div>
               </article>
 
               <article class="panel run-console">
@@ -440,6 +453,13 @@
                 <div class="panel-head"><div><span class="eyebrow">REPORT TABLE</span><h2>Tabel Pengujian</h2></div><div class="graph-controls"><span class="muted" id="tableLiveHint">Preview live + hasil run</span><button class="soft-btn" id="saveTableCsvBtn">Save CSV</button><button class="primary-btn" id="saveTableExcelBtn">Save Excel (.xlsx)</button></div></div>
                 <div id="tableTabs" class="lab-tabs" hidden></div>
                 <div id="experimentTables" class="experiment-table-stack"><div class="empty-state">Subbab ini tidak mendefinisikan tabel.</div></div>
+              </article>
+
+              <article class="panel trial-recap" id="trialRecapPanel">
+                <div class="panel-head"><div><span class="eyebrow">PERSISTENT TRIALS</span><h2>Rekap Pengujian & Kalibrasi</h2></div><div class="panel-actions"><button class="soft-btn" id="refreshTrialsBtn">Reload Trials</button><button class="primary-btn" id="optimalScaleBtn" hidden>Hitung + Apply Scale Optimal</button></div></div>
+                <div id="trialOptimalState" class="tuning-note">Setiap STOP menambah satu trial ke YAML. Data dapat dihapus lalu dihitung ulang.</div>
+                <div class="table-scroll"><table class="data-table"><thead id="trialRecapHead"></thead><tbody id="trialRecapBody"><tr><td>Belum ada trial.</td></tr></tbody></table></div>
+                <div class="button-row" id="trialArtifactActions" hidden><a class="soft-btn" id="downloadTrialXlsx" href="/api/experiment/record/last.xlsx">Download Excel (.xlsx)</a><span id="trialGraphDownloads"></span></div>
               </article>
 
               <article class="panel audit-ribbon">

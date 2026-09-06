@@ -1,0 +1,14 @@
+imu_speed_diagnostic:
+  ros__parameters:
+    imu_topic: /imu/data
+    accel_lpf_alpha: 0.18
+    process_velocity_noise: 0.20
+    process_bias_noise: 0.002
+    zupt_velocity_variance: 0.0025
+    stationary_accel_norm_tolerance_mps2: 0.35
+    stationary_gyro_norm_max_rps: 0.04
+    stationary_hold_sec: 0.60
+    gyro_assisted_stationary_gate: true
+    forward_accel_sign: 1.0
+    gravity_compensation_sign: 1.0
+    max_abs_speed_mps: 3.0

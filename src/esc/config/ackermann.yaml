@@ -20,6 +20,8 @@ esc_ackermann:
     drive_wheel_radius_m: 0.145
     drive_motor_pole_pairs: 15
     drive_gear_ratio: 1.0
+    # Applied live after N2.1 GNSS/RPM calibration: V_ground = V_raw_ESC * scale.
+    drive_odometry_calibration_scale: 1.0
     wheelbase_m: 0.7
     track_width_m: 0.48
     min_speed_for_nav_steering_mps: 0.05

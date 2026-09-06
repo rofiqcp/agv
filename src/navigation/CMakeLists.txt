@@ -80,6 +80,11 @@ add_executable(imu_node src/imu_node.cpp)
 target_include_directories(imu_node PRIVATE include)
 ament_target_dependencies(imu_node rclcpp sensor_msgs std_msgs)
 
+# Diagnostic-only longitudinal speed estimator from IMU acceleration + optional gyro-assisted ZUPT.
+# It deliberately publishes no Odometry and is not wired into robot_localization.
+add_executable(imu_speed_diagnostic src/imu_speed_diagnostic.cpp)
+ament_target_dependencies(imu_speed_diagnostic rclcpp sensor_msgs std_msgs geometry_msgs)
+
 # Tilt-compensated independent heading observations from Yahboom MAG + NEO3 IST8310.
 add_executable(mag_heading_fusion src/mag_heading_fusion_node.cpp)
 ament_target_dependencies(mag_heading_fusion rclcpp sensor_msgs std_msgs geometry_msgs)
@@ -209,6 +214,7 @@ endif()
 install(TARGETS
     gnss_node
     imu_node
+    imu_speed_diagnostic
     mag_heading_fusion
     joint_state_visualizer
     localization_core

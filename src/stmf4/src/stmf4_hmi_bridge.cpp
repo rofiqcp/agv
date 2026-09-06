@@ -161,7 +161,7 @@ private:
 
   void declareParameters() {
     declare_parameter<std::string>("serial_device", "auto");
-    declare_parameter<int>("serial_baud", 115200);
+    declare_parameter<int>("serial_baud", 1000000);
     declare_parameter<double>("reconnect_sec", 0.5);
     declare_parameter<double>("telemetry_rate_hz", 10.0);
     declare_parameter<double>("serial_poll_hz", 1000.0);
@@ -209,7 +209,7 @@ private:
     neo3_mag_sigma_ut_ = std::clamp(get_parameter("neo3_mag_sigma_ut").as_double(), 0.1, 100.0);
     publish_stm32_gnss_ = get_parameter("publish_stm32_gnss").as_bool();
     vesc_transport_timeout_sec_ = std::clamp(get_parameter("vesc_transport_timeout_sec").as_double(), 0.25, 10.0);
-    if (serial_baud_ != 115200) throw std::runtime_error("stmf4 currently requires serial_baud=115200");
+    if (serial_baud_ != 1000000) throw std::runtime_error("stmf4 requires serial_baud=1000000");
   }
 
   void initializeWaypoints() {
@@ -636,8 +636,8 @@ private:
     termios tty{};
     if (::tcgetattr(fd, &tty) != 0) { ::close(fd); return false; }
     ::cfmakeraw(&tty);
-    ::cfsetispeed(&tty, B115200);
-    ::cfsetospeed(&tty, B115200);
+    ::cfsetispeed(&tty, B1000000);
+    ::cfsetospeed(&tty, B1000000);
     tty.c_cflag |= static_cast<tcflag_t>(CLOCAL | CREAD);
     tty.c_cflag &= static_cast<tcflag_t>(~CSTOPB);
     tty.c_cflag &= static_cast<tcflag_t>(~CRTSCTS);
@@ -1393,7 +1393,7 @@ private:
 
   std::string serial_device_, active_serial_device_;
   std::string waypoint_file_;
-  int serial_baud_{115200};
+  int serial_baud_{1000000};
   double reconnect_sec_{0.5}, telemetry_rate_hz_{10.0}, serial_poll_hz_{1000.0}, command_rate_hz_{30.0}, heartbeat_sec_{5.0};
   double waypoint_pose_timeout_sec_{2.5};
   double neo3_sensor_timeout_sec_{2.0}, neo3_mag_sigma_ut_{3.0};

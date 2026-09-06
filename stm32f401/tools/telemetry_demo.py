@@ -34,7 +34,7 @@ lines = [
     "MANUAL_SPEED:20",
 ]
 
-with serial.Serial(port, 115200, timeout=0.3) as ser:
+with serial.Serial(port, 1000000, timeout=0.3) as ser:
     time.sleep(0.4)
     for line in lines:
         ser.write((line + "\n").encode())

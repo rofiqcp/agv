@@ -90,7 +90,7 @@ def _request_software_dfu(port):
     print(f"[USB-DFU] Requesting ROM DFU through {port} ...")
     try:
         import serial
-        with serial.Serial(port, 115200, timeout=0.20, write_timeout=1.0) as ser:
+        with serial.Serial(port, 1000000, timeout=0.20, write_timeout=1.0) as ser:
             time.sleep(0.15)
             ser.reset_input_buffer()
             # Terminate any partial command left in the MCU parser by a previous
