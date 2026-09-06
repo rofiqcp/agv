@@ -57,7 +57,12 @@ void Neo3Sensors::poll() {
   updateSafetyLed();
 
   const uint32_t now_ms = millis();
-  if (!pvt_.valid || static_cast<uint32_t>(now_ms - pvt_.received_ms) > PVT_STALE_MS) {
+  // Configuration recovery follows transport freshness, not GNSS fix validity.
+  // Indoors NAV-PVT can stream correctly at 10 Hz with fix_type=0/LLH invalid;
+  // repeatedly VALSET-configuring a healthy receiver in that state is needless.
+  const bool pvt_stream_fresh = pvt_.received_ms != 0U &&
+    static_cast<uint32_t>(now_ms - pvt_.received_ms) <= PVT_STALE_MS;
+  if (!pvt_stream_fresh) {
     // RAM-only UBX configuration is idempotent. Retry quickly at boot, then
     // periodically so a receiver power-cycle recovers without resetting HMI.
     const uint32_t retry_ms = config_attempts_ < 3 ? GNSS_CONFIG_RETRY_MS : 10000UL;

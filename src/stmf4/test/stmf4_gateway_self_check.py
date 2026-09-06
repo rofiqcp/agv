@@ -50,5 +50,7 @@ require('qualified_fix && velocity_valid' in bridge,
         'M9N velocity must never publish into ROS without qualified position fix')
 require('pvt_.received_ms != 0U' in neo_cpp and 'gnssReady(uint32_t now_ms)' in neo_cpp,
         'F411 must distinguish M9N streaming/connected from GNSS ready/fix')
+require('const bool pvt_stream_fresh' in neo_cpp and 'if (!pvt_stream_fresh)' in neo_cpp,
+        'M9N UBX configuration retry must follow stream freshness, not GNSS fix')
 print('PASS stmf4_gateway_self_check')
 print('pins: VESC PB6/PB7 | NEO3 I2C PB8/PB9 | GNSS PA2/PA3 | one F411 USB CDC')
