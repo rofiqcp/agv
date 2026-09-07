@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-export BINDIR="${BINDIR:-$PWD}"
-export APPSDIR="${APPSDIR:-$PWD/../apps}"
-export APPSBINDIR="${APPSBINDIR:-$PWD/../apps}"
-export EXTERNALDIR="${EXTERNALDIR:-dummy}"
-exec /home/otomasi/ros/px4/PX4-Autopilot/platforms/nuttx/NuttX/tools/kconfig-conf "$@"

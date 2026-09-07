@@ -1,2 +1,0 @@
-#!/usr/bin/env bash
-exec /home/otomasi/ros/px4/PX4-Autopilot/platforms/nuttx/NuttX/tools/kconfig-conf "$@"
