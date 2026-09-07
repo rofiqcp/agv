@@ -480,8 +480,10 @@ private:
     flip_horizontal_ = get_parameter("flip_horizontal").as_bool();
     hotplug_retry_ = get_parameter("camera_hotplug_retry").as_bool();
     retry_sec_ = get_parameter("camera_retry_interval_sec").as_double();
-    camera_read_fail_threshold_ = std::clamp(get_parameter("camera_read_fail_threshold").as_int(), 2, 30);
-    camera_online_good_frames_ = std::clamp(get_parameter("camera_online_good_frames").as_int(), 1, 30);
+    camera_read_fail_threshold_ = static_cast<int>(
+      std::clamp<std::int64_t>(get_parameter("camera_read_fail_threshold").as_int(), 2, 30));
+    camera_online_good_frames_ = static_cast<int>(
+      std::clamp<std::int64_t>(get_parameter("camera_online_good_frames").as_int(), 1, 30));
     confidence_threshold_ = static_cast<float>(get_parameter("confidence_threshold").as_double());
     iou_threshold_ = static_cast<float>(get_parameter("iou_threshold").as_double());
     lane_threshold_ = static_cast<float>(get_parameter("lane_threshold").as_double());
