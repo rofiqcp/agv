@@ -28,7 +28,7 @@ const char *VescGateway::ownerName(Owner owner) {
 }
 
 void VescGateway::begin() {
-  gVescUart.begin(kBaud);
+  uart_ok_ = gVescUart.begin(kBaud);
   // Native STM32Cube priorities keep the VESC UART above USB CDC.
   // USART1 is the dedicated F103 VESC link. Keep its IRQ at the highest
   // peripheral priority even at the standard 115200 baud so motor-active USB/HMI
@@ -43,6 +43,8 @@ void VescGateway::begin() {
   recovery_streak_ = 0U;
   ever_valid_frame_ = false;
   last_status_ms_ = 0;
+  maintenance_activity_ms_ = 0U;
+  last_uart_retry_ms_ = last_rx_ms_;
   publishStatus(true);
 }
 
@@ -86,9 +88,17 @@ bool VescGateway::forwardHex(const char *hex, Owner source) {
     }
     bytes[i] = static_cast<uint8_t>((hi << 4) | lo);
   }
+  if (!uart_ok_) {
+    (void)gUsb.writeLine("VESC:ERR:UART_OFFLINE");
+    return false;
+  }
   const size_t written = gVescUart.write(bytes, count);
   tx_bytes_ += static_cast<uint32_t>(written);
-  if (source == Owner::RUNTIME && written == count) last_runtime_tx_ms_ = HAL_GetTick();
+  if (written == count) {
+    const uint32_t now = HAL_GetTick();
+    if (source == Owner::RUNTIME) last_runtime_tx_ms_ = now;
+    else maintenance_activity_ms_ = now;
+  }
   if (written != count) {
     (void)gUsb.writeLine("VESC:ERR:UART_TX");
     return false;
@@ -204,7 +214,7 @@ void VescGateway::serviceRxFrames() {
 void VescGateway::recoverRuntimeUart(uint32_t now) {
   rx_len_ = 0U;
   gVescUart.end();
-  gVescUart.begin(kBaud);
+  uart_ok_ = gVescUart.begin(kBaud);
   HAL_NVIC_SetPriority(USART1_IRQn, 0, 0);
   ++uart_recovery_count_;
   if (recovery_streak_ < 0xffU) ++recovery_streak_;
@@ -212,6 +222,17 @@ void VescGateway::recoverRuntimeUart(uint32_t now) {
   last_valid_frame_ms_ = now;
   last_rx_ms_ = now;
   recovery_tx_marker_ = tx_bytes_;
+}
+
+void VescGateway::switchToRuntime(uint32_t now, bool announce) {
+  owner_ = Owner::RUNTIME;
+  maintenance_activity_ms_ = 0U;
+  recovery_streak_ = 0U;
+  last_valid_frame_ms_ = now;
+  recovery_tx_marker_ = tx_bytes_;
+  while (gVescUart.available() > 0) (void)gVescUart.read();
+  rx_len_ = 0U;
+  if (announce && gUsb.connected()) (void)gUsb.writeLine("VESC:MODE:RUNTIME");
 }
 
 void VescGateway::recoveryTick(uint32_t now) {
@@ -268,22 +289,17 @@ bool VescGateway::handleHostCommand(const char *command) {
     char line[96];
     std::snprintf(line, sizeof(line), "VESC:LINE:rx_pd=%d,rx_pu=%d,class=%s", rxPd, rxPu, line_class);
     (void)gUsb.writeLine(line);
-    (void)gVescUart.begin(kBaud);
+    uart_ok_ = gVescUart.begin(kBaud);
     return true;
   }
   if (strcmp(command, "VESC:MODE:RUNTIME") == 0 || strcmp(command, "VESC:MODE:NORMAL") == 0) {
-    owner_ = Owner::RUNTIME;
-    recovery_streak_ = 0U;
-    last_valid_frame_ms_ = HAL_GetTick();
-    recovery_tx_marker_ = tx_bytes_;
-    while (gVescUart.available() > 0) (void)gVescUart.read();
-    rx_len_ = 0U;
-    (void)gUsb.writeLine("VESC:MODE:RUNTIME");
+    switchToRuntime(HAL_GetTick(), true);
     publishStatus(true);
     return true;
   }
   if (strcmp(command, "VESC:MODE:MAINTENANCE") == 0) {
     owner_ = Owner::MAINTENANCE;
+    maintenance_activity_ms_ = HAL_GetTick();
     recovery_streak_ = 0U;
     while (gVescUart.available() > 0) (void)gVescUart.read();
     rx_len_ = 0U;
@@ -299,6 +315,16 @@ bool VescGateway::handleHostCommand(const char *command) {
 
 void VescGateway::poll() {
   const uint32_t now = HAL_GetTick();
+  if (owner_ == Owner::MAINTENANCE &&
+      (!gUsb.connected() || static_cast<uint32_t>(now - maintenance_activity_ms_) >= kMaintenanceLeaseMs)) {
+    switchToRuntime(now, gUsb.connected());
+  }
+  if (!uart_ok_ && static_cast<uint32_t>(now - last_uart_retry_ms_) >= kUartRetryMs) {
+    last_uart_retry_ms_ = now;
+    gVescUart.end();
+    uart_ok_ = gVescUart.begin(kBaud);
+    HAL_NVIC_SetPriority(USART1_IRQn, 0U, 0U);
+  }
   if (rx_len_ > 0U && static_cast<uint32_t>(now - last_rx_ms_) > kRxFrameTimeoutMs) {
     rx_frame_errors_ += static_cast<uint32_t>(rx_len_);
     rx_len_ = 0U;

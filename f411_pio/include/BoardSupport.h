@@ -32,7 +32,9 @@ class HalUartPort {
   std::size_t write(const uint8_t *data, std::size_t length);
   std::size_t write(uint8_t byte) { return write(&byte, 1U); }
   void flush();
+  bool service();
   uint32_t overflowCount() const { return overflow_count_; }
+  uint32_t errorCount() const { return error_count_; }
   void irqRxComplete();
   void irqError();
  private:
@@ -44,6 +46,8 @@ class HalUartPort {
   uint8_t rx_byte_{0U};
   uint8_t rx_buffer_[kRxSize]{};
   volatile uint32_t overflow_count_{0U};
+  volatile uint32_t error_count_{0U};
+  volatile bool rx_restart_required_{false};
 };
 
 extern HalUartPort gVescUart;

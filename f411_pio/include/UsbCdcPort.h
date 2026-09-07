@@ -13,6 +13,7 @@ class UsbCdcPort {
   int availableForWrite() const;
   std::size_t write(const uint8_t *data, std::size_t length);
   bool writeLine(const char *line);
+  bool writeLineCritical(const char *line, uint32_t timeout_ms = 150U);
   void flush(uint32_t timeout_ms = 100U);
   bool connected() const;
   uint32_t rxDropped() const { return rx_dropped_; }

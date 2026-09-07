@@ -78,6 +78,7 @@ class HmiDisplay {
   void textBounds(const char *text, int32_t &min_x, int32_t &min_y,
                   int32_t &max_x, int32_t &max_y, int32_t &advance) const;
   void drawBuiltinChar(char c, int32_t x, int32_t y, uint8_t scale);
+  void drawFont2Char(char c, int32_t x, int32_t y, uint8_t scale);
   void drawGfxGlyph(uint8_t c, int32_t baseline_x, int32_t baseline_y);
 
   int32_t width_{320};

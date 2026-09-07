@@ -90,12 +90,13 @@ class CdcLineBuffer {
 void Neo3Sensors::begin() {
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET);  // safety LED active-low: off
   Board_BuzzerStop();
-  (void)gGnssUart.begin(GNSS_BAUD);
+  gnss_uart_ok_ = gGnssUart.begin(GNSS_BAUD);
+  last_gnss_uart_retry_ms_ = HAL_GetTick();
   HAL_Delay(5U);
   ist_ok_ = initIst8310();
-  (void)configureGnss();
+  config_attempts_ = 0U;
+  if (gnss_uart_ok_ && configureGnss()) config_attempts_ = 1U;
   last_config_ms_ = HAL_GetTick();
-  config_attempts_ = 1U;
   switch_raw_ = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_12) == GPIO_PIN_RESET;
   switch_pressed_ = switch_raw_;
   switch_changed_ms_ = HAL_GetTick();
@@ -110,6 +111,13 @@ void Neo3Sensors::poll() {
   updateSafetyLed();
 
   const uint32_t now_ms = HAL_GetTick();
+  if (!gnss_uart_ok_ && static_cast<uint32_t>(now_ms - last_gnss_uart_retry_ms_) >= GNSS_UART_RETRY_MS) {
+    last_gnss_uart_retry_ms_ = now_ms;
+    gGnssUart.end();
+    gnss_uart_ok_ = gGnssUart.begin(GNSS_BAUD);
+    if (!gnss_uart_ok_) ++gnss_uart_error_count_;
+    else if (configureGnss() && config_attempts_ < 255U) ++config_attempts_;
+  }
   // Configuration recovery follows transport freshness, not GNSS fix validity.
   // Indoors NAV-PVT can stream correctly at 10 Hz with fix_type=0/LLH invalid;
   // repeatedly VALSET-configuring a healthy receiver in that state is needless.
@@ -119,8 +127,8 @@ void Neo3Sensors::poll() {
     // RAM-only UBX configuration is idempotent. Retry quickly at boot, then
     // periodically so a receiver power-cycle recovers without resetting HMI.
     const uint32_t retry_ms = config_attempts_ < 3 ? GNSS_CONFIG_RETRY_MS : 10000UL;
-    if (static_cast<uint32_t>(now_ms - last_config_ms_) >= retry_ms) {
-      if (configureGnss() && config_attempts_ < 255) ++config_attempts_;
+    if (gnss_uart_ok_ && static_cast<uint32_t>(now_ms - last_config_ms_) >= retry_ms) {
+      if (configureGnss() && config_attempts_ < 255U) ++config_attempts_;
       last_config_ms_ = now_ms;
     }
     if (nmea_.gga_valid && static_cast<uint32_t>(now_ms - nmea_.gga_ms) <= NMEA_FRESH_MS) {
@@ -485,16 +493,29 @@ void Neo3Sensors::appendU8(uint8_t *payload, uint16_t &pos, uint8_t value) {
 }
 
 bool Neo3Sensors::sendUbx(uint8_t cls, uint8_t id, const uint8_t *payload, uint16_t length) {
-  uint8_t ck_a = 0, ck_b = 0;
-  const uint8_t header[4] = {cls, id, static_cast<uint8_t>(length & 0xFFU), static_cast<uint8_t>(length >> 8)};
-  gGnssUart.write(0xB5); gGnssUart.write(0x62);
-  for (uint8_t b : header) { gGnssUart.write(b); ubxChecksumAdd(b, ck_a, ck_b); }
-  for (uint16_t i = 0; i < length; ++i) {
-    const uint8_t b = payload[i];
-    gGnssUart.write(b);
-    ubxChecksumAdd(b, ck_a, ck_b);
+  if (!gnss_uart_ok_ || length > UBX_MAX_PAYLOAD || (length > 0U && payload == nullptr)) return false;
+  uint8_t frame[UBX_MAX_PAYLOAD + 8U]{};
+  uint16_t pos = 0U;
+  frame[pos++] = 0xB5U;
+  frame[pos++] = 0x62U;
+  frame[pos++] = cls;
+  frame[pos++] = id;
+  frame[pos++] = static_cast<uint8_t>(length & 0xFFU);
+  frame[pos++] = static_cast<uint8_t>(length >> 8U);
+  uint8_t ck_a = 0U, ck_b = 0U;
+  for (uint16_t i = 2U; i < 6U; ++i) ubxChecksumAdd(frame[i], ck_a, ck_b);
+  for (uint16_t i = 0U; i < length; ++i) {
+    frame[pos++] = payload[i];
+    ubxChecksumAdd(payload[i], ck_a, ck_b);
   }
-  gGnssUart.write(ck_a); gGnssUart.write(ck_b);
+  frame[pos++] = ck_a;
+  frame[pos++] = ck_b;
+  const std::size_t written = gGnssUart.write(frame, pos);
+  if (written != pos) {
+    ++gnss_uart_error_count_;
+    gnss_uart_ok_ = false;
+    return false;
+  }
   gGnssUart.flush();
   return true;
 }
@@ -556,15 +577,39 @@ bool Neo3Sensors::istRead(uint8_t reg, uint8_t *dst, uint8_t count) { return ist
 void Neo3Sensors::recoverIstBus() {
   (void)HAL_I2C_DeInit(&hi2c1);
   GPIO_InitTypeDef gpio{};
-  gpio.Pin = GPIO_PIN_9; gpio.Mode = GPIO_MODE_INPUT; gpio.Pull = GPIO_PULLUP;
-  gpio.Speed = GPIO_SPEED_FREQ_LOW; HAL_GPIO_Init(GPIOB, &gpio);
-  gpio.Pin = GPIO_PIN_8; gpio.Mode = GPIO_MODE_OUTPUT_OD; gpio.Pull = GPIO_PULLUP;
-  HAL_GPIO_Init(GPIOB, &gpio); HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_SET);
+  gpio.Pin = GPIO_PIN_9;
+  gpio.Mode = GPIO_MODE_INPUT;
+  gpio.Pull = GPIO_PULLUP;
+  gpio.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &gpio);
+
+  gpio.Pin = GPIO_PIN_8;
+  gpio.Mode = GPIO_MODE_OUTPUT_OD;
+  gpio.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(GPIOB, &gpio);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_SET);
   Board_DelayUs(5U);
-  for (uint8_t i = 0U; i < 9U; ++i) {
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_RESET); Board_DelayUs(5U);
-    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_SET); Board_DelayUs(5U);
+
+  // Clock a slave out of a half-finished byte. Stop early once SDA releases.
+  for (uint8_t i = 0U; i < 9U && HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_9) == GPIO_PIN_RESET; ++i) {
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_RESET);
+    Board_DelayUs(5U);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_SET);
+    Board_DelayUs(5U);
   }
+
+  // Generate an explicit I2C STOP (SDA low -> high while SCL is high).
+  gpio.Pin = GPIO_PIN_9;
+  gpio.Mode = GPIO_MODE_OUTPUT_OD;
+  gpio.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(GPIOB, &gpio);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_RESET);
+  Board_DelayUs(5U);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_SET);
+  Board_DelayUs(5U);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET);
+  Board_DelayUs(5U);
+
   Board_ReinitI2c1();
   HAL_Delay(2U);
 }
@@ -771,10 +816,6 @@ uint32_t Neo3Sensors::readU32LE(const uint8_t *p) {
 
 uint16_t Neo3Sensors::readU16LE(const uint8_t *p) {
   return static_cast<uint16_t>(p[0]) | (static_cast<uint16_t>(p[1]) << 8);
-}
-
-int16_t Neo3Sensors::readI16LE(const uint8_t *p) {
-  return static_cast<int16_t>(readU16LE(p));
 }
 
 float Neo3Sensors::normalize360(float deg) {

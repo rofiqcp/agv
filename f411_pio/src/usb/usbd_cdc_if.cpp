@@ -29,9 +29,25 @@ static int8_t CDC_Init_FS(void) {
 static int8_t CDC_DeInit_FS(void) { return (int8_t)USBD_OK; }
 
 static int8_t CDC_Control_FS(uint8_t cmd, uint8_t *pbuf, uint16_t length) {
-  (void)cmd;
-  (void)pbuf;
-  (void)length;
+  // CDC ACM line coding is informational for USB CDC (the transport itself is
+  // USB, not a hardware UART). Still implement the mandatory requests so host
+  // drivers see a standards-compliant ACM endpoint. Default: 1,000,000 8N1.
+  static uint8_t line_coding[7] = {0x40U, 0x42U, 0x0FU, 0x00U, 0x00U, 0x00U, 0x08U};
+  switch (cmd) {
+    case CDC_SET_LINE_CODING:
+      if (pbuf != nullptr && length >= sizeof(line_coding)) {
+        for (uint8_t i = 0U; i < sizeof(line_coding); ++i) line_coding[i] = pbuf[i];
+      }
+      break;
+    case CDC_GET_LINE_CODING:
+      if (pbuf != nullptr && length >= sizeof(line_coding)) {
+        for (uint8_t i = 0U; i < sizeof(line_coding); ++i) pbuf[i] = line_coding[i];
+      }
+      break;
+    case CDC_SET_CONTROL_LINE_STATE:
+    default:
+      break;
+  }
   return (int8_t)USBD_OK;
 }
 

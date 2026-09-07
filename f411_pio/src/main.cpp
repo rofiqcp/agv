@@ -8,6 +8,8 @@
 #include "HmiDisplay.h"
 
 #include <algorithm>
+#include <cerrno>
+#include <climits>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -90,7 +92,7 @@ static bool serialRxDiscarding = false;
 // ---------------------------------------------------------------------------
 // Forward declarations used by page/safety helpers
 // ---------------------------------------------------------------------------
-static void sendDriveStop();
+static bool sendDriveStop();
 static void publishControlState();
 static void publishCameraTab();
 static void enterSystemDfu();
@@ -114,6 +116,7 @@ static void enterSystemDfu() {
 
   // Match the reference transaction: best-effort ACK, clean CDC disconnect,
   // then reset into the dedicated recovery bootloader at 0x08000000.
+  gUsb.flush(120U);
   HAL_Delay(20U);
   gUsb.end();
   NVIC_SystemReset();
@@ -265,38 +268,57 @@ static void restartSplash() {
 // ---------------------------------------------------------------------------
 // Command output for manual actuator test
 // ---------------------------------------------------------------------------
-static void sendDriveCommand(const char* direction) {
+static bool sendDriveCommand(const char* direction) {
   char line[48];
   snprintf(line, sizeof(line), "CMD:DRIVE:%s:%u", direction, gTelemetry.manualSpeedPct);
-  printBoth(line);
-  gTelemetry.state = STATE_RUNNING;
+  if (!gUsb.writeLineCritical(line)) {
+    gTelemetry.systemStatus = SYS_FAULT;
+    uiDirty = true;
+    return false;
+  }
+  // STATE:* telemetry is authoritative; queueing a request does not prove motion.
   uiDirty = true;
+  return true;
 }
 
-static void sendDriveStop() {
-  printBoth("CMD:DRIVE:STOP");
-  gTelemetry.state = STATE_STOPPED;
+static bool sendDriveStop() {
+  if (!gUsb.writeLineCritical("CMD:DRIVE:STOP")) {
+    gTelemetry.systemStatus = SYS_FAULT;
+    uiDirty = true;
+    return false;
+  }
+  // Do not claim STATE_STOPPED until the host/F103 path reports it back.
   uiDirty = true;
+  return true;
 }
 
-static void sendSteerTarget(float targetDeg) {
+static bool sendSteerTarget(float targetDeg) {
   targetDeg = std::clamp(targetDeg, STEER_MIN_DEG, STEER_MAX_DEG);
-  gTelemetry.steeringTargetDeg = targetDeg;
-  gTelemetry.steeringErrorDeg = gTelemetry.steeringTargetDeg - gTelemetry.steeringActualDeg;
-
   char line[48];
   snprintf(line, sizeof(line), "CMD:STEER:%.1f", targetDeg);
-  printBoth(line);
+  if (!gUsb.writeLineCritical(line)) {
+    gTelemetry.systemStatus = SYS_FAULT;
+    uiDirty = true;
+    return false;
+  }
+  gTelemetry.steeringTargetDeg = targetDeg;
+  gTelemetry.steeringErrorDeg = gTelemetry.steeringTargetDeg - gTelemetry.steeringActualDeg;
   uiDirty = true;
+  return true;
 }
 
-static void setManualSpeed(int value) {
+static bool setManualSpeed(int value) {
   value = std::clamp(value, MANUAL_SPEED_MIN, MANUAL_SPEED_MAX);
-  gTelemetry.manualSpeedPct = (uint8_t)value;
   char line[32];
-  snprintf(line, sizeof(line), "CMD:SPEED:%u", gTelemetry.manualSpeedPct);
-  printBoth(line);
+  snprintf(line, sizeof(line), "CMD:SPEED:%d", value);
+  if (!gUsb.writeLineCritical(line)) {
+    gTelemetry.systemStatus = SYS_FAULT;
+    uiDirty = true;
+    return false;
+  }
+  gTelemetry.manualSpeedPct = static_cast<uint8_t>(value);
   uiDirty = true;
+  return true;
 }
 
 static void handleWaypointTap(WaypointAction action) {
@@ -340,11 +362,13 @@ static void handleWaypointTap(WaypointAction action) {
 // Touch behavior
 // ---------------------------------------------------------------------------
 static bool speedAdjustEnabled() {
-  return gTelemetry.rosConnected && gTelemetry.systemStatus == SYS_READY && gTelemetry.mode == MODE_MANUAL;
+  return !gVesc.maintenanceMode() && gTelemetry.rosConnected &&
+         gTelemetry.systemStatus == SYS_READY && gTelemetry.mode == MODE_MANUAL;
 }
 
 static bool controlAllowed(ControlAction action) {
   if (action == CTRL_STOP) return true;
+  if (gVesc.maintenanceMode()) return false;
   if (action == CTRL_FORWARD || action == CTRL_REVERSE) return manualDriveEnabled(gTelemetry);
   if (action == CTRL_LEFT || action == CTRL_RIGHT || action == CTRL_CENTER) return manualSteerEnabled(gTelemetry);
   if (action == CTRL_SPEED_MINUS || action == CTRL_SPEED_PLUS) return speedAdjustEnabled();
@@ -362,52 +386,51 @@ static void handleControlTap(ControlAction action) {
 
   switch (action) {
     case CTRL_FORWARD:
-      // If reversing, explicitly stop before changing direction.
-      if (activeDriveControl == CTRL_REVERSE) sendDriveStop();
-      sendDriveCommand("FWD");
-      activeDriveControl = CTRL_FORWARD;
+      // Never reverse direction in one transaction. Request STOP first and wait
+      // for authoritative STATE:STOPPED before the next tap can reverse.
+      if (activeDriveControl == CTRL_REVERSE) {
+        if (sendDriveStop()) activeDriveControl = CTRL_NONE;
+        break;
+      }
+      if (sendDriveCommand("FWD")) activeDriveControl = CTRL_FORWARD;
       break;
 
     case CTRL_REVERSE:
-      // If moving forward, explicitly stop before changing direction.
-      if (activeDriveControl == CTRL_FORWARD) sendDriveStop();
-      sendDriveCommand("REV");
-      activeDriveControl = CTRL_REVERSE;
+      if (activeDriveControl == CTRL_FORWARD) {
+        if (sendDriveStop()) activeDriveControl = CTRL_NONE;
+        break;
+      }
+      if (sendDriveCommand("REV")) activeDriveControl = CTRL_REVERSE;
       break;
 
     case CTRL_LEFT:
-      // One tap commands a fixed left steering position.
-      sendSteerTarget(STEER_LEFT_PRESET_DEG);
-      activeSteerControl = CTRL_LEFT;
+      if (sendSteerTarget(STEER_LEFT_PRESET_DEG)) activeSteerControl = CTRL_LEFT;
       break;
 
     case CTRL_RIGHT:
-      // One tap commands a fixed right steering position.
-      sendSteerTarget(STEER_RIGHT_PRESET_DEG);
-      activeSteerControl = CTRL_RIGHT;
+      if (sendSteerTarget(STEER_RIGHT_PRESET_DEG)) activeSteerControl = CTRL_RIGHT;
       break;
 
     case CTRL_CENTER:
-      sendSteerTarget(0.0f);
-      activeSteerControl = CTRL_CENTER;
+      if (sendSteerTarget(0.0f)) activeSteerControl = CTRL_CENTER;
       break;
 
     case CTRL_STOP:
-      sendDriveStop();
-      activeDriveControl = CTRL_NONE;
+      if (sendDriveStop()) activeDriveControl = CTRL_NONE;
       break;
 
     case CTRL_SPEED_MINUS:
-      setManualSpeed((int)gTelemetry.manualSpeedPct - MANUAL_SPEED_STEP);
-      // If already driving, immediately re-issue the latched command at the new speed.
-      if (activeDriveControl == CTRL_FORWARD) sendDriveCommand("FWD");
-      else if (activeDriveControl == CTRL_REVERSE) sendDriveCommand("REV");
+      if (setManualSpeed((int)gTelemetry.manualSpeedPct - MANUAL_SPEED_STEP)) {
+        if (activeDriveControl == CTRL_FORWARD) (void)sendDriveCommand("FWD");
+        else if (activeDriveControl == CTRL_REVERSE) (void)sendDriveCommand("REV");
+      }
       break;
 
     case CTRL_SPEED_PLUS:
-      setManualSpeed((int)gTelemetry.manualSpeedPct + MANUAL_SPEED_STEP);
-      if (activeDriveControl == CTRL_FORWARD) sendDriveCommand("FWD");
-      else if (activeDriveControl == CTRL_REVERSE) sendDriveCommand("REV");
+      if (setManualSpeed((int)gTelemetry.manualSpeedPct + MANUAL_SPEED_STEP)) {
+        if (activeDriveControl == CTRL_FORWARD) (void)sendDriveCommand("FWD");
+        else if (activeDriveControl == CTRL_REVERSE) (void)sendDriveCommand("REV");
+      }
       break;
 
     default:
@@ -428,15 +451,16 @@ static void handleTouch() {
   if (ev.type == TouchEvent::PRESS) {
     if (ev.modeToggle && currentPage == PAGE_HOME) {
       const bool toManual = gTelemetry.mode != MODE_MANUAL;
-      gTelemetry.mode = toManual ? MODE_MANUAL : MODE_AUTO;
-      if (!toManual) {
-        if (activeDriveControl == CTRL_FORWARD || activeDriveControl == CTRL_REVERSE) sendDriveStop();
+      if (!toManual && (activeDriveControl == CTRL_FORWARD || activeDriveControl == CTRL_REVERSE)) {
+        if (!sendDriveStop()) return;
         activeDriveControl = CTRL_NONE;
-        activeSteerControl = CTRL_NONE;
       }
-      printBoth(toManual ? "CMD:MODE:MANUAL" : "CMD:MODE:AUTO");
-      updateHomePage(gTelemetry);
-      publishControlState();
+      const char *mode_cmd = toManual ? "CMD:MODE:MANUAL" : "CMD:MODE:AUTO";
+      if (!gUsb.writeLineCritical(mode_cmd)) {
+        gTelemetry.systemStatus = SYS_FAULT;
+        uiDirty = true;
+      }
+      // MODE:* echoed by ROS is authoritative; do not fabricate a local ACK.
       return;
     }
     if (ev.home) {
@@ -489,6 +513,37 @@ static bool eqIgnoreCase(const char* a, const char* b) {
 static bool parseBool(const char* s) {
   return !strcmp(s, "1") || eqIgnoreCase(s, "ON") || eqIgnoreCase(s, "READY") || eqIgnoreCase(s, "TRUE");
 }
+
+static bool parseLongStrict(const char* text, long minimum, long maximum, long& value) {
+  if (text == nullptr || *text == '\0') return false;
+  errno = 0;
+  char* end = nullptr;
+  const long parsed = std::strtol(text, &end, 10);
+  if (end == text || errno == ERANGE) return false;
+  while (*end == ' ' || *end == '\t') ++end;
+  if (*end != '\0' || parsed < minimum || parsed > maximum) return false;
+  value = parsed;
+  return true;
+}
+
+static bool parseDoubleStrict(const char* text, double minimum, double maximum, double& value) {
+  if (text == nullptr || *text == '\0') return false;
+  errno = 0;
+  char* end = nullptr;
+  const double parsed = std::strtod(text, &end);
+  if (end == text || errno == ERANGE || !std::isfinite(parsed)) return false;
+  while (*end == ' ' || *end == '\t') ++end;
+  if (*end != '\0' || parsed < minimum || parsed > maximum) return false;
+  value = parsed;
+  return true;
+}
+
+static void reportBadValue(const char* field) {
+  char line[64];
+  std::snprintf(line, sizeof(line), "ERR:BAD_VALUE:%s", field == nullptr ? "UNKNOWN" : field);
+  (void)gUsb.writeLine(line);
+}
+
 
 static void parseSystemStatus(const char* s) {
   if (eqIgnoreCase(s, "OFF")) gTelemetry.systemStatus = SYS_OFF;
@@ -558,7 +613,13 @@ static void markRosHeartbeat() {
 
 static void forceRosOffline() {
   const bool wasConnected = gTelemetry.rosConnected;
-  if (activeDriveControl == CTRL_FORWARD || activeDriveControl == CTRL_REVERSE) sendDriveStop();
+  const bool motionWasPossible = activeDriveControl == CTRL_FORWARD ||
+                                 activeDriveControl == CTRL_REVERSE ||
+                                 gTelemetry.state == STATE_RUNNING ||
+                                 std::fabs(gTelemetry.speedKmh) > 0.2f;
+  if (activeDriveControl == CTRL_FORWARD || activeDriveControl == CTRL_REVERSE) {
+    (void)sendDriveStop();
+  }
   activeDriveControl = CTRL_NONE;
   activeSteerControl = CTRL_NONE;
   gTelemetry.rosConnected = false;
@@ -566,8 +627,9 @@ static void forceRosOffline() {
   rosHeartbeatStable = false;
   gAppWatchdogArmed = false;
   gTelemetry.systemStatus = SYS_NOT_READY;
-  gTelemetry.state = STATE_STOPPED;
-  gTelemetry.speedKmh = 0.0f;
+  // A lost link cannot prove that a previously moving vehicle has stopped.
+  gTelemetry.state = motionWasPossible ? STATE_FAULT : STATE_STOPPED;
+  if (!motionWasPossible) gTelemetry.speedKmh = 0.0f;
   gTelemetry.gpsReady = false;
   gTelemetry.gpsFix = GPS_LOST;
   gTelemetry.imuReady = false;
@@ -591,6 +653,25 @@ static void checkRosLinkTimeout() {
   if ((uint32_t)(HAL_GetTick() - lastRosHeartbeatMs) > timeoutMs) forceRosOffline();
 }
 
+static bool navigationActive() {
+  return gTelemetry.navigationStatus == NAV_QUEUED ||
+         gTelemetry.navigationStatus == NAV_NAVIGATING;
+}
+
+static bool maintenanceEntrySafe() {
+  return activeDriveControl == CTRL_NONE &&
+         gTelemetry.state != STATE_RUNNING &&
+         std::fabs(gTelemetry.speedKmh) <= 0.2f &&
+         !navigationActive();
+}
+
+static bool dfuMotionConfirmedSafe() {
+  return activeDriveControl == CTRL_NONE &&
+         (gTelemetry.state == STATE_STOPPED || gTelemetry.state == STATE_STANDBY) &&
+         std::fabs(gTelemetry.speedKmh) <= 0.2f &&
+         !navigationActive();
+}
+
 static uint32_t gDfuArmDeadlineMs = 0u;
 
 static void handleSerialCommand(char* command) {
@@ -601,6 +682,10 @@ static void handleSerialCommand(char* command) {
   const VehicleTelemetry telemetryBefore = gTelemetry;
   // Hardware gateway namespaces are handled before the HMI command namespace.
   if (!strncmp(command, "VESC:", 5)) {
+    if (!strcmp(command, "VESC:MODE:MAINTENANCE") && !maintenanceEntrySafe()) {
+      (void)gUsb.writeLineCritical("VESC:ERR:NOT_SAFE");
+      return;
+    }
     (void)gVesc.handleHostCommand(command);
     return;
   }
@@ -626,26 +711,31 @@ static void handleSerialCommand(char* command) {
     return;
   }
   if (!strcmp(command, "BOOT:DFU:ARM")) {
-    // Two-step software DFU: a single stale/corrupted CDC line must never reboot
-    // the F411 while Nav2 is running. Confirmation is valid for only 2 seconds.
-    gDfuArmDeadlineMs = HAL_GetTick() + 2000u;
-    printBoth("ACK:DFU:ARMED");
+    // Two-step DFU with a bounded safety window. ARM alone can never reboot.
+    gDfuArmDeadlineMs = HAL_GetTick() + 5000U;
+    (void)gUsb.writeLineCritical("ACK:DFU:ARMED");
     return;
   }
   if (!strcmp(command, "BOOT:DFU:CONFIRM")) {
     const uint32_t now = HAL_GetTick();
-    if (gDfuArmDeadlineMs == 0u || (int32_t)(gDfuArmDeadlineMs - now) <= 0) {
-      gDfuArmDeadlineMs = 0u;
-      printBoth("ERR:DFU:NOT_ARMED");
+    if (gDfuArmDeadlineMs == 0U || static_cast<int32_t>(gDfuArmDeadlineMs - now) <= 0) {
+      gDfuArmDeadlineMs = 0U;
+      (void)gUsb.writeLineCritical("ERR:DFU:NOT_ARMED");
       return;
     }
-    gDfuArmDeadlineMs = 0u;
     if (activeDriveControl == CTRL_FORWARD || activeDriveControl == CTRL_REVERSE) {
-      sendDriveStop();
-      activeDriveControl = CTRL_NONE;
+      if (sendDriveStop()) activeDriveControl = CTRL_NONE;
+      (void)gUsb.writeLineCritical("ERR:DFU:WAIT_SAFE");
+      return;
     }
-    printBoth("ACK:DFU");
-    HAL_Delay(80U);
+    if (!dfuMotionConfirmedSafe()) {
+      (void)gUsb.writeLineCritical("ERR:DFU:WAIT_SAFE");
+      return;
+    }
+    if (!gUsb.writeLineCritical("ACK:DFU")) return;
+    gDfuArmDeadlineMs = 0U;
+    gUsb.flush(150U);
+    HAL_Delay(20U);
     enterSystemDfu();
     return;
   }
@@ -688,11 +778,9 @@ static void handleSerialCommand(char* command) {
     const char* action = command + 13;
     if (eqIgnoreCase(action, "STOP")) {
       activeDriveControl = CTRL_NONE;
-      gTelemetry.state = STATE_STOPPED;
-    } else if (gTelemetry.mode == MODE_MANUAL && gTelemetry.escReady &&
+    } else if (!gVesc.maintenanceMode() && manualDriveEnabled(gTelemetry) &&
                (eqIgnoreCase(action, "FWD") || eqIgnoreCase(action, "REV"))) {
       activeDriveControl = eqIgnoreCase(action, "FWD") ? CTRL_FORWARD : CTRL_REVERSE;
-      gTelemetry.state = STATE_RUNNING;
     } else {
       printBoth("ERR:REMOTE_DRIVE_LOCKED");
       return;
@@ -703,7 +791,7 @@ static void handleSerialCommand(char* command) {
   }
   if (!strncmp(command, "REMOTE:STEER:", 13)) {
     const char* action = command + 13;
-    if (!(gTelemetry.mode == MODE_MANUAL && gTelemetry.escReady && gTelemetry.encoderReady)) {
+    if (gVesc.maintenanceMode() || !manualSteerEnabled(gTelemetry)) {
       printBoth("ERR:REMOTE_STEER_LOCKED");
       return;
     }
@@ -716,7 +804,12 @@ static void handleSerialCommand(char* command) {
     return;
   }
   if (!strncmp(command, "REMOTE:SPEED:", 13)) {
-    gTelemetry.manualSpeedPct = (uint8_t)std::clamp(atoi(command + 13), MANUAL_SPEED_MIN, MANUAL_SPEED_MAX);
+    long value = 0;
+    if (!parseLongStrict(command + 13, MANUAL_SPEED_MIN, MANUAL_SPEED_MAX, value)) {
+      reportBadValue("REMOTE:SPEED");
+      return;
+    }
+    gTelemetry.manualSpeedPct = static_cast<uint8_t>(value);
     if (currentPage == PAGE_ACTUATOR) updateActuatorPage(gTelemetry, activeDriveControl, activeSteerControl);
     publishControlState();
     return;
@@ -726,9 +819,15 @@ static void handleSerialCommand(char* command) {
     if (parseBool(command + 4)) markRosHeartbeat();
     else forceRosOffline();
   } else if (!strncmp(command, "FPS:", 4)) {
-    gTelemetry.cameraFps = std::max(0.0f, static_cast<float>(atof(command + 4)));
+    double value = 0.0;
+    if (!parseDoubleStrict(command + 4, 0.0, 120.0, value)) { reportBadValue("FPS"); return; }
+    gTelemetry.cameraFps = static_cast<float>(value);
   } else if (!strncmp(command, "WPSEL:", 6)) {
-    gTelemetry.selectedWaypoint = (uint8_t)std::clamp(atoi(command + 6), 0, static_cast<int>(HMI_WAYPOINT_COUNT) - 1);
+    long value = 0;
+    if (!parseLongStrict(command + 6, 0, static_cast<long>(HMI_WAYPOINT_COUNT) - 1L, value)) {
+      reportBadValue("WPSEL"); return;
+    }
+    gTelemetry.selectedWaypoint = static_cast<uint8_t>(value);
   } else if (!strncmp(command, "TARGET:", 7)) {
     snprintf(gTelemetry.activeTarget, sizeof(gTelemetry.activeTarget), "%s", command + 7);
   } else if (!strncmp(command, "NAV:", 4)) {
@@ -774,25 +873,38 @@ static void handleSerialCommand(char* command) {
       activeDriveControl = CTRL_NONE;
     }
   } else if (!strncmp(command, "SPD:", 4)) {
-    gTelemetry.speedKmh = atof(command + 4);
+    double value = 0.0;
+    if (!parseDoubleStrict(command + 4, 0.0, 100.0, value)) { reportBadValue("SPD"); return; }
+    gTelemetry.speedKmh = static_cast<float>(value);
   } else if (!strncmp(command, "HEAD:", 5)) {
-    gTelemetry.headingDeg = atof(command + 5);
+    double value = 0.0;
+    if (!parseDoubleStrict(command + 5, -360000.0, 360000.0, value)) { reportBadValue("HEAD"); return; }
+    gTelemetry.headingDeg = static_cast<float>(value);
   } else if (!strncmp(command, "GPS:", 4)) {
     gTelemetry.gpsReady = parseBool(command + 4);
   } else if (!strncmp(command, "FIX:", 4)) {
-    int fix = atoi(command + 4);
+    long fix = 0;
+    if (!parseLongStrict(command + 4, 0, 4, fix)) { reportBadValue("FIX"); return; }
     if (fix <= 1) gTelemetry.gpsFix = GPS_NO_FIX;
     else if (fix == 2) gTelemetry.gpsFix = GPS_2D_FIX;
     else if (fix == 3) gTelemetry.gpsFix = GPS_3D_FIX;
-    else if (fix == 4) gTelemetry.gpsFix = GPS_DEGRADED;
+    else gTelemetry.gpsFix = GPS_DEGRADED;
   } else if (!strncmp(command, "LAT:", 4)) {
-    gTelemetry.latitude = atof(command + 4);
+    double value = 0.0;
+    if (!parseDoubleStrict(command + 4, -90.0, 90.0, value)) { reportBadValue("LAT"); return; }
+    gTelemetry.latitude = value;
   } else if (!strncmp(command, "LON:", 4)) {
-    gTelemetry.longitude = atof(command + 4);
+    double value = 0.0;
+    if (!parseDoubleStrict(command + 4, -180.0, 180.0, value)) { reportBadValue("LON"); return; }
+    gTelemetry.longitude = value;
   } else if (!strncmp(command, "SAT:", 4)) {
-    gTelemetry.satellites = (uint8_t)std::clamp(atoi(command + 4), 0, 99);
+    long value = 0;
+    if (!parseLongStrict(command + 4, 0, 99, value)) { reportBadValue("SAT"); return; }
+    gTelemetry.satellites = static_cast<uint8_t>(value);
   } else if (!strncmp(command, "HDOP:", 5)) {
-    gTelemetry.hdop = atof(command + 5);
+    double value = 0.0;
+    if (!parseDoubleStrict(command + 5, 0.0, 99.9, value)) { reportBadValue("HDOP"); return; }
+    gTelemetry.hdop = static_cast<float>(value);
   } else if (!strncmp(command, "IMU:", 4)) {
     gTelemetry.imuReady = parseBool(command + 4);
   } else if (!strncmp(command, "CAM:", 4)) {
@@ -802,23 +914,35 @@ static void handleSerialCommand(char* command) {
   } else if (!strncmp(command, "OBJ:", 4)) {
     snprintf(gTelemetry.detectedObject, sizeof(gTelemetry.detectedObject), "%s", command + 4);
   } else if (!strncmp(command, "DIST:", 5)) {
-    gTelemetry.objectDistanceM = atof(command + 5);
+    double value = 0.0;
+    if (!parseDoubleStrict(command + 5, 0.0, 10000.0, value)) { reportBadValue("DIST"); return; }
+    gTelemetry.objectDistanceM = static_cast<float>(value);
   } else if (!strncmp(command, "CONF:", 5)) {
-    gTelemetry.confidencePct = atof(command + 5);
+    double value = 0.0;
+    if (!parseDoubleStrict(command + 5, 0.0, 100.0, value)) { reportBadValue("CONF"); return; }
+    gTelemetry.confidencePct = static_cast<float>(value);
   } else if (!strncmp(command, "DRV:", 4)) {
     gTelemetry.drivableAreaClear = parseBool(command + 4);
   } else if (!strncmp(command, "OBS:", 4)) {
     gTelemetry.obstacleDetected = parseBool(command + 4);
   } else if (!strncmp(command, "STEER_TARGET:", 13)) {
-    gTelemetry.steeringTargetDeg = std::clamp(static_cast<float>(atof(command + 13)), STEER_MIN_DEG, STEER_MAX_DEG);
+    double value = 0.0;
+    if (!parseDoubleStrict(command + 13, STEER_MIN_DEG, STEER_MAX_DEG, value)) { reportBadValue("STEER_TARGET"); return; }
+    gTelemetry.steeringTargetDeg = static_cast<float>(value);
     gTelemetry.steeringErrorDeg = gTelemetry.steeringTargetDeg - gTelemetry.steeringActualDeg;
   } else if (!strncmp(command, "STEER_ACTUAL:", 13)) {
-    gTelemetry.steeringActualDeg = atof(command + 13);
+    double value = 0.0;
+    if (!parseDoubleStrict(command + 13, -360.0, 360.0, value)) { reportBadValue("STEER_ACTUAL"); return; }
+    gTelemetry.steeringActualDeg = static_cast<float>(value);
     gTelemetry.steeringErrorDeg = gTelemetry.steeringTargetDeg - gTelemetry.steeringActualDeg;
   } else if (!strncmp(command, "STEER_ERR:", 10)) {
-    gTelemetry.steeringErrorDeg = atof(command + 10);
+    double value = 0.0;
+    if (!parseDoubleStrict(command + 10, -720.0, 720.0, value)) { reportBadValue("STEER_ERR"); return; }
+    gTelemetry.steeringErrorDeg = static_cast<float>(value);
   } else if (!strncmp(command, "RPM:", 4)) {
-    gTelemetry.motorRpm = atof(command + 4);
+    double value = 0.0;
+    if (!parseDoubleStrict(command + 4, -200000.0, 200000.0, value)) { reportBadValue("RPM"); return; }
+    gTelemetry.motorRpm = static_cast<float>(value);
   } else if (!strncmp(command, "ESC:", 4)) {
     gTelemetry.escReady = parseBool(command + 4);
     if (!gTelemetry.escReady &&
@@ -830,7 +954,11 @@ static void handleSerialCommand(char* command) {
     gTelemetry.encoderReady = parseBool(command + 4);
     if (!gTelemetry.encoderReady) activeSteerControl = CTRL_NONE;
   } else if (!strncmp(command, "MANUAL_SPEED:", 13)) {
-    gTelemetry.manualSpeedPct = (uint8_t)std::clamp(atoi(command + 13), MANUAL_SPEED_MIN, MANUAL_SPEED_MAX);
+    long value = 0;
+    if (!parseLongStrict(command + 13, MANUAL_SPEED_MIN, MANUAL_SPEED_MAX, value)) {
+      reportBadValue("MANUAL_SPEED"); return;
+    }
+    gTelemetry.manualSpeedPct = static_cast<uint8_t>(value);
   } else {
     char line[224];
     std::snprintf(line, sizeof(line), "ERR:UNKNOWN_COMMAND:%s", command);
@@ -957,7 +1085,14 @@ static void updateDemoTelemetry() {
 
 int main() {
   Board_Init();
-  if (!gUsb.begin()) { NVIC_SystemReset(); }
+  bool usbInitOk = false;
+  for (uint8_t attempt = 0U; attempt < 3U && !usbInitOk; ++attempt) {
+    usbInitOk = gUsb.begin();
+    if (!usbInitOk) {
+      gUsb.end();
+      HAL_Delay(50U * static_cast<uint32_t>(attempt + 1U));
+    }
+  }
   HAL_Delay(50U);
   printBoth("ADV HMI + CUAV NEO3 integrated firmware - boot");
 
@@ -965,6 +1100,7 @@ int main() {
   gVesc.begin();
   initDisplay();
   restartSplash();
+  if (!usbInitOk) gTelemetry.systemStatus = SYS_FAULT;
   startAppWatchdog();
 
   while (true) {
@@ -976,19 +1112,15 @@ int main() {
   pollSerialGui();
   gVesc.poll();
 
-  // Maintenance is entered only after the ROS arbiter verifies the vehicle is idle.
-  // Give the VESC request/reply path exclusive loop priority while a maintenance
-  // owner is active. This prevents TFT, GNSS/I2C and HMI telemetry from adding
-  // millisecond-scale jitter to VESC Tool RT data. Runtime mode is unchanged.
+  // Maintenance gets an extra VESC service burst, but it never suspends GNSS,
+  // IST8310, safety switch, ROS timeout, touch, or watchdog supervision. The
+  // gateway itself enforces a finite maintenance lease and USB-disconnect exit.
   if (gVesc.maintenanceMode()) {
-    for (uint8_t i = 0; i < 4U; ++i) {
+    for (uint8_t i = 0U; i < 4U; ++i) {
       pollSerialGui();
       gVesc.poll();
     }
     gUsb.poll();
-    Board_Service();
-    gMainLoopHeartbeatMs = HAL_GetTick();
-    continue;
   }
 
   // VESC traffic has first service priority, but maintenance must not suspend

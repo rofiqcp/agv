@@ -211,6 +211,8 @@ void Board_Init() {
 }
 
 void Board_Service() {
+  (void)gVescUart.service();
+  (void)gGnssUart.service();
   if (g_buzzer_active && static_cast<int32_t>(HAL_GetTick() - g_buzzer_deadline_ms) >= 0) {
     Board_BuzzerStop();
   }
@@ -265,7 +267,11 @@ bool HalUartPort::begin(uint32_t baudrate) {
   if (HAL_UART_Init(handle_) != HAL_OK) return false;
   rx_head_ = rx_tail_ = 0U;
   overflow_count_ = 0U;
-  return HAL_UART_Receive_IT(handle_, &rx_byte_, 1U) == HAL_OK;
+  error_count_ = 0U;
+  rx_restart_required_ = false;
+  const bool started = HAL_UART_Receive_IT(handle_, &rx_byte_, 1U) == HAL_OK;
+  rx_restart_required_ = !started;
+  return started;
 }
 
 void HalUartPort::end() {
@@ -275,6 +281,7 @@ void HalUartPort::end() {
   }
   handle_->Instance = instance_;
   rx_head_ = rx_tail_ = 0U;
+  rx_restart_required_ = false;
 }
 
 int HalUartPort::available() const {
@@ -305,6 +312,17 @@ void HalUartPort::flush() {
          static_cast<uint32_t>(HAL_GetTick() - start) < 100U) { }
 }
 
+bool HalUartPort::service() {
+  if (!rx_restart_required_) return true;
+  (void)HAL_UART_AbortReceive(handle_);
+  __HAL_UART_CLEAR_OREFLAG(handle_);
+  __HAL_UART_CLEAR_NEFLAG(handle_);
+  __HAL_UART_CLEAR_FEFLAG(handle_);
+  const bool restarted = HAL_UART_Receive_IT(handle_, &rx_byte_, 1U) == HAL_OK;
+  rx_restart_required_ = !restarted;
+  return restarted;
+}
+
 void HalUartPort::irqRxComplete() {
   const uint16_t next = static_cast<uint16_t>((rx_head_ + 1U) % kRxSize);
   if (next != rx_tail_) {
@@ -313,14 +331,15 @@ void HalUartPort::irqRxComplete() {
   } else {
     ++overflow_count_;
   }
-  (void)HAL_UART_Receive_IT(handle_, &rx_byte_, 1U);
+  if (HAL_UART_Receive_IT(handle_, &rx_byte_, 1U) != HAL_OK) rx_restart_required_ = true;
 }
 
 void HalUartPort::irqError() {
+  ++error_count_;
   __HAL_UART_CLEAR_OREFLAG(handle_);
   __HAL_UART_CLEAR_NEFLAG(handle_);
   __HAL_UART_CLEAR_FEFLAG(handle_);
-  (void)HAL_UART_Receive_IT(handle_, &rx_byte_, 1U);
+  if (HAL_UART_Receive_IT(handle_, &rx_byte_, 1U) != HAL_OK) rx_restart_required_ = true;
 }
 
 extern "C" void USART1_IRQHandler() { HAL_UART_IRQHandler(&huart1); }

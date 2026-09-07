@@ -3,8 +3,9 @@ import os
 from pathlib import Path
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -33,6 +34,8 @@ def generate_launch_description():
 
     args = [
         DeclareLaunchArgument("use_sim_time", default_value="false"),
+        DeclareLaunchArgument("start_gateway", default_value="true"),
+        DeclareLaunchArgument("hmi_port", default_value="auto"),
         DeclareLaunchArgument("start_teleop", default_value="true"),
         DeclareLaunchArgument("start_ackermann", default_value="true"),
         DeclareLaunchArgument("start_vesc_tool_bridge", default_value="true"),
@@ -44,6 +47,17 @@ def generate_launch_description():
         DeclareLaunchArgument("active_source_topic", default_value="/esc/mux/active_source"),
         DeclareLaunchArgument("require_autonomy_gate", default_value="true"),
     ]
+
+
+    stmf4_share = get_package_share_directory("stmf4")
+    gateway = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(os.path.join(stmf4_share, "launch", "stmf4.launch.py")),
+        condition=IfCondition(LaunchConfiguration("start_gateway")),
+        launch_arguments={
+            "serial_device": LaunchConfiguration("hmi_port"),
+            "use_sim_time": LaunchConfiguration("use_sim_time"),
+        }.items(),
+    )
 
     teleop = Node(
         package="esc",
@@ -94,4 +108,4 @@ def generate_launch_description():
         parameters=[vesc_tool_params, {"use_sim_time": ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)}],
     )
 
-    return LaunchDescription(args + [teleop, ackermann, vesc_tool])
+    return LaunchDescription(args + [gateway, teleop, ackermann, vesc_tool])

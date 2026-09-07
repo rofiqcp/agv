@@ -88,6 +88,7 @@ private:
   static constexpr uint32_t GNSS_BAUD = 38400;
   static constexpr uint32_t PVT_STALE_MS = 1500;
   static constexpr uint32_t GNSS_CONFIG_RETRY_MS = 3000;
+  static constexpr uint32_t GNSS_UART_RETRY_MS = 1000;
   static constexpr uint32_t NMEA_FRESH_MS = 1800;
   static constexpr uint32_t MAG_PUBLISH_MS = 50;     // 20 Hz USB telemetry
   static constexpr uint32_t HW_PUBLISH_MS = 1000;
@@ -135,7 +136,6 @@ private:
   static int32_t readI32LE(const uint8_t *p);
   static uint32_t readU32LE(const uint8_t *p);
   static uint16_t readU16LE(const uint8_t *p);
-  static int16_t readI16LE(const uint8_t *p);
   static float normalize360(float deg);
 
 
@@ -159,6 +159,9 @@ private:
   uint32_t last_pvt_itow_{0};
   uint32_t last_config_ms_{0};
   uint8_t config_attempts_{0};
+  bool gnss_uart_ok_{false};
+  uint32_t last_gnss_uart_retry_ms_{0};
+  uint32_t gnss_uart_error_count_{0};
   uint32_t gnss_sequence_{0};
   uint32_t mag_sequence_{0};
   uint32_t hw_sequence_{0};

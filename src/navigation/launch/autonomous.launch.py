@@ -413,8 +413,6 @@ def generate_launch_description() -> LaunchDescription:
     nav_share = get_package_share_directory('navigation')
     nav_config_dir = _active_config_dir(nav_share)
     esc_share = get_package_share_directory('esc')
-    stmf4_share = get_package_share_directory('stmf4')
-    stmf4_config_dir = _active_package_config_dir(stmf4_share, 'stmf4', 'AGV_STMF4_CONFIG_DIR')
     # Perception/TensorRT is optional for the mini-PC navigation-only profile.
     # Do not resolve it as a hard launch dependency when the package was skipped.
     astra_share = _optional_package_share('perception')
@@ -455,7 +453,6 @@ def generate_launch_description() -> LaunchDescription:
     bt_xml = os.path.join(nav_share, 'behavior_trees', 'ackermann_navigate_to_pose.xml')
     rviz_file = os.path.join(nav_share, 'rviz', 'autonomous.rviz')
     xacro_file = os.path.join(nav_share, 'urdf', 'agv.urdf.xacro')
-    hmi_params = os.path.join(stmf4_config_dir, 'hmi.yaml')
     perception_config_dir = _active_package_config_dir(
         astra_share, "perception", "AGV_PERCEPTION_CONFIG_DIR") if astra_share else ''
     camera_params = os.path.join(perception_config_dir, 'astra_yolop_gpu.yaml') if astra_share else ''
@@ -599,25 +596,15 @@ def generate_launch_description() -> LaunchDescription:
                           'use_sim_time': LaunchConfiguration('use_sim_time')}.items(),
     )
 
-    hmi_bridge = Node(
-        package='stmf4', executable='stmf4_hmi_bridge', name='stmf4_hmi_bridge', output='screen',
-        condition=IfCondition(PythonExpression(["'", LaunchConfiguration('start_hmi'), "' == 'true' or '", LaunchConfiguration('start_esc_ackermann'), "' == 'true' or '", LaunchConfiguration('start_vesc_tool_bridge'), "' == 'true' or ('", LaunchConfiguration('start_gnss'), "' == 'true' and '", LaunchConfiguration('gnss_source'), "'.lower() == 'stm32')"])),
-        respawn=True, respawn_delay=2.0,
-        parameters=[hmi_params, {
-            'serial_device': LaunchConfiguration('hmi_port'),
-            'publish_stm32_gnss': ParameterValue(PythonExpression([
-                "'", LaunchConfiguration('start_gnss'), "' == 'true' and '",
-                LaunchConfiguration('gnss_source'), "'.lower() == 'stm32'"]), value_type=bool),
-            'use_sim_time': ParameterValue(LaunchConfiguration('use_sim_time'), value_type=bool),
-        }],
-    )
-
     # ESC runtime: motor_teleop + esc_ackermann + fail-closed VESC maintenance bridge.
     # Physical F103 UART ownership is centralized in stmf4_hmi_bridge via the F411 gateway.
     esc_runtime = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(esc_share, 'launch', 'esc.launch.py')),
         launch_arguments={
             'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'start_gateway': PythonExpression([
+                "'", LaunchConfiguration('start_hmi'), "' == 'true' or '", LaunchConfiguration('start_esc_ackermann'), "' == 'true' or '", LaunchConfiguration('start_vesc_tool_bridge'), "' == 'true' or ('", LaunchConfiguration('start_gnss'), "' == 'true' and '", LaunchConfiguration('gnss_source'), "'.lower() == 'stm32')"]),
+            'hmi_port': LaunchConfiguration('hmi_port'),
             'start_teleop': PythonExpression([
                 "'", LaunchConfiguration('enable_keyboard'), "' == 'true' or '",
                 LaunchConfiguration('enable_joystick'), "' == 'true'"]),
@@ -1050,7 +1037,7 @@ def generate_launch_description() -> LaunchDescription:
         LogInfo(
             condition=IfCondition(camera_only_enabled),
             msg='[AGV] PERCEPTION OFF: camera-only aktif; raw/preview kamera jalan, model/inference OFF.'),
-        robot_state, joint_state_visualizer, gnss, imu, hmi_bridge, esc_runtime,
+        robot_state, joint_state_visualizer, gnss, imu, esc_runtime,
         delayed_ekf, localization_core, mag_heading_fusion, imu_speed_diagnostic,
         camera_only, perception_cpu, perception_gpu, semantic_obstacle,
         map_server, lifecycle_map, controller, planner, behavior, cmd_vel_router, smoother, collision, navigator,

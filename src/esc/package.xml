@@ -16,6 +16,7 @@
 
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <exec_depend>stmf4</exec_depend>
 
   <!-- Static runtime-contract regression reads the installed YAML configuration. -->
   <test_depend>python3-yaml</test_depend>

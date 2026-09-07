@@ -61,6 +61,7 @@ constexpr std::uint8_t HB_SET_TUNING = 7;
 constexpr std::uint8_t HB_GET_STEERING_CAL = 10;
 constexpr std::uint8_t HB_STEERING_HOME = 13;
 constexpr std::uint8_t HB_ENCODER_DEBUG = 14;
+constexpr std::uint8_t HB_STEERING_SET_CENTER = 15;
 
 rclcpp::QoS stateQos() { return rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local(); }
 
@@ -878,6 +879,7 @@ class VescToolBridge final : public rclcpp::Node {
     }
     if (parts.size() == 3 && parts[0] == "POSRESET" && parts[1] == "ZERO" && parseMotor(parts[2], &motor)) { sendCustom(motor, HB_RESET_POSITION); return; }
     if (parts.size() == 2 && parts[0] == "STEERING" && parts[1] == "HOME") { sendCustom(1, HB_STEERING_HOME); explicit_request_hold_until_ = std::chrono::steady_clock::now() + 25s; return; }
+    if (parts.size() == 2 && parts[0] == "STEERING" && parts[1] == "CENTER") { sendCustom(1, HB_STEERING_SET_CENTER); return; }
     if (parts.size() == 2 && parts[0] == "STEERING" && parts[1] == "CAL") { sendCustom(1, HB_GET_STEERING_CAL); return; }
     if (parts.size() == 2 && parts[0] == "STEERING" && parts[1] == "ENCDEBUG") { sendCustom(1, HB_ENCODER_DEBUG); return; }
     if (parts.size() == 4 && parts[0] == "SET" && parseMotor(parts[2], &motor) && parseDouble(parts[3], &value)) {
@@ -976,9 +978,13 @@ class VescToolBridge final : public rclcpp::Node {
       publishJson(tuning_pub_,o.str()); return;
     }
     if (op==HB_GET_STEERING_CAL && p.size()>=31U) {
-      const auto flags=p[6]; std::ostringstream o; o<<"{\"motor\":1,\"op\":"<<unsigned(op)<<",\"status\":"<<unsigned(status)
+      const auto flags=p[6]; const auto measured=i32(&p[7]);
+      const auto safe=p.size()>=35U?i32(&p[31]):static_cast<std::int32_t>((static_cast<std::int64_t>(measured)*95)/100);
+      const double pos360=p.size()>=39U?double(i32(&p[35]))/1000.0:std::clamp((double(i32(&p[19]))/1000.0+30.0)*6.0,0.0,360.0);
+      std::ostringstream o; o<<"{\"motor\":1,\"op\":"<<unsigned(op)<<",\"status\":"<<unsigned(status)
         <<",\"calibrated\":"<<((flags&1)?"true":"false")<<",\"homed\":"<<((flags&2)?"true":"false")<<",\"encoder_synced\":"<<((flags&4)?"true":"false")<<",\"logical_inverted\":"<<((flags&8)?"true":"false")
-        <<",\"span\":"<<i32(&p[7])<<",\"position\":"<<i32(&p[11])<<",\"target\":"<<i32(&p[15])<<",\"steering_deg\":"<<(double(i32(&p[19]))/1000.0)
+        <<",\"span\":"<<measured<<",\"measured_span\":"<<measured<<",\"safe_span\":"<<safe<<",\"safe_half_span\":"<<(std::abs(safe)/2)
+        <<",\"position\":"<<i32(&p[11])<<",\"target\":"<<i32(&p[15])<<",\"steering_deg\":"<<(double(i32(&p[19]))/1000.0)<<",\"pos360\":"<<pos360
         <<",\"sensor_port_mode\":"<<unsigned(p[23])<<",\"foc_sensor_mode\":"<<unsigned(p[24])<<",\"encoder_configured\":"<<(p[25]?"true":"false")
         <<",\"fault\":"<<unsigned(p[26])<<",\"raw_encoder\":"<<static_cast<std::uint32_t>(i32(&p[27]))<<"}"; publishJson(steering_pub_,o.str()); return;
     }
@@ -986,6 +992,11 @@ class VescToolBridge final : public rclcpp::Node {
       const auto flags=p[6]; std::ostringstream o; o<<"{\"motor\":1,\"op\":"<<unsigned(op)<<",\"status\":"<<unsigned(status)
         <<",\"calibrated\":"<<((flags&1)?"true":"false")<<",\"homed\":"<<((flags&2)?"true":"false")<<",\"encoder_synced\":"<<((flags&4)?"true":"false")<<",\"logical_inverted\":"<<((flags&8)?"true":"false")
         <<",\"span\":"<<i32(&p[7])<<"}"; publishJson(steering_pub_,o.str()); return;
+    }
+    if (op==HB_STEERING_SET_CENTER && p.size()>=19U) {
+      const auto flags=p[6]; std::ostringstream o; o<<"{\"motor\":1,\"op\":"<<unsigned(op)<<",\"status\":"<<unsigned(status)
+        <<",\"calibrated\":"<<((flags&1)?"true":"false")<<",\"homed\":"<<((flags&2)?"true":"false")<<",\"encoder_synced\":"<<((flags&4)?"true":"false")<<",\"logical_inverted\":"<<((flags&8)?"true":"false")
+        <<",\"span\":"<<i32(&p[7])<<",\"safe_span\":"<<i32(&p[11])<<",\"position\":"<<i32(&p[15])<<",\"pos360\":180.0}"; publishJson(steering_pub_,o.str()); return;
     }
     if (op==HB_ENCODER_DEBUG && p.size()>=82U) {
       std::ostringstream o; o<<"{\"motor\":1,\"op\":"<<unsigned(op)<<",\"status\":"<<unsigned(status)

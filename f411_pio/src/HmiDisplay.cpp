@@ -11,6 +11,7 @@
 #include "fonts/FreeSansBold12pt7b.h"
 #include "fonts/FreeSansBold24pt7b.h"
 #include "fonts/Classic5x7.inc"
+#include "fonts/Font16.inc"
 
 namespace {
 constexpr uint16_t kTftCs = GPIO_PIN_0;
@@ -66,7 +67,7 @@ void HmiDisplay::init() {
   command(0xC0U); data8(0x23U); command(0xC1U); data8(0x10U);
   command(0xC5U); data8(0x3EU); data8(0x28U); command(0xC7U); data8(0x86U);
   command(0x36U); data8(0x48U); command(0x3AU); data8(0x55U);
-  command(0xB1U); data8(0x00U); data8(0x18U);
+  command(0xB1U); data8(0x00U); data8(0x13U);
   command(0xB6U); data8(0x08U); data8(0x82U); data8(0x27U);
   command(0xF2U); data8(0x00U); command(0x26U); data8(0x01U);
   const uint8_t gp[15]={0x0FU,0x31U,0x2BU,0x0CU,0x0EU,0x08U,0x4EU,0xF1U,0x37U,0x07U,0x10U,0x03U,0x0EU,0x09U,0x00U};
@@ -137,11 +138,40 @@ void HmiDisplay::pushImage(int32_t x,int32_t y,int32_t w,int32_t h,const uint16_
 
 void HmiDisplay::textBounds(const char *text,int32_t &min_x,int32_t &min_y,int32_t &max_x,int32_t &max_y,int32_t &advance) const{
   min_x=min_y=max_x=max_y=advance=0;if(text==nullptr||*text=='\0')return;
-  if(font_==nullptr){const int32_t scale=static_cast<int32_t>(text_size_)*(builtin_font_==2U?2:1);advance=static_cast<int32_t>(std::strlen(text))*6*scale;max_x=advance-1;max_y=8*scale-1;return;}
+  if(font_==nullptr){
+    const int32_t scale=static_cast<int32_t>(text_size_);
+    if (builtin_font_ == 2U) {
+      for (const char *q=text; *q!='\0'; ++q) {
+        const uint8_t c=static_cast<uint8_t>(*q);
+        advance += (c >= 32U && c <= 127U ? widtbl_f16[c-32U] : widtbl_f16[0]) * scale;
+      }
+      max_x=advance>0?advance-1:0; max_y=16*scale-1; return;
+    }
+    advance=static_cast<int32_t>(std::strlen(text))*6*scale;
+    max_x=advance-1; max_y=8*scale-1; return;
+  }
   bool first=true;int32_t cursor=0;for(const char *q=text;*q!='\0';++q){const uint8_t c=static_cast<uint8_t>(*q);if(c<font_->first||c>font_->last)continue;const GFXglyph &g=font_->glyph[c-font_->first];const int32_t gx0=cursor+g.xOffset,gy0=g.yOffset,gx1=gx0+g.width-1,gy1=gy0+g.height-1;if(first){min_x=gx0;min_y=gy0;max_x=gx1;max_y=gy1;first=false;}else{min_x=std::min(min_x,gx0);min_y=std::min(min_y,gy0);max_x=std::max(max_x,gx1);max_y=std::max(max_y,gy1);}cursor+=g.xAdvance;}advance=cursor;if(first)min_x=min_y=max_x=max_y=0;
 }
 int16_t HmiDisplay::textWidth(const char *text) const{int32_t a,b,c,d,e;textBounds(text,a,b,c,d,e);(void)b;(void)d;const int32_t w=font_==nullptr?e:std::max(e,c-std::min<int32_t>(0,a)+1);return static_cast<int16_t>(std::min<int32_t>(32767,std::max<int32_t>(0,w)));}
 void HmiDisplay::drawBuiltinChar(char ch,int32_t x,int32_t y,uint8_t scale){const uint8_t c=static_cast<uint8_t>(ch);for(uint8_t col=0U;col<5U;++col){uint8_t bits=kClassicFont[static_cast<uint16_t>(c)*5U+col];for(uint8_t row=0U;row<8U;++row){if((bits&1U)!=0U)fillRect(x+col*scale,y+row*scale,scale,scale,text_fg_);bits>>=1U;}}}
+void HmiDisplay::drawFont2Char(char ch,int32_t x,int32_t y,uint8_t scale){
+  const uint8_t c=static_cast<uint8_t>(ch);
+  if(c<32U||c>127U)return;
+  const uint8_t width=widtbl_f16[c-32U];
+  const uint8_t bytes_per_row=static_cast<uint8_t>((width+6U)/8U);
+  const unsigned char *glyph=chrtbl_f16[c-32U];
+  for(uint8_t row=0U;row<16U;++row){
+    for(uint8_t byte_index=0U;byte_index<bytes_per_row;++byte_index){
+      const uint8_t bits=glyph[static_cast<uint16_t>(row)*bytes_per_row+byte_index];
+      for(uint8_t bit=0U;bit<8U;++bit){
+        const uint8_t px=static_cast<uint8_t>(byte_index*8U+bit);
+        if(px>=width)break;
+        if((bits & static_cast<uint8_t>(0x80U>>bit))!=0U)
+          fillRect(x+static_cast<int32_t>(px)*scale,y+static_cast<int32_t>(row)*scale,scale,scale,text_fg_);
+      }
+    }
+  }
+}
 void HmiDisplay::drawGfxGlyph(uint8_t c,int32_t bx,int32_t by){if(font_==nullptr||c<font_->first||c>font_->last)return;const GFXglyph &g=font_->glyph[c-font_->first];uint32_t off=g.bitmapOffset;uint8_t bits=0U,nbit=0U;for(uint8_t yy=0U;yy<g.height;++yy){for(uint8_t xx=0U;xx<g.width;++xx){if(nbit==0U){bits=font_->bitmap[off++];nbit=8U;}if((bits&0x80U)!=0U)drawPixel(bx+g.xOffset+xx,by+g.yOffset+yy,text_fg_);bits<<=1U;--nbit;}}}
 int16_t HmiDisplay::drawString(const char *text,int32_t x,int32_t y){
   if (text == nullptr) return 0;
@@ -149,7 +179,16 @@ int16_t HmiDisplay::drawString(const char *text,int32_t x,int32_t y){
   if(datum_==TC_DATUM||datum_==MC_DATUM||datum_==BC_DATUM)left-=lw/2;else if(datum_==TR_DATUM||datum_==MR_DATUM||datum_==BR_DATUM)left-=lw;
   if(datum_==ML_DATUM||datum_==MC_DATUM||datum_==MR_DATUM)top-=ch/2;else if(datum_==BL_DATUM||datum_==BC_DATUM||datum_==BR_DATUM)top-=ch;
   const int32_t clearw=std::max<int32_t>(lw,padding_);int32_t clearleft=left;if(padding_>lw){if(datum_==TC_DATUM||datum_==MC_DATUM||datum_==BC_DATUM)clearleft=x-clearw/2;else if(datum_==TR_DATUM||datum_==MR_DATUM||datum_==BR_DATUM)clearleft=x-clearw;}if(clearw>0)fillRect(clearleft,top,clearw,ch,text_bg_);
-  if(font_==nullptr){const uint8_t scale=static_cast<uint8_t>(text_size_*(builtin_font_==2U?2U:1U));int32_t cur=left;for(const char *q=text;*q!='\0';++q){drawBuiltinChar(*q,cur,top,scale);cur+=6*scale;}}
+  if(font_==nullptr){
+    const uint8_t scale=text_size_; int32_t cur=left;
+    for(const char *q=text;*q!='\0';++q){
+      if(builtin_font_==2U){
+        const uint8_t c=static_cast<uint8_t>(*q);
+        drawFont2Char(*q,cur,top,scale);
+        cur+=static_cast<int32_t>(c>=32U&&c<=127U?widtbl_f16[c-32U]:widtbl_f16[0])*scale;
+      }else{drawBuiltinChar(*q,cur,top,scale);cur+=6*scale;}
+    }
+  }
   else{int32_t cur=left-minx;const int32_t baseline=top-miny;for(const char *q=text;*q!='\0';++q){const uint8_t c=static_cast<uint8_t>(*q);if(c<font_->first||c>font_->last)continue;drawGfxGlyph(c,cur,baseline);cur+=font_->glyph[c-font_->first].xAdvance;}}
   return static_cast<int16_t>(lw);
 }
@@ -179,7 +218,7 @@ uint16_t HmiDisplay::readTouchZ() {
   setSpiPrescaler(SPI_BAUDRATEPRESCALER_64); TftCs(true); TouchCs(false);
   int16_t z = 0x0FFF;
   (void)transfer(0xB0U);
-  z = static_cast<int16_t>(z + static_cast<int16_t>(transfer16(0xC000U) >> 3U));
+  z = static_cast<int16_t>(z + static_cast<int16_t>(transfer16(0x00C0U) >> 3U));
   z = static_cast<int16_t>(z - static_cast<int16_t>(transfer16(0x0000U) >> 3U));
   TouchCs(true);
   return z == 4095 ? 0U : static_cast<uint16_t>(std::max<int16_t>(0, z));

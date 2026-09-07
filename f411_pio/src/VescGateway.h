@@ -24,6 +24,8 @@ class VescGateway {
   static constexpr uint32_t kRuntimeNoValidFrameRecoverMs = 1200;
   static constexpr uint32_t kRuntimeRecoverCooldownMs = 1200;
   static constexpr uint8_t kRuntimeRecoverBeforeReset = 4;
+  static constexpr uint32_t kMaintenanceLeaseMs = 5000U;
+  static constexpr uint32_t kUartRetryMs = 1000U;
 
   Owner owner_{Owner::RUNTIME};
   uint8_t rx_chunk_[kRxBufferBytes]{};
@@ -43,6 +45,9 @@ class VescGateway {
   uint32_t uart_recovery_count_{0};
   uint8_t recovery_streak_{0};
   bool ever_valid_frame_{false};
+  bool uart_ok_{false};
+  uint32_t maintenance_activity_ms_{0U};
+  uint32_t last_uart_retry_ms_{0U};
 
   static int hexNibble(char c);
   static uint16_t crc16(const uint8_t *data, size_t len);
@@ -54,4 +59,5 @@ class VescGateway {
   void publishStatus(bool force = false);
   void recoverRuntimeUart(uint32_t now);
   void recoveryTick(uint32_t now);
+  void switchToRuntime(uint32_t now, bool announce);
 };

@@ -75,11 +75,38 @@ std::size_t UsbCdcPort::write(const uint8_t *data, std::size_t length) {
 bool UsbCdcPort::writeLine(const char *line) {
   if (line == nullptr) return false;
   const std::size_t len = std::strlen(line);
-  if (len + 2U >= kTxSize) return false;
-  if (availableForWrite() < static_cast<int>(len + 2U)) return false;
-  if (write(reinterpret_cast<const uint8_t *>(line), len) != len) return false;
-  static const uint8_t ending[2] = {'\r', '\n'};
-  return write(ending, sizeof(ending)) == sizeof(ending);
+  const std::size_t total = len + 2U;
+  if (total >= kTxSize) return false;
+
+  const uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  if (RingFree(tx_head_, tx_tail_, kTxSize) < total) {
+    ++tx_dropped_;
+    if (primask == 0U) __enable_irq();
+    return false;
+  }
+  for (std::size_t i = 0U; i < len; ++i) {
+    tx_[tx_head_] = static_cast<uint8_t>(line[i]);
+    tx_head_ = static_cast<uint16_t>((tx_head_ + 1U) % kTxSize);
+  }
+  tx_[tx_head_] = '\r';
+  tx_head_ = static_cast<uint16_t>((tx_head_ + 1U) % kTxSize);
+  tx_[tx_head_] = '\n';
+  tx_head_ = static_cast<uint16_t>((tx_head_ + 1U) % kTxSize);
+  if (primask == 0U) __enable_irq();
+  poll();
+  return true;
+}
+
+bool UsbCdcPort::writeLineCritical(const char *line, uint32_t timeout_ms) {
+  if (line == nullptr || !connected()) return false;
+  const uint32_t start = HAL_GetTick();
+  do {
+    if (writeLine(line)) return true;
+    poll();
+    HAL_Delay(1U);
+  } while (static_cast<uint32_t>(HAL_GetTick() - start) < timeout_ms && connected());
+  return false;
 }
 
 void UsbCdcPort::poll() {

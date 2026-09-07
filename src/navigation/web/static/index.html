@@ -266,7 +266,7 @@
             <details class="vesc-editor"><summary>LEFT Encoder / Home • Position Limits • Detect</summary>
               <section class="vesc-section"><div class="vesc-work-grid">
                 <article class="vesc-card"><div class="vesc-card-head"><b>Position Counter / Runtime Limits</b></div><div class="vesc-position-strip"><div><span>Current</span><b id="vescPosCurrent">--</b></div><div><span>Target</span><b id="vescPosTarget">--</b></div><div><span>Min</span><b id="vescPosMin">--</b></div><div><span>Max</span><b id="vescPosMax">--</b></div></div><div class="vesc-form-row"><label>Min count<input id="vescPosMinInput" type="number" step="1"></label><label>Max count<input id="vescPosMaxInput" type="number" step="1"></label></div><div class="button-row"><button class="soft-btn" id="vescReadPositionState">Read</button><button class="primary-btn" id="vescSetPositionLimits">Set Limits</button><button class="warning-btn" id="vescResetPosition">Reset 0</button></div></article>
-                <article class="vesc-card" id="vescSteeringCard"><div class="vesc-card-head"><b>LEFT Encoder ABI / TIM4</b><span class="path-tag">PB6/PB7</span></div><div class="vesc-position-strip"><div><span>Cal</span><b id="vescSteerCal">--</b></div><div><span>Home</span><b id="vescSteerHome">--</b></div><div><span>Sync</span><b id="vescSteerSync">--</b></div><div><span>Raw TIM4</span><b id="vescSteerRaw">--</b></div><div><span>Span</span><b id="vescSteerSpan">--</b></div><div><span>Fault</span><b id="vescSteerFault">--</b></div></div><div class="button-row"><button class="soft-btn" id="vescReadSteeringCal">Read</button><button class="soft-btn" id="vescEncoderDebug">Encoder Debug</button><button class="warning-btn" id="vescHomeSteering">Home</button><button class="warning-btn" id="vescResetLeftZero">Reset 0</button></div><div class="json-pretty vesc-reply" id="vescSteeringDetail">Not read.</div></article>
+                <article class="vesc-card" id="vescSteeringCard"><div class="vesc-card-head"><b>LEFT Steering Encoder / Safe Span</b><span class="path-tag">ABI TIM4 • PB6/PB7</span></div><p class="hint">Boot SOP: luruskan roda sebelum power ON. FOC Encoder Inverted adalah electrical phase setting — jangan dipakai untuk menukar kiri/kanan. Gunakan Logical Direction.</p><div class="vesc-position-strip"><div><span>Cal</span><b id="vescSteerCal">--</b></div><div><span>Home</span><b id="vescSteerHome">--</b></div><div><span>Sync</span><b id="vescSteerSync">--</b></div><div><span>Raw TIM4</span><b id="vescSteerRaw">--</b></div><div><span>Measured span</span><b id="vescSteerSpan">--</b></div><div><span>Safe span 95%</span><b id="vescSteerSafeSpan">--</b></div><div><span>Safe half</span><b id="vescSteerSafeHalf">--</b></div><div><span>Logical POS</span><b id="vescSteerPos360">--</b></div><div><span>Logical direction</span><b id="vescSteerLogicalDir">--</b></div><div><span>FOC enc invert</span><b id="vescSteerFocInvert">--</b></div><div><span>Fault</span><b id="vescSteerFault">--</b></div></div><div class="button-row"><button class="soft-btn" id="vescReadSteeringCal">Refresh</button><button class="soft-btn" id="vescEncoderDebug">Encoder Debug</button><button class="warning-btn" id="vescSetSteeringCenter">Set Current as 180</button><button class="soft-btn" id="vescToggleSteeringInvert">Toggle Logical Direction</button><button class="danger-btn" id="vescResetSteeringSpan">Reset Span</button></div><div class="json-pretty vesc-reply" id="vescSteeringDetail">Not read.</div></article>
               </div><div class="vesc-form-row"><label>Detect current A<input id="vescDetectCurrent" type="number" min="0.1" max="5" step="0.1" value="1.0"></label><div class="button-row compact"><button class="warning-btn" id="vescDetectEncoder">Detect LEFT Encoder</button><button class="warning-btn" id="vescDetectHall">Detect RIGHT Hall</button></div></div></section>
             </details>
           </article>
@@ -315,8 +315,23 @@
               <div><span>Mechanical limits</span><b id="ackScaleMechanical">−30° / +30°</b></div>
               <div><span>Nav2 operational limit</span><b id="ackScaleOperational">±28°</b></div>
               <div><span>Mapping formula</span><b>POS = (deg + 30) × 6</b></div>
+              <div><span>Drive native scale</span><b id="ackScaleErpmPerMps">--</b></div>
+              <div><span>Encoder measured / safe</span><b id="ackScaleEncoderSpan">--</b></div>
+              <div><span>Raw TIM4 / POS</span><b id="ackScaleEncoderRaw">--</b></div>
+            </div>
+            <div class="vesc-form-row">
+              <label>Wheel radius (m)<input id="ackScaleWheelRadius" type="number" min="0.01" max="1" step="0.001"></label>
+              <label>Pole pairs<input id="ackScalePolePairs" type="number" min="1" max="100" step="1"></label>
+              <label>Gear ratio<input id="ackScaleGear" type="number" min="0.01" max="100" step="0.01"></label>
+              <label>Odom scale<input id="ackScaleDriveScale" type="number" min="0.2" max="5" step="0.001"></label>
+            </div>
+            <div class="vesc-form-row">
+              <label>Physical LEFT (deg)<input id="ackScaleLeftLimit" type="number" min="-45" max="-1" step="0.1"></label>
+              <label>Physical RIGHT (deg)<input id="ackScaleRightLimit" type="number" min="1" max="45" step="0.1"></label>
+              <label>Nav2 operational ±deg<input id="ackScaleOperationalLimit" type="number" min="1" max="30" step="0.1"></label>
             </div>
             <div class="button-row">
+              <button class="primary-btn grow" id="ackScaleSave">Save Ackermann Parameters</button>
               <button class="warning-btn grow" id="calModeOn2">Enable Safe Cal Mode</button>
               <button class="soft-btn grow" id="calModeOff2">Disable</button>
               <button class="soft-btn grow" id="ackScaleApplyCanonical">Restore Canonical Scaling</button>
