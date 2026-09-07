@@ -3,8 +3,7 @@
 // ============================================================================
 #pragma once
 
-#include <Arduino.h>
-#include <TFT_eSPI.h>
+#include "HmiDisplay.h"
 #include "Config.h"
 #include "Telemetry.h"
 #include "Theme.h"
@@ -12,7 +11,7 @@
 #include "BottomMenu.h"
 #include "Icons.h"
 
-extern TFT_eSPI tft;
+extern HmiDisplay tft;
 
 inline int cameraTabX(uint8_t index) {
   return CAM_TAB_X0 + index * (CAM_TAB_W + CAM_TAB_GAP);

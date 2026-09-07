@@ -91,7 +91,7 @@ Python 65101 / VESC Tool 65102 -> single-owner VESC router ----------------^
 - `/home/otomasi/ros/src/navigation/src/gnss_node.cpp`
 - `/home/otomasi/ros/src/navigation/include/gnss/gnss_node.hpp`
 - `/home/otomasi/ros/src/navigation/config/gnss.yaml`
-- `/home/otomasi/ros/stm32f401/src/Neo3Sensors.cpp`
+- `/home/otomasi/ros/f411_pio_arduino/src/Neo3Sensors.cpp`
 - `/home/otomasi/ros/src/stmf4/src/stmf4_hmi_bridge.cpp`
 - `/home/otomasi/ros/src/navigation/src/localization_core.cpp`
 
@@ -157,8 +157,8 @@ IMU tidak lagi dinilai sekadar 'port terbuka'. Sistem mengetahui apakah gyro yan
 - `/home/otomasi/ros/px4/PX4-Autopilot/src/drivers/magnetometer/isentek/ist8310/IST8310.cpp`
 
 ### TO
-- `/home/otomasi/ros/stm32f401/src/Neo3Sensors.cpp`
-- `/home/otomasi/ros/stm32f401/src/Neo3Sensors.h`
+- `/home/otomasi/ros/f411_pio_arduino/src/Neo3Sensors.cpp`
+- `/home/otomasi/ros/f411_pio_arduino/src/Neo3Sensors.h`
 - `/home/otomasi/ros/src/stmf4/src/stmf4_hmi_bridge.cpp`
 - `/home/otomasi/ros/src/navigation/src/mag_heading_fusion_node.cpp`
 - `/home/otomasi/ros/src/navigation/config/mag_heading.yaml`
@@ -220,10 +220,10 @@ Saat reset terdeteksi, `ackermann_controller_server.cpp` tidak mengintegrasikan 
 - `/home/otomasi/ros/px4/PX4-Autopilot/src/modules/uxrce_dds_client/dds_topics.yaml`
 
 ### TO
-- `/home/otomasi/ros/stm32f401/src/VescGateway.cpp`
-- `/home/otomasi/ros/stm32f401/src/VescGateway.h`
-- `/home/otomasi/ros/stm32f401/src/Telemetry.h`
-- `/home/otomasi/ros/stm32f401/src/Config.h`
+- `/home/otomasi/ros/f411_pio_arduino/src/VescGateway.cpp`
+- `/home/otomasi/ros/f411_pio_arduino/src/VescGateway.h`
+- `/home/otomasi/ros/f411_pio_arduino/src/Telemetry.h`
+- `/home/otomasi/ros/f411_pio_arduino/src/Config.h`
 - `/home/otomasi/ros/src/stmf4/src/stmf4_hmi_bridge.cpp`
 - `/home/otomasi/ros/hoverboard-firmware-hack-FOC/Src/comms.c`
 - `/home/otomasi/ros/hoverboard-firmware-hack-FOC/Src/vesc/vesc_protocol.c`
@@ -599,8 +599,8 @@ Untuk RT 50 Hz, interval ideal sekitar 20 ms; APP 20 Hz sekitar 50 ms. Threshold
 - `/home/otomasi/ros/px4/mavlink-router/src/mavlink-router/timeout.cpp`
 
 ### TO
-- `/home/otomasi/ros/stm32f401/src/VescGateway.cpp`
-- `/home/otomasi/ros/stm32f401/src/VescGateway.h`
+- `/home/otomasi/ros/f411_pio_arduino/src/VescGateway.cpp`
+- `/home/otomasi/ros/f411_pio_arduino/src/VescGateway.h`
 - `/home/otomasi/ros/src/stmf4/src/stmf4_hmi_bridge.cpp`
 - `/home/otomasi/ros/src/esc/src/vesc_tool_bridge.cpp`
 - `/home/otomasi/ros/src/esc/src/ackermann_controller_server.cpp`
@@ -736,10 +736,10 @@ Patch target:
 5. Poll/telemetry tetap non-blocking selama config transaction.
 6. Publish `AgvLinkStatus` dan raw rate/jitter/drop counters.
 
-### `/home/otomasi/ros/stm32f401/src/VescGateway.cpp` + `/home/otomasi/ros/stm32f401/src/VescGateway.h`
+### `/home/otomasi/ros/f411_pio_arduino/src/VescGateway.cpp` + `/home/otomasi/ros/f411_pio_arduino/src/VescGateway.h`
 Jadikan scheduler F411 deterministic: command/RT 50 Hz, APP 20 Hz, HEALTH 5–10 Hz. Tambah sequence/timestamp/class/version; bounded TX queues; no long blocking wait. Python/VESC logical ownership dari PC diterjemahkan ke transaction routing tanpa menghambat periodic telemetry.
 
-### `/home/otomasi/ros/stm32f401/src/Neo3Sensors.cpp` + `/home/otomasi/ros/stm32f401/src/Neo3Sensors.h`
+### `/home/otomasi/ros/f411_pio_arduino/src/Neo3Sensors.cpp` + `/home/otomasi/ros/f411_pio_arduino/src/Neo3Sensors.h`
 GNSS: sequence+iTOW+receive time + health counters. IST: explicit non-blocking state machine, DRDY/I2C/config integrity. Sensor failure tidak boleh menahan VESC gateway loop.
 
 ### `/home/otomasi/ros/src/stmf4/src/stmf4_hmi_bridge.cpp`

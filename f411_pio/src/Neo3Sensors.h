@@ -1,7 +1,9 @@
 #pragma once
 
-#include <Arduino.h>
-#include <Wire.h>
+#include "BoardSupport.h"
+#include "UsbCdcPort.h"
+#include <cstdint>
+
 
 // CUAV NEO 3 sensor/IO front-end for STM32F411CEU6.
 //
@@ -14,7 +16,7 @@
 //   SW LED  <- PB13 (active-low/open-drain output)
 //   BUZZER  <- PA8 (passive buzzer PWM)
 //
-// The USB CDC Serial remains exclusively owned by the HMI/ROS bridge. This
+// The native USB CDC endpoint remains exclusively owned by the HMI/ROS bridge. This
 // module multiplexes sensor records onto that same newline-delimited link using
 // the SENS:* namespace, so the host never opens a second serial endpoint.
 class Neo3Sensors {
@@ -136,7 +138,6 @@ private:
   static int16_t readI16LE(const uint8_t *p);
   static float normalize360(float deg);
 
-  Uart gnss_serial_{PA3, PA2};
 
   UbxState ubx_state_{UbxState::SYNC1};
   uint8_t ubx_class_{0};

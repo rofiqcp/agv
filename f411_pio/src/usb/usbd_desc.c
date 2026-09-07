@@ -78,7 +78,7 @@ static void GetSerialNumber(void) {
 static void IntToUnicode(uint32_t value, uint8_t *buffer, uint8_t length) {
   for (uint8_t i = 0U; i < length; ++i) {
     const uint8_t nibble = (uint8_t)(value >> 28U);
-    buffer[2U * i] = (uint8_t)(nibble < 10U ? nibble + '0' : nibble - 10U + 'A');
+    buffer[2U * i] = (uint8_t)(nibble < 10U ? (uint32_t)(nibble + (uint32_t)'0') : (uint32_t)(nibble - 10U + (uint32_t)'A'));
     buffer[2U * i + 1U] = 0U;
     value <<= 4U;
   }

@@ -1,6 +1,10 @@
 #pragma once
 
-#include <Arduino.h>
+#include "BoardSupport.h"
+#include "UsbCdcPort.h"
+#include <cstddef>
+#include <cstdint>
+
 
 class VescGateway {
  public:
@@ -21,7 +25,6 @@ class VescGateway {
   static constexpr uint32_t kRuntimeRecoverCooldownMs = 1200;
   static constexpr uint8_t kRuntimeRecoverBeforeReset = 4;
 
-  Uart uart_{PB7, PB6};  // RX=PB7, TX=PB6 (USART1 AF7)
   Owner owner_{Owner::RUNTIME};
   uint8_t rx_chunk_[kRxBufferBytes]{};
   size_t rx_len_{0};

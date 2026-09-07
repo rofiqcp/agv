@@ -977,14 +977,14 @@ class VescToolBridge final : public rclcpp::Node {
     }
     if (op==HB_GET_STEERING_CAL && p.size()>=31U) {
       const auto flags=p[6]; std::ostringstream o; o<<"{\"motor\":1,\"op\":"<<unsigned(op)<<",\"status\":"<<unsigned(status)
-        <<",\"calibrated\":"<<((flags&1)?"true":"false")<<",\"homed\":"<<((flags&2)?"true":"false")<<",\"encoder_synced\":"<<((flags&4)?"true":"false")
+        <<",\"calibrated\":"<<((flags&1)?"true":"false")<<",\"homed\":"<<((flags&2)?"true":"false")<<",\"encoder_synced\":"<<((flags&4)?"true":"false")<<",\"logical_inverted\":"<<((flags&8)?"true":"false")
         <<",\"span\":"<<i32(&p[7])<<",\"position\":"<<i32(&p[11])<<",\"target\":"<<i32(&p[15])<<",\"steering_deg\":"<<(double(i32(&p[19]))/1000.0)
         <<",\"sensor_port_mode\":"<<unsigned(p[23])<<",\"foc_sensor_mode\":"<<unsigned(p[24])<<",\"encoder_configured\":"<<(p[25]?"true":"false")
         <<",\"fault\":"<<unsigned(p[26])<<",\"raw_encoder\":"<<static_cast<std::uint32_t>(i32(&p[27]))<<"}"; publishJson(steering_pub_,o.str()); return;
     }
     if (op==HB_STEERING_HOME && p.size()>=11U) {
       const auto flags=p[6]; std::ostringstream o; o<<"{\"motor\":1,\"op\":"<<unsigned(op)<<",\"status\":"<<unsigned(status)
-        <<",\"calibrated\":"<<((flags&1)?"true":"false")<<",\"homed\":"<<((flags&2)?"true":"false")<<",\"encoder_synced\":"<<((flags&4)?"true":"false")
+        <<",\"calibrated\":"<<((flags&1)?"true":"false")<<",\"homed\":"<<((flags&2)?"true":"false")<<",\"encoder_synced\":"<<((flags&4)?"true":"false")<<",\"logical_inverted\":"<<((flags&8)?"true":"false")
         <<",\"span\":"<<i32(&p[7])<<"}"; publishJson(steering_pub_,o.str()); return;
     }
     if (op==HB_ENCODER_DEBUG && p.size()>=82U) {

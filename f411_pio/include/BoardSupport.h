@@ -23,7 +23,8 @@ void Board_BuzzerStop();
 
 class HalUartPort {
  public:
-  explicit HalUartPort(UART_HandleTypeDef *handle) : handle_(handle) {}
+  HalUartPort(UART_HandleTypeDef *handle, USART_TypeDef *instance)
+      : handle_(handle), instance_(instance) {}
   bool begin(uint32_t baudrate);
   void end();
   int available() const;
@@ -37,6 +38,7 @@ class HalUartPort {
  private:
   static constexpr uint16_t kRxSize = 2048U;
   UART_HandleTypeDef *handle_;
+  USART_TypeDef *instance_;
   volatile uint16_t rx_head_{0U};
   volatile uint16_t rx_tail_{0U};
   uint8_t rx_byte_{0U};

@@ -3,16 +3,15 @@
 // Final UI architecture: HOME / CAMERA / GPS / ACTUATOR
 // ============================================================================
 
-#include <Arduino.h>
-#include <SPI.h>
-#include <TFT_eSPI.h>
-#include <HardwareTimer.h>
-#include <math.h>
-#include <string.h>
-#include <stdlib.h>
+#include "BoardSupport.h"
+#include "UsbCdcPort.h"
+#include "HmiDisplay.h"
 
-// STM32F411 ROM bootloader support for firmware updates over the same USB connector.
-#include <stm32f4xx_hal.h>
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
 #include "Config.h"
 #include "Telemetry.h"
@@ -27,11 +26,7 @@
 #include "ActuatorPage.h"
 #include "TouchButtons.h"
 
-#ifndef HMI_LEGACY_UART
-#define HMI_LEGACY_UART 0
-#endif
-
-TFT_eSPI tft = TFT_eSPI();
+HmiDisplay tft;
 VehicleTelemetry gTelemetry = defaultTelemetry();
 Neo3Sensors gNeo3;
 VescGateway gVesc;
@@ -39,7 +34,6 @@ VescGateway gVesc;
 // Application watchdog: unlike IWDG this timer is stopped before ROM-DFU, so
 // firmware updates cannot be interrupted. The ISR only resets when the entire
 // cooperative main loop fails to complete for several seconds.
-static HardwareTimer *gAppWatchdogTimer = nullptr;
 static volatile uint32_t gMainLoopHeartbeatMs = 0U;
 static volatile bool gAppWatchdogArmed = false;
 static constexpr uint32_t APP_WATCHDOG_TIMEOUT_MS = 3500U;
@@ -54,19 +48,16 @@ static void appWatchdogIsr() {
 
 static void startAppWatchdog() {
   gMainLoopHeartbeatMs = HAL_GetTick();
-  gAppWatchdogTimer = new HardwareTimer(TIM11);
-  gAppWatchdogTimer->setOverflow(100000U, MICROSEC_FORMAT);
-  gAppWatchdogTimer->attachInterrupt(appWatchdogIsr);
-  gAppWatchdogTimer->resume();
-  // Boot/reconnect must never enter a watchdog reset-loop before ROS owns CDC.
-  // Arm only after qualified ROS heartbeats in markRosHeartbeat().
+  Board_SetWatchdogCallback(appWatchdogIsr);
+  Board_WatchdogStart();
   gAppWatchdogArmed = false;
 }
 
 static void stopAppWatchdog() {
   gAppWatchdogArmed = false;
-  if (gAppWatchdogTimer != nullptr) gAppWatchdogTimer->pause();
+  Board_WatchdogStop();
 }
+
 
 static PageId currentPage = PAGE_SPLASH;
 static CameraSubPage currentCameraTab = CAM_VIEW;
@@ -95,11 +86,6 @@ static ControlAction activeSteerControl = CTRL_NONE;   // LEFT / RIGHT / CENTER 
 static char serialRx[640];
 static size_t serialRxLen = 0;
 static bool serialRxDiscarding = false;
-#if HMI_LEGACY_UART
-static char serial1Rx[128];
-static size_t serial1RxLen = 0;
-static bool serial1RxDiscarding = false;
-#endif
 
 // ---------------------------------------------------------------------------
 // Forward declarations used by page/safety helpers
@@ -112,67 +98,24 @@ static void enterSystemDfu();
 // ---------------------------------------------------------------------------
 // USB firmware-update helper
 // STM32F411 system-memory bootloader starts at 0x1FFF0000 and exposes USB DFU.
-// We reset first, then jump from .preinit_array before Arduino/HAL/USB startup,
+// We reset first, then jump from .preinit_array before HAL/USB application startup,
 // avoiding stale USB/peripheral state during erase/program operations.
 // ---------------------------------------------------------------------------
-static constexpr uint32_t kSystemMemory = 0x1FFF0000UL;
-static constexpr uint32_t kDfuBootMagic = 0x44465531UL;  // "DFU1"
-__attribute__((section(".noinit"))) static volatile uint32_t gDfuBootMagic;
-
-static void earlySystemDfuCheck() {
-  if (gDfuBootMagic != kDfuBootMagic) return;
-  gDfuBootMagic = 0;
-
-  const uint32_t bootStack = *reinterpret_cast<volatile uint32_t*>(kSystemMemory);
-  const uint32_t bootReset = *reinterpret_cast<volatile uint32_t*>(kSystemMemory + 4UL);
-
-  // Sanity-check the ROM vectors before changing processor state.
-  if ((bootStack & 0x2FFE0000UL) != 0x20000000UL ||
-      (bootReset & 0xFFF00000UL) != 0x1FF00000UL) {
-    return;
-  }
-
-  __disable_irq();
-  SysTick->CTRL = 0;
-  SysTick->LOAD = 0;
-  SysTick->VAL = 0;
-  for (uint32_t i = 0; i < 8; ++i) {
-    NVIC->ICER[i] = 0xFFFFFFFFUL;
-    NVIC->ICPR[i] = 0xFFFFFFFFUL;
-  }
-
-  __HAL_RCC_SYSCFG_CLK_ENABLE();
-  __HAL_SYSCFG_REMAPMEMORY_SYSTEMFLASH();
-  SCB->VTOR = kSystemMemory;
-  __DSB();
-  __ISB();
-
-  using BootEntry = void (*)();
-  BootEntry boot = reinterpret_cast<BootEntry>(bootReset);
-  __set_MSP(bootStack);
-  __enable_irq();
-  boot();
-  while (true) { }
-}
-
-using PreinitFn = void (*)();
-__attribute__((used, section(".preinit_array")))
-static PreinitFn const gEarlyDfuHook = earlySystemDfuCheck;
+static constexpr uint32_t kBootRequestMagic = 0x42465544UL;  // "DFUB"
 
 static void enterSystemDfu() {
   stopAppWatchdog();
-  // Finish acknowledgement and force a clean CDC disconnect before reset.
-  Serial.flush();
-  delay(40);
-  Serial.end();
-#if HMI_LEGACY_UART
-  Serial1.end();
-#endif
-  delay(120);
-
-  gDfuBootMagic = kDfuBootMagic;
+  __HAL_RCC_PWR_CLK_ENABLE();
+  HAL_PWR_EnableBkUpAccess();
+  for (volatile uint32_t i = 0; i < 1000U; ++i) __NOP();
+  RTC->BKP0R = kBootRequestMagic;
   __DSB();
   __ISB();
+
+  // Match the reference transaction: best-effort ACK, clean CDC disconnect,
+  // then reset into the dedicated recovery bootloader at 0x08000000.
+  HAL_Delay(20U);
+  gUsb.end();
   NVIC_SystemReset();
   while (true) { }
 }
@@ -199,15 +142,12 @@ static bool tryUsbLine(const char* line) {
   memcpy(out, line, len);
   out[len] = '\n';
   const size_t total = len + 1U;
-  if (Serial.availableForWrite() < static_cast<int>(total)) return false;
-  return Serial.write(reinterpret_cast<const uint8_t *>(out), total) == total;
+  if (gUsb.availableForWrite() < static_cast<int>(total)) return false;
+  return gUsb.write(reinterpret_cast<const uint8_t *>(out), total) == total;
 }
 
 static void printBoth(const char* line) {
   (void)tryUsbLine(line);
-#if HMI_LEGACY_UART
-  Serial1.println(line);
-#endif
 }
 
 static void publishPage() {
@@ -318,7 +258,7 @@ static void restartSplash() {
   lastUiRefreshMs = 0;
   gTelemetry.systemStatus = SYS_INITIALIZING;
   drawSplashScreen();
-  splashStartMs = millis();
+  splashStartMs = HAL_GetTick();
   publishPage();
 }
 
@@ -340,7 +280,7 @@ static void sendDriveStop() {
 }
 
 static void sendSteerTarget(float targetDeg) {
-  targetDeg = constrain(targetDeg, STEER_MIN_DEG, STEER_MAX_DEG);
+  targetDeg = std::clamp(targetDeg, STEER_MIN_DEG, STEER_MAX_DEG);
   gTelemetry.steeringTargetDeg = targetDeg;
   gTelemetry.steeringErrorDeg = gTelemetry.steeringTargetDeg - gTelemetry.steeringActualDeg;
 
@@ -351,7 +291,7 @@ static void sendSteerTarget(float targetDeg) {
 }
 
 static void setManualSpeed(int value) {
-  value = constrain(value, MANUAL_SPEED_MIN, MANUAL_SPEED_MAX);
+  value = std::clamp(value, MANUAL_SPEED_MIN, MANUAL_SPEED_MAX);
   gTelemetry.manualSpeedPct = (uint8_t)value;
   char line[32];
   snprintf(line, sizeof(line), "CMD:SPEED:%u", gTelemetry.manualSpeedPct);
@@ -528,7 +468,7 @@ static void handleTouch() {
 }
 
 // ---------------------------------------------------------------------------
-// Serial telemetry parser
+// USB CDC telemetry parser
 // GUI/ROS2 -> HMI examples:
 // SYS:READY, MODE:MANUAL, STATE:STOPPED, SPD:1.2, HEAD:32.0,
 // GPS:1, FIX:3, LAT:-7.050123, LON:110.440235, SAT:17, HDOP:0.82,
@@ -567,28 +507,28 @@ static void parseVehicleState(const char* s) {
 }
 
 static void sanitizeTelemetry() {
-  if (!isfinite(gTelemetry.speedKmh)) gTelemetry.speedKmh = 0.0f;
-  gTelemetry.speedKmh = constrain(gTelemetry.speedKmh, 0.0f, 100.0f);
-  if (!isfinite(gTelemetry.headingDeg)) gTelemetry.headingDeg = 0.0f;
-  gTelemetry.headingDeg = fmodf(gTelemetry.headingDeg, 360.0f);
+  if (!std::isfinite(gTelemetry.speedKmh)) gTelemetry.speedKmh = 0.0f;
+  gTelemetry.speedKmh = std::clamp(gTelemetry.speedKmh, 0.0f, 100.0f);
+  if (!std::isfinite(gTelemetry.headingDeg)) gTelemetry.headingDeg = 0.0f;
+  gTelemetry.headingDeg = std::fmod(gTelemetry.headingDeg, 360.0f);
   if (gTelemetry.headingDeg < 0.0f) gTelemetry.headingDeg += 360.0f;
-  if (!isfinite(gTelemetry.latitude) || gTelemetry.latitude < -90.0 || gTelemetry.latitude > 90.0) gTelemetry.latitude = 0.0;
-  if (!isfinite(gTelemetry.longitude) || gTelemetry.longitude < -180.0 || gTelemetry.longitude > 180.0) gTelemetry.longitude = 0.0;
-  if (!isfinite(gTelemetry.hdop)) gTelemetry.hdop = 0.0f;
-  gTelemetry.hdop = constrain(gTelemetry.hdop, 0.0f, 99.9f);
-  if (!isfinite(gTelemetry.cameraFps)) gTelemetry.cameraFps = 0.0f;
-  gTelemetry.cameraFps = constrain(gTelemetry.cameraFps, 0.0f, 120.0f);
-  if (!isfinite(gTelemetry.objectDistanceM) || gTelemetry.objectDistanceM < 0.0f) gTelemetry.objectDistanceM = 0.0f;
-  if (!isfinite(gTelemetry.confidencePct)) gTelemetry.confidencePct = 0.0f;
-  gTelemetry.confidencePct = constrain(gTelemetry.confidencePct, 0.0f, 100.0f);
-  if (!isfinite(gTelemetry.steeringTargetDeg)) gTelemetry.steeringTargetDeg = 0.0f;
-  if (!isfinite(gTelemetry.steeringActualDeg)) gTelemetry.steeringActualDeg = 0.0f;
-  if (!isfinite(gTelemetry.steeringErrorDeg)) gTelemetry.steeringErrorDeg = 0.0f;
-  if (!isfinite(gTelemetry.motorRpm)) gTelemetry.motorRpm = 0.0f;
+  if (!std::isfinite(gTelemetry.latitude) || gTelemetry.latitude < -90.0 || gTelemetry.latitude > 90.0) gTelemetry.latitude = 0.0;
+  if (!std::isfinite(gTelemetry.longitude) || gTelemetry.longitude < -180.0 || gTelemetry.longitude > 180.0) gTelemetry.longitude = 0.0;
+  if (!std::isfinite(gTelemetry.hdop)) gTelemetry.hdop = 0.0f;
+  gTelemetry.hdop = std::clamp(gTelemetry.hdop, 0.0f, 99.9f);
+  if (!std::isfinite(gTelemetry.cameraFps)) gTelemetry.cameraFps = 0.0f;
+  gTelemetry.cameraFps = std::clamp(gTelemetry.cameraFps, 0.0f, 120.0f);
+  if (!std::isfinite(gTelemetry.objectDistanceM) || gTelemetry.objectDistanceM < 0.0f) gTelemetry.objectDistanceM = 0.0f;
+  if (!std::isfinite(gTelemetry.confidencePct)) gTelemetry.confidencePct = 0.0f;
+  gTelemetry.confidencePct = std::clamp(gTelemetry.confidencePct, 0.0f, 100.0f);
+  if (!std::isfinite(gTelemetry.steeringTargetDeg)) gTelemetry.steeringTargetDeg = 0.0f;
+  if (!std::isfinite(gTelemetry.steeringActualDeg)) gTelemetry.steeringActualDeg = 0.0f;
+  if (!std::isfinite(gTelemetry.steeringErrorDeg)) gTelemetry.steeringErrorDeg = 0.0f;
+  if (!std::isfinite(gTelemetry.motorRpm)) gTelemetry.motorRpm = 0.0f;
 }
 
 static void markRosHeartbeat() {
-  const uint32_t now = millis();
+  const uint32_t now = HAL_GetTick();
   if (!gTelemetry.rosConnected) {
     rosHeartbeatStableCount = 1;
     rosHeartbeatStable = false;
@@ -648,7 +588,7 @@ static void forceRosOffline() {
 static void checkRosLinkTimeout() {
   if (!gTelemetry.rosConnected) return;
   const uint32_t timeoutMs = rosHeartbeatStable ? ROS_LINK_TIMEOUT_MS : ROS_LINK_STARTUP_TIMEOUT_MS;
-  if ((uint32_t)(millis() - lastRosHeartbeatMs) > timeoutMs) forceRosOffline();
+  if ((uint32_t)(HAL_GetTick() - lastRosHeartbeatMs) > timeoutMs) forceRosOffline();
 }
 
 static uint32_t gDfuArmDeadlineMs = 0u;
@@ -659,7 +599,6 @@ static void handleSerialCommand(char* command) {
   // ROS intentionally repeats a complete state heartbeat. Snapshot the visible
   // telemetry so an identical heartbeat does not trigger any TFT transaction.
   const VehicleTelemetry telemetryBefore = gTelemetry;
-
   // Hardware gateway namespaces are handled before the HMI command namespace.
   if (!strncmp(command, "VESC:", 5)) {
     (void)gVesc.handleHostCommand(command);
@@ -689,12 +628,12 @@ static void handleSerialCommand(char* command) {
   if (!strcmp(command, "BOOT:DFU:ARM")) {
     // Two-step software DFU: a single stale/corrupted CDC line must never reboot
     // the F411 while Nav2 is running. Confirmation is valid for only 2 seconds.
-    gDfuArmDeadlineMs = millis() + 2000u;
+    gDfuArmDeadlineMs = HAL_GetTick() + 2000u;
     printBoth("ACK:DFU:ARMED");
     return;
   }
   if (!strcmp(command, "BOOT:DFU:CONFIRM")) {
-    const uint32_t now = millis();
+    const uint32_t now = HAL_GetTick();
     if (gDfuArmDeadlineMs == 0u || (int32_t)(gDfuArmDeadlineMs - now) <= 0) {
       gDfuArmDeadlineMs = 0u;
       printBoth("ERR:DFU:NOT_ARMED");
@@ -706,7 +645,7 @@ static void handleSerialCommand(char* command) {
       activeDriveControl = CTRL_NONE;
     }
     printBoth("ACK:DFU");
-    delay(80);
+    HAL_Delay(80U);
     enterSystemDfu();
     return;
   }
@@ -777,7 +716,7 @@ static void handleSerialCommand(char* command) {
     return;
   }
   if (!strncmp(command, "REMOTE:SPEED:", 13)) {
-    gTelemetry.manualSpeedPct = (uint8_t)constrain(atoi(command + 13), MANUAL_SPEED_MIN, MANUAL_SPEED_MAX);
+    gTelemetry.manualSpeedPct = (uint8_t)std::clamp(atoi(command + 13), MANUAL_SPEED_MIN, MANUAL_SPEED_MAX);
     if (currentPage == PAGE_ACTUATOR) updateActuatorPage(gTelemetry, activeDriveControl, activeSteerControl);
     publishControlState();
     return;
@@ -787,9 +726,9 @@ static void handleSerialCommand(char* command) {
     if (parseBool(command + 4)) markRosHeartbeat();
     else forceRosOffline();
   } else if (!strncmp(command, "FPS:", 4)) {
-    gTelemetry.cameraFps = max(0.0f, (float)atof(command + 4));
+    gTelemetry.cameraFps = std::max(0.0f, static_cast<float>(atof(command + 4)));
   } else if (!strncmp(command, "WPSEL:", 6)) {
-    gTelemetry.selectedWaypoint = (uint8_t)constrain(atoi(command + 6), 0, HMI_WAYPOINT_COUNT - 1);
+    gTelemetry.selectedWaypoint = (uint8_t)std::clamp(atoi(command + 6), 0, static_cast<int>(HMI_WAYPOINT_COUNT) - 1);
   } else if (!strncmp(command, "TARGET:", 7)) {
     snprintf(gTelemetry.activeTarget, sizeof(gTelemetry.activeTarget), "%s", command + 7);
   } else if (!strncmp(command, "NAV:", 4)) {
@@ -851,7 +790,7 @@ static void handleSerialCommand(char* command) {
   } else if (!strncmp(command, "LON:", 4)) {
     gTelemetry.longitude = atof(command + 4);
   } else if (!strncmp(command, "SAT:", 4)) {
-    gTelemetry.satellites = (uint8_t)constrain(atoi(command + 4), 0, 99);
+    gTelemetry.satellites = (uint8_t)std::clamp(atoi(command + 4), 0, 99);
   } else if (!strncmp(command, "HDOP:", 5)) {
     gTelemetry.hdop = atof(command + 5);
   } else if (!strncmp(command, "IMU:", 4)) {
@@ -871,7 +810,7 @@ static void handleSerialCommand(char* command) {
   } else if (!strncmp(command, "OBS:", 4)) {
     gTelemetry.obstacleDetected = parseBool(command + 4);
   } else if (!strncmp(command, "STEER_TARGET:", 13)) {
-    gTelemetry.steeringTargetDeg = constrain((float)atof(command + 13), STEER_MIN_DEG, STEER_MAX_DEG);
+    gTelemetry.steeringTargetDeg = std::clamp(static_cast<float>(atof(command + 13)), STEER_MIN_DEG, STEER_MAX_DEG);
     gTelemetry.steeringErrorDeg = gTelemetry.steeringTargetDeg - gTelemetry.steeringActualDeg;
   } else if (!strncmp(command, "STEER_ACTUAL:", 13)) {
     gTelemetry.steeringActualDeg = atof(command + 13);
@@ -891,58 +830,50 @@ static void handleSerialCommand(char* command) {
     gTelemetry.encoderReady = parseBool(command + 4);
     if (!gTelemetry.encoderReady) activeSteerControl = CTRL_NONE;
   } else if (!strncmp(command, "MANUAL_SPEED:", 13)) {
-    gTelemetry.manualSpeedPct = (uint8_t)constrain(atoi(command + 13), MANUAL_SPEED_MIN, MANUAL_SPEED_MAX);
+    gTelemetry.manualSpeedPct = (uint8_t)std::clamp(atoi(command + 13), MANUAL_SPEED_MIN, MANUAL_SPEED_MAX);
   } else {
-    Serial.print(F("ERR:UNKNOWN_COMMAND:"));
-    Serial.println(command);
-#if HMI_LEGACY_UART
-    Serial1.print(F("ERR:UNKNOWN_COMMAND:"));
-    Serial1.println(command);
-#endif
+    char line[224];
+    std::snprintf(line, sizeof(line), "ERR:UNKNOWN_COMMAND:%s", command);
+    (void)gUsb.writeLine(line);
     return;
   }
 
   sanitizeTelemetry();
-  if (memcmp(&telemetryBefore, &gTelemetry, sizeof(VehicleTelemetry)) != 0) {
+  if (std::memcmp(&telemetryBefore, &gTelemetry, sizeof(VehicleTelemetry)) != 0) {
     uiDirty = true;
   }
 }
 
-static void pollSerialStream(Stream& io, char* rx, size_t capacity, size_t& rxLen, bool& discarding) {
-  while (io.available() > 0) {
-    const char c = (char)io.read();
+static void pollSerialGui() {
+  gUsb.poll();
+  while (gUsb.available() > 0) {
+    const int value = gUsb.read();
+    if (value < 0) break;
+    const char c = static_cast<char>(value);
     if (c == '\r') continue;
-    if (discarding) {
-      if (c == '\n') discarding = false;
+    if (serialRxDiscarding) {
+      if (c == '\n') serialRxDiscarding = false;
       continue;
     }
     if (c == '\n') {
-      rx[rxLen] = '\0';
-      if (rxLen > 0) handleSerialCommand(rx);
-      rxLen = 0;
-    } else if (rxLen + 1U < capacity) {
-      rx[rxLen++] = c;
+      serialRx[serialRxLen] = '\0';
+      if (serialRxLen > 0U) handleSerialCommand(serialRx);
+      serialRxLen = 0U;
+    } else if (serialRxLen + 1U < sizeof(serialRx)) {
+      serialRx[serialRxLen++] = c;
     } else {
-      rxLen = 0;
-      discarding = true;
-      io.println(F("ERR:COMMAND_TOO_LONG"));
+      serialRxLen = 0U;
+      serialRxDiscarding = true;
+      (void)gUsb.writeLine("ERR:COMMAND_TOO_LONG");
     }
   }
-}
-
-static void pollSerialGui() {
-  pollSerialStream(Serial, serialRx, sizeof(serialRx), serialRxLen, serialRxDiscarding);
-#if HMI_LEGACY_UART
-  pollSerialStream(Serial1, serial1Rx, sizeof(serial1Rx), serial1RxLen, serial1RxDiscarding);
-#endif
 }
 
 // ---------------------------------------------------------------------------
 // Display / splash
 // ---------------------------------------------------------------------------
 static void initDisplay() {
-  pinMode(PIN_TOUCH_CS, OUTPUT);
-  digitalWrite(PIN_TOUCH_CS, HIGH);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);
   tft.init();
   tft.setRotation(1);
   // RGB565 illustration arrays use standard byte order.
@@ -954,7 +885,7 @@ static void initDisplay() {
 static bool updateProgressBar() {
   if (splashComplete) return false;
 
-  uint32_t now = millis();
+  uint32_t now = HAL_GetTick();
   if (now - lastFrameMs < FRAME_MS) return true;
   lastFrameMs = now;
 
@@ -992,8 +923,8 @@ static bool updateProgressBar() {
 #if HMI_DEMO_MODE
 static void updateDemoTelemetry() {
   static uint32_t demoMs = 0;
-  if (millis() - demoMs < 700) return;
-  demoMs = millis();
+  if (HAL_GetTick() - demoMs < 700) return;
+  demoMs = HAL_GetTick();
 
   gTelemetry.systemStatus = SYS_READY;
   gTelemetry.mode = MODE_MANUAL;
@@ -1024,28 +955,20 @@ static void updateDemoTelemetry() {
 }
 #endif
 
-void setup() {
-  pinMode(PC13, OUTPUT);
-  digitalWrite(PC13, HIGH);
-
-  Serial.begin(1000000);
-#if HMI_LEGACY_UART
-  Serial1.begin(115200);
-#endif
-  delay(50);
+int main() {
+  Board_Init();
+  if (!gUsb.begin()) { NVIC_SystemReset(); }
+  HAL_Delay(50U);
   printBoth("ADV HMI + CUAV NEO3 integrated firmware - boot");
 
-  // Sensor interfaces are initialized before the splash so GNSS acquisition
-  // and IST8310 conversion run in parallel with the HMI startup animation.
   gNeo3.begin();
   gVesc.begin();
-
   initDisplay();
   restartSplash();
   startAppWatchdog();
-}
 
-void loop() {
+  while (true) {
+
   // USB host commands are serviced first. In VESC MAINTENANCE the gateway owns
   // the USB/UART bandwidth exclusively so firmware blocks cannot be dropped by
   // GNSS/I2C/TFT traffic. Power-stage outputs remain under the F103 bootloader's
@@ -1062,8 +985,10 @@ void loop() {
       pollSerialGui();
       gVesc.poll();
     }
+    gUsb.poll();
+    Board_Service();
     gMainLoopHeartbeatMs = HAL_GetTick();
-    return;
+    continue;
   }
 
   // VESC traffic has first service priority, but maintenance must not suspend
@@ -1081,7 +1006,7 @@ void loop() {
   if (!splashComplete) {
     updateProgressBar();
   } else {
-    const uint32_t now = millis();
+    const uint32_t now = HAL_GetTick();
     if ((uint32_t)(now - lastTouchPollMs) >= TOUCH_POLL_MS) {
       lastTouchPollMs = now;
       handleTouch();
@@ -1102,11 +1027,14 @@ void loop() {
 
   // Heartbeat LED (PC13 active-low on many Black Pill boards)
   static uint32_t ledMs = 0;
-  if (millis() - ledMs >= 500) {
-    ledMs = millis();
-    digitalWrite(PC13, !digitalRead(PC13));
+  if (HAL_GetTick() - ledMs >= 500) {
+    ledMs = HAL_GetTick();
+    HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
   }
+  gUsb.poll();
+  Board_Service();
   // Feed only after one complete main-loop iteration. A blocking USB/TFT/I2C
   // call therefore cannot keep the watchdog alive accidentally.
   gMainLoopHeartbeatMs = HAL_GetTick();
+  }
 }

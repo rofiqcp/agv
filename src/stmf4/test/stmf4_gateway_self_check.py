@@ -7,11 +7,11 @@ ROOT = Path(__file__).resolve().parents[1]
 WS = ROOT.parents[1]
 bridge = (ROOT / 'src/stmf4_hmi_bridge.cpp').read_text(encoding='utf-8')
 hmi = (yaml.safe_load((ROOT / 'config/hmi.yaml').read_text()) or {})['stmf4_hmi_bridge']['ros__parameters']
-vesc_h = (WS / 'stm32f401/src/VescGateway.h').read_text(encoding='utf-8')
-vesc_cpp = (WS / 'stm32f401/src/VescGateway.cpp').read_text(encoding='utf-8')
-neo_h = (WS / 'stm32f401/src/Neo3Sensors.h').read_text(encoding='utf-8')
-neo_cpp = (WS / 'stm32f401/src/Neo3Sensors.cpp').read_text(encoding='utf-8')
-main = (WS / 'stm32f401/src/main.cpp').read_text(encoding='utf-8')
+vesc_h = (WS / 'f411_pio_arduino/src/VescGateway.h').read_text(encoding='utf-8')
+vesc_cpp = (WS / 'f411_pio_arduino/src/VescGateway.cpp').read_text(encoding='utf-8')
+neo_h = (WS / 'f411_pio_arduino/src/Neo3Sensors.h').read_text(encoding='utf-8')
+neo_cpp = (WS / 'f411_pio_arduino/src/Neo3Sensors.cpp').read_text(encoding='utf-8')
+main = (WS / 'f411_pio_arduino/src/main.cpp').read_text(encoding='utf-8')
 
 def require(ok, msg):
     if not ok:
@@ -76,5 +76,17 @@ require('pvt_.received_ms != 0U' in neo_cpp and 'gnssReady(uint32_t now_ms)' in 
         'F411 must distinguish M9N streaming/connected from GNSS ready/fix')
 require('const bool pvt_stream_fresh' in neo_cpp and 'if (!pvt_stream_fresh)' in neo_cpp,
         'M9N UBX configuration retry must follow stream freshness, not GNSS fix')
+
+# F411 first-stage recovery bootloader contract.
+pio = (WS / 'f411_pio_arduino/platformio.ini').read_text(encoding='utf-8')
+boot = (WS / 'f411_pio_arduino/bootloader/src/main.c').read_text(encoding='utf-8')
+uploader = (WS / 'f411_pio_arduino/scripts/dfu_upload_blackpill.sh').read_text(encoding='utf-8')
+require('board_build.flash_offset = 0x8000' in pio and 'board_upload.maximum_size = 393216' in pio,
+        'F411 application must stay relocated behind 32-KiB first-stage bootloader')
+for token in ('APP_BASE', 'MANIFEST_ADDR', 'MANIFEST_MAGIC', 'crc32_bytes', 'jump_system_dfu', 'application_valid'):
+    require(token in boot, f'F411 recovery bootloader contract missing: {token}')
+require('0x08008000' in uploader and '0x08060000' in uploader and 'readback verified' in uploader and
+        '0x08000000:4:leave' in uploader, 'transactional DFU updater must preserve bootloader and verify app')
+
 print('PASS stmf4_gateway_self_check')
 print('pins: VESC PB6/PB7 | NEO3 I2C PB8/PB9 | GNSS PA2/PA3 | one F411 USB CDC')

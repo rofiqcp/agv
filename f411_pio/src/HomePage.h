@@ -3,8 +3,7 @@
 // ============================================================================
 #pragma once
 
-#include <Arduino.h>
-#include <TFT_eSPI.h>
+#include "HmiDisplay.h"
 #include "Config.h"
 #include "Telemetry.h"
 #include "Theme.h"
@@ -12,7 +11,7 @@
 #include "BottomMenu.h"
 #include "Icons.h"
 
-extern TFT_eSPI tft;
+extern HmiDisplay tft;
 
 inline const char* homeNavigationLine(const VehicleTelemetry& d) {
   static char line[38];

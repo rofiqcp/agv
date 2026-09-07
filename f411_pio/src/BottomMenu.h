@@ -3,13 +3,12 @@
 // ============================================================================
 #pragma once
 
-#include <Arduino.h>
-#include <TFT_eSPI.h>
+#include "HmiDisplay.h"
 #include "Config.h"
 #include "Theme.h"
 #include "Icons.h"
 
-extern TFT_eSPI tft;
+extern HmiDisplay tft;
 
 inline int navTileX(uint8_t i) {
   return NAV_X0 + i * (NAV_W + NAV_GAP);

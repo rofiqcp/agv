@@ -1,13 +1,13 @@
 #include "Neo3Sensors.h"
 
-#include <math.h>
-#include <stdlib.h>
-#include <string.h>
+#include <algorithm>
+#include <cstdarg>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
 namespace {
-constexpr pin_size_t PIN_NEO_SAFETY_SWITCH = PB12;
-constexpr pin_size_t PIN_NEO_SAFETY_LED = PB13;
-constexpr pin_size_t PIN_NEO_BUZZER = PA8;
 constexpr float IST8310_UT_PER_LSB = 0.30f;
 // IST8310 full-scale from the vendor-compatible ArduPilot/PX4 driver family.
 // Reject impossible raw values before they can contaminate heading fusion.
@@ -20,68 +20,85 @@ inline void ubxChecksumAdd(uint8_t byte, uint8_t &a, uint8_t &b) {
 }
 
 
-// Buffer Arduino Print formatting in RAM and submit a complete sensor record to
-// USB CDC with one write. This preserves Serial.print float formatting exactly
-// while avoiding dozens of tiny USB writes that can delay VESC packet service.
-class CdcLineBuffer : public Print {
+// Native fixed-capacity formatter. It never allocates and emits each sensor record
+// as one atomic USB CDC write, keeping VESC traffic deterministic.
+class CdcLineBuffer {
  public:
-  CdcLineBuffer(char *buffer, size_t capacity) : buffer_(buffer), capacity_(capacity) {}
-  size_t write(uint8_t value) override {
-    if (length_ >= capacity_) { overflow_ = true; return 0; }
-    buffer_[length_++] = static_cast<char>(value); return 1;
+  CdcLineBuffer(char *buffer, std::size_t capacity) : buffer_(buffer), capacity_(capacity) {}
+  void print(const char *v) { append("%s", v == nullptr ? "" : v); }
+  void print(char v) {
+    if (length_ < capacity_) buffer_[length_++] = v;
+    else overflow_ = true;
   }
-  size_t write(const uint8_t *data, size_t size) override {
-    if (data == nullptr || size == 0U) return 0U;
-    const size_t room = capacity_ > length_ ? capacity_ - length_ : 0U;
-    const size_t copy = size < room ? size : room;
-    if (copy) { memcpy(buffer_ + length_, data, copy); length_ += copy; }
-    if (copy != size) overflow_ = true;
-    return copy;
-  }
+  void print(int v) { append("%d", v); }
+  void print(unsigned int v) { append("%u", v); }
+  void print(long v) { append("%ld", v); }
+  void print(unsigned long v) { append("%lu", v); }
+  void print(float v, int digits = 2) { appendFloat(static_cast<double>(v), digits); }
+  void print(double v, int digits = 2) { appendFloat(v, digits); }
+  void println(int v) { print(v); endLine(); }
+  void println(unsigned int v) { print(v); endLine(); }
+  void println(long v) { print(v); endLine(); }
+  void println(unsigned long v) { print(v); endLine(); }
+  void println(float v, int digits = 2) { print(v, digits); endLine(); }
+  void println(double v, int digits = 2) { print(v, digits); endLine(); }
   bool flushToUsb() {
     if (overflow_ || length_ == 0U) return false;
-    // Sensor telemetry is low-priority relative to the VESC request/reply path.
-    // Never spin inside USBSerial::write waiting for CDC space: if the complete
-    // record cannot be queued atomically now, skip this sample and publish the
-    // next fresh one. Sensor acquisition itself continues at full rate.
-    if (Serial.availableForWrite() < static_cast<int>(length_)) return false;
-    return Serial.write(reinterpret_cast<const uint8_t *>(buffer_), length_) == length_;
+    if (gUsb.availableForWrite() < static_cast<int>(length_)) return false;
+    return gUsb.write(reinterpret_cast<const uint8_t *>(buffer_), length_) == length_;
   }
  private:
+  void endLine() { print('\r'); print('\n'); }
+  void appendFloat(double number, int digits) {
+    if (digits < 0) digits = 2;
+    if (std::isnan(number)) { print("nan"); return; }
+    if (std::isinf(number)) { print("inf"); return; }
+    if (number > 4294967040.0 || number < -4294967040.0) { print("ovf"); return; }
+    if (number < 0.0) { print('-'); number = -number; }
+    double rounding = 0.5;
+    for (int i = 0; i < digits; ++i) rounding /= 10.0;
+    number += rounding;
+    const unsigned long integer = static_cast<unsigned long>(number);
+    double remainder = number - static_cast<double>(integer);
+    print(integer);
+    if (digits > 0) print('.');
+    while (digits-- > 0) {
+      remainder *= 10.0;
+      const unsigned int digit = static_cast<unsigned int>(remainder);
+      print(digit);
+      remainder -= static_cast<double>(digit);
+    }
+  }
+  void append(const char *format, ...) {
+    if (overflow_ || length_ >= capacity_) { overflow_ = true; return; }
+    va_list args;
+    va_start(args, format);
+    const int n = std::vsnprintf(buffer_ + length_, capacity_ - length_, format, args);
+    va_end(args);
+    if (n < 0 || static_cast<std::size_t>(n) >= capacity_ - length_) {
+      overflow_ = true;
+      return;
+    }
+    length_ += static_cast<std::size_t>(n);
+  }
   char *buffer_;
-  size_t capacity_;
-  size_t length_{0U};
+  std::size_t capacity_;
+  std::size_t length_{0U};
   bool overflow_{false};
-};
-}
+};}
 
 void Neo3Sensors::begin() {
-  pinMode(PIN_NEO_SAFETY_SWITCH, INPUT_PULLUP);
-#ifdef OUTPUT_OPEN_DRAIN
-  pinMode(PIN_NEO_SAFETY_LED, OUTPUT_OPEN_DRAIN);
-#else
-  pinMode(PIN_NEO_SAFETY_LED, OUTPUT);
-#endif
-  digitalWrite(PIN_NEO_SAFETY_LED, HIGH);  // active-low: OFF
-  pinMode(PIN_NEO_BUZZER, OUTPUT);
-  digitalWrite(PIN_NEO_BUZZER, LOW);
-
-  gnss_serial_.begin(GNSS_BAUD);
-
-  Wire.setSDA(PB9);
-  Wire.setSCL(PB8);
-  Wire.begin();
-  // 100 kHz is ample for 20-Hz IST8310 and gives more cable margin.
-  Wire.setClock(100000);
-
-  delay(5);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET);  // safety LED active-low: off
+  Board_BuzzerStop();
+  (void)gGnssUart.begin(GNSS_BAUD);
+  HAL_Delay(5U);
   ist_ok_ = initIst8310();
   (void)configureGnss();
-  last_config_ms_ = millis();
-  config_attempts_ = 1;
-  switch_raw_ = digitalRead(PIN_NEO_SAFETY_SWITCH) == LOW;
+  last_config_ms_ = HAL_GetTick();
+  config_attempts_ = 1U;
+  switch_raw_ = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_12) == GPIO_PIN_RESET;
   switch_pressed_ = switch_raw_;
-  switch_changed_ms_ = millis();
+  switch_changed_ms_ = HAL_GetTick();
   updateSafetyLed();
   publishHardwareStatus(true);
 }
@@ -92,7 +109,7 @@ void Neo3Sensors::poll() {
   pollSafetySwitch();
   updateSafetyLed();
 
-  const uint32_t now_ms = millis();
+  const uint32_t now_ms = HAL_GetTick();
   // Configuration recovery follows transport freshness, not GNSS fix validity.
   // Indoors NAV-PVT can stream correctly at 10 Hz with fix_type=0/LLH invalid;
   // repeatedly VALSET-configuring a healthy receiver in that state is needless.
@@ -126,25 +143,24 @@ bool Neo3Sensors::handleHostCommand(const char *command) {
   if (strcmp(command, "NEO:LED:AUTO") == 0) {
     led_mode_ = LedMode::AUTO;
     updateSafetyLed();
-    Serial.println(F("ACK:NEO:LED:AUTO"));
+    (void)gUsb.writeLine("ACK:NEO:LED:AUTO");
     return true;
   }
   if (strcmp(command, "NEO:LED:ON") == 0) {
     led_mode_ = LedMode::FORCE_ON;
     updateSafetyLed();
-    Serial.println(F("ACK:NEO:LED:ON"));
+    (void)gUsb.writeLine("ACK:NEO:LED:ON");
     return true;
   }
   if (strcmp(command, "NEO:LED:OFF") == 0) {
     led_mode_ = LedMode::FORCE_OFF;
     updateSafetyLed();
-    Serial.println(F("ACK:NEO:LED:OFF"));
+    (void)gUsb.writeLine("ACK:NEO:LED:OFF");
     return true;
   }
   if (strcmp(command, "NEO:BUZZER:OFF") == 0) {
-    noTone(PIN_NEO_BUZZER);
-    digitalWrite(PIN_NEO_BUZZER, LOW);
-    Serial.println(F("ACK:NEO:BUZZER:OFF"));
+    Board_BuzzerStop();
+    (void)gUsb.writeLine("ACK:NEO:BUZZER:OFF");
     return true;
   }
   if (strcmp(command, "NEO:STATUS") == 0) {
@@ -155,24 +171,24 @@ bool Neo3Sensors::handleHostCommand(const char *command) {
     unsigned int frequency = 0;
     unsigned int duration = 0;
     if (sscanf(command + 9, "%u:%u", &frequency, &duration) == 2) {
-      frequency = constrain(frequency, 200U, 5000U);
-      duration = constrain(duration, 20U, 2000U);
+      frequency = std::clamp(frequency, 200U, 5000U);
+      duration = std::clamp(duration, 20U, 2000U);
       beep(static_cast<uint16_t>(frequency), static_cast<uint16_t>(duration));
-      Serial.println(F("ACK:NEO:BEEP"));
+      (void)gUsb.writeLine("ACK:NEO:BEEP");
     } else {
-      Serial.println(F("ERR:NEO:BEEP_FORMAT"));
+      (void)gUsb.writeLine("ERR:NEO:BEEP_FORMAT");
     }
     return true;
   }
 
-  Serial.println(F("ERR:NEO:UNKNOWN_COMMAND"));
+  (void)gUsb.writeLine("ERR:NEO:UNKNOWN_COMMAND");
   return true;
 }
 
 void Neo3Sensors::pollGnss() {
   uint16_t budget = 768;
-  while (budget-- > 0 && gnss_serial_.available() > 0) {
-    const int value = gnss_serial_.read();
+  while (budget-- > 0 && gGnssUart.available() > 0) {
+    const int value = gGnssUart.read();
     if (value < 0) break;
     consumeGnssByte(static_cast<uint8_t>(value));
   }
@@ -277,11 +293,11 @@ void Neo3Sensors::parseNavPvt() {
   next.sacc_mps = static_cast<float>(readU32LE(&ubx_payload_[68])) * 0.001f;
   next.course_acc_deg = static_cast<float>(readU32LE(&ubx_payload_[72])) * 1.0e-5f;
   next.pdop = static_cast<float>(readU16LE(&ubx_payload_[76])) * 0.01f;
-  next.received_ms = millis();
+  next.received_ms = HAL_GetTick();
 
-  const bool coordinates_ok = isfinite(next.latitude) && isfinite(next.longitude) &&
-    fabs(next.latitude) <= 90.0 && fabs(next.longitude) <= 180.0 &&
-    !(fabs(next.latitude) < 1.0e-12 && fabs(next.longitude) < 1.0e-12);
+  const bool coordinates_ok = std::isfinite(next.latitude) && std::isfinite(next.longitude) &&
+    std::fabs(next.latitude) <= 90.0 && std::fabs(next.longitude) <= 180.0 &&
+    !(std::fabs(next.latitude) < 1.0e-12 && std::fabs(next.longitude) < 1.0e-12);
   next.valid = coordinates_ok;
 
   if (have_last_pvt_itow_) {
@@ -303,7 +319,7 @@ void Neo3Sensors::parseNavPvt() {
 void Neo3Sensors::publishPvt() {
   ++gnss_sequence_;
   char line[320]; CdcLineBuffer out(line, sizeof(line));
-  out.print(F("SENS:GNSS:"));
+  out.print("SENS:GNSS:");
   out.print(gnss_sequence_); out.print(',');
   out.print(pvt_.received_ms); out.print(',');
   out.print(pvt_.itow_ms); out.print(',');
@@ -383,7 +399,7 @@ bool Neo3Sensors::parseNmeaCoordinate(const char *text, char hemisphere, bool la
   if (text == nullptr || *text == '\0') return false;
   char *end = nullptr;
   const double raw = strtod(text, &end);
-  if (end == text || !isfinite(raw) || raw < 0.0) return false;
+  if (end == text || !std::isfinite(raw) || raw < 0.0) return false;
   const int degrees = static_cast<int>(raw / 100.0);
   const double minutes = raw - static_cast<double>(degrees) * 100.0;
   const int max_deg = latitude ? 90 : 180;
@@ -392,7 +408,7 @@ bool Neo3Sensors::parseNmeaCoordinate(const char *text, char hemisphere, bool la
   if (!latitude && hemisphere != 'E' && hemisphere != 'W') return false;
   out = static_cast<double>(degrees) + minutes / 60.0;
   if (hemisphere == 'S' || hemisphere == 'W') out = -out;
-  return isfinite(out);
+  return std::isfinite(out);
 }
 
 void Neo3Sensors::parseNmeaSentence(char *sentence) {
@@ -403,7 +419,7 @@ void Neo3Sensors::parseNmeaSentence(char *sentence) {
   if (count == 0) return;
   const size_t type_len = strlen(fields[0]);
   const char *type = type_len >= 3 ? fields[0] + type_len - 3 : fields[0];
-  const uint32_t now_ms = millis();
+  const uint32_t now_ms = HAL_GetTick();
 
   if (strcmp(type, "GGA") == 0 && count >= 10) {
     double lat = 0.0, lon = 0.0;
@@ -414,19 +430,19 @@ void Neo3Sensors::parseNmeaSentence(char *sentence) {
     const int sats = atoi(fields[7]);
     const float hdop = static_cast<float>(atof(fields[8]));
     const float alt = static_cast<float>(atof(fields[9]));
-    nmea_.gga_valid = coord_ok && fix > 0 && sats >= 0 && isfinite(hdop) && hdop > 0.0f;
-    nmea_.fix_quality = static_cast<uint8_t>(constrain(fix, 0, 9));
-    nmea_.satellites = static_cast<uint8_t>(constrain(sats, 0, 99));
+    nmea_.gga_valid = coord_ok && fix > 0 && sats >= 0 && std::isfinite(hdop) && hdop > 0.0f;
+    nmea_.fix_quality = static_cast<uint8_t>(std::clamp(fix, 0, 9));
+    nmea_.satellites = static_cast<uint8_t>(std::clamp(sats, 0, 99));
     nmea_.latitude = lat;
     nmea_.longitude = lon;
-    nmea_.altitude_m = isfinite(alt) ? alt : 0.0f;
-    nmea_.hdop = isfinite(hdop) ? hdop : 99.9f;
+    nmea_.altitude_m = std::isfinite(alt) ? alt : 0.0f;
+    nmea_.hdop = std::isfinite(hdop) ? hdop : 99.9f;
     nmea_.gga_ms = now_ms;
   } else if (strcmp(type, "RMC") == 0 && count >= 9) {
     const bool active = fields[2][0] == 'A';
     const float knots = static_cast<float>(atof(fields[7]));
     const float course = static_cast<float>(atof(fields[8]));
-    nmea_.rmc_valid = active && isfinite(knots) && knots >= 0.0f && isfinite(course);
+    nmea_.rmc_valid = active && std::isfinite(knots) && knots >= 0.0f && std::isfinite(course);
     nmea_.speed_mps = nmea_.rmc_valid ? knots * 0.514444f : 0.0f;
     nmea_.course_deg_ned = nmea_.rmc_valid ? normalize360(course) : 0.0f;
     nmea_.rmc_ms = now_ms;
@@ -434,11 +450,11 @@ void Neo3Sensors::parseNmeaSentence(char *sentence) {
 }
 
 void Neo3Sensors::publishNmeaFallback() {
-  const uint32_t now_ms = millis();
+  const uint32_t now_ms = HAL_GetTick();
   const bool rmc_fresh = nmea_.rmc_valid && static_cast<uint32_t>(now_ms - nmea_.rmc_ms) <= 2000;
   ++gnss_sequence_;
   char line[192]; CdcLineBuffer out(line, sizeof(line));
-  out.print(F("SENS:GNSSF:"));
+  out.print("SENS:GNSSF:");
   out.print(gnss_sequence_); out.print(',');
   out.print(now_ms); out.print(',');
   out.print(nmea_.fix_quality); out.print(',');
@@ -471,15 +487,15 @@ void Neo3Sensors::appendU8(uint8_t *payload, uint16_t &pos, uint8_t value) {
 bool Neo3Sensors::sendUbx(uint8_t cls, uint8_t id, const uint8_t *payload, uint16_t length) {
   uint8_t ck_a = 0, ck_b = 0;
   const uint8_t header[4] = {cls, id, static_cast<uint8_t>(length & 0xFFU), static_cast<uint8_t>(length >> 8)};
-  gnss_serial_.write(0xB5); gnss_serial_.write(0x62);
-  for (uint8_t b : header) { gnss_serial_.write(b); ubxChecksumAdd(b, ck_a, ck_b); }
+  gGnssUart.write(0xB5); gGnssUart.write(0x62);
+  for (uint8_t b : header) { gGnssUart.write(b); ubxChecksumAdd(b, ck_a, ck_b); }
   for (uint16_t i = 0; i < length; ++i) {
     const uint8_t b = payload[i];
-    gnss_serial_.write(b);
+    gGnssUart.write(b);
     ubxChecksumAdd(b, ck_a, ck_b);
   }
-  gnss_serial_.write(ck_a); gnss_serial_.write(ck_b);
-  gnss_serial_.flush();
+  gGnssUart.write(ck_a); gGnssUart.write(ck_b);
+  gGnssUart.flush();
   return true;
 }
 
@@ -523,18 +539,14 @@ bool Neo3Sensors::configureGnss() {
 }
 
 bool Neo3Sensors::istWriteAt(uint8_t addr, uint8_t reg, uint8_t value) {
-  Wire.beginTransmission(addr); Wire.write(reg); Wire.write(value);
-  return Wire.endTransmission() == 0;
+  return HAL_I2C_Mem_Write(&hi2c1, static_cast<uint16_t>(addr) << 1U, reg,
+                           I2C_MEMADD_SIZE_8BIT, &value, 1U, 5U) == HAL_OK;
 }
 
 bool Neo3Sensors::istReadAt(uint8_t addr, uint8_t reg, uint8_t *dst, uint8_t count) {
-  if (dst == nullptr || count == 0) return false;
-  Wire.beginTransmission(addr); Wire.write(reg);
-  if (Wire.endTransmission(false) != 0) return false;
-  const uint8_t got = Wire.requestFrom(addr, count);
-  if (got != count) { while (Wire.available()) (void)Wire.read(); return false; }
-  for (uint8_t i = 0; i < count; ++i) dst[i] = static_cast<uint8_t>(Wire.read());
-  return true;
+  if (dst == nullptr || count == 0U) return false;
+  return HAL_I2C_Mem_Read(&hi2c1, static_cast<uint16_t>(addr) << 1U, reg,
+                          I2C_MEMADD_SIZE_8BIT, dst, count, 5U) == HAL_OK;
 }
 
 bool Neo3Sensors::istWrite(uint8_t reg, uint8_t value) { return istWriteAt(ist_addr_, reg, value); }
@@ -542,19 +554,19 @@ bool Neo3Sensors::istRead(uint8_t reg, uint8_t *dst, uint8_t count) { return ist
 
 
 void Neo3Sensors::recoverIstBus() {
-  Wire.end();
-  pinMode(PB9, INPUT_PULLUP);
-  pinMode(PB8, OUTPUT_OPEN_DRAIN);
-  digitalWrite(PB8, HIGH);
-  delayMicroseconds(5);
-  for (uint8_t i = 0; i < 9; ++i) {
-    digitalWrite(PB8, LOW); delayMicroseconds(5);
-    digitalWrite(PB8, HIGH); delayMicroseconds(5);
+  (void)HAL_I2C_DeInit(&hi2c1);
+  GPIO_InitTypeDef gpio{};
+  gpio.Pin = GPIO_PIN_9; gpio.Mode = GPIO_MODE_INPUT; gpio.Pull = GPIO_PULLUP;
+  gpio.Speed = GPIO_SPEED_FREQ_LOW; HAL_GPIO_Init(GPIOB, &gpio);
+  gpio.Pin = GPIO_PIN_8; gpio.Mode = GPIO_MODE_OUTPUT_OD; gpio.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(GPIOB, &gpio); HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_SET);
+  Board_DelayUs(5U);
+  for (uint8_t i = 0U; i < 9U; ++i) {
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_RESET); Board_DelayUs(5U);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_SET); Board_DelayUs(5U);
   }
-  pinMode(PB8, INPUT_PULLUP);
-  pinMode(PB9, INPUT_PULLUP);
-  Wire.setSDA(PB9); Wire.setSCL(PB8); Wire.begin(); Wire.setClock(100000);
-  delay(2);
+  Board_ReinitI2c1();
+  HAL_Delay(2U);
 }
 
 bool Neo3Sensors::initIst8310() {
@@ -599,11 +611,11 @@ bool Neo3Sensors::initIst8310() {
 }
 
 void Neo3Sensors::startIstMeasurement() {
-  if (istWrite(IST8310_CTRL1, 0x01)) last_ist_measurement_ms_ = millis();
+  if (istWrite(IST8310_CTRL1, 0x01)) last_ist_measurement_ms_ = HAL_GetTick();
 }
 
 void Neo3Sensors::pollIst8310() {
-  const uint32_t now_ms = millis();
+  const uint32_t now_ms = HAL_GetTick();
   if (!ist_ok_) {
     if (static_cast<uint32_t>(now_ms - last_ist_retry_ms_) >= 2000) {
       last_ist_retry_ms_ = now_ms;
@@ -656,12 +668,12 @@ void Neo3Sensors::publishMag(int16_t x, int16_t y, int16_t z) {
   const float mx = static_cast<float>(x) * IST8310_UT_PER_LSB;
   const float my = static_cast<float>(y) * IST8310_UT_PER_LSB;
   const float mz = static_cast<float>(z) * IST8310_UT_PER_LSB;
-  const float norm = sqrtf(mx * mx + my * my + mz * mz);
+  const float norm = std::sqrt(mx * mx + my * my + mz * mz);
   ++mag_sequence_;
   char line[128]; CdcLineBuffer out(line, sizeof(line));
-  out.print(F("SENS:MAG:"));
+  out.print("SENS:MAG:");
   out.print(mag_sequence_); out.print(',');
-  out.print(millis()); out.print(',');
+  out.print(HAL_GetTick()); out.print(',');
   out.print(mx, 2); out.print(',');
   out.print(my, 2); out.print(',');
   out.print(mz, 2); out.print(',');
@@ -671,8 +683,8 @@ void Neo3Sensors::publishMag(int16_t x, int16_t y, int16_t z) {
 }
 
 void Neo3Sensors::pollSafetySwitch() {
-  const uint32_t now_ms = millis();
-  const bool raw = digitalRead(PIN_NEO_SAFETY_SWITCH) == LOW;
+  const uint32_t now_ms = HAL_GetTick();
+  const bool raw = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_12) == GPIO_PIN_RESET;
   if (raw != switch_raw_) {
     switch_raw_ = raw;
     switch_changed_ms_ = now_ms;
@@ -680,7 +692,7 @@ void Neo3Sensors::pollSafetySwitch() {
   if (raw != switch_pressed_ && static_cast<uint32_t>(now_ms - switch_changed_ms_) >= SWITCH_DEBOUNCE_MS) {
     switch_pressed_ = raw;
     char line[64]; CdcLineBuffer out(line, sizeof(line));
-    out.print(F("SENS:SW:"));
+    out.print("SENS:SW:");
     out.print(++hw_sequence_); out.print(',');
     out.print(now_ms); out.print(',');
     out.println(switch_pressed_ ? 1 : 0);
@@ -700,7 +712,7 @@ bool Neo3Sensors::gnssReady(uint32_t now_ms) const {
   if (pvt_.valid && static_cast<uint32_t>(now_ms - pvt_.received_ms) <= PVT_STALE_MS) {
     const bool type_ok = pvt_.fix_type == 3U || pvt_.fix_type == 4U;
     return pvt_.fix_ok && !pvt_.invalid_llh && type_ok && pvt_.satellites >= 6U &&
-      isfinite(pvt_.hacc_m) && pvt_.hacc_m > 0.0f && pvt_.hacc_m <= 10.0f;
+      std::isfinite(pvt_.hacc_m) && pvt_.hacc_m > 0.0f && pvt_.hacc_m <= 10.0f;
   }
   return nmea_.gga_valid && static_cast<uint32_t>(now_ms - nmea_.gga_ms) <= NMEA_FRESH_MS &&
     nmea_.satellites >= 6U && nmea_.hdop > 0.0f && nmea_.hdop <= 3.0f;
@@ -709,27 +721,27 @@ bool Neo3Sensors::gnssReady(uint32_t now_ms) const {
 void Neo3Sensors::setSafetyLed(bool on) {
   if (safety_led_on_ == on) return;
   safety_led_on_ = on;
-  digitalWrite(PIN_NEO_SAFETY_LED, on ? LOW : HIGH);  // active-low
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, on ? GPIO_PIN_RESET : GPIO_PIN_SET);  // active-low
 }
 
 void Neo3Sensors::updateSafetyLed() {
   bool desired = false;
   if (led_mode_ == LedMode::FORCE_ON) desired = true;
-  else if (led_mode_ == LedMode::AUTO) desired = gnssReady(millis());
+  else if (led_mode_ == LedMode::AUTO) desired = gnssReady(HAL_GetTick());
   setSafetyLed(desired);
   last_ready_ = desired;
 }
 
 void Neo3Sensors::beep(uint16_t frequency_hz, uint16_t duration_ms) {
-  tone(PIN_NEO_BUZZER, frequency_hz, duration_ms);
+  Board_BuzzerStart(frequency_hz, duration_ms);
 }
 
 void Neo3Sensors::publishHardwareStatus(bool force) {
-  const uint32_t now_ms = millis();
+  const uint32_t now_ms = HAL_GetTick();
   if (!force && static_cast<uint32_t>(now_ms - last_hw_publish_ms_) < HW_PUBLISH_MS) return;
   last_hw_publish_ms_ = now_ms;
   char line[128]; CdcLineBuffer out(line, sizeof(line));
-  out.print(F("SENS:HW:"));
+  out.print("SENS:HW:");
   out.print(++hw_sequence_); out.print(',');
   out.print(now_ms); out.print(',');
   out.print(gnssAlive(now_ms) ? 1 : 0); out.print(',');
@@ -741,8 +753,8 @@ void Neo3Sensors::publishHardwareStatus(bool force) {
   out.print(ist_addr_); out.print(',');
   out.print(ist_whoami_); out.print(',');
   out.print(ist_init_error_); out.print(',');
-  out.print(digitalRead(PB9)); out.print(',');
-  out.println(digitalRead(PB8));
+  out.print(HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_9) == GPIO_PIN_SET ? 1 : 0); out.print(',');
+  out.println(HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_8) == GPIO_PIN_SET ? 1 : 0);
   (void)out.flushToUsb();
 }
 

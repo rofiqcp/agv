@@ -9,7 +9,7 @@ void HAL_PCD_MspInit(PCD_HandleTypeDef *hpcd) {
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_USB_OTG_FS_CLK_ENABLE();
 
-  GPIO_InitTypeDef gpio{};
+  GPIO_InitTypeDef gpio = {0};
   gpio.Pin = GPIO_PIN_11 | GPIO_PIN_12;
   gpio.Mode = GPIO_MODE_AF_PP;
   gpio.Pull = GPIO_NOPULL;

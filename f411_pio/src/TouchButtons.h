@@ -1,15 +1,15 @@
 // ============================================================================
 // TouchButtons.h — XPT2046 direct navigation + one-tap controls
-// Preserves the existing TFT_eSPI calibration and coordinate correction.
+// Preserves the existing HmiDisplay calibration and coordinate correction.
 // ============================================================================
 #pragma once
 
-#include <Arduino.h>
-#include <TFT_eSPI.h>
+#include "HmiDisplay.h"
+#include "UsbCdcPort.h"
 #include "Config.h"
 #include "BottomMenu.h"
 
-extern TFT_eSPI tft;
+extern HmiDisplay tft;
 
 struct TouchEvent {
   enum Type : uint8_t { NONE = 0, PRESS, RELEASE } type;
@@ -40,8 +40,7 @@ inline void resetTouchState() {
 }
 
 inline void beginTouch() {
-  pinMode(PIN_TOUCH_CS, OUTPUT);
-  digitalWrite(PIN_TOUCH_CS, HIGH);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);
   // Exact calibration path from the original HMI revision that was touchable.
   uint16_t calData[5] = { 300, 3600, 300, 3600, 1 };
   tft.setTouch(calData);
@@ -50,10 +49,12 @@ inline void beginTouch() {
 
 // Exact coordinate correction from the original working HMI.
 inline void correctTouchXY(uint16_t sx, uint16_t sy, uint16_t& tx, uint16_t& ty) {
-  tx = map((int)sy, 0, H - 1, 0, W - 1);
-  ty = map((int)sx, 0, W - 1, H - 1, 0);
-  tx = (uint16_t)constrain((int)tx, 0, W - 1);
-  ty = (uint16_t)constrain((int)ty, 0, H - 1);
+  const int32_t mappedX = static_cast<int32_t>(sy) * (W - 1) / (H - 1);
+  // Preserve the reference integer mapping/truncation order exactly.
+  const int32_t mappedY = (H - 1) +
+      static_cast<int32_t>(sx) * (0 - (H - 1)) / (W - 1);
+  tx = static_cast<uint16_t>(std::clamp<int32_t>(mappedX, 0, W - 1));
+  ty = static_cast<uint16_t>(std::clamp<int32_t>(mappedY, 0, H - 1));
 }
 
 inline bool hit(int px, int py, int x, int y, int w, int h) {
@@ -103,7 +104,7 @@ inline WaypointAction gpsHitWaypointAction(int x, int y) {
 inline TouchEvent pollTouch(PageId currentPage) {
   TouchEvent ev{TouchEvent::NONE, CTRL_NONE, PAGE_SPLASH, false, false, CAM_NONE, WP_ACTION_NONE};
 
-  // Original working path: TFT_eSPI validates pressure/debounce and applies
+  // Original working path: HmiDisplay validates pressure/debounce and applies
   // the calibration loaded by beginTouch(). Keep this foundation untouched.
   uint16_t sx = 0, sy = 0;
   const bool down = tft.getTouch(&sx, &sy, TOUCH_THRESHOLD);
@@ -137,14 +138,11 @@ inline TouchEvent pollTouch(PageId currentPage) {
     ev.type = TouchEvent::PRESS;
 
     // Edge-only diagnostics; no extra XPT2046 reads are performed here.
-    Serial.print(F("[TOUCH] PRESS CAL X="));
-    Serial.print(sx);
-    Serial.print(F(" Y="));
-    Serial.println(sy);
-    Serial.print(F("[TOUCH] SCREEN X="));
-    Serial.print(tx);
-    Serial.print(F(" Y="));
-    Serial.println(ty);
+    char touchLog[64];
+    std::snprintf(touchLog, sizeof(touchLog), "[TOUCH] PRESS CAL X=%u Y=%u", sx, sy);
+    (void)gUsb.writeLine(touchLog);
+    std::snprintf(touchLog, sizeof(touchLog), "[TOUCH] SCREEN X=%u Y=%u", tx, ty);
+    (void)gUsb.writeLine(touchLog);
 
     // HOME mode card is a large finger-friendly AUTO/MANUAL toggle.
     if (currentPage == PAGE_HOME && hit(tx, ty, HOME_SIDE_X, HOME_MODE_Y, HOME_SIDE_W, HOME_SIDE_H)) {

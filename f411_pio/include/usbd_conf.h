@@ -1,8 +1,8 @@
 #pragma once
 
 #include "stm32f4xx_hal.h"
-#include <cstdlib>
-#include <cstring>
+#include <stdlib.h>
+#include <string.h>
 
 #define USBD_MAX_NUM_INTERFACES 2U
 #define USBD_MAX_NUM_CONFIGURATION 1U

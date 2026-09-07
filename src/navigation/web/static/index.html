@@ -294,12 +294,47 @@
           <article class="panel troubleshooting"><div class="panel-head"><div><span class="eyebrow">ESC TROUBLESHOOTING</span><h2>Readiness Checklist</h2></div></div><div class="checklist" id="escChecklist"></div></article>
         </section>
 
+        <!-- ESC ACKERMANN SCALING -->
+        <section class="page" id="page-esc-ackermann">
+          <article class="panel">
+            <div class="panel-head"><div><span class="eyebrow">ACKERMANN → VESC POSITION</span><h2>Steering Scaling & Calibration</h2></div><span class="status-chip waiting" id="calSteerChip">WAIT</span></div>
+            <p class="info-box">Kontrak tunggal steering: ROS/Nav2 memakai sudut roda fisik −30°…+30°. Ackermann memetakan linear ke VESC COMM_SET_POS 0°…360°. Electrical encoder inversion F103 tidak boleh dipakai untuk membalik arah kendaraan.</p>
+            <div class="metric-grid">
+              <div><span>Physical LEFT</span><b>−30°</b><small>mechanical endpoint</small></div>
+              <div><span>VESC LEFT</span><b>0°</b><small>COMM_SET_POS</small></div>
+              <div><span>Physical CENTER</span><b>0°</b><small>straight</small></div>
+              <div><span>VESC CENTER</span><b>180°</b><small>startup center</small></div>
+              <div><span>Physical RIGHT</span><b>+30°</b><small>mechanical endpoint</small></div>
+              <div><span>VESC RIGHT</span><b>360°</b><small>COMM_SET_POS</small></div>
+            </div>
+            <div class="kv-list spaced">
+              <div><span>Controller</span><b id="calSteerController">--</b></div>
+              <div><span>Physical target</span><b id="calSteerTarget">--</b></div>
+              <div><span>Physical actual</span><b id="calSteerActual">--</b></div>
+              <div><span>VESC protocol position</span><b id="calSteerProtocol">--</b></div>
+              <div><span>Mechanical limits</span><b id="ackScaleMechanical">−30° / +30°</b></div>
+              <div><span>Nav2 operational limit</span><b id="ackScaleOperational">±28°</b></div>
+              <div><span>Mapping formula</span><b>POS = (deg + 30) × 6</b></div>
+            </div>
+            <div class="button-row">
+              <button class="warning-btn grow" id="calModeOn2">Enable Safe Cal Mode</button>
+              <button class="soft-btn grow" id="calModeOff2">Disable</button>
+              <button class="soft-btn grow" id="ackScaleApplyCanonical">Restore Canonical Scaling</button>
+            </div>
+            <p class="hint">Nav2 produksi tetap dibatasi ±28°. ±30° hanya untuk mechanical endpoint/commissioning. Scaling VESC tetap 0/180/360.</p>
+          </article>
+          <article class="panel">
+            <div class="panel-head"><div><span class="eyebrow">LIVE CONTRACT</span><h2>Command Domain Verification</h2></div><span class="status-chip waiting" id="ackScaleContractChip">WAIT</span></div>
+            <div class="json-pretty" id="ackScaleContractDetail">Waiting for ESC telemetry...</div>
+          </article>
+        </section>
+
         <!-- CALIBRATION -->
         <section class="page" id="page-calibration">
-          <div class="four-metrics"><div><span>Steering physical</span><b id="calSteeringFlag">WAIT</b></div><div><span>Circle geometry</span><b id="calCircleFlag">WAIT</b></div><div><span>Drive odometry</span><b id="calDriveFlag">WAIT</b></div><div><span>IMU stationary</span><b id="calImuFlag">WAIT</b></div></div>
+          <div class="four-metrics"><div><span>Circle geometry</span><b id="calCircleFlag">WAIT</b></div><div><span>Drive odometry</span><b id="calDriveFlag">WAIT</b></div><div><span>IMU stationary</span><b id="calImuFlag">WAIT</b></div><div><span>Steering</span><b>ESC → Ackermann Scaling</b></div></div>
           <div class="two-col">
             <article class="panel"><div class="panel-head"><div><span class="eyebrow">LOCALIZATION CALIBRATION</span><h2>GNSS / Map Alignment</h2></div><span class="status-chip waiting" id="calGnssChip">WAIT</span></div><p class="info-box">Reset hanya menghapus sampel calibration runtime; autonomous motion tetap fail-closed sampai syarat kualitas dan commissioning benar-benar lulus.</p><div class="kv-list"><div><span>Localization mode</span><b id="calLocMode">--</b></div><div><span>Planning localization</span><b id="calPlanningReady">--</b></div><div><span>Motion localization</span><b id="calMotionReady">--</b></div><div><span>GNSS fusion</span><b id="calGnssFusion">--</b></div></div><div class="button-row"><button class="warning-btn grow" id="calResetLocalization">Reset GNSS Samples</button></div></article>
-            <article class="panel"><div class="panel-head"><div><span class="eyebrow">STEERING</span><h2>Physical Calibration Gate</h2></div><span class="status-chip waiting" id="calSteerChip">WAIT</span></div><div class="kv-list"><div><span>Controller</span><b id="calSteerController">--</b></div><div><span>Target</span><b id="calSteerTarget">--</b></div><div><span>Actual</span><b id="calSteerActual">--</b></div><div><span>Protocol feedback</span><b id="calSteerProtocol">--</b></div></div><div class="button-row"><button class="warning-btn grow" id="calModeOn2">Enable Safe Cal Mode</button><button class="soft-btn grow" id="calModeOff2">Disable</button></div></article>
+            <article class="panel"><div class="panel-head"><div><span class="eyebrow">ACTUATOR CALIBRATION</span><h2>Steering moved to ESC</h2></div></div><p class="info-box">Kalibrasi dan scaling Ackermann dipusatkan di domain <b>ESC → Ackermann Scaling</b>. Halaman ini hanya memuat kalibrasi localization, camera, dan IMU.</p></article>
           </div>
           <div class="two-col">
             <article class="panel"><div class="panel-head"><div><span class="eyebrow">CAMERA METRIC</span><h2>Astra / Perception Calibration</h2></div><span class="status-chip waiting" id="calCameraChip">WAIT</span></div><div class="kv-list"><div><span>USB camera</span><b id="calCameraUsb">--</b></div><div><span>Frame health</span><b id="calCameraHealth">--</b></div><div><span>Metric validated</span><b id="calCameraMetric">--</b></div><div><span>Inference freshness</span><b id="calPerceptionFresh">--</b></div></div><p class="hint">Titik/homography kamera tetap mengikuti source calibration GUI lama. Web menampilkan gate aktual dan tidak menandai PASS secara sintetis.</p></article>

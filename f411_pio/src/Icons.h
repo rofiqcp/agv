@@ -3,12 +3,11 @@
 // ============================================================================
 #pragma once
 
-#include <Arduino.h>
-#include <TFT_eSPI.h>
+#include "HmiDisplay.h"
 #include "Config.h"
 #include "VisualAssets.h"
 
-extern TFT_eSPI tft;
+extern HmiDisplay tft;
 
 inline void iconHome(int cx, int cy, uint16_t c) {
   tft.fillTriangle(cx - 8, cy - 1, cx, cy - 8, cx + 8, cy - 1, c);

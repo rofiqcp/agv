@@ -9,8 +9,8 @@ UART_HandleTypeDef huart2{};
 TIM_HandleTypeDef htim1{};
 TIM_HandleTypeDef htim11{};
 
-HalUartPort gVescUart(&huart1);
-HalUartPort gGnssUart(&huart2);
+HalUartPort gVescUart(&huart1, USART1);
+HalUartPort gGnssUart(&huart2, USART2);
 
 namespace {
 void (*g_watchdog_callback)() = nullptr;
@@ -100,7 +100,7 @@ void Spi1_Init() {
   hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_8;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
@@ -253,6 +253,7 @@ void Board_BuzzerStop() {
 
 bool HalUartPort::begin(uint32_t baudrate) {
   end();
+  handle_->Instance = instance_;
   handle_->Init.BaudRate = baudrate;
   handle_->Init.WordLength = UART_WORDLENGTH_8B;
   handle_->Init.StopBits = UART_STOPBITS_1;
@@ -272,6 +273,7 @@ void HalUartPort::end() {
     (void)HAL_UART_Abort_IT(handle_);
     (void)HAL_UART_DeInit(handle_);
   }
+  handle_->Instance = instance_;
   rx_head_ = rx_tail_ = 0U;
 }
 

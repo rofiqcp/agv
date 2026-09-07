@@ -75,11 +75,11 @@ std::size_t UsbCdcPort::write(const uint8_t *data, std::size_t length) {
 bool UsbCdcPort::writeLine(const char *line) {
   if (line == nullptr) return false;
   const std::size_t len = std::strlen(line);
-  if (len + 1U >= kTxSize) return false;
-  if (availableForWrite() < static_cast<int>(len + 1U)) return false;
+  if (len + 2U >= kTxSize) return false;
+  if (availableForWrite() < static_cast<int>(len + 2U)) return false;
   if (write(reinterpret_cast<const uint8_t *>(line), len) != len) return false;
-  const uint8_t newline = '\n';
-  return write(&newline, 1U) == 1U;
+  static const uint8_t ending[2] = {'\r', '\n'};
+  return write(ending, sizeof(ending)) == sizeof(ending);
 }
 
 void UsbCdcPort::poll() {

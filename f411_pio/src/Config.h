@@ -3,11 +3,16 @@
 // ============================================================================
 #pragma once
 
-#include <Arduino.h>
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+
 
 static const int W = 320;
 static const int H = 240;
-static const int PIN_TOUCH_CS = PA4;
 
 enum PageId : uint8_t {
   PAGE_SPLASH = 0,
@@ -187,9 +192,9 @@ static const float STEER_MAX_DEG =  90.0f;
 static const float STEER_LEFT_PRESET_DEG  = -90.0f;
 static const float STEER_RIGHT_PRESET_DEG =  90.0f;
 
-// TFT_eSPI performs pressure validation/debounce internally through getTouch().
+// HmiDisplay performs pressure validation/debounce internally through getTouch().
 // Actual panel taps have been observed below Z=600; 300 keeps fingertip taps
-// responsive while remaining below TFT_eSPI's normal pressed range.
+// responsive while remaining below HmiDisplay's normal pressed range.
 static const uint16_t TOUCH_THRESHOLD = 300;
 static const uint32_t TOUCH_POLL_MS = 20;          // 50 Hz touch scan; avoids SPI hammering.
 static const uint32_t DISPLAY_REFRESH_MS = 500;    // 2 Hz visual refresh; telemetry stays full-rate.

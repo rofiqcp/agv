@@ -46,7 +46,7 @@ if float(ack.get("command_watchdog_sec", 99.0)) >= float(ack.get("nav2_timeout_s
 if float(ack.get("serial_tx_rate_hz", 0.0)) != float(ack.get("command_rate_hz", 0.0)):
     fail("ROS command and STM transmit rates must match")
 if int(ack.get("serial_baud", 0)) != 115200:
-    fail("STM protocol baud must remain 1000000")
+    fail("F411<->F103 VESC UART must remain 115200 baud")
 if abs(float(ack.get("drive_wheel_radius_m", 0.0)) - 0.145) > 1e-9:
     fail("native VESC drive wheel radius must match vehicle radius 0.145 m")
 if int(ack.get("drive_motor_pole_pairs", 0)) != 15:
@@ -56,7 +56,9 @@ if abs(float(ack.get("drive_gear_ratio", 0.0)) - 1.0) > 1e-9:
 for token in ("nativeDriveErpmPerMps", "rightCommandUnitsPerMps", "rightCommandLimit",
               "COMM_SET_RPM and COMM_GET_VALUES use electrical RPM",
               "raw_commissioning_enabled", "rawCommissioningSnapshot",
-              "clampCommissioningSteeringDeg", "stm32_right_erpm", "RAW_COMMISSIONING"):
+              "clampCommissioningSteeringDeg", "stm32_right_erpm", "RAW_COMMISSIONING",
+              "vescPositionDegFromPhysicalSteering", "std::vector<std::uint8_t> payload{kVescSetPos}",
+              "(physical_deg + 30.0) * 6.0"):
     if token not in source:
         fail(f"native VESC eRPM conversion contract missing: {token}")
 if ack.get("stm32_tx_topic") != "/stmf4/vesc/runtime_tx" or ack.get("stm32_rx_topic") != "/stmf4/vesc/rx":

@@ -55,7 +55,6 @@ constexpr std::uint8_t kVescCustomAppData = 36;
 constexpr std::uint8_t kHbMagic0 = 0x48;
 constexpr std::uint8_t kHbMagic1 = 0x42;
 constexpr std::uint8_t kHbVersion = 1;
-constexpr std::uint8_t kHbSetSteeringDeg = 9;
 constexpr std::uint8_t kHbGetSteeringCal = 10;
 constexpr std::uint8_t kVescForwardCan = 34;
 constexpr std::uint8_t kVescRightMotorId = 2;
@@ -1857,7 +1856,12 @@ private:
     steering_target.data = steering_deg * kPi / 180.0;
     steering_target_pub_->publish(steering_target);
     std_msgs::msg::Float64 steering_uncal_target;
-    steering_uncal_target.data = protocol_cmd_deg * kPi / 180.0;
+    // For STM32/VESC the externally useful protocol-domain value is the standard
+    // VESC position 0..360 deg. Legacy transports retain their historical signed
+    // command domain. Physical steering remains on /esc/steering_target_rad.
+    const double protocol_visible_deg = transport_mode_ == "stm32"
+      ? vescPositionDegFromPhysicalSteering(steering_deg) : protocol_cmd_deg;
+    steering_uncal_target.data = protocol_visible_deg * kPi / 180.0;
     steering_uncal_target_pub_->publish(steering_uncal_target);
     steering_protocol_command_pub_->publish(steering_uncal_target);
 
@@ -2143,14 +2147,28 @@ private:
     return cmd;
   }
 
-  void sendVescSetPos(double position_deg)
+  static double vescPositionDegFromPhysicalSteering(double physical_deg)
   {
-    /* ROS/Web path is signed physical steering. Standard COMM_SET_POS is kept
-     * exclusively for VESC Tool's 0..360 widget and is remapped in F103. */
-    position_deg = std::clamp(position_deg, -30.0, 30.0);
-    std::vector<std::uint8_t> payload{
-      kVescCustomAppData, kHbMagic0, kHbMagic1, kHbVersion, kHbSetSteeringDeg};
-    appendI32Be(payload, static_cast<std::int32_t>(std::lround(position_deg * 1000.0)));
+    // Canonical Ackermann -> VESC steering scale. Do not insert another center
+    // offset, LUT, or electrical-encoder inversion in this layer.
+    //   -30 deg physical = VESC POS   0 deg
+    //     0 deg physical = VESC POS 180 deg
+    //   +30 deg physical = VESC POS 360 deg
+    physical_deg = std::clamp(physical_deg, -30.0, 30.0);
+    return std::clamp((physical_deg + 30.0) * 6.0, 0.0, 360.0);
+  }
+
+  void sendVescSetPos(double physical_deg)
+  {
+    /* Single steering wire contract:
+     *   ROS/Ackermann physical -30..0..+30 deg
+     *       -> VESC COMM_SET_POS 0..180..360 deg
+     * F103 maps the standard VESC 0..360 position back to the calibrated
+     * signed steering envelope. This keeps Nav2, commissioning and VESC Tool
+     * on one unambiguous position API. */
+    const double vesc_pos_deg = vescPositionDegFromPhysicalSteering(physical_deg);
+    std::vector<std::uint8_t> payload{kVescSetPos};
+    appendI32Be(payload, static_cast<std::int32_t>(std::lround(vesc_pos_deg * 1000000.0)));
     sendVescPayload(payload);
   }
 
