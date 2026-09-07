@@ -58,7 +58,9 @@ static void startAppWatchdog() {
   gAppWatchdogTimer->setOverflow(100000U, MICROSEC_FORMAT);
   gAppWatchdogTimer->attachInterrupt(appWatchdogIsr);
   gAppWatchdogTimer->resume();
-  gAppWatchdogArmed = true;
+  // Boot/reconnect must never enter a watchdog reset-loop before ROS owns CDC.
+  // Arm only after qualified ROS heartbeats in markRosHeartbeat().
+  gAppWatchdogArmed = false;
 }
 
 static void stopAppWatchdog() {
@@ -113,64 +115,25 @@ static void enterSystemDfu();
 // We reset first, then jump from .preinit_array before Arduino/HAL/USB startup,
 // avoiding stale USB/peripheral state during erase/program operations.
 // ---------------------------------------------------------------------------
-static constexpr uint32_t kSystemMemory = 0x1FFF0000UL;
-static constexpr uint32_t kDfuBootMagic = 0x44465531UL;  // "DFU1"
-__attribute__((section(".noinit"))) static volatile uint32_t gDfuBootMagic;
-
-static void earlySystemDfuCheck() {
-  if (gDfuBootMagic != kDfuBootMagic) return;
-  gDfuBootMagic = 0;
-
-  const uint32_t bootStack = *reinterpret_cast<volatile uint32_t*>(kSystemMemory);
-  const uint32_t bootReset = *reinterpret_cast<volatile uint32_t*>(kSystemMemory + 4UL);
-
-  // Sanity-check the ROM vectors before changing processor state.
-  if ((bootStack & 0x2FFE0000UL) != 0x20000000UL ||
-      (bootReset & 0xFFF00000UL) != 0x1FF00000UL) {
-    return;
-  }
-
-  __disable_irq();
-  SysTick->CTRL = 0;
-  SysTick->LOAD = 0;
-  SysTick->VAL = 0;
-  for (uint32_t i = 0; i < 8; ++i) {
-    NVIC->ICER[i] = 0xFFFFFFFFUL;
-    NVIC->ICPR[i] = 0xFFFFFFFFUL;
-  }
-
-  __HAL_RCC_SYSCFG_CLK_ENABLE();
-  __HAL_SYSCFG_REMAPMEMORY_SYSTEMFLASH();
-  SCB->VTOR = kSystemMemory;
-  __DSB();
-  __ISB();
-
-  using BootEntry = void (*)();
-  BootEntry boot = reinterpret_cast<BootEntry>(bootReset);
-  __set_MSP(bootStack);
-  __enable_irq();
-  boot();
-  while (true) { }
-}
-
-using PreinitFn = void (*)();
-__attribute__((used, section(".preinit_array")))
-static PreinitFn const gEarlyDfuHook = earlySystemDfuCheck;
+static constexpr uint32_t kBootRequestMagic = 0x42465544UL;  // "DFUB"
 
 static void enterSystemDfu() {
   stopAppWatchdog();
-  // Finish acknowledgement and force a clean CDC disconnect before reset.
-  Serial.flush();
-  delay(40);
+  RCC->APB1ENR |= RCC_APB1ENR_PWREN;
+  (void)RCC->APB1ENR;
+  PWR->CR |= PWR_CR_DBP;
+  for (volatile uint32_t i = 0; i < 1000U; ++i) __NOP();
+  RTC->BKP0R = kBootRequestMagic;
+  __DSB();
+  __ISB();
+
+  // Never call Serial.flush() here. USBSerial::flush can wait forever when
+  // the host disappears with queued data. ACK is best-effort; reset is final.
+  delay(20);
   Serial.end();
 #if HMI_LEGACY_UART
   Serial1.end();
 #endif
-  delay(120);
-
-  gDfuBootMagic = kDfuBootMagic;
-  __DSB();
-  __ISB();
   NVIC_SystemReset();
   while (true) { }
 }
@@ -189,20 +152,29 @@ static const char* pageName(PageId page) {
   }
 }
 
+static bool tryUsbLine(const char* line) {
+  if (line == nullptr) return false;
+  const size_t len = strnlen(line, 190U);
+  if (len >= 190U) return false;
+  char out[192];
+  memcpy(out, line, len);
+  out[len] = '\n';
+  const size_t total = len + 1U;
+  if (Serial.availableForWrite() < static_cast<int>(total)) return false;
+  return Serial.write(reinterpret_cast<const uint8_t *>(out), total) == total;
+}
+
 static void printBoth(const char* line) {
-  Serial.println(line);
+  (void)tryUsbLine(line);
 #if HMI_LEGACY_UART
   Serial1.println(line);
 #endif
 }
 
 static void publishPage() {
-  Serial.print(F("PAGE:"));
-  Serial.println(pageName(currentPage));
-#if HMI_LEGACY_UART
-  Serial1.print(F("PAGE:"));
-  Serial1.println(pageName(currentPage));
-#endif
+  char line[32];
+  snprintf(line, sizeof(line), "PAGE:%s", pageName(currentPage));
+  printBoth(line);
 }
 
 static const char* driveControlName() {
@@ -588,7 +560,13 @@ static void markRosHeartbeat() {
     const uint32_t gap = (uint32_t)(now - lastRosHeartbeatMs);
     if (gap <= ROS_HEARTBEAT_STABLE_GAP_MS) {
       if (rosHeartbeatStableCount < 255) ++rosHeartbeatStableCount;
-      if (rosHeartbeatStableCount >= ROS_HEARTBEAT_STABLE_COUNT) rosHeartbeatStable = true;
+      if (rosHeartbeatStableCount >= ROS_HEARTBEAT_STABLE_COUNT) {
+        rosHeartbeatStable = true;
+        if (!gAppWatchdogArmed) {
+          gMainLoopHeartbeatMs = HAL_GetTick();
+          gAppWatchdogArmed = true;
+        }
+      }
     } else {
       // A busy ROS startup may delay timers. Restart the qualification window
       // without falsely declaring the link dead.
@@ -607,6 +585,7 @@ static void forceRosOffline() {
   gTelemetry.rosConnected = false;
   rosHeartbeatStableCount = 0;
   rosHeartbeatStable = false;
+  gAppWatchdogArmed = false;
   gTelemetry.systemStatus = SYS_NOT_READY;
   gTelemetry.state = STATE_STOPPED;
   gTelemetry.speedKmh = 0.0f;
@@ -1015,7 +994,7 @@ void setup() {
   Serial1.begin(115200);
 #endif
   delay(50);
-  Serial.println(F("ADV HMI + CUAV NEO3 integrated firmware — boot"));
+  printBoth("ADV HMI + CUAV NEO3 integrated firmware - boot");
 
   // Sensor interfaces are initialized before the splash so GNSS acquisition
   // and IST8310 conversion run in parallel with the HMI startup animation.
