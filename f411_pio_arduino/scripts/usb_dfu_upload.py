@@ -144,7 +144,10 @@ def _request_software_dfu(port):
             return False
     except Exception as exc:
         print(f"[USB-DFU] CDC trigger detail: {exc}")
-        return True
+        # CDC existing does not mean the application is alive. Treat any
+        # transport exception as a failed software trigger and fall back to
+        # manual ROM-DFU (BOOT0 + RESET) instead of assuming DFU was requested.
+        return False
 
 
 def _before_upload(source, target, env):
@@ -166,10 +169,7 @@ def _before_upload(source, target, env):
     if software_supported:
         if _wait_for_dfu(12.0, manual_hint=False):
             return
-        raise RuntimeError(
-            "BOOT:DFU dikirim tetapi STM32 ROM DFU tidak terdeteksi. "
-            "Coba satu kali bootstrap manual BOOT0 + RESET."
-        )
+        print("[USB-DFU] Software DFU tidak muncul; fallback ke ROM DFU manual.")
 
     if _wait_for_dfu(MANUAL_DFU_WAIT_S, manual_hint=True):
         return

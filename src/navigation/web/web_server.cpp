@@ -1538,7 +1538,9 @@ class WebRosBridge {
         {"/stmf4/vesc/status", "vesc_transport_status"}, {"/stmf4/vesc/error", "vesc_transport_error"}, {"/esc/vesc/tool_status", "vesc_tool_status"},
         {"/esc/vesc/tool_telemetry", "vesc_tool_telemetry"}, {"/esc/vesc/left_values", "vesc_left_values"}, {"/esc/vesc/right_values", "vesc_right_values"}, {"/esc/vesc/config_state", "vesc_config_state"},
         {"/esc/vesc/tuning_state", "vesc_tuning_state"}, {"/esc/vesc/position_state", "vesc_position_state"},
-        {"/esc/vesc/steering_state", "vesc_steering_state"}, {"/esc/vesc/command_state", "vesc_command_state"}, {"/esc/vesc/raw_reply", "vesc_raw_reply"}};
+        {"/esc/vesc/steering_state", "vesc_steering_state"}, {"/esc/vesc/rotor_state", "vesc_rotor_state"},
+        {"/esc/vesc/left_rotor_state", "vesc_left_rotor_state"}, {"/esc/vesc/right_rotor_state", "vesc_right_rotor_state"},
+        {"/esc/vesc/command_state", "vesc_command_state"}, {"/esc/vesc/raw_reply", "vesc_raw_reply"}};
     for (const auto &entry : strings) {
       const QString channel = QString::fromLatin1(entry.second);
       const QString topic = QString::fromLatin1(entry.first);

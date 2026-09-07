@@ -302,6 +302,8 @@ private:
     declare_parameter<bool>("flip_horizontal", true);
     declare_parameter<bool>("camera_hotplug_retry", true);
     declare_parameter<double>("camera_retry_interval_sec", 2.0);
+    declare_parameter<int>("camera_read_fail_threshold", 5);
+    declare_parameter<int>("camera_online_good_frames", 3);
     declare_parameter<double>("confidence_threshold", 0.10);
     declare_parameter<double>("iou_threshold", 0.45);
     declare_parameter<double>("lane_threshold", 0.50);
@@ -478,6 +480,8 @@ private:
     flip_horizontal_ = get_parameter("flip_horizontal").as_bool();
     hotplug_retry_ = get_parameter("camera_hotplug_retry").as_bool();
     retry_sec_ = get_parameter("camera_retry_interval_sec").as_double();
+    camera_read_fail_threshold_ = std::clamp(get_parameter("camera_read_fail_threshold").as_int(), 2, 30);
+    camera_online_good_frames_ = std::clamp(get_parameter("camera_online_good_frames").as_int(), 1, 30);
     confidence_threshold_ = static_cast<float>(get_parameter("confidence_threshold").as_double());
     iou_threshold_ = static_cast<float>(get_parameter("iou_threshold").as_double());
     lane_threshold_ = static_cast<float>(get_parameter("lane_threshold").as_double());
@@ -1053,7 +1057,11 @@ private:
       cv::VideoCapture candidate;
       if (!configureCameraCandidate(device, candidate)) continue;
       capture_ = std::move(candidate);
-      publishConnected(true);
+      camera_read_fail_streak_ = 0;
+      camera_good_frame_streak_ = 1;
+      // configureCameraCandidate already dequeued one real BGR frame. Delay the
+      // ONLINE edge until a few consecutive capture-loop frames also succeed;
+      // this prevents USB/V4L2 status flapping on transient open/read glitches.
       const double actual_width = capture_.get(cv::CAP_PROP_FRAME_WIDTH);
       const double actual_height = capture_.get(cv::CAP_PROP_FRAME_HEIGHT);
       const double actual_fps = capture_.get(cv::CAP_PROP_FPS);
@@ -1065,7 +1073,7 @@ private:
 
     publishConnected(false);
     publishHealth(false, "CAMERA_OPEN_FAILED");
-    publishEmergency(true);
+    publishEmergency(inference_enabled_.load());
     RCLCPP_WARN_THROTTLE(
       get_logger(), *get_clock(), 5000,
       "Kamera CPU belum tersedia/usable; %zu kandidat V4L2 sudah diprobe, menunggu hot-plug",
@@ -2272,10 +2280,25 @@ private:
       cv::Mat frame;
       if (!capture_.read(frame) || frame.empty() || frame.type() != CV_8UC3) {
         ++capture_dropped_total_;
+        ++camera_read_fail_streak_;
+        camera_good_frame_streak_ = 0;
+        if (camera_read_fail_streak_ < camera_read_fail_threshold_) {
+          std::this_thread::sleep_for(10ms);
+          continue;
+        }
         capture_.release();
-        publishConnected(false); publishHealth(false, "FRAME_READ_FAILED_OR_NOT_BGR8"); publishEmergency(true);
+        camera_read_fail_streak_ = 0;
+        publishConnected(false);
+        publishHealth(false, "FRAME_READ_FAILED_STREAK");
+        publishEmergency(inference_enabled_.load());
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 5000,
+          "Camera read gagal %d frame berturut-turut; reopen V4L2", camera_read_fail_threshold_);
         continue;
       }
+      camera_read_fail_streak_ = 0;
+      camera_good_frame_streak_ = std::min(camera_good_frame_streak_ + 1, camera_online_good_frames_);
+      if (camera_good_frame_streak_ == camera_online_good_frames_) publishConnected(true);
       if (flip_horizontal_) cv::flip(frame, frame, 1);
       const auto steady_now = std::chrono::steady_clock::now();
       const auto ros_stamp = now();
@@ -2695,6 +2718,10 @@ private:
   bool flip_horizontal_{true};
   bool hotplug_retry_{true};
   double retry_sec_{2.0};
+  int camera_read_fail_threshold_{5};
+  int camera_online_good_frames_{3};
+  int camera_read_fail_streak_{0};
+  int camera_good_frame_streak_{0};
   float confidence_threshold_{0.10F};
   float iou_threshold_{0.45F};
   float lane_threshold_{0.50F};

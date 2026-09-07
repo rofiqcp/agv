@@ -1146,9 +1146,9 @@ private:
 
     // F411 owns the physical USB CDC. Ackermann exchanges the exact existing
     // 14-byte actuator frames through ROS byte arrays; direct serial remains fallback.
-    stm32_tx_pub_ = create_publisher<std_msgs::msg::UInt8MultiArray>(stm32_tx_topic_, rclcpp::QoS(100).reliable());
+    stm32_tx_pub_ = create_publisher<std_msgs::msg::UInt8MultiArray>(stm32_tx_topic_, rclcpp::QoS(rclcpp::KeepLast(8)).reliable());
     stm32_rx_sub_ = create_subscription<std_msgs::msg::UInt8MultiArray>(
-      stm32_rx_topic_, rclcpp::QoS(100).reliable(),
+      stm32_rx_topic_, rclcpp::QoS(rclcpp::KeepLast(16)).reliable(),
       [this](std_msgs::msg::UInt8MultiArray::ConstSharedPtr msg) {
         if (transport_mode_ != "stm32") return;
         consumeVescRxBytes(msg->data);
@@ -2323,13 +2323,25 @@ private:
         if (vesc_rx_stream_.size() < 3U) return;
         header = 3U;
         payload_len = (static_cast<std::size_t>(vesc_rx_stream_[1]) << 8U) | vesc_rx_stream_[2];
+        if (payload_len < 255U) {
+          vesc_rx_stream_.erase(vesc_rx_stream_.begin());
+          ++vesc_rx_format_error_count_;
+          continue;
+        }
       } else {
         if (vesc_rx_stream_.size() < 4U) return;
         header = 4U;
         payload_len = (static_cast<std::size_t>(vesc_rx_stream_[1]) << 16U) |
                       (static_cast<std::size_t>(vesc_rx_stream_[2]) << 8U) | vesc_rx_stream_[3];
+        if (payload_len < 65535U) {
+          vesc_rx_stream_.erase(vesc_rx_stream_.begin());
+          ++vesc_rx_format_error_count_;
+          continue;
+        }
       }
-      if (payload_len == 0U || payload_len > 4096U) {
+      // This F103 firmware uses PACKET_MAX_PL_LEN=512. Reject impossible frames
+      // early rather than allowing a corrupted length to hold or flush the stream.
+      if (payload_len == 0U || payload_len > 512U) {
         vesc_rx_stream_.erase(vesc_rx_stream_.begin());
         ++vesc_rx_format_error_count_;
         continue;
@@ -2349,10 +2361,13 @@ private:
       if (expected_crc == actual_crc) {
         std::vector<std::uint8_t> payload(payload_ptr, payload_ptr + payload_len);
         handleVescPayload(payload);
+        vesc_rx_stream_.erase(vesc_rx_stream_.begin(), vesc_rx_stream_.begin() + static_cast<std::ptrdiff_t>(total));
       } else {
         ++vesc_rx_crc_error_count_;
+        // CRC failure means even the claimed length is untrusted. Discard one
+        // byte and rescan so a valid frame immediately behind noise is preserved.
+        vesc_rx_stream_.erase(vesc_rx_stream_.begin());
       }
-      vesc_rx_stream_.erase(vesc_rx_stream_.begin(), vesc_rx_stream_.begin() + static_cast<std::ptrdiff_t>(total));
     }
   }
 

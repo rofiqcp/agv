@@ -222,6 +222,21 @@
               </div>
             </section>
 
+            <section class="vesc-section" id="vescRotorSection">
+              <div class="vesc-section-head"><div><span class="eyebrow">VESC ROTOR POSITION</span><h3>Rotor / Position Diagnostics</h3></div><div class="status-pair"><span class="status-chip waiting" id="vescRotorSnapshotState">WAIT</span><button class="soft-btn" id="vescReadRotor">Refresh Rotor</button></div></div>
+              <p class="hint"><b>PID Pos</b> adalah feedback position-control steering. <b>Encoder</b> adalah sudut mekanik sensor. <b>Observer</b>, Obs vs Enc, dan Obs vs Hall adalah domain elektrik FOC. <b>Inductance</b> hanya sah saat detection; tidak dipalsukan sebagai posisi steering.</p>
+              <div class="vesc-position-strip">
+                <div><span>Inductance</span><b id="vescRotorInductance">DETECT ONLY</b><small>detection signal</small></div>
+                <div><span>Encoder</span><b id="vescRotorEncoder">--</b><small>mechanical deg</small></div>
+                <div><span>Observer</span><b id="vescRotorObserver">--</b><small>electrical deg</small></div>
+                <div><span>PID Pos</span><b id="vescRotorPidPos">--</b><small>steering feedback</small></div>
+                <div><span>Obs vs Enc</span><b id="vescRotorObsEnc">--</b><small>observer − encoder</small></div>
+                <div><span>Obs vs Hall</span><b id="vescRotorObsHall">--</b><small>observer − Hall</small></div>
+                <div><span>PID Error</span><b id="vescRotorPidErr">--</b><small>setpoint − position</small></div>
+              </div>
+              <details><summary>Decoded rotor snapshot motor terpilih</summary><div class="json-pretty vesc-reply" id="vescRotorDetail">Waiting for rotor snapshot...</div></details>
+            </section>
+
             <section class="vesc-section">
               <div class="vesc-section-head"><div><span class="eyebrow">MOTOR CONTROL</span><h3>Set Commands</h3></div><button class="danger-btn" id="vescSendZero">STOP BOTH</button></div>
               <div class="vesc-command-grid">
@@ -560,7 +575,7 @@
   <div class="toast-stack" id="toastStack" aria-live="polite"></div>
   <div class="modal-backdrop" id="confirmModal"><div class="modal"><span class="eyebrow">CONFIRM ACTION</span><h2 id="confirmTitle">Confirm</h2><p id="confirmText"></p><div class="button-row"><button class="soft-btn grow" id="confirmNo">Cancel</button><button class="danger-btn grow" id="confirmYes">Continue</button></div></div></div>
   <script src="/app.js?v=20260904-sse-fallback-v1-bab4-report-v2" defer></script>
-  <script src="/vesc_workbench.js?v=20260906-vesc-engineering-v5" defer></script>
+  <script src="/vesc_workbench.js?v=20260907-rotor-snapshot-v6" defer></script>
   <script src="/export_tools.js?v=20260904-bab4-report-v1" defer></script>
 </body>
 </html>

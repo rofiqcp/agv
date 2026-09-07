@@ -136,6 +136,7 @@ private:
   double last_status_time_ = 0.0;
   double last_reconnect_try_ = 0.0;
   double last_data_time_ = 0.0;
+  double last_valid_packet_time_ = 0.0;
   double data_timeout_sec_ = 6.0;
   const double reconnect_interval_sec_ = 2.0;
   double error_suppress_until_ = 0.0;

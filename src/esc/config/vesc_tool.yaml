@@ -1,6 +1,6 @@
 vesc_tool_bridge:
   ros__parameters:
-    maintenance_poll_hz: 20.0
+    maintenance_poll_hz: 50.0
     tcp_service_hz: 1000.0
     max_abs_duty: 0.95
     max_abs_current_a: 20.0

@@ -28,6 +28,7 @@ using namespace std::chrono_literals;
 namespace {
 constexpr std::uint8_t COMM_FW_VERSION = 0;
 constexpr std::uint8_t COMM_GET_VALUES = 4;
+constexpr std::uint8_t COMM_GET_VALUES_SELECTIVE = 50;
 constexpr std::uint8_t COMM_SET_DUTY = 5;
 constexpr std::uint8_t COMM_SET_CURRENT = 6;
 constexpr std::uint8_t COMM_SET_CURRENT_BRAKE = 7;
@@ -62,6 +63,13 @@ constexpr std::uint8_t HB_GET_STEERING_CAL = 10;
 constexpr std::uint8_t HB_STEERING_HOME = 13;
 constexpr std::uint8_t HB_ENCODER_DEBUG = 14;
 constexpr std::uint8_t HB_STEERING_SET_CENTER = 15;
+constexpr std::uint8_t HB_GET_ROTOR_SNAPSHOT = 16;
+constexpr std::size_t kMaxF103VescPayload = 512U;
+constexpr std::uint32_t kMaintenanceValuesMask =
+  (1U << 0U) | (1U << 1U) | (1U << 2U) | (1U << 3U) | (1U << 4U) |
+  (1U << 5U) | (1U << 6U) | (1U << 7U) | (1U << 8U) |
+  (1U << 15U) | (1U << 16U) | (1U << 17U) | (1U << 18U) |
+  (1U << 19U) | (1U << 20U) | (1U << 21U);
 
 rclcpp::QoS stateQos() { return rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local(); }
 
@@ -152,7 +160,7 @@ bool containsValidVescFrame(const std::vector<std::uint8_t> &bytes) {
     } else {
       continue;
     }
-    if (n == 0U || n > 4096U) continue;
+    if (n == 0U || n > kMaxF103VescPayload) continue;
     const std::size_t total = h + n + 3U;
     if (bytes.size() - s < total || bytes[s + total - 1U] != 3U) continue;
     const auto expected = static_cast<std::uint16_t>((std::uint16_t(bytes[s + h + n]) << 8U) |
@@ -186,7 +194,7 @@ bool popValidVescFrame(std::vector<std::uint8_t> &bytes, std::vector<std::uint8_
       bytes.erase(bytes.begin());
       continue;
     }
-    if (n == 0U || n > 4096U) { bytes.erase(bytes.begin()); continue; }
+    if (n == 0U || n > kMaxF103VescPayload) { bytes.erase(bytes.begin()); continue; }
     const std::size_t total = h + n + 3U;
     if (bytes.size() < total) return false;
     const auto expected = static_cast<std::uint16_t>((std::uint16_t(bytes[h + n]) << 8U) |
@@ -257,7 +265,7 @@ bool parseDouble(const std::string &s, double *value) {
 class VescToolBridge final : public rclcpp::Node {
  public:
   VescToolBridge() : Node("vesc_tool_bridge") {
-    poll_hz_ = std::clamp(declare_parameter<double>("maintenance_poll_hz", 20.0), 1.0, 25.0);
+    poll_hz_ = std::clamp(declare_parameter<double>("maintenance_poll_hz", 50.0), 1.0, 50.0);
     tcp_service_hz_ = std::clamp(declare_parameter<double>("tcp_service_hz", 1000.0), 100.0, 2000.0);
     max_abs_duty_ = std::clamp(declare_parameter<double>("max_abs_duty", 0.95), 0.01, 0.99);
     max_abs_current_a_ = std::clamp(declare_parameter<double>("max_abs_current_a", 20.0), 0.1, 100.0);
@@ -269,7 +277,7 @@ class VescToolBridge final : public rclcpp::Node {
     if (python_tcp_port_ == tcp_port_) throw std::runtime_error("python_tcp_port and tcp_port must differ");
 
     tx_pub_ = create_publisher<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/maintenance_tx", rclcpp::QoS(100).reliable());
-    runtime_probe_pub_ = create_publisher<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/runtime_tx", rclcpp::QoS(20).reliable());
+    runtime_probe_pub_ = create_publisher<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/runtime_tx", rclcpp::QoS(rclcpp::KeepLast(8)).reliable());
     mode_pub_ = create_publisher<std_msgs::msg::String>("/stmf4/vesc/mode", stateQos());
     active_pub_ = create_publisher<std_msgs::msg::Bool>("/esc/vesc/maintenance_active", stateQos());
     owner_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/maintenance_owner", stateQos());
@@ -281,10 +289,13 @@ class VescToolBridge final : public rclcpp::Node {
     tuning_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/tuning_state", stateQos());
     position_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/position_state", stateQos());
     steering_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/steering_state", stateQos());
+    rotor_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/rotor_state", stateQos());
+    left_rotor_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/left_rotor_state", stateQos());
+    right_rotor_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/right_rotor_state", stateQos());
     command_state_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/command_state", stateQos());
     raw_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/raw_reply", rclcpp::QoS(20).reliable());
 
-    rx_sub_ = create_subscription<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/rx", rclcpp::QoS(100).reliable(),
+    rx_sub_ = create_subscription<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/rx", rclcpp::QoS(rclcpp::KeepLast(16)).reliable(),
       [this](std_msgs::msg::UInt8MultiArray::ConstSharedPtr m) { consume(m->data); });
     gateway_sub_ = create_subscription<std_msgs::msg::Bool>("/hmi/connected", stateQos(),
       [this](std_msgs::msg::Bool::ConstSharedPtr m) { gateway_connected_ = m->data; publishStatus(); });
@@ -495,7 +506,10 @@ class VescToolBridge final : public rclcpp::Node {
     if (tcp_client_fd_ < 0) return;
 
     std::uint8_t buf[1024];
-    for (;;) {
+    // Bound socket work per 1-ms service tick. A peer that continuously writes
+    // must not monopolize the single-threaded ROS executor and delay safety/route
+    // callbacks. 32 KiB/tick is far above the 115200-baud downstream capacity.
+    for (std::size_t rx_budget = 0U; rx_budget < 32U; ++rx_budget) {
       const ssize_t n = ::recv(tcp_client_fd_, buf, sizeof(buf), 0);
       if (n > 0) {
         if (tcp_pending_rx_.size() + static_cast<std::size_t>(n) > 65536U) {
@@ -635,7 +649,8 @@ class VescToolBridge final : public rclcpp::Node {
     if (python_tcp_client_fd_ < 0) return;
 
     std::uint8_t buf[1024];
-    for (;;) {
+    // Same bounded service budget as the VESC Tool socket.
+    for (std::size_t rx_budget = 0U; rx_budget < 32U; ++rx_budget) {
       const ssize_t n = ::recv(python_tcp_client_fd_, buf, sizeof(buf), 0);
       if (n > 0) {
         if (python_pending_rx_.size() + static_cast<std::size_t>(n) > 65536U) {
@@ -803,10 +818,24 @@ class VescToolBridge final : public rclcpp::Node {
   void pollTick() {
     if (!maintenance_active_ || transition_ != Transition::NONE || tcp_client_armed_ || python_tcp_client_armed_) return;
     if (std::chrono::steady_clock::now() < explicit_request_hold_until_) return;
-    // Internal Web/maintenance application view: 20 Hz per motor. External
-    // Python/VESC Tool TCP clients own their own polling cadence and bypass this.
-    sendPayload(1, {COMM_GET_VALUES});
-    sendPayload(2, {COMM_GET_VALUES});
+    // Internal Web/maintenance application view: essential electrical/motor
+    // telemetry is 50 Hz per motor using a selective mask. Slow energy/tacho
+    // counters are refreshed at 1 Hz per motor with a full GET_VALUES. External
+    // Python/VESC Tool TCP clients bypass this stream entirely.
+    std::vector<std::uint8_t> fast{COMM_GET_VALUES_SELECTIVE};
+    appendI32(fast, static_cast<std::int32_t>(kMaintenanceValuesMask));
+    sendPayload(1, fast);
+    sendPayload(2, fast);
+    // Stock COMM_ROTOR_POSITION can expose only one DISP_POS_MODE at a time.
+    // This compact custom snapshot carries every standard-equivalent rotor
+    // diagnostic in parallel at the same maintenance rate (50 Hz per motor).
+    sendCustom(1, HB_GET_ROTOR_SNAPSHOT);
+    sendCustom(2, HB_GET_ROTOR_SNAPSHOT);
+    if (++slow_poll_divider_ >= 25U) {
+      slow_poll_divider_ = 0U;
+      sendPayload(slow_poll_motor_, {COMM_GET_VALUES});
+      slow_poll_motor_ = slow_poll_motor_ == 1 ? 2 : 1;
+    }
   }
 
   void command(const std::string &raw) {
@@ -873,6 +902,7 @@ class VescToolBridge final : public rclcpp::Node {
       d.push_back(static_cast<std::uint8_t>(store)); sendCustom(motor, HB_SET_TUNING, d); explicit_request_hold_until_ = std::chrono::steady_clock::now() + 3s; return;
     }
     if (parts.size() == 3 && parts[0] == "POSSTATE" && parts[1] == "GET" && parseMotor(parts[2], &motor)) { sendCustom(motor, HB_GET_POS_STATE); return; }
+    if (parts.size() == 3 && parts[0] == "ROTOR" && parts[1] == "GET" && parseMotor(parts[2], &motor)) { sendCustom(motor, HB_GET_ROTOR_SNAPSHOT); return; }
     if (parts.size() == 5 && parts[0] == "POSLIMITS" && parts[1] == "SET" && parseMotor(parts[2], &motor)) {
       double lo=0,hi=0; if(!parseDouble(parts[3],&lo)||!parseDouble(parts[4],&hi)||lo>hi||lo<std::numeric_limits<std::int32_t>::min()||hi>std::numeric_limits<std::int32_t>::max()){publishStatus("position_limits_rejected");return;}
       std::vector<std::uint8_t> d; appendI32(d,static_cast<std::int32_t>(std::lround(lo))); appendI32(d,static_cast<std::int32_t>(std::lround(hi))); sendCustom(motor,HB_SET_POS_LIMITS,d); return;
@@ -930,17 +960,29 @@ class VescToolBridge final : public rclcpp::Node {
       while (!stream_.empty() && stream_[0] != 2U && stream_[0] != 3U && stream_[0] != 4U) stream_.erase(stream_.begin());
       if (stream_.size() < 2U) return;
       const auto start = stream_[0]; std::size_t h = 0, n = 0;
-      if (start == 2U) { h = 2U; n = stream_[1]; }
-      else if (start == 3U) { if (stream_.size() < 3U) return; h = 3U; n = (std::size_t(stream_[1]) << 8U) | stream_[2]; }
-      else { if (stream_.size() < 4U) return; h = 4U; n = (std::size_t(stream_[1]) << 16U) | (std::size_t(stream_[2]) << 8U) | stream_[3]; }
-      if (!n || n > 4096U) { stream_.erase(stream_.begin()); ++format_errors_; continue; }
+      if (start == 2U) {
+        h = 2U; n = stream_[1];
+      } else if (start == 3U) {
+        if (stream_.size() < 3U) return;
+        h = 3U; n = (std::size_t(stream_[1]) << 8U) | stream_[2];
+        if (n < 255U) { stream_.erase(stream_.begin()); ++format_errors_; continue; }
+      } else {
+        if (stream_.size() < 4U) return;
+        h = 4U; n = (std::size_t(stream_[1]) << 16U) | (std::size_t(stream_[2]) << 8U) | stream_[3];
+        if (n < 65535U) { stream_.erase(stream_.begin()); ++format_errors_; continue; }
+      }
+      if (!n || n > kMaxF103VescPayload) { stream_.erase(stream_.begin()); ++format_errors_; continue; }
       const auto total = h + n + 3U; if (stream_.size() < total) return;
       if (stream_[total - 1U] != 3U) { stream_.erase(stream_.begin()); ++format_errors_; continue; }
       const auto expected = static_cast<std::uint16_t>((std::uint16_t(stream_[h + n]) << 8U) | stream_[h + n + 1U]);
       const auto actual = crc16(stream_.data() + h, n);
-      if (expected == actual) handlePayload(std::vector<std::uint8_t>(stream_.begin() + static_cast<std::ptrdiff_t>(h), stream_.begin() + static_cast<std::ptrdiff_t>(h + n)));
-      else ++crc_errors_;
-      stream_.erase(stream_.begin(), stream_.begin() + static_cast<std::ptrdiff_t>(total));
+      if (expected == actual) {
+        handlePayload(std::vector<std::uint8_t>(stream_.begin() + static_cast<std::ptrdiff_t>(h), stream_.begin() + static_cast<std::ptrdiff_t>(h + n)));
+        stream_.erase(stream_.begin(), stream_.begin() + static_cast<std::ptrdiff_t>(total));
+      } else {
+        ++crc_errors_;
+        stream_.erase(stream_.begin());
+      }
     }
   }
 
@@ -964,6 +1006,36 @@ class VescToolBridge final : public rclcpp::Node {
       std::ostringstream o; o << "{\"motor\":"<<motor<<",\"op\":"<<unsigned(op)<<",\"status\":"<<unsigned(status)
         <<",\"current\":"<<i32(&p[6])<<",\"target\":"<<i32(&p[10])<<",\"minimum\":"<<i32(&p[14])<<",\"maximum\":"<<i32(&p[18])
         <<",\"persistent\":false}"; publishJson(position_pub_,o.str()); return;
+    }
+    if (op==HB_GET_ROTOR_SNAPSHOT && p.size()>=38U) {
+      const unsigned id=p[6];
+      if (id!=1U && id!=RIGHT_ID) return;
+      const unsigned flags=p[7];
+      std::ostringstream o; o<<std::setprecision(9)<<"{\"motor\":"<<id<<",\"op\":"<<unsigned(op)<<",\"status\":"<<unsigned(status)
+        <<",\"sensor_mode\":"<<unsigned(p[8])<<",\"mc_state\":"<<unsigned(p[9])
+        <<",\"encoder_valid\":"<<((flags&0x01U)?"true":"false")
+        <<",\"observer_valid\":"<<((flags&0x02U)?"true":"false")
+        <<",\"pid_position_valid\":"<<((flags&0x04U)?"true":"false")
+        <<",\"observer_encoder_error_valid\":"<<((flags&0x08U)?"true":"false")
+        <<",\"observer_hall_error_valid\":"<<((flags&0x10U)?"true":"false")
+        <<",\"pid_error_valid\":"<<((flags&0x20U)?"true":"false")
+        <<",\"inductance_valid\":"<<((flags&0x40U)?"true":"false");
+      const auto angle=[&](const char *name,unsigned bit,std::size_t off){
+        o<<",\""<<name<<"\":";
+        if(flags&bit)o<<double(i32(&p[off]))/100000.0; else o<<"null";
+      };
+      angle("encoder_mechanical_deg",0x01U,10U);
+      angle("observer_electrical_deg",0x02U,14U);
+      angle("pid_position_deg",0x04U,18U);
+      angle("observer_encoder_error_deg",0x08U,22U);
+      angle("observer_hall_error_deg",0x10U,26U);
+      angle("pid_error_deg",0x20U,30U);
+      angle("inductance_detect_deg",0x40U,34U);
+      o<<",\"inductance_note\":\"detect-only signal; unavailable outside true detector position\"}";
+      const auto json=o.str();
+      publishJson(rotor_pub_,json);
+      publishJson(id==RIGHT_ID?right_rotor_pub_:left_rotor_pub_,json);
+      return;
     }
     if ((op==HB_GET_TUNING || op==HB_SET_TUNING) && p.size()>=30U) {
       const double kpq=u16(&p[6])/1536.0, kiq=u16(&p[8])/4.608, kpd=u16(&p[10])/1536.0, kid=u16(&p[12])/4.608;
@@ -1010,11 +1082,29 @@ class VescToolBridge final : public rclcpp::Node {
 
   void handlePayload(const std::vector<std::uint8_t> &p) {
     if (p.empty()) return;
-    const int motor=last_request_motor_; const auto idx=static_cast<std::size_t>(motor-1);
+    int motor = last_request_motor_;
+    // COMM_GET_VALUES carries the controller ID at byte 58. pollTick() sends
+    // LEFT then RIGHT back-to-back, so last_request_motor_ alone can label the
+    // LEFT raw reply as RIGHT before its response arrives. Prefer the reply's
+    // authoritative ID whenever it is present.
+    if (p[0] == COMM_GET_VALUES && p.size() >= 59U && (p[58] == 1U || p[58] == RIGHT_ID)) {
+      motor = static_cast<int>(p[58]);
+    } else if (p[0] == COMM_GET_VALUES_SELECTIVE && p.size() == 54U &&
+               static_cast<std::uint32_t>(i32(&p[1])) == kMaintenanceValuesMask &&
+               (p[38] == 1U || p[38] == RIGHT_ID)) {
+      motor = static_cast<int>(p[38]);
+    }
+    const auto idx=static_cast<std::size_t>(motor-1);
     std_msgs::msg::String raw; std::ostringstream r;
     r << "{\"motor\":" << motor << ",\"command_id\":" << static_cast<unsigned>(p[0])
       << ",\"payload_hex\":\"" << hex(p) << "\"}"; raw.data = r.str(); raw_pub_->publish(raw);
     if (p[0] == COMM_GET_VALUES && p.size() >= 59U) {
+      slow_amp_hours_[idx] = double(i32(&p[29])) / 10000.0;
+      slow_amp_hours_charged_[idx] = double(i32(&p[33])) / 10000.0;
+      slow_watt_hours_[idx] = double(i32(&p[37])) / 10000.0;
+      slow_watt_hours_charged_[idx] = double(i32(&p[41])) / 10000.0;
+      slow_tachometer_[idx] = i32(&p[45]);
+      slow_tachometer_abs_[idx] = i32(&p[49]);
       std_msgs::msg::String m; std::ostringstream o; o<<std::setprecision(9);
       o << "{\"motor\":" << unsigned(p[58]) << ",\"temp_mos_c\":" << double(i16(&p[1])) / 10.0
         << ",\"temp_motor_c\":" << double(i16(&p[3])) / 10.0 << ",\"current_motor_a\":" << double(i32(&p[5])) / 100.0
@@ -1028,6 +1118,24 @@ class VescToolBridge final : public rclcpp::Node {
         <<",\"vd_v\":"<<double(i32(&p[65]))/1000.0<<",\"vq_v\":"<<double(i32(&p[69]))/1000.0<<",\"timeout_kill\":"<<unsigned(p[73]);
       o<<"}"; m.data=o.str(); telemetry_pub_->publish(m);
       if (unsigned(p[58]) == 2U) right_values_pub_->publish(m); else left_values_pub_->publish(m);
+    } else if (p[0] == COMM_GET_VALUES_SELECTIVE && p.size() == 54U &&
+               static_cast<std::uint32_t>(i32(&p[1])) == kMaintenanceValuesMask) {
+      const unsigned id = p[38];
+      if (id != 1U && id != RIGHT_ID) return;
+      std_msgs::msg::String m; std::ostringstream o; o<<std::setprecision(9);
+      o << "{\"motor\":" << id << ",\"temp_mos_c\":" << double(i16(&p[5])) / 10.0
+        << ",\"temp_motor_c\":" << double(i16(&p[7])) / 10.0 << ",\"current_motor_a\":" << double(i32(&p[9])) / 100.0
+        << ",\"current_in_a\":" << double(i32(&p[13])) / 100.0 << ",\"id_a\":" << double(i32(&p[17])) / 100.0 << ",\"iq_a\":" << double(i32(&p[21])) / 100.0
+        << ",\"duty\":" << double(i16(&p[25])) / 1000.0 << ",\"rpm\":" << i32(&p[27]) << ",\"vbus_v\":" << double(i16(&p[31])) / 10.0
+        << ",\"amp_hours\":" << slow_amp_hours_[idx] << ",\"amp_hours_charged\":" << slow_amp_hours_charged_[idx]
+        << ",\"watt_hours\":" << slow_watt_hours_[idx] << ",\"watt_hours_charged\":" << slow_watt_hours_charged_[idx]
+        << ",\"tachometer\":" << slow_tachometer_[idx] << ",\"tachometer_abs\":" << slow_tachometer_abs_[idx]
+        << ",\"fault\":" << static_cast<unsigned>(p[33]) << ",\"position_deg\":" << double(i32(&p[34])) / 1000000.0
+        << ",\"temp_mos_1_c\":" << double(i16(&p[39])) / 10.0 << ",\"temp_mos_2_c\":" << double(i16(&p[41])) / 10.0
+        << ",\"temp_mos_3_c\":" << double(i16(&p[43])) / 10.0 << ",\"vd_v\":" << double(i32(&p[45])) / 1000.0
+        << ",\"vq_v\":" << double(i32(&p[49])) / 1000.0 << ",\"timeout_kill\":" << unsigned(p[53]) << "}";
+      m.data=o.str(); telemetry_pub_->publish(m);
+      if (id == RIGHT_ID) right_values_pub_->publish(m); else left_values_pub_->publish(m);
     } else if (p[0] == COMM_FW_VERSION && p.size() >= 4U) {
       std::string hw(reinterpret_cast<const char *>(&p[3])); publishStatus(std::string("fw_") + std::to_string(p[1]) + "." + std::to_string(p[2]) + "_" + hw);
       std::ostringstream o; o<<"{\"motor\":"<<motor<<",\"kind\":\"firmware\",\"event\":\"reply\",\"fw\":\""<<unsigned(p[1])<<"."<<unsigned(p[2])<<"\",\"hw\":\""<<hw<<"\"}"; publishJson(config_pub_,o.str());
@@ -1055,7 +1163,7 @@ class VescToolBridge final : public rclcpp::Node {
     } else if (p[0] == COMM_CUSTOM_APP_DATA) handleCustom(motor,p);
   }
 
-  double poll_hz_{20.0}, tcp_service_hz_{1000.0};
+  double poll_hz_{50.0}, tcp_service_hz_{1000.0};
   double max_abs_duty_{0.95}, max_abs_current_a_{20.0}, max_abs_rpm_{10000.0};
   bool maintenance_active_{false}, gateway_connected_{false}, transport_connected_{false}, tcp_enabled_{true}, python_tcp_enabled_{true};
   bool tcp_probe_pending_{false}, python_probe_pending_{false};
@@ -1069,13 +1177,18 @@ class VescToolBridge final : public rclcpp::Node {
   std::chrono::steady_clock::time_point tcp_probe_deadline_{}, tcp_probe_next_{};
   std::chrono::steady_clock::time_point python_probe_deadline_{}, python_probe_next_{};
   int poll_motor_{1}, last_request_motor_{1};
+  std::uint8_t slow_poll_divider_{0U};
+  int slow_poll_motor_{1};
+  double slow_amp_hours_[2]{0.0,0.0}, slow_amp_hours_charged_[2]{0.0,0.0};
+  double slow_watt_hours_[2]{0.0,0.0}, slow_watt_hours_charged_[2]{0.0,0.0};
+  std::int32_t slow_tachometer_[2]{0,0}, slow_tachometer_abs_[2]{0,0};
   std::vector<std::uint8_t> stream_, tcp_pending_rx_, tcp_pending_tx_, python_pending_rx_, python_pending_tx_;
   std::vector<std::uint8_t> mc_active_[2], mc_default_[2], app_active_[2], app_default_[2], pending_mc_verify_[2], pending_app_verify_[2];
   bool pending_tuning_store_[2]{false,false}, pending_mc_temp_store_[2]{false,false};
   std::uint64_t crc_errors_{0}, format_errors_{0};
 
   rclcpp::Publisher<std_msgs::msg::UInt8MultiArray>::SharedPtr tx_pub_, runtime_probe_pub_;
-  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr mode_pub_, owner_pub_, status_pub_, telemetry_pub_, left_values_pub_, right_values_pub_, config_pub_, tuning_pub_, position_pub_, steering_pub_, command_state_pub_, raw_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr mode_pub_, owner_pub_, status_pub_, telemetry_pub_, left_values_pub_, right_values_pub_, config_pub_, tuning_pub_, position_pub_, steering_pub_, rotor_pub_, left_rotor_pub_, right_rotor_pub_, command_state_pub_, raw_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr active_pub_;
   rclcpp::Subscription<std_msgs::msg::UInt8MultiArray>::SharedPtr rx_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr gateway_sub_, transport_sub_;

@@ -413,6 +413,7 @@ void ImuNode::openSerial(bool initial)
         buf_.clear();
         const double opened_at = nowSec();
         last_data_time_ = opened_at;
+        last_valid_packet_time_ = opened_at;
         last_orientation_packet_time_ = opened_at;
         last_accel_packet_time_ = 0.0;
         last_gyro_packet_time_ = 0.0;
@@ -770,6 +771,7 @@ void ImuNode::pollSerial()
       uint8_t parsed_type = packet[1];
       if (parsePacket(packet)) {
         packets_parsed_++;
+        last_valid_packet_time_ = nowSec();
         if (parsed_type == 0x54) {
           published_mag = true;
         } else if (parsed_type == 0x53 || parsed_type == 0x59) {
@@ -780,6 +782,14 @@ void ImuNode::pollSerial()
     }
 
     const double stream_now = nowSec();
+    if (last_valid_packet_time_ > 0.0 &&
+        stream_now - last_valid_packet_time_ > data_timeout_sec_) {
+      logRateLimited("IMU bytes masuk tetapi tidak ada frame WIT checksum-valid; serial dibuka ulang", "info");
+      closeSerial();
+      buf_.clear();
+      last_reconnect_try_ = stream_now;
+      return;
+    }
     const double orientation_age = stream_now - last_orientation_packet_time_;
     if (bytes_received_ > 0 && orientation_age > orientation_packet_timeout_sec_) {
       if (!orientation_recovery_attempted_ &&
@@ -796,16 +806,27 @@ void ImuNode::pollSerial()
       } else if (orientation_recovery_attempted_ &&
                  orientation_recovery_started_time_ > 0.0 &&
                  stream_now - orientation_recovery_started_time_ > orientation_reopen_sec_) {
-        // Register write tidak memulihkan stream: reset jalur USB serial secara bersih.
+        const bool valid_stream_stale = last_valid_packet_time_ <= 0.0 ||
+          stream_now - last_valid_packet_time_ > data_timeout_sec_;
+        if (valid_stream_stale) {
+          // Only tear down USB serial when the whole checksum-valid WIT stream
+          // is stale. Missing ANGLE alone is a field-health issue and must not
+          // flap /imu/connected while ACC/GYRO/MAG packets are still healthy.
+          logRateLimited(
+            "IMU valid WIT stream hilang setelah recovery; serial dibuka ulang", "info");
+          closeSerial();
+          buf_.clear();
+          last_reconnect_try_ = stream_now;
+          last_orientation_packet_time_ = stream_now;
+          orientation_recovery_attempted_ = false;
+          orientation_recovery_started_time_ = 0.0;
+          return;
+        }
         logRateLimited(
-          "IMU orientation tetap hilang setelah recovery; serial dibuka ulang", "info");
-        closeSerial();
-        buf_.clear();
-        last_reconnect_try_ = stream_now;
-        last_orientation_packet_time_ = stream_now;
+          "IMU ANGLE masih stale tetapi WIT stream valid tetap aktif; port dipertahankan", "info");
         orientation_recovery_attempted_ = false;
         orientation_recovery_started_time_ = 0.0;
-        return;
+        last_sensor_config_try_ = stream_now;
       }
     }
 

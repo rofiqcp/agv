@@ -305,7 +305,7 @@ private:
     neo3_ist_connected_pub_ = create_publisher<std_msgs::msg::Bool>("/neo3/ist8310_connected", stateQos());
     neo3_safety_switch_pub_ = create_publisher<std_msgs::msg::Bool>("/neo3/safety_switch", stateQos());
     neo3_status_pub_ = create_publisher<std_msgs::msg::String>("/neo3/status", stateQos());
-    vesc_rx_pub_ = create_publisher<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/rx", rclcpp::QoS(100).reliable());
+    vesc_rx_pub_ = create_publisher<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/rx", rclcpp::QoS(rclcpp::KeepLast(16)).reliable());
     vesc_status_pub_ = create_publisher<std_msgs::msg::String>("/stmf4/vesc/status", stateQos());
     vesc_error_pub_ = create_publisher<std_msgs::msg::String>("/stmf4/vesc/error", stateQos());
     vesc_connected_pub_ = create_publisher<std_msgs::msg::Bool>("/stmf4/vesc/connected", stateQos());
@@ -324,7 +324,7 @@ private:
           RCLCPP_WARN(get_logger(), "Rejected /neo3/command: %s", msg->data.c_str());
         }
       });
-    vesc_runtime_tx_sub_ = create_subscription<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/runtime_tx", rclcpp::QoS(100).reliable(),
+    vesc_runtime_tx_sub_ = create_subscription<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/runtime_tx", rclcpp::QoS(rclcpp::KeepLast(8)).reliable(),
       [this](std_msgs::msg::UInt8MultiArray::ConstSharedPtr msg) { (void)sendVescBytes(msg->data, 'R'); });
     vesc_maintenance_tx_sub_ = create_subscription<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/maintenance_tx", rclcpp::QoS(100).reliable(),
       [this](std_msgs::msg::UInt8MultiArray::ConstSharedPtr msg) { (void)sendVescBytes(msg->data, 'M'); });
@@ -1090,9 +1090,14 @@ private:
       const size_t count = std::min(kChunk, bytes.size() - offset);
       const std::string line = std::string("VESC:TX:") + source + ":" + bytesToHex(bytes.data() + offset, count);
       bool sent = false;
-      for (int attempt = 0; attempt < 100 && fd_ >= 0; ++attempt) {
+      // Runtime is a 20-ms latest-value stream: stale frames are worse than a
+      // dropped refresh, so never block one callback for hundreds of ms.
+      // Maintenance/config transactions are non-periodic and get a longer
+      // bounded retry window for reliability. sendLine() already retries EAGAIN.
+      const int max_attempts = source == 'R' ? 2 : 20;
+      for (int attempt = 0; attempt < max_attempts && fd_ >= 0; ++attempt) {
         if (sendLine(line)) { sent = true; break; }
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        if (attempt + 1 < max_attempts) std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
       if (!sent) {
         if (source == 'R') ++vesc_runtime_tx_rejected_;
