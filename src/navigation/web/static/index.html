@@ -7,6 +7,7 @@
   <link rel="icon" href="data:,">
   <title>ADV Operator Console</title>
   <link rel="stylesheet" href="/styles.css?v=20260904-bab4-report-v1">
+  <link rel="stylesheet" href="/vesc_mp_theme.css?v=20260908-v1">
 </head>
 <body>
   <div class="app-shell">
@@ -544,7 +545,22 @@
 
         <!-- CONFIGURATION -->
         <section class="page" id="page-configuration">
-          <article class="panel"><div class="panel-head"><div><span class="eyebrow">READ-ONLY CONFIG VIEW</span><h2>Active Configuration</h2></div><button class="soft-btn" id="refreshConfigBtn">Reload</button></div><p class="info-box">Web UI menampilkan source-of-truth YAML yang sama dengan GUI C++. Editing parameter kritis tetap dilakukan melalui GUI/commissioning flow agar tidak bypass validasi.</p><div class="config-tabs" id="configTabs"></div><div class="config-view" id="configView">Loading...</div></article>
+          <div class="config-workbench" aria-label="YAML parameter browser">
+            <aside class="config-tree">
+              <div class="config-tree-head"><span class="eyebrow">YAML SOURCES</span><b>Configuration Files</b><small>Mission Planner-style source browser</small><input id="configSearch" class="config-search" type="search" placeholder="Search parameter / path..." autocomplete="off"></div>
+              <div class="config-file-list" id="configFileList"></div>
+              <div class="config-tabs" id="configTabs" hidden></div>
+            </aside>
+            <section class="config-main">
+              <div class="config-toolbar"><b id="configFileTitle">Loading configuration...</b><button class="soft-btn config-filter-btn active" data-cfg-filter="all">ALL</button><button class="soft-btn config-filter-btn" data-cfg-filter="modified">MODIFIED</button><button class="soft-btn config-filter-btn" data-cfg-filter="scalar">SCALAR</button><span class="muted" id="configRowCount">0 params</span></div>
+              <div class="config-grid-wrap"><table class="config-grid"><thead><tr><th>Name</th><th>Value</th><th>Baseline</th><th>Type</th><th>Path</th></tr></thead><tbody id="configGridBody"><tr><td colspan="5">Loading...</td></tr></tbody></table></div>
+              <details class="config-raw-drawer"><summary>Raw source snapshot / developer view</summary><pre class="config-view" id="configView">Loading...</pre></details>
+            </section>
+            <aside class="config-actions">
+              <button class="soft-btn" id="refreshConfigBtn">↻ Reload</button><button class="soft-btn" id="configCopyPathBtn">Copy Path</button><button class="soft-btn" id="configExportFileBtn">Export Snapshot</button><hr><div class="config-selection" id="configSelection"><b>No parameter selected</b>Click a parameter row to inspect its full YAML path and baseline.</div>
+            </aside>
+          </div>
+          <p class="info-box">Configuration browser bersifat read-only seperti parameter inspector. Perubahan parameter tetap dilakukan melalui <b>Tuning & Control</b> sehingga atomic backup, baseline, runtime apply, stationary gate, dan verification yang sudah ada tetap dipakai.</p>
         </section>
       </main>
 

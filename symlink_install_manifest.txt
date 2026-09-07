@@ -68,6 +68,7 @@
 /home/otomasi/ros/install/navigation/share/navigation/config/stage3_navigation.yaml
 /home/otomasi/ros/install/navigation/share/navigation/config/stage3_navigation.yaml.web.baseline
 /home/otomasi/ros/install/navigation/share/navigation/config/trajectory_safety.yaml
+/home/otomasi/ros/install/navigation/share/navigation/config/trajectory_safety.yaml.web.bak.20260908_013707_245
 /home/otomasi/ros/install/navigation/share/navigation/config/trajectory_safety.yaml.web.baseline
 /home/otomasi/ros/install/navigation/share/navigation/config/vehicle.yaml
 /home/otomasi/ros/install/navigation/share/navigation/config/vehicle.yaml.web.baseline
@@ -184,6 +185,7 @@
 /home/otomasi/ros/install/navigation/share/navigation/tools/stage3_certify.py
 /home/otomasi/ros/install/navigation/share/navigation/tools/stage3_commissioning_check.py
 /home/otomasi/ros/install/navigation/share/navigation/tools/stage3_nav2_csv_analyzer.py
+/home/otomasi/ros/install/navigation/share/navigation/web/static/.ui_refactor_marker
 /home/otomasi/ros/install/navigation/share/navigation/web/static/app.js
 /home/otomasi/ros/install/navigation/share/navigation/web/static/app.js.bak_report_20260904
 /home/otomasi/ros/install/navigation/share/navigation/web/static/app.js.bak_report_refine_20260904_2151
@@ -194,6 +196,7 @@
 /home/otomasi/ros/install/navigation/share/navigation/web/static/style.css
 /home/otomasi/ros/install/navigation/share/navigation/web/static/styles.css
 /home/otomasi/ros/install/navigation/share/navigation/web/static/styles.css.bak_report_20260904
+/home/otomasi/ros/install/navigation/share/navigation/web/static/vesc_mp_theme.css
 /home/otomasi/ros/install/navigation/share/navigation/web/static/vesc_workbench.js
 /home/otomasi/ros/install/navigation/lib/navigation/experiment_rank.py
 /home/otomasi/ros/install/navigation/lib/navigation/minipc_nav2_preflight.py

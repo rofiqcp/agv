@@ -22,7 +22,6 @@ def fail(msg):
 
 v = load(root/'config/vehicle.yaml')['vehicle']['ros__parameters']
 esc = load(ws/'esc/config/ackermann.yaml')['esc_ackermann']['ros__parameters']
-teleop = load(ws/'esc/config/teleop.yaml')['/**']['ros__parameters']
 nc = load(root/'config/navigation_core.yaml')['navigation_core']['ros__parameters']
 nav2 = load(root/'config/nav2_ackermann.yaml')
 per = load(ws/'perception/config/astra_yolop_gpu.yaml')['perception']['ros__parameters']
@@ -58,18 +57,13 @@ checks = [
     ('MPPI yaw', ctrl['wz_max'], v['max_yaw_rate_rps']),
     ('MPPI accel', ctrl['ax_max'], v['max_accel_mps2']),
     ('Smoother forward', sm['max_velocity'][0], v['max_forward_speed_mps']),
+    ('Smoother yaw', abs(sm['max_velocity'][2]), v['max_yaw_rate_rps']),
     ('Smoother accel', sm['max_accel'][0], v['max_accel_mps2']),
     ('Smoother yaw accel', sm['max_accel'][2], v['max_yaw_accel_rps2']),
     ('Trajectory yaw', traj['maximum_yaw_rate_rps'], v['max_yaw_rate_rps']),
 ]
 for name, actual, ceiling in checks:
     if float(actual) > float(ceiling) + 1e-9: fail(f'{name}: {actual} exceeds {ceiling}')
-
-teleop_yaw_encoding = math.radians(float(teleop['yaw_max_deg_s']))
-if abs(float(sm['max_velocity'][2])) + 1e-9 < teleop_yaw_encoding:
-    fail(f'Smoother yaw {sm["max_velocity"][2]} truncates teleop encoding {teleop_yaw_encoding}')
-if abs(float(sm['min_velocity'][2])) + 1e-9 < teleop_yaw_encoding:
-    fail(f'Smoother negative yaw {sm["min_velocity"][2]} truncates teleop encoding {teleop_yaw_encoding}')
 if float(ctrl['ax_min']) < float(v['max_decel_mps2']) - 1e-9:
     fail('MPPI decel exceeds certified magnitude')
 if float(sm['max_decel'][0]) < float(v['max_decel_mps2']) - 1e-9:
