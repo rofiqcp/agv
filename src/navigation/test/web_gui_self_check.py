@@ -126,13 +126,18 @@ for token in ("loadCostmapImage", "zoomMap", "screenToWorld", "pointerdown", "po
 if 'src="/vesc_workbench.js' not in html:
     fail("ESC workbench JS module is not loaded")
 for token in ("ESC Motor Workbench", 'id="page-esc-status"', "F411 GATEWAY",
-              "vescEnterMaintenance", "vescExitMaintenance", "vescReadMcconf",
-              "vescReadMcconfDefault", "vescWriteMcconf", "vescRestoreMcconfDefault",
-              "vescReadAppconf", "vescReadAppconfDefault", "vescWriteAppconf",
-              "vescChartLeft", "vescChartRight", "vescSetDuty", "vescSetCurrent",
-              "vescSetRpm", "vescSetPos", "vescSetBrake", "vescSetHandbrake",
-              "vescFullBrake", "vescDetectHall", "vescDetectEncoder"):
+              "vescEnterMaintenance", "vescExitMaintenance",
+              "vescLeftRawEncoder", "vescRightRpm", "vescDualTuning", "vescDualLimits",
+              "vescChartLeft", "vescChartRight", "vescLeftSetDuty", "vescRightSetDuty",
+              "vescLeftSetCurrent", "vescRightSetCurrent", "vescRightSetRpm",
+              "vescLeftSetPos", "vescRightSetBrake", "vescDetectHall", "vescDetectEncoder",
+              "1.00 m/s → 8000 eRPM"):
     if token not in html: fail(f"VESC Web workbench missing {token}")
+for token in ("ReadMcconf", "WriteMcconf", "ReadAppconf", "WriteAppconf",
+              "v5BindMotorEditor", "DUAL RUNTIME LIVE", "v5RuntimeMotor", "v5Freshness"):
+    if token not in web_js: fail(f"VESC dual runtime behavior missing {token}")
+if 'id="vescMotor"' in html:
+    fail("VESC workbench must not contain LEFT/RIGHT motor selector")
 for token in ("vescCmd", "vesc_tool_status", "tcp_client", "VESC TOOL TCP",
               "command',{command}", "renderVescTool"):
     if token not in web_js: fail(f"VESC Web behavior missing {token}")
@@ -150,6 +155,6 @@ for token in ("recordingCsvStem", "section_label", "lastDownloadCsv_", "recordTo
 
 for token in ("cameraEncodeMutex_", "rosShutdownGuard", "Request body too large",
               "canonicalRoot", "declare_parameter<std::int64_t>(\"port\"",
-              "configuredPort > 65535"):
+              "configuredPort != 5000"):
     if token not in cpp: fail(f"web runtime hardening missing {token}")
 print("PASS web_gui_self_check")

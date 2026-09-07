@@ -24,10 +24,14 @@ prod=load(ROOT/'config/collision_monitor_production.yaml')['collision_monitor'][
 if preview.get('cmd_vel_out_topic') == '/cmd_vel': fail('preview config must never own final cmd_vel')
 if prod.get('cmd_vel_out_topic') != '/cmd_vel/autonomy_pre_smoother': fail('production collision monitor must feed autonomy pre-smoother')
 auto=(ROOT/'launch/autonomous.launch.py').read_text()
-for token in ["collision_monitor_production.yaml", "_yaml_ros_param", "collision_monitor_enabled': ParameterValue", "AGV_CLEAN_STALE_RUNTIME"]:
+for token in ["collision_monitor_production.yaml", "_yaml_ros_param", "collision_monitor_enabled': ParameterValue"]:
     if token not in auto: fail(f'autonomous production routing missing {token}')
-if '_cleanup_stale_workspace_runtime(nav_share, esc_share, astra_share)\n' in auto and "AGV_CLEAN_STALE_RUNTIME" not in auto:
-    fail('destructive stale cleanup must be opt-in')
+cleanup='_cleanup_stale_workspace_runtime(nav_share, esc_share, astra_share)'
+generate=auto[auto.index('def generate_launch_description()'): ]
+if cleanup not in generate: fail('autonomous start must pre-clean stale AGV runtime')
+if generate.index(cleanup) > generate.index('_guard_single_autonomous_instance()'): fail('stale cleanup must run before single-instance lock')
+for token in ['OnShutdown', '_shutdown_owned_runtime', 'ros2 launch esc esc.launch.py']:
+    if token not in auto: fail(f'robust launch cleanup missing {token}')
 
 gui = read_gui_source(ROOT) + (ROOT / 'gui/agv_gui_specs.hpp').read_text(encoding='utf-8')
 for token in ['class NavigationTuningPage','Buat Paket Sweep','CLOSED_LOOP ELIGIBLE','numeric_summary','experiment_category','void certify()','camera_metric_validation','Mulai Rosbag','Peringkat Eksperimen']:

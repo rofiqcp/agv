@@ -169,7 +169,7 @@ private:
     declare_parameter<bool>("require_stage3_production_certification", true);
     declare_parameter<bool>("stage3_production_certified", false);
     declare_parameter<bool>("stage3_commissioning_mode", false);
-    declare_parameter<double>("stage3_commissioning_speed_cap_mps", 0.18);
+    declare_parameter<double>("stage3_commissioning_speed_cap_mps", 1.0);
     declare_parameter<double>("overlay_text_size_px", 9.0);
     declare_parameter<int>("hud_margin_px", 12);
     declare_parameter<bool>("keyboard_available", false);
@@ -1301,7 +1301,7 @@ private:
   bool require_stage3_production_certification_{true};
   bool stage3_production_certified_{false};
   bool stage3_commissioning_mode_{false};
-  double stage3_commissioning_speed_cap_mps_{0.18};
+  double stage3_commissioning_speed_cap_mps_{1.0};
   double overlay_text_size_px_{9.0}, log_heartbeat_sec_{10.0};
   int hud_margin_px_{12};
   bool keyboard_available_{false};

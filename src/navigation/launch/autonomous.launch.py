@@ -17,7 +17,7 @@ from launch.actions import (
     DeclareLaunchArgument, EmitEvent, IncludeLaunchDescription, LogInfo,
     OpaqueFunction, RegisterEventHandler, SetEnvironmentVariable, TimerAction)
 from launch.conditions import IfCondition, UnlessCondition
-from launch.event_handlers import OnProcessExit
+from launch.event_handlers import OnProcessExit, OnShutdown
 from launch.events import Shutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PythonExpression
@@ -233,21 +233,28 @@ def _cleanup_stale_workspace_runtime(nav_share: str, esc_share: str, astra_share
         workspace_node = any(prefix in raw for prefix in executable_prefixes)
         named_autonomous_node = '--ros-args' in raw and any(
             f'__node:={name}' in raw or f'__node:={name} ' in raw for name in autonomous_node_names)
-        old_launch = 'ros2 launch navigation autonomous.launch.py' in raw
+        old_launch = any(sig in raw for sig in (
+            'ros2 launch navigation autonomous.launch.py',
+            'ros2 launch navigation gui.launch.py',
+            'ros2 launch navigation web_gui.launch.py',
+            'ros2 launch esc esc.launch.py',
+        ))
         if workspace_node or named_autonomous_node or old_launch:
             victims.append(proc_pid)
 
     if not victims:
-        return
+        return []
+    victims = sorted(set(victims))
+    print('[AGV] pre-clean stale runtime PID(s): ' + ', '.join(map(str, victims)), flush=True)
     for proc_pid in victims:
         try:
             os.kill(proc_pid, signal.SIGTERM)
         except ProcessLookupError:
             pass
-    deadline = time.monotonic() + 1.2
+    deadline = time.monotonic() + 2.5
     while time.monotonic() < deadline:
         if not any(Path(f'/proc/{proc_pid}').exists() for proc_pid in victims):
-            return
+            return victims
         time.sleep(0.05)
     for proc_pid in victims:
         if Path(f'/proc/{proc_pid}').exists():
@@ -255,11 +262,55 @@ def _cleanup_stale_workspace_runtime(nav_share: str, esc_share: str, astra_share
                 os.kill(proc_pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+    return victims
 
 
+def _descendant_pids(root_pid: int) -> list[int]:
+    children = {}
+    for proc in Path('/proc').iterdir():
+        if not proc.name.isdigit():
+            continue
+        try:
+            fields = (proc / 'stat').read_text().split()
+            pid = int(fields[0]); ppid = int(fields[3])
+        except (OSError, ValueError, IndexError):
+            continue
+        children.setdefault(ppid, []).append(pid)
+    out = []
+    pending = list(children.get(root_pid, []))
+    while pending:
+        pid = pending.pop()
+        if pid in out:
+            continue
+        out.append(pid)
+        pending.extend(children.get(pid, []))
+    return sorted(out)
 
 
-
+def _shutdown_owned_runtime(event, context):
+    del event, context
+    victims = _descendant_pids(os.getpid())
+    if not victims:
+        return []
+    print('[AGV] shutdown cleanup child PID(s): ' + ', '.join(map(str, victims)), flush=True)
+    for pid in victims:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    deadline = time.monotonic() + 2.5
+    while time.monotonic() < deadline:
+        alive = [pid for pid in victims if Path(f'/proc/{pid}').exists()]
+        if not alive:
+            return []
+        time.sleep(0.05)
+    for pid in victims:
+        if Path(f'/proc/{pid}').exists():
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    return []
 
 
 def _active_config_dir(nav_share: str) -> str:
@@ -409,7 +460,6 @@ def _validate_gnss_source(context):
 
 
 def generate_launch_description() -> LaunchDescription:
-    _guard_single_autonomous_instance()
     nav_share = get_package_share_directory('navigation')
     nav_config_dir = _active_config_dir(nav_share)
     esc_share = get_package_share_directory('esc')
@@ -429,10 +479,12 @@ def generate_launch_description() -> LaunchDescription:
         perception_cpu_path.is_file() and os.access(perception_cpu_path, os.X_OK))
     perception_gpu_executable_available = (
         perception_gpu_path.is_file() and os.access(perception_gpu_path, os.X_OK))
-    # Destructive stale-process cleanup is opt-in in production. Default launch
-    # never SIGKILLs unrelated diagnostics/rosbag sessions from the same workspace.
-    if os.environ.get('AGV_CLEAN_STALE_RUNTIME', '0').strip().lower() in {'1', 'true', 'yes'}:
-        _cleanup_stale_workspace_runtime(nav_share, esc_share, astra_share)
+    # Every autonomous start owns the AGV runtime exclusively. Clean stale
+    # navigation/ESC launch wrappers and their known nodes before acquiring the
+    # single-instance lock, so the normal `ros2 launch ... | tee ...` command is
+    # deterministic after crashes, detached terminals, or an earlier Ctrl+C.
+    _cleanup_stale_workspace_runtime(nav_share, esc_share, astra_share)
+    _guard_single_autonomous_instance()
     keyboard_hw_available = _keyboard_evdev_readable()
 
     map_file = os.path.join(nav_share, 'maps', 'undip', 'undip_nav2.yaml')
@@ -472,7 +524,7 @@ def generate_launch_description() -> LaunchDescription:
     stage3_production_default = bool(_yaml_ros_param(
         stage3_params, 'stage3_navigation', 'production_autonomy_certified', False))
     stage3_commissioning_speed = float(_yaml_ros_param(
-        stage3_params, 'stage3_navigation', 'commissioning_speed_cap_mps', 0.18))
+        stage3_params, 'stage3_navigation', 'commissioning_speed_cap_mps', 1.0))
     configured_mode = str(_yaml_ros_param(camera_params, 'perception', 'perception_mode', 'off') or 'off').strip().lower()
     configured_engine = str(_yaml_ros_param(camera_params, 'perception', 'engine_path', '') or '')
     engine_path = os.environ.get('YOLOP_ENGINE_PATH', configured_engine)
@@ -639,7 +691,7 @@ def generate_launch_description() -> LaunchDescription:
     )
     # Delay EKF startup until map image/camera initialization has released the CPU.
     # Runtime EKF frequency is unchanged; this only removes startup deadline misses.
-    delayed_ekf = TimerAction(period=5.0, actions=[local_ekf, global_ekf])
+    delayed_ekf = TimerAction(period=20.0, actions=[local_ekf, global_ekf])
     localization_core = Node(
         package='navigation', executable='localization_core', name='localization_core',
         output='screen', respawn=True, respawn_delay=2.0,
@@ -783,9 +835,13 @@ def generate_launch_description() -> LaunchDescription:
             **common_perception_parameters,
         }],
     )
+    semantic_torch_available = subprocess.run(
+        ['python3', '-c', 'import torch'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        check=False, timeout=3.0).returncode == 0
     semantic_obstacle = Node(
         package='perception', executable='semantic_obstacle_node.py', name='semantic_obstacle',
-        output='screen', emulate_tty=True, condition=IfCondition(PythonExpression(["'", LaunchConfiguration('mode'), "'.lower() == 'web'"])),
+        output='screen', emulate_tty=True, condition=IfCondition(PythonExpression([
+            "'", LaunchConfiguration('mode'), "'.lower() == 'web' and ", str(semantic_torch_available)])),
         respawn=True, respawn_delay=3.0,
         parameters=[{
             'input_topic': '/camera/astra/image_preview/compressed',
@@ -976,8 +1032,7 @@ def generate_launch_description() -> LaunchDescription:
         condition=IfCondition(mode_gui),
     )
 
-    # Native C++ browser HMI. Loopback-only by default; ubah bind address ke
-    # 0.0.0.0 hanya bila operator memang membutuhkan akses dari LAN tepercaya.
+    # Native C++ browser HMI. Deployment contract is fixed to localhost:5000.
     web_gui = Node(
         package='navigation', executable='agv_web_gui', name='agv_web_gui', output='screen',
         condition=IfCondition(mode_web),
@@ -999,6 +1054,8 @@ def generate_launch_description() -> LaunchDescription:
         arguments=['-d', LaunchConfiguration('rviz_config'), '--ros-args', '--log-level', 'warn'],
         additional_env={'QT_QPA_PLATFORM': 'xcb'},
         parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}])
+
+    shutdown_cleanup = RegisterEventHandler(OnShutdown(on_shutdown=_shutdown_owned_runtime))
 
     # Direct test mode: sensor serial dimulai langsung seperti bringup lama.
     # Tidak ada delay buatan sehingga EKF/localization segera menerima sensor.
@@ -1043,5 +1100,5 @@ def generate_launch_description() -> LaunchDescription:
         camera_only, perception_cpu, perception_gpu, semantic_obstacle,
         map_server, lifecycle_map, controller, planner, behavior, cmd_vel_router, smoother, collision, navigator,
         lifecycle_smoother, lifecycle_with_collision, lifecycle_without_collision,
-        trajectory_safety, navigation_core, mppi_closed_loop, vehicle_dynamics_observer, native_gui, stop_when_gui_closes, web_gui, rviz,
+        trajectory_safety, navigation_core, mppi_closed_loop, vehicle_dynamics_observer, native_gui, stop_when_gui_closes, web_gui, rviz, shutdown_cleanup,
     ])

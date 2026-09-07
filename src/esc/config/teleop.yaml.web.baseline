@@ -4,7 +4,7 @@
   ros__parameters:
     # Shared runtime vehicle speed envelope. Direct maintenance/VESC commissioning
     # commands have their own guarded electrical limits and do not use this cap.
-    speed_max: 0.50
+    speed_max: 1.00
 
     # Manual teleop request scale. +/-80 deg/s is only a normalized Twist encoding;
     # esc_ackermann converts that fraction to the calibrated physical wheel limit.

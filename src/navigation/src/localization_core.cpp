@@ -2078,7 +2078,7 @@ private:
       initial_map_heading_rad_ = manual_map_base.yaw;
       initial_odom_yaw_rad_ = odom_base_.yaw;
       last_reject_reason_.clear();
-      RCLCPP_WARN(get_logger(),
+      RCLCPP_INFO(get_logger(),
         "MANUAL COMMISSIONING ANCHOR: map=(%.3f,%.3f,%.1fdeg), GNSS samples unchanged",
         manual_map_base.x, manual_map_base.y,
         manual_map_base.yaw * 180.0 / 3.14159265358979323846);
@@ -2684,7 +2684,14 @@ private:
       planning_ready = anchor_valid_ && local_odom_fresh;
       const bool manual_motion =
         anchor_mode_ == "MANUAL" && allow_manual_pose_for_motion_;
-      motion_ready = planning_ready && inputs_fresh &&
+      // Indoor commissioning intentionally replaces GNSS position with a manual
+      // map anchor. Do not re-require a raw GNSS fix here; retain fresh local
+      // odometry and IMU as the motion inputs. Production remains unchanged and
+      // still uses inputsFreshUnlocked() + GNSS quality gates.
+      const bool manual_inputs_fresh =
+        local_odom_fresh && imu_data_fresh && imu_orientation_fresh;
+      motion_ready = planning_ready &&
+        (manual_motion ? manual_inputs_fresh : inputs_fresh) &&
         (motionQualityReadyUnlocked() || manual_motion);
 
       if (!anchor_valid_) {

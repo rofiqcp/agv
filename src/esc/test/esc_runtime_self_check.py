@@ -55,8 +55,10 @@ if int(ack.get("drive_motor_pole_pairs", 0)) != 15:
     fail("native VESC drive pole-pair count must match F103 right motor = 15")
 if abs(float(ack.get("drive_gear_ratio", 0.0)) - 1.0) > 1e-9:
     fail("native VESC drive gear ratio must be direct 1.0")
+if abs(float(ack.get("drive_erpm_per_mps", 0.0)) - 8000.0) > 1e-9:
+    fail("commissioning drive baseline must be 8000 eRPM per m/s")
 for token in ("nativeDriveErpmPerMps", "rightCommandUnitsPerMps", "rightCommandLimit",
-              "COMM_SET_RPM and COMM_GET_VALUES use electrical RPM",
+              "return drive_erpm_per_mps_",
               "raw_commissioning_enabled", "rawCommissioningSnapshot",
               "clampCommissioningSteeringDeg", "stm32_right_erpm", "RAW_COMMISSIONING",
               "vescPositionDegFromPhysicalSteering", "std::vector<std::uint8_t> payload{kVescSetPos}",

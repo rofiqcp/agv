@@ -23,7 +23,7 @@ planner_server:
       max_planning_time: 2.5
       motion_model_for_search: DUBIN
       angle_quantization_bins: 48
-      minimum_turning_radius: 1.712159378317
+      minimum_turning_radius: 1.452435565298
       reverse_penalty: 3.0
       change_penalty: 0.0
       non_straight_penalty: 1.2
@@ -79,10 +79,10 @@ controller_server:
       vx_std: 0.1
       vy_std: 0.0
       wz_std: 0.25
-      vx_max: 0.5
+      vx_max: 1.0
       vx_min: 0.0
       vy_max: 0.0
-      wz_max: 0.292028888392
+      wz_max: 0.688498701004
       ax_max: 0.75
       ax_min: -1.0
       ay_max: 0.0
@@ -101,7 +101,7 @@ controller_server:
         trajectory_step: 20
         time_step: 4
       AckermannConstraints:
-        min_turning_r: 1.712159378317
+        min_turning_r: 1.452435565298
       critics:
       - ConstraintCritic
       - CostCritic
@@ -209,8 +209,8 @@ velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: true
     feedback: OPEN_LOOP
-    max_velocity: [0.5, 0.0, 0.292028888392]
-    min_velocity: [-0.5, 0.0, -0.292028888392]
+    max_velocity: [1.0, 0.0, 1.396263401595]
+    min_velocity: [-1.0, 0.0, -1.396263401595]
     max_accel:
     - 0.18
     - 0.0

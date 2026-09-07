@@ -1,0 +1,58 @@
+/* ADV Engineering Theme V1 — VESC Tool density + Mission Planner workspaces */
+:root{
+  --bg:#272727;--bg2:#2b2b2b;--panel:#303030;--panel2:#353535;
+  --border:#494949;--border2:#5a5a5a;--text:#d7d7d7;--muted:#a5a5a5;--dim:#7f7f7f;
+  --blue:#00a0e3;--blue2:#006a96;--green:#0db14b;--green2:#256a38;--cyan:#4fcbcb;
+  --amber:#ce7d2c;--red:#c83434;--gold:#e5cf33;--violet:#8851c8;
+  --shadow:none;--radius:6px;--sidebar:224px;--chart-bg:#272727;
+}
+html{font-size:14px}body{font:13px/1.35 Roboto,"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--text)}
+body,.app-shell,.main-shell{background:var(--bg)}
+*{scrollbar-width:thin;scrollbar-color:#5a5a5a #303030}
+.content{padding:8px 9px 12px}.page{animation:none}.page>*+*{margin-top:7px}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:9px;box-shadow:none}
+.panel.compact{padding:8px}.panel-head{gap:8px;margin-bottom:7px;align-items:center}.panel-head.sub{margin-top:10px}
+.panel-head h2,.section-title h2{font-size:14px;margin:1px 0 0;font-weight:600}.eyebrow,.page-heading span{font-size:8px;letter-spacing:.8px;color:#62bee8}
+.section-title{margin:8px 1px 5px}.section-title .muted{font-size:9px}
+.hero-grid,.two-col,.sensor-hero,.esc-hero,.camera-layout,.lab-two-col{gap:6px;margin-top:6px}
+.health-grid,.metric-grid,.metric-3,.four-metrics,.checklist{gap:4px;margin-top:5px}
+.health-card,.metric-grid>div,.metric-3>div,.four-metrics>div,.big-coordinates>div{background:#303030;border:1px solid #454545;border-radius:4px;padding:7px}
+.sidebar{width:var(--sidebar);padding:0 6px 8px;background:#272727;border-right:1px solid #4a4a4a}
+.brand{height:54px;min-height:54px;margin:0 0 5px;padding:0 5px;border-bottom:1px solid #454545;gap:8px}
+.brand-mark{width:34px;height:34px;border-radius:5px;background:#3a3a3a;color:#f15922;box-shadow:none;font-size:17px;border:1px solid #555}
+.brand strong{font-size:13px}.brand span{font-size:9px;letter-spacing:.5px}.sidebar-collapse{width:24px;height:24px;border-radius:3px;background:#303030;font-size:16px}
+.sidebar-context-head{margin:0 3px 4px;padding:5px 6px 6px}.sidebar-context-head span{font-size:7px;letter-spacing:.8px}.sidebar-context-head b{font-size:12px;margin-top:1px}
+#contextNav{gap:1px}.nav-list{padding-right:1px}.nav-item,#contextNav .nav-item{min-height:30px;padding:5px 7px;border-radius:3px;gap:7px;color:#b8b8b8}
+.nav-item span{width:20px;font-size:13px}.nav-item b{font-size:10.5px;font-weight:500}.nav-item:hover{background:#353535;color:#eee}
+.nav-item.active,#contextNav .nav-item.active{background:linear-gradient(90deg,#004b6b,#0075a7 62%,#303030);color:#fff;box-shadow:none;border-color:#007ead}
+.sidebar-tuning-head,.sidebar-report-head{margin:5px 3px 2px;padding:6px 6px 4px}.sidebar-tuning-group,.sidebar-report-group{padding:5px 7px 2px;font-size:7px}
+.nav-item.tuning-nav,.nav-item.report-nav{padding:4px 6px;gap:5px}.nav-item.tuning-nav b,.nav-item.report-nav b{font-size:9px;line-height:1.2}.nav-item.tuning-nav small,.nav-item.report-nav small{font-size:7px;margin-top:1px}
+.sidebar-bottom{padding:6px 5px 0}.mini-health b{font-size:9px}.mini-health span{font-size:8px}.version{font-size:7px;margin-top:5px}
+.topbar{height:52px;min-height:52px;padding:0 9px;gap:8px;background:#272727;border-bottom:1px solid #4b4b4b;backdrop-filter:none}
+.page-heading{flex:0 0 155px}.page-heading h1{font-size:15px;margin-top:0}.top-domain-tabs{min-width:300px;gap:1px;padding:2px;border-radius:4px;background:#303030;border-color:#4a4a4a}
+.top-domain{min-height:31px;min-width:76px;padding:0 10px;border-radius:2px;font-size:10px;color:#aaa}.top-domain:hover{background:#383838;color:#eee}
+.top-domain.active{color:#fff;background:#3d3d3d;border-color:#555;box-shadow:inset 0 -2px #00a0e3}
+.runtime-pill{height:29px;min-width:72px;border-radius:3px;padding:0 7px;background:#303030}.runtime-pill span{font-size:8px}.runtime-pill strong{font-size:9px}
+.icon-button{width:29px;height:29px;border-radius:3px;background:#303030}.footer{min-height:26px;height:26px;padding:0 9px;background:#272727;border-color:#454545;font-size:8px;color:#888}
+.soft-btn,.primary-btn,.danger-btn,.warning-btn{min-height:30px;padding:5px 9px;border-radius:3px;font-size:9.5px;font-weight:600;background:#353535;border-color:#565656;color:#ddd}
+.soft-btn:hover{background:#404040;border-color:#686868}.soft-btn.active{color:#fff;background:#3d3d3d;border-color:#007ead;box-shadow:inset 0 -2px #00a0e3}
+.primary-btn{background:#006d9c;border-color:#008cc8;color:#fff}.primary-btn:hover{background:#007cae}.warning-btn{background:#4a3928;border-color:#8b612d;color:#ffd39a}.danger-btn{background:#4b2b2b;border-color:#8b4040;color:#ffb1b1}
+.status-chip{font-size:8px;padding:3px 6px;border-radius:3px;letter-spacing:.4px}.live-dot{font-size:8px}.count-badge{height:20px;min-width:20px;border-radius:3px}
+.control-card label,.tuning-field-head label,.vesc-card label{font-size:9px}.control-card input,.chapter-search,.vesc-card input,.vesc-card select,.tuning-input-row>input{min-height:30px;height:30px;margin-top:3px;padding:4px 6px;border-radius:3px;background:#272727;border-color:#555;color:#ddd;font-size:10px}
+.hint,.info-box,.alert-item,.tuning-note{font-size:9px;line-height:1.4}.info-box,.tuning-note{padding:6px 8px;border-radius:4px;background:#2d3336}
+.kv-list>div{padding:4px 1px;border-color:#464646}.kv-list span{font-size:9px}.kv-list b{font-size:10px;font-family:Roboto Mono,ui-monospace,monospace}
+.health-card{gap:6px}.health-icon{width:25px;height:25px;border-radius:3px;background:#3a3a3a}.health-card span{font-size:8px}.health-card b{font-size:10px;margin:1px 0}.health-card small{font-size:7.5px;max-width:130px}
+.readiness-ring-wrap{gap:12px}.readiness-ring{width:94px;height:94px;padding:6px}.readiness-ring:before{inset:6px;background:#303030}.readiness-ring strong{font-size:19px}.readiness-copy h3{font-size:14px;margin-bottom:3px}.readiness-copy p{font-size:9px}.micro-row{margin-top:6px;padding-top:5px}
+.mission-state{height:58px;border-radius:4px;padding:8px;background:#333;border-color:#4b4b4b}.mission-state strong{font-size:18px}.mission-state span{font-size:8px}
+.pipeline{gap:3px}.pipeline div{padding:6px;border-radius:3px;background:#2d2d2d}.pipeline span{font-size:7px}.pipeline b{font-size:11px}
+.json-pretty,.config-view,.raw-json{background:#252525;border-color:#4a4a4a;border-radius:4px;padding:7px;font:9px/1.45 "Roboto Mono",ui-monospace,monospace;color:#c8d3d6}
+/* Mission Planner-like navigation workspace */
+.map-layout{grid-template-columns:minmax(0,1fr) 218px;gap:4px;margin-top:0}.map-layout>.stack{gap:4px}.rviz-panel{padding:5px}.map-head{min-height:34px;margin-bottom:4px;padding:0 2px}.map-toolbar{gap:2px;flex-wrap:wrap;justify-content:flex-end}.map-toolbar .soft-btn{min-height:28px;padding:4px 7px}.icon-tool{width:28px;font-size:14px}.zoom-readout{min-width:44px;font-size:9px}
+.map-stage,.rviz-stage{height:min(76vh,790px);min-height:510px;border-radius:2px;border-color:#555;background:#202020}.rviz-layer-panel{top:5px;left:5px;width:192px;padding:4px;border-radius:3px;background:rgba(39,39,39,.94);border-color:#5a5a5a;box-shadow:none;backdrop-filter:none}
+.layer-head{padding:3px 4px 4px;margin-bottom:2px}.layer-head b{font-size:9px}.layer-head span{font-size:8px;color:#62bee8}.rviz-layer-panel label{grid-template-columns:14px 1fr auto;gap:4px;padding:3px 4px;border-radius:2px;font-size:8.5px}.rviz-layer-panel label>i{width:11px;height:11px;border-radius:1px;background:#242424}.rviz-layer-panel input:checked+i{border-color:#00a0e3;background:#004d6d}.rviz-layer-panel input:checked+i:after{font-size:9px;inset:-3px 0 0;color:#fff}.rviz-layer-panel em{font-size:7px;color:#62bee8}
+.map-legend{left:5px;bottom:27px;padding:4px 5px;gap:7px;border-radius:2px;font-size:7.5px;background:rgba(39,39,39,.94)}.map-statusbar{min-height:23px;height:23px;padding:3px 7px;background:rgba(39,39,39,.97);font-size:8.5px;color:#aaa}.map-statusbar span:first-child{color:#d5d5d5}
+.map-layout .control-card,.map-layout .stack>.panel{padding:7px}.map-layout .control-card label{margin:4px 0}.map-layout .button-row{gap:3px}.map-layout .panel-head{margin-bottom:5px}.map-layout .panel-head h2{font-size:12px}
+.map-layout+.four-metrics{margin-top:4px}.precision-grid{margin-top:4px}.precision-grid .panel{padding:7px}
+/* Compact cameras and engineering groups */
+.camera-layout{grid-template-columns:minmax(0,1.8fr) 250px}.camera-stage{height:min(70vh,700px);min-height:470px;border-radius:3px}.orientation-display{height:112px;border-radius:4px;background:#2a2a2a}.big-coordinates{gap:4px}.big-coordinates>div{border-radius:4px;padding:8px}.big-coordinates b{font-size:15px}
+.check-item{border-radius:4px;padding:6px;grid-template-columns:18px 1fr;gap:5px;background:#2c2c2c}.check-item i{width:17px;height:17px;border-radius:2px}.check-item b{font-size:8.5px}.check-item span{font-size:7.5px}

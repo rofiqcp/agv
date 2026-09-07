@@ -1,12 +1,145 @@
 Import("env")
 
+import fcntl
 import glob
 import os
+import signal
+import subprocess
 import time
 
 DFU_VID = "0483"
 DFU_PID = "df11"
 MANUAL_DFU_WAIT_S = 60.0
+UPLOAD_LOCK = "/tmp/adv_f411_dfu_upload.lock"
+_upload_lock_fd = None
+
+ROS_PROCESS_MARKERS = (
+    "/opt/ros/",
+    "/home/otomasi/ros/install/",
+    "ros2 launch ",
+    "ros2 run ",
+)
+
+def _protected_pids():
+    protected = {os.getpid()}
+    pid = os.getppid()
+    while pid > 1 and pid not in protected:
+        protected.add(pid)
+        try:
+            with open(f"/proc/{pid}/stat", "r", encoding="ascii") as f:
+                pid = int(f.read().split()[3])
+        except Exception:
+            break
+    return protected
+
+def _proc_cmdline(pid):
+    try:
+        raw = open(f"/proc/{pid}/cmdline", "rb").read().replace(b"\0", b" ")
+        return raw.decode(errors="replace").strip()
+    except OSError:
+        return ""
+
+def _stop_ros_processes():
+    protected = _protected_pids()
+    victims = []
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        pid = int(name)
+        if pid in protected:
+            continue
+        cmd = _proc_cmdline(pid)
+        if cmd and any(marker in cmd for marker in ROS_PROCESS_MARKERS):
+            victims.append(pid)
+    if not victims:
+        print("[USB-DFU] ROS stack already stopped")
+        return
+    print(f"[USB-DFU] stopping ROS processes: {victims}")
+    for pid in victims:
+        try: os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError): pass
+    deadline = time.monotonic() + 4.0
+    while time.monotonic() < deadline:
+        alive = [pid for pid in victims if os.path.exists(f"/proc/{pid}")]
+        if not alive:
+            return
+        time.sleep(0.10)
+    alive = [pid for pid in victims if os.path.exists(f"/proc/{pid}")]
+    if alive:
+        print(f"[USB-DFU] force-stopping remaining ROS processes: {alive}")
+    for pid in alive:
+        try: os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError): pass
+    time.sleep(0.20)
+
+
+def _acquire_upload_lock():
+    global _upload_lock_fd
+    if _upload_lock_fd is not None:
+        return
+    fd = os.open(UPLOAD_LOCK, os.O_CREAT | os.O_RDWR, 0o660)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        raise RuntimeError("another F411 DFU upload is already active")
+    os.ftruncate(fd, 0)
+    os.write(fd, f"pid={os.getpid()} started={time.time():.3f}\n".encode())
+    os.fsync(fd)
+    _upload_lock_fd = fd
+
+
+def _port_holders(port):
+    real = os.path.realpath(port)
+    try:
+        result = subprocess.run(
+            ["fuser", real], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, check=False, timeout=2.0)
+    except Exception:
+        return []
+    holders = []
+    for token in result.stdout.split():
+        if not token.isdigit():
+            continue
+        pid = int(token)
+        if pid == os.getpid():
+            continue
+        try:
+            raw = open(f"/proc/{pid}/cmdline", "rb").read().replace(b"\0", b" ")
+            cmd = raw.decode(errors="replace").strip()
+        except OSError:
+            cmd = ""
+        holders.append((pid, cmd))
+    return holders
+
+
+def _release_cdc_holders(port):
+    holders = _port_holders(port)
+    if not holders:
+        return
+    protected = _protected_pids()
+    holders = [(pid, cmd) for pid, cmd in holders if pid not in protected]
+    if not holders:
+        return
+    pids = [pid for pid, _ in holders]
+    print(f"[USB-DFU] releasing F411 CDC holders pid={pids}")
+    for pid in pids:
+        try: os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError): pass
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        if not any(pid in pids for pid, _ in _port_holders(port)):
+            return
+        time.sleep(0.05)
+    for pid in pids:
+        try: os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError): pass
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline:
+        if not any(pid in pids for pid, _ in _port_holders(port)):
+            return
+        time.sleep(0.05)
+    raise RuntimeError(f"F411 CDC still held after stopping pid={pids}")
 
 
 def _usb_nodes(vid, pid):
@@ -46,10 +179,15 @@ def _find_cdc_port():
     return None
 
 
-def _assert_dfu_permission(nodes):
-    writable = [n for n in nodes if os.access(n, os.R_OK | os.W_OK)]
-    if writable:
-        return
+def _assert_dfu_permission(nodes, settle_s=3.0):
+    deadline = time.monotonic() + settle_s
+    while True:
+        writable = [n for n in nodes if os.path.exists(n) and os.access(n, os.R_OK | os.W_OK)]
+        if writable:
+            return
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.10)
     joined = ", ".join(nodes) if nodes else "unknown USB node"
     raise RuntimeError(
         "STM32 ROM DFU is active, but Linux cannot write " + joined + ". "
@@ -130,11 +268,19 @@ def _request_software_dfu(port):
             if "ACK:DFU:ARMED" in reply:
                 ser.write(b"BOOT:DFU:CONFIRM\n")
                 ser.flush()
-                confirm = collect_until(ser, "ACK:DFU", 0.45)
+                confirm = collect_until(ser, "ACK:DFU", 0.75)
+                if "ACK:DFU" in confirm:
+                    print("[USB-DFU] DFU confirm ACK seen")
+                    time.sleep(0.20)
+                    return True
                 if confirm:
-                    print("[USB-DFU] DFU confirm seen")
-                time.sleep(0.20)
-                return True
+                    tail = confirm[-800:].replace("\r", " ").replace("\n", " | ")
+                    print("[USB-DFU] DFU confirm rejected:", tail)
+                if "ERR:DFU:WAIT_SAFE" in confirm:
+                    raise RuntimeError("F411 rejected DFU: vehicle/navigation state is not confirmed safe")
+                if "ERR:DFU:NOT_ARMED" in confirm:
+                    raise RuntimeError("F411 rejected DFU: two-step arm window expired")
+                return False
 
             if "UNKNOWN_COMMAND" in reply:
                 ser.write(b"BOOT:DFU\n")
@@ -144,13 +290,12 @@ def _request_software_dfu(port):
             return False
     except Exception as exc:
         print(f"[USB-DFU] CDC trigger detail: {exc}")
-        # CDC existing does not mean the application is alive. Treat any
-        # transport exception as a failed software trigger and fall back to
-        # manual ROM-DFU (BOOT0 + RESET) instead of assuming DFU was requested.
         return False
 
 
 def _before_upload(source, target, env):
+    _acquire_upload_lock()
+    _stop_ros_processes()
     nodes = _usb_nodes(DFU_VID, DFU_PID)
     if nodes:
         print("[USB-DFU] STM32 ROM DFU already active:", ", ".join(nodes))
@@ -165,11 +310,18 @@ def _before_upload(source, target, env):
             "BLACKPILL CDC tidak ditemukan dan ROM DFU tidak muncul dalam waktu tunggu."
         )
 
+    # The runtime bridge owns the CDC exclusively by design. Only that exact
+    # official process is allowed to be stopped; arbitrary serial monitors are
+    # never killed automatically. stmf4.launch.py respawns the bridge after DFU.
+    _release_cdc_holders(port)
     software_supported = _request_software_dfu(port)
     if software_supported:
         if _wait_for_dfu(12.0, manual_hint=False):
             return
-        print("[USB-DFU] Software DFU tidak muncul; fallback ke ROM DFU manual.")
+        raise RuntimeError(
+            "BOOT:DFU dikirim tetapi STM32 ROM DFU tidak terdeteksi. "
+            "Coba satu kali bootstrap manual BOOT0 + RESET."
+        )
 
     if _wait_for_dfu(MANUAL_DFU_WAIT_S, manual_hint=True):
         return

@@ -1,7 +1,7 @@
 stage3_navigation:
   ros__parameters:
     commissioning_mode_default: false
-    commissioning_speed_cap_mps: 0.18
+    commissioning_speed_cap_mps: 1.0
     require_camera_metric_for_production: true
     require_collision_monitor_for_production: true
     require_trajectory_safety_for_production: true

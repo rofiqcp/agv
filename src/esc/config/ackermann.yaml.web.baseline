@@ -13,13 +13,14 @@ esc_ackermann:
     teleop_timeout_sec: 0.3
     nav2_timeout_sec: 0.6
     manual_release_hold_sec: 0.5
-    speed_max: 0.5
+    speed_max: 1.0
     serial_left_max_deg: 90.0
     # Direct-serial fallback scale only. Native VESC uses physical eRPM conversion.
     serial_right_max_rpm: 300.0
     drive_wheel_radius_m: 0.145
     drive_motor_pole_pairs: 15
     drive_gear_ratio: 1.0
+    drive_erpm_per_mps: 8000.0
     # Applied live after N2.1 GNSS/RPM calibration: V_ground = V_raw_ESC * scale.
     drive_odometry_calibration_scale: 1.0
     wheelbase_m: 0.7
@@ -65,7 +66,7 @@ esc_ackermann:
     steering_physical_calibration_enabled: false
     steering_physical_left_limit_deg: -30.0
     steering_physical_right_limit_deg: 30.0
-    steering_physical_operational_limit_deg: 28.0
+    steering_physical_operational_limit_deg: 30.0
     steering_physical_calibration_saved_at: ''
     steering_physical_lut_enabled: false
     steering_lut_physical_deg:

@@ -308,3 +308,15 @@ body.sidebar-collapsed .nav-item.report-nav>span{width:100%;min-width:0;text-ali
 @media(max-width:620px){.vesc-simple .panel-head{flex-direction:column;align-items:stretch}.vesc-simple .status-pair{justify-content:flex-start}.vesc-mode-actions{flex-wrap:wrap}.vesc-mode-actions>*{flex:1 1 120px}.perception-engineering-grid{display:block}.perception-engineering-grid>section+section{margin-top:10px}.obcal-progress-row{grid-template-columns:38px minmax(0,1fr) 34px 54px}.obcal-progress-mini{grid-template-columns:repeat(2,minmax(0,1fr))}.trial-recap .data-table{min-width:760px}}
 @media(max-width:620px){.vesc-brake-row{display:flex;flex-wrap:wrap}.vesc-brake-row>*{flex:1 1 112px;min-width:0}.vesc-brake-row .grow{flex:1 1 145px}}
 @media(max-width:1100px) and (min-width:821px){.topbar{height:auto;min-height:78px;flex-wrap:wrap;padding-top:8px;padding-bottom:8px}.page-heading{flex:1 1 150px}.top-domain-tabs{order:3;flex:1 0 100%;min-width:0}.top-domain{flex:1;min-width:0}.top-status{margin-left:auto}}
+
+/* Dual VESC workbench: both motors visible simultaneously, no motor selector. */
+.vesc-dual-statusbar{grid-template-columns:repeat(4,minmax(120px,1fr)) minmax(190px,auto)}
+.vesc-mode-actions{display:flex;gap:6px;align-items:center;justify-content:flex-end;flex-wrap:wrap}
+.vesc-dual-live-grid,.vesc-dual-control-grid,.vesc-dual-editor-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.vesc-live-motor-card{min-width:0;border:1px solid var(--border);border-radius:11px;background:#071214;padding:10px}
+.vesc-dual-control-grid fieldset{min-width:0;margin:0;border:1px solid var(--border);border-radius:10px;background:#071214;padding:10px}
+.vesc-dual-control-grid legend{padding:0 6px;color:var(--green);font-size:9px;font-weight:900}
+.compact-tuning,.compact-limits{grid-template-columns:repeat(3,minmax(0,1fr))}
+.vesc-dual-editor-grid .vesc-card{min-width:0}
+@media(max-width:1100px){.vesc-dual-statusbar{grid-template-columns:repeat(2,1fr)}.vesc-dual-live-grid,.vesc-dual-control-grid,.vesc-dual-editor-grid{grid-template-columns:1fr}.compact-tuning,.compact-limits{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:620px){.vesc-dual-statusbar{grid-template-columns:1fr}.compact-tuning,.compact-limits{grid-template-columns:1fr}}

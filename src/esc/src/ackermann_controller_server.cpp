@@ -196,9 +196,9 @@ public:
       transport_mode_ == "stm32" ? "/stmf4/vesc/runtime_tx" : (serial_device_.empty() ? "AUTO" : serial_device_.c_str()));
     RCLCPP_INFO(
       get_logger(),
-      "Drive scale: speed +/-%.3f m/s -> native VESC +/-%.1f ERPM (r=%.3fm, pp=%d, gear=%.3f); "
+      "Drive scale: speed +/-%.3f m/s -> baseline VESC +/-%.1f ERPM (%.1f eRPM/(m/s), r=%.3fm, pp=%d, gear=%.3f); "
       "legacy serial limit +/-%.1f units | steering +/-%.1f deg | teleop yaw +/-%.1f deg/s",
-      speed_max_mps_, speed_max_mps_ * nativeDriveErpmPerMps(), drive_wheel_radius_m_,
+      speed_max_mps_, speed_max_mps_ * nativeDriveErpmPerMps(), nativeDriveErpmPerMps(), drive_wheel_radius_m_,
       drive_motor_pole_pairs_, drive_gear_ratio_, right_max_rpm_, steering_max_deg_, yaw_max_deg_s_);
     RCLCPP_INFO(
       get_logger(),
@@ -306,6 +306,9 @@ private:
     declare_parameter<double>("drive_wheel_radius_m", 0.145);
     declare_parameter<int>("drive_motor_pole_pairs", 15);
     declare_parameter<double>("drive_gear_ratio", 1.0);
+    // Temporary direct commissioning baseline: 1.00 m/s = 8000 electrical RPM.
+    // Wheel/pole/gear remain engineering metadata until outdoor calibration replaces this baseline.
+    declare_parameter<double>("drive_erpm_per_mps", 8000.0);
     // Multiplicative calibration from raw wheel-model speed to measured ground speed.
     // scale = V_GNSS / V_raw_ESC. This is runtime-adjustable after N2.1 trials.
     declare_parameter<double>("drive_odometry_calibration_scale", 1.0);
@@ -385,7 +388,7 @@ private:
     declare_parameter<bool>("steering_physical_calibration_enabled", false);
     declare_parameter<double>("steering_physical_left_limit_deg", -30.0);
     declare_parameter<double>("steering_physical_right_limit_deg", 30.0);
-    declare_parameter<double>("steering_physical_operational_limit_deg", 28.0);
+    declare_parameter<double>("steering_physical_operational_limit_deg", 30.0);
     declare_parameter<std::string>("steering_physical_calibration_saved_at", "");
 
     // Multi-point physical steering LUT. Physical angles are strictly
@@ -473,6 +476,7 @@ private:
     drive_wheel_radius_m_ = std::clamp(get_parameter("drive_wheel_radius_m").as_double(), 0.01, 1.0);
     drive_motor_pole_pairs_ = std::clamp(static_cast<int>(get_parameter("drive_motor_pole_pairs").as_int()), 1, 100);
     drive_gear_ratio_ = std::clamp(get_parameter("drive_gear_ratio").as_double(), 0.01, 100.0);
+    drive_erpm_per_mps_ = std::clamp(get_parameter("drive_erpm_per_mps").as_double(), 100.0, 50000.0);
     drive_odometry_calibration_scale_ = std::clamp(
       get_parameter("drive_odometry_calibration_scale").as_double(), 0.20, 5.0);
     wheelbase_m_ = std::max(0.05, get_parameter("wheelbase_m").as_double());
@@ -1372,7 +1376,7 @@ private:
   double clampCommissioningSteeringDeg(double physical_deg) const
   {
     // Commissioning may exercise the measured mechanical endpoints (+/-30 deg)
-    // while production Nav2/teleop remains limited by operationalPhysicalLimitDeg() (+/-28 deg).
+    // while production Nav2/teleop is limited by operationalPhysicalLimitDeg() (+/-30 deg).
     return std::clamp(physical_deg, leftPhysicalLimitDeg(), rightPhysicalLimitDeg());
   }
 
@@ -1715,10 +1719,10 @@ private:
 
   double nativeDriveErpmPerMps() const
   {
-    // COMM_SET_RPM and COMM_GET_VALUES use electrical RPM. Convert vehicle
-    // linear speed -> wheel mechanical RPM -> motor mechanical RPM -> ERPM.
-    return (60.0 * drive_gear_ratio_ * static_cast<double>(drive_motor_pole_pairs_)) /
-      (2.0 * kPi * drive_wheel_radius_m_);
+    // Commissioning baseline is intentionally explicit. For the current indoor
+    // phase, 1.00 m/s maps to 8000 eRPM. Outdoor measured calibration later
+    // adjusts drive_odometry_calibration_scale without changing command topology.
+    return drive_erpm_per_mps_;
   }
 
   double rightCommandUnitsPerMps() const
@@ -1738,7 +1742,7 @@ private:
 
   double rightCommandLimit() const
   {
-    return transport_mode_ == "stm32" ? speed_max_mps_ * nativeDriveErpmPerMps() : right_max_rpm_;
+    return transport_mode_ == "stm32" ? speed_max_mps_ * rightCommandUnitsPerMps() : right_max_rpm_;
   }
 
   double rightRpmFor(const Selected & selected) const
@@ -2915,6 +2919,7 @@ private:
   double drive_wheel_radius_m_{0.145};
   int drive_motor_pole_pairs_{15};
   double drive_gear_ratio_{1.0};
+  double drive_erpm_per_mps_{8000.0};
   double drive_odometry_calibration_scale_{1.0};
   double wheelbase_m_{0.70};
   double track_width_m_{0.48};
@@ -2959,7 +2964,7 @@ private:
   bool steering_physical_calibration_valid_{false};
   double steering_physical_left_limit_deg_{-30.0};
   double steering_physical_right_limit_deg_{30.0};
-  double steering_physical_operational_limit_deg_{28.0};
+  double steering_physical_operational_limit_deg_{30.0};
   std::string steering_physical_calibration_saved_at_;
   bool steering_physical_lut_enabled_{false};
   bool steering_physical_lut_valid_{false};

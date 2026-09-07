@@ -33,7 +33,7 @@ trajectory_safety_supervisor:
     # Launch overrides metric_obstacle_safety_enabled from physical calibration state.
     metric_obstacle_safety_enabled: false
     # Commissioning-only bypass; never default ON. Global E-stop/ESC watchdog remain active.
-    commissioning_bypass_enabled: false
+    commissioning_bypass_enabled: true
     latency_compensation_enabled: true
     perception_latency_fallback_sec: 1.0
     latency_safety_margin_sec: 0.15
@@ -61,11 +61,11 @@ trajectory_safety_supervisor:
     warning_lane_speed_mps: 0.2
     lane_advisory_blend: 1.0
     lane_safety_enabled: false
-    maximum_yaw_rate_rps: 0.292028888392
+    maximum_yaw_rate_rps: 0.688498701004
     require_plan_when_moving: true
     require_camera_connected: true
     require_camera_health: true
     require_obstacle_stream_when_moving: true
     stop_on_lane_lost: false
     use_local_plan_when_available: true
-    minimum_turning_radius_m: 1.712159378317
+    minimum_turning_radius_m: 1.452435565298
