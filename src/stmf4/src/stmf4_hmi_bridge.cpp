@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <cerrno>
 #include <chrono>
@@ -163,7 +164,7 @@ private:
     declare_parameter<std::string>("serial_device", "auto");
     declare_parameter<int>("serial_baud", 1000000);
     declare_parameter<double>("reconnect_sec", 0.5);
-    declare_parameter<double>("telemetry_rate_hz", 10.0);
+    declare_parameter<double>("telemetry_rate_hz", 20.0);
     declare_parameter<double>("serial_poll_hz", 1000.0);
     declare_parameter<double>("command_rate_hz", 30.0);
     declare_parameter<double>("heartbeat_sec", 5.0);
@@ -183,6 +184,7 @@ private:
     declare_parameter<double>("neo3_mag_sigma_ut", 3.0);
     declare_parameter<bool>("publish_stm32_gnss", true);
     declare_parameter<double>("vesc_transport_timeout_sec", 2.0);
+    declare_parameter<int>("vesc_uart_baud_expected", 115200);
   }
 
   void readParameters() {
@@ -209,6 +211,8 @@ private:
     neo3_mag_sigma_ut_ = std::clamp(get_parameter("neo3_mag_sigma_ut").as_double(), 0.1, 100.0);
     publish_stm32_gnss_ = get_parameter("publish_stm32_gnss").as_bool();
     vesc_transport_timeout_sec_ = std::clamp(get_parameter("vesc_transport_timeout_sec").as_double(), 0.25, 10.0);
+    vesc_uart_baud_expected_ = static_cast<std::uint32_t>(std::clamp<std::int64_t>(get_parameter("vesc_uart_baud_expected").as_int(), 9600, 2000000));
+    vesc_uart_baud_active_.store(vesc_uart_baud_expected_);
     if (serial_baud_ != 1000000) throw std::runtime_error("stmf4 requires serial_baud=1000000");
   }
 
@@ -303,6 +307,7 @@ private:
     neo3_status_pub_ = create_publisher<std_msgs::msg::String>("/neo3/status", stateQos());
     vesc_rx_pub_ = create_publisher<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/rx", rclcpp::QoS(100).reliable());
     vesc_status_pub_ = create_publisher<std_msgs::msg::String>("/stmf4/vesc/status", stateQos());
+    vesc_error_pub_ = create_publisher<std_msgs::msg::String>("/stmf4/vesc/error", stateQos());
     vesc_connected_pub_ = create_publisher<std_msgs::msg::Bool>("/stmf4/vesc/connected", stateQos());
     goal_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("/navigation/goal_request", 10);
     cancel_nav_client_ = create_client<action_msgs::srv::CancelGoal>("/navigate_to_pose/_action/cancel_goal");
@@ -681,6 +686,14 @@ private:
     rx_.clear();
     if (was) RCLCPP_WARN(get_logger(), "HMI USB disconnected: %s", reason);
     publishConnected(false);
+    publishNeo3Connected(false);
+    if (neo3_ist_connected_state_) {
+      neo3_ist_connected_state_ = false;
+      std_msgs::msg::Bool b; b.data = false; neo3_ist_connected_pub_->publish(b);
+    }
+    publishVescConnected(false);
+    last_neo3_gnss_time_ = {}; last_neo3_mag_time_ = {};
+    last_vesc_line_time_ = {}; last_vesc_rx_time_ = {};
     drive_ = "STOP";
     steer_ = "NONE";
     control_origin_ = "NONE";
@@ -967,7 +980,10 @@ private:
     const bool ist_ok = v[4] > 0.5;
     const bool sw = v[5] > 0.5;
     const bool led = v[6] > 0.5;
-    if (publish_stm32_gnss_) publishNeo3Connected(gnss_alive);
+    // Host freshness of actual GNSS measurement frames is authoritative.
+    // A 1-Hz hardware snapshot may briefly report not-alive between UART bursts;
+    // never let that low-rate diagnostic flap /gnss/connected false.
+    if (publish_stm32_gnss_ && gnss_alive) publishNeo3Connected(true);
     if (neo3_ist_connected_state_ != ist_ok) {
       neo3_ist_connected_state_ = ist_ok;
       std_msgs::msg::Bool b; b.data = ist_ok; neo3_ist_connected_pub_->publish(b);
@@ -984,8 +1000,17 @@ private:
         << ",\"ist8310\":" << (ist_ok ? "true" : "false")
         << ",\"safety_switch\":" << (sw ? "true" : "false")
         << ",\"safety_led\":" << (led ? "true" : "false")
-        << ",\"gnss_config_attempts\":" << static_cast<int>(std::lround(v[7]))
-        << ",\"parse_errors\":" << neo3_parse_errors_ << "}";
+        << ",\"gnss_config_attempts\":" << static_cast<int>(std::lround(v[7]));
+    if (v.size() >= 11U) {
+      out << ",\"ist_i2c_addr\":" << static_cast<int>(std::lround(v[8]))
+          << ",\"ist_whoami\":" << static_cast<int>(std::lround(v[9]))
+          << ",\"ist_init_error\":" << static_cast<int>(std::lround(v[10]));
+    }
+    if (v.size() >= 13U) {
+      out << ",\"ist_sda_level\":" << static_cast<int>(std::lround(v[11]))
+          << ",\"ist_scl_level\":" << static_cast<int>(std::lround(v[12]));
+    }
+    out << ",\"parse_errors\":" << neo3_parse_errors_ << "}";
     status.data = out.str();
     neo3_status_pub_->publish(status);
   }
@@ -1032,6 +1057,18 @@ private:
 
   bool sendVescBytes(const std::vector<std::uint8_t> &bytes, char source) {
     if (bytes.empty() || bytes.size() > 4096U || (source != 'R' && source != 'M')) return false;
+    // Startup/hot-plug gap is expected and fail-closed. Drop stale refreshes.
+    if (fd_ < 0) {
+      if (source == 'R') ++vesc_runtime_tx_rejected_;
+      else ++vesc_maintenance_tx_rejected_;
+      return false;
+    }
+    // Mini-PC<->F411 USB CDC is fixed at 1 Mbaud. F411<->F103 is an independent
+    // UART validated and fixed at 115200 baud. Pace raw VESC packets against
+    // the baud reported by F411 VESC:STAT, so a future field fallback of ONLY the
+    // internal F411<->F103 link to 115200 remains safe without slowing or changing
+    // the Mini-PC<->F411 USB link. Runtime and maintenance are mutually exclusive.
+    std::unique_lock<std::mutex> wire_lock(vesc_wire_tx_mutex_);
     /* /stmf4/vesc/mode is the ONLY ownership authority. Data packets must never
      * switch the F411 route themselves: the runtime controller keeps publishing
      * zero/telemetry traffic while maintenance owns the actuator, and allowing
@@ -1058,12 +1095,27 @@ private:
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
       }
       if (!sent) {
-        RCLCPP_ERROR(get_logger(), "VESC USB chunk send failed at offset=%zu/%zu", offset, bytes.size());
+        if (source == 'R') ++vesc_runtime_tx_rejected_;
+        else ++vesc_maintenance_tx_rejected_;
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+          "VESC USB refresh dropped while F411 CDC is unavailable; waiting for hot-plug reconnect");
         return false;
       }
-      // Firmware/tuning traffic is loss-intolerant. Pace each complete USB
-      // text frame so the F411 command parser and UART TX queue drain it.
-      if (offset + count < bytes.size()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      // 8N1 = 10 wire bits per byte. Limit effective utilization to 80% so
+      // replies, F411 scheduling jitter and long VESC config frames have margin.
+      // This is flow control, not an arbitrary command delay: at runtime a
+      // typical 10-byte setpoint consumes only about 1.1 ms of wire budget.
+      const double wire_baud = static_cast<double>(std::max<std::uint32_t>(9600U, vesc_uart_baud_active_.load()));
+      const double wire_sec = (static_cast<double>(count) * 10.0) / (wire_baud * 0.80);
+      const auto hold = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+        std::chrono::duration<double>(wire_sec));
+      const auto now = std::chrono::steady_clock::now();
+      if (vesc_next_uart_tx_time_ < now) vesc_next_uart_tx_time_ = now;
+      vesc_next_uart_tx_time_ += hold;
+      if (offset + count < bytes.size() || bytes.size() <= kChunk) {
+        const auto sleep_now = std::chrono::steady_clock::now();
+        if (vesc_next_uart_tx_time_ > sleep_now) std::this_thread::sleep_until(vesc_next_uart_tx_time_);
+      }
     }
     return true;
   }
@@ -1096,7 +1148,24 @@ private:
       std_msgs::msg::String msg;
       msg.data = line.substr(10);
       vesc_status_pub_->publish(msg);
+      std_msgs::msg::String clear_error; clear_error.data.clear(); vesc_error_pub_->publish(clear_error);
       const std::string payload = line.substr(10);
+      const auto baud_pos = payload.find("baud=");
+      if (baud_pos != std::string::npos) {
+        char *baud_end = nullptr;
+        const unsigned long reported = std::strtoul(payload.c_str() + baud_pos + 5, &baud_end, 10);
+        if (baud_end != payload.c_str() + baud_pos + 5 && reported >= 9600UL && reported <= 2000000UL) {
+          const auto previous = vesc_uart_baud_active_.exchange(static_cast<std::uint32_t>(reported));
+          if (previous != reported) {
+            RCLCPP_INFO(get_logger(), "F411<->F103 VESC UART baud synchronized from gateway: %lu", reported);
+          }
+          if (reported != vesc_uart_baud_expected_) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000,
+              "F411<->F103 baud=%lu differs from expected=%u; adaptive pacing active; Mini-PC<->F411 remains 1000000",
+              reported, vesc_uart_baud_expected_);
+          }
+        }
+      }
       const auto age_pos = payload.find("age_ms=");
       const auto rx_pos = payload.find("rx=");
       if (age_pos != std::string::npos && rx_pos != std::string::npos) {
@@ -1104,17 +1173,18 @@ private:
         char *rx_end = nullptr;
         const unsigned long age_ms = std::strtoul(payload.c_str() + age_pos + 7, &age_end, 10);
         const unsigned long rx_count = std::strtoul(payload.c_str() + rx_pos + 3, &rx_end, 10);
-        if (age_end != payload.c_str() + age_pos + 7 && rx_end != payload.c_str() + rx_pos + 3) {
-          publishVescConnected(rx_count > 0UL &&
-            age_ms <= static_cast<unsigned long>(vesc_transport_timeout_sec_ * 1000.0));
+        if (age_end != payload.c_str() + age_pos + 7 && rx_end != payload.c_str() + rx_pos + 3 &&
+            rx_count > 0UL && age_ms <= static_cast<unsigned long>(vesc_transport_timeout_sec_ * 1000.0)) {
+          publishVescConnected(true);
         }
       }
       return;
     }
-    if (line.rfind("VESC:MODE:", 0) == 0 || line.rfind("VESC:ERR:", 0) == 0) {
-      std_msgs::msg::String msg;
-      msg.data = line.substr(5);
-      vesc_status_pub_->publish(msg);
+    if (line.rfind("VESC:MODE:", 0) == 0) {
+      std_msgs::msg::String msg; msg.data = line.substr(5); vesc_status_pub_->publish(msg); return;
+    }
+    if (line.rfind("VESC:ERR:", 0) == 0) {
+      std_msgs::msg::String msg; msg.data = line.substr(9); vesc_error_pub_->publish(msg); return;
     }
   }
 
@@ -1129,8 +1199,8 @@ private:
       neo3_ist_connected_state_ = false;
       std_msgs::msg::Bool b; b.data = false; neo3_ist_connected_pub_->publish(b);
     }
-    if (vesc_connected_state_ && last_vesc_line_time_.time_since_epoch().count() != 0 &&
-        t - last_vesc_line_time_ > std::chrono::duration<double>(vesc_transport_timeout_sec_)) {
+    if (vesc_connected_state_ && last_vesc_rx_time_.time_since_epoch().count() != 0 &&
+        t - last_vesc_rx_time_ > std::chrono::duration<double>(vesc_transport_timeout_sec_)) {
       publishVescConnected(false);
     }
   }
@@ -1394,10 +1464,12 @@ private:
   std::string serial_device_, active_serial_device_;
   std::string waypoint_file_;
   int serial_baud_{1000000};
-  double reconnect_sec_{0.5}, telemetry_rate_hz_{10.0}, serial_poll_hz_{1000.0}, command_rate_hz_{30.0}, heartbeat_sec_{5.0};
+  double reconnect_sec_{0.5}, telemetry_rate_hz_{20.0}, serial_poll_hz_{1000.0}, command_rate_hz_{30.0}, heartbeat_sec_{5.0};
   double waypoint_pose_timeout_sec_{2.5};
   double neo3_sensor_timeout_sec_{2.0}, neo3_mag_sigma_ut_{3.0};
   double vesc_transport_timeout_sec_{2.0};
+  std::uint32_t vesc_uart_baud_expected_{115200U};
+  std::atomic<std::uint32_t> vesc_uart_baud_active_{115200U};
   bool publish_stm32_gnss_{true};
   std::string neo3_gnss_frame_id_{"gnss_link"}, neo3_mag_frame_id_{"gnss_link"};
   double manual_speed_max_mps_{1.0}, hmi_steer_full_scale_deg_{90.0}, teleop_yaw_max_rps_{80.0 * kPi / 180.0};
@@ -1447,7 +1519,7 @@ private:
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr neo3_quality_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr neo3_gnss_state_pub_, neo3_status_pub_;
   rclcpp::Publisher<std_msgs::msg::UInt8MultiArray>::SharedPtr vesc_rx_pub_;
-  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr vesc_status_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr vesc_status_pub_, vesc_error_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr vesc_connected_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr neo3_gnss_connected_pub_, neo3_ist_connected_pub_, neo3_safety_switch_pub_;
   rclcpp::Publisher<sensor_msgs::msg::MagneticField>::SharedPtr neo3_mag_pub_;
@@ -1456,6 +1528,8 @@ private:
   rclcpp::Subscription<std_msgs::msg::UInt8MultiArray>::SharedPtr vesc_runtime_tx_sub_, vesc_maintenance_tx_sub_;
   bool vesc_maintenance_mode_{false};
   std::uint64_t vesc_runtime_tx_rejected_{0}, vesc_maintenance_tx_rejected_{0};
+  std::mutex vesc_wire_tx_mutex_;
+  std::chrono::steady_clock::time_point vesc_next_uart_tx_time_{};
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr vesc_mode_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr performance_sub_, nav_goal_state_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr map_pose_sub_;

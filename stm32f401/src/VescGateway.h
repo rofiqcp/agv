@@ -11,12 +11,15 @@ class VescGateway {
 
  private:
   enum class Owner : uint8_t { RUNTIME = 0, MAINTENANCE = 1 };
-  static constexpr uint32_t kBaud = 1000000;
+  static constexpr uint32_t kBaud = 115200;
   static constexpr size_t kChunkBytes = 512;
   static constexpr size_t kRxFrameBytes = 768;   // F103 VESC_MAX_FRAME <= 707 bytes
   static constexpr size_t kRxBufferBytes = 1536; // noise + at least one whole frame
-  static constexpr uint32_t kRxFrameTimeoutMs = 50;
+  static constexpr uint32_t kRxFrameTimeoutMs = 150;
   static constexpr uint32_t kStatusPeriodMs = 1000;
+  static constexpr uint32_t kRuntimeNoValidFrameRecoverMs = 1200;
+  static constexpr uint32_t kRuntimeRecoverCooldownMs = 1200;
+  static constexpr uint8_t kRuntimeRecoverBeforeReset = 4;
 
   Uart uart_{PB7, PB6};  // RX=PB7, TX=PB6 (USART1 AF7)
   Owner owner_{Owner::RUNTIME};
@@ -29,12 +32,23 @@ class VescGateway {
   uint32_t rejected_bytes_{0};
   uint32_t rx_frames_{0};
   uint32_t rx_frame_errors_{0};
+  uint32_t usb_drop_frames_{0};
+  uint32_t last_valid_frame_ms_{0};
+  uint32_t last_runtime_tx_ms_{0};
+  uint32_t last_recovery_ms_{0};
+  uint32_t recovery_tx_marker_{0};
+  uint32_t uart_recovery_count_{0};
+  uint8_t recovery_streak_{0};
+  bool ever_valid_frame_{false};
 
   static int hexNibble(char c);
   static uint16_t crc16(const uint8_t *data, size_t len);
   static const char *ownerName(Owner owner);
   bool forwardHex(const char *hex, Owner source);
+  bool writeUsbBounded(const uint8_t *data, size_t len, uint32_t timeout_ms);
   void publishRxFrame(const uint8_t *data, size_t len);
   void serviceRxFrames();
   void publishStatus(bool force = false);
+  void recoverRuntimeUart(uint32_t now);
+  void recoveryTick(uint32_t now);
 };

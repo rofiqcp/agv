@@ -346,6 +346,10 @@ private:
     // Metric obstacle/path decisions require validated homography. Guard-only mode
     // still enforces camera health + image-space near-field emergency stop.
     declare_parameter<bool>("metric_obstacle_safety_enabled", false);
+    // Explicit commissioning-only bypass for perception-derived guards. This does NOT
+    // bypass global teleop/ESC E-stop, stale Nav2 stop, non-finite guard,
+    // Ackermann feasibility clamp, or actuator watchdog. Default is fail-closed.
+    declare_parameter<bool>("commissioning_bypass_enabled", false);
     declare_parameter<bool>("latency_compensation_enabled", true);
     declare_parameter<double>("perception_latency_fallback_sec", 1.0);
     declare_parameter<double>("latency_safety_margin_sec", 0.15);
@@ -966,6 +970,8 @@ private:
       closest_obstacle_left_edge = closest_path_obstacle_left_edge_m_;
     }
 
+    const bool commissioning_bypass = get_parameter("commissioning_bypass_enabled").as_bool();
+    const bool metric_guard_active = metric_obstacle_safety_enabled_ && !commissioning_bypass;
     const bool drivable_fresh = drivable.valid && fresh(drivable.received, drivable_timeout_sec_, t);
     const FreeCorridor free_corridor = drivable_fresh ? evaluateFreeCorridor(
       drivable, closest_obstacle_forward, closest_obstacle_right_edge, closest_obstacle_left_edge,
@@ -989,40 +995,42 @@ private:
     if (!nav_fresh) {
       decision = "NAV_CMD_STALE_STOP";
       output = geometry_msgs::msg::Twist{};
-    } else if (emergency) {
+    } else if (!commissioning_bypass && emergency) {
       decision = "PERCEPTION_EMERGENCY_STOP";
       output = geometry_msgs::msg::Twist{};
-    } else if (require_camera_connected_ && !camera_ok) {
+    } else if (!commissioning_bypass && require_camera_connected_ && !camera_ok) {
       decision = "CAMERA_DISCONNECTED_STOP";
       output = geometry_msgs::msg::Twist{};
-    } else if (!camera_health_ok) {
+    } else if (!commissioning_bypass && !camera_health_ok) {
       decision = "CAMERA_UNHEALTHY_STOP";
       output = geometry_msgs::msg::Twist{};
-    } else if (metric_obstacle_safety_enabled_ && moving_request && require_plan_when_moving_ && !path.valid) {
+    } else if (metric_guard_active && moving_request && require_plan_when_moving_ && !path.valid) {
       decision = "PLAN_UNAVAILABLE_STOP";
       output = geometry_msgs::msg::Twist{};
-    } else if (metric_obstacle_safety_enabled_ && moving_request && require_obstacle_stream_when_moving_ && !obstacle_stream_fresh) {
+    } else if (metric_guard_active && moving_request && require_obstacle_stream_when_moving_ && !obstacle_stream_fresh) {
       decision = "OBSTACLE_STREAM_STALE_STOP";
       output = geometry_msgs::msg::Twist{};
-    } else if (lane_safety_enabled_ && lane_control_fresh && lane_recenter_blocked) {
+    } else if (!commissioning_bypass && lane_safety_enabled_ && lane_control_fresh && lane_recenter_blocked) {
       decision = "LANE_RECENTER_BLOCKED_STOP";
       output = geometry_msgs::msg::Twist{};
-    } else if (metric_obstacle_safety_enabled_ && std::isfinite(min_obstacle_command_along) &&
+    } else if (metric_guard_active && std::isfinite(min_obstacle_command_along) &&
                min_obstacle_command_along <= effective_immediate_stop_m) {
       // Emergency geometric veto: current MPPI command masih membawa footprint
       // langsung menuju obstacle yang sudah sangat dekat.
       decision = "IMMEDIATE_COMMAND_HARD_STOP";
       output = geometry_msgs::msg::Twist{};
     } else {
-      const bool path_obstacle_near = metric_obstacle_safety_enabled_ && std::isfinite(min_obstacle_along) &&
+      const bool path_obstacle_near = metric_guard_active && std::isfinite(min_obstacle_along) &&
         min_obstacle_along < effective_slow_distance_m;
-      const bool path_obstacle_close = metric_obstacle_safety_enabled_ && std::isfinite(min_obstacle_along) &&
+      const bool path_obstacle_close = metric_guard_active && std::isfinite(min_obstacle_along) &&
         min_obstacle_along <= effective_hard_stop_m;
-      const bool command_still_hits_close = metric_obstacle_safety_enabled_ && std::isfinite(min_obstacle_command_along) &&
+      const bool command_still_hits_close = metric_guard_active && std::isfinite(min_obstacle_command_along) &&
         min_obstacle_command_along <= effective_hard_stop_m;
       const bool any_free_side = free_corridor.left_free || free_corridor.right_free;
 
-      if (!metric_obstacle_safety_enabled_) {
+      if (commissioning_bypass) {
+        decision = "COMMISSIONING_BYPASS_PASS";
+      } else if (!metric_obstacle_safety_enabled_) {
         decision = "GUARD_ONLY_PASS";
       } else if (path_obstacle_near) {
         const double span = std::max(0.05, effective_slow_distance_m - effective_hard_stop_m);
@@ -1056,7 +1064,7 @@ private:
         }
       }
 
-      const bool recenter = lane_safety_enabled_ && !path_obstacle_near && lane_fresh && lane_valid &&
+      const bool recenter = !commissioning_bypass && lane_safety_enabled_ && !path_obstacle_near && lane_fresh && lane_valid &&
         (lane_state == "RECENTER_LEFT" || lane_state == "RECENTER_RIGHT");
       if (recenter && advisory_fresh) {
         const double speed_cap = lane_critical ? critical_lane_speed_mps_ : warning_lane_speed_mps_;
@@ -1064,7 +1072,7 @@ private:
         output.angular.z = (1.0 - lane_advisory_blend_) * output.angular.z +
           lane_advisory_blend_ * advisory.angular.z;
         decision = lane_critical ? "LANE_CRITICAL_RECENTER" : "LANE_RECENTER";
-      } else if (lane_safety_enabled_ && stop_on_lane_lost_ && lane_fresh &&
+      } else if (!commissioning_bypass && lane_safety_enabled_ && stop_on_lane_lost_ && lane_fresh &&
                  (!lane_valid || lane_state == "LANE_LOST")) {
         decision = "LANE_LOST_STOP";
         output = geometry_msgs::msg::Twist{};
@@ -1096,6 +1104,7 @@ private:
        << ";camera_health_ok=" << camera_health_ok
        << ";emergency=" << emergency
        << ";metric_obstacle_safety=" << metric_obstacle_safety_enabled_
+       << ";commissioning_bypass=" << commissioning_bypass
        << ";perception_latency_fresh=" << perception_latency_fresh
        << ";perception_latency_sec=" << perception_latency_sec
        << ";required_stop_m=" << required_stop_distance

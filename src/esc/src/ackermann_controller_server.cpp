@@ -2,8 +2,10 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rcl_interfaces/msg/set_parameters_result.hpp>
+#include <sensor_msgs/msg/imu.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float64.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/u_int8_multi_array.hpp>
 
@@ -43,6 +45,10 @@ constexpr std::uint8_t kTypeAck = 0x81;
 constexpr std::uint8_t kFlagEstop = 0x01;
 constexpr std::size_t kFrameSize = 14;
 constexpr std::uint8_t kVescGetValues = 4;
+constexpr std::uint8_t kVescGetValuesSelective = 50;
+constexpr std::uint32_t kRuntimeValuesMask =
+  (1U << 0U) | (1U << 2U) | (1U << 3U) | (1U << 4U) | (1U << 5U) |
+  (1U << 6U) | (1U << 7U) | (1U << 8U) | (1U << 15U) | (1U << 16U) | (1U << 17U);
 constexpr std::uint8_t kVescSetRpm = 8;
 constexpr std::uint8_t kVescSetPos = 9;
 constexpr std::uint8_t kVescCustomAppData = 36;
@@ -258,7 +264,8 @@ private:
   struct SerialCommand
   {
     std::int16_t left_cdeg{0};
-    std::int16_t right_rpm_x10{0};
+    std::int16_t right_rpm_x10{0};  // legacy direct-serial frame only
+    double stm32_right_erpm{0.0};   // native VESC COMM_SET_RPM; no int16 truncation
     std::uint8_t flags{0};
   };
 
@@ -284,6 +291,11 @@ private:
     declare_parameter<double>("perception_state_timeout_sec", 0.75);
     declare_parameter<double>("manual_release_hold_sec", 0.50);
     declare_parameter<bool>("require_autonomy_gate", true);
+    declare_parameter<bool>("raw_commissioning_enabled", false);
+    declare_parameter<std::string>("raw_commissioning_topic", "/esc/commissioning/raw_actuator");
+    declare_parameter<double>("raw_commissioning_timeout_sec", 0.25);
+    declare_parameter<double>("raw_commissioning_max_erpm", 10000.0);
+    declare_parameter<double>("raw_commissioning_max_steering_deg", 30.0);
 
     // Injected by esc.launch.py from the single esc/config/teleop.yaml source of truth.
     declare_parameter<double>("speed_max", 0.5);
@@ -301,6 +313,21 @@ private:
     declare_parameter<double>("wheelbase_m", 0.70);
     declare_parameter<double>("track_width_m", 0.48);
     declare_parameter<double>("min_speed_for_nav_steering_mps", 0.05);
+
+    // PX4-rover-inspired lower-level yaw-rate feedback. The existing Ackermann
+    // geometry remains the feed-forward term; this PI only corrects model/steering
+    // error during forward NAV2 motion using fresh REP-103 IMU gyro-Z.
+    declare_parameter<bool>("yaw_rate_feedback_enabled", true);
+    declare_parameter<std::string>("yaw_rate_feedback_imu_topic", "/imu/data");
+    declare_parameter<double>("yaw_rate_feedback_kp_deg_per_rps", 2.0);
+    declare_parameter<double>("yaw_rate_feedback_ki_deg_per_rad", 0.30);
+    declare_parameter<double>("yaw_rate_feedback_integral_limit_deg", 2.0);
+    declare_parameter<double>("yaw_rate_feedback_correction_limit_deg", 4.0);
+    declare_parameter<double>("yaw_rate_feedback_timeout_sec", 0.25);
+    declare_parameter<double>("yaw_rate_feedback_min_speed_mps", 0.10);
+    declare_parameter<double>("yaw_rate_setpoint_slew_rps2", 1.0);
+    declare_parameter<double>("yaw_rate_feedback_deadband_rps", 0.01);
+
     declare_parameter<bool>("invert_steering", false);
     declare_parameter<bool>("invert_drive", false);
 
@@ -393,7 +420,7 @@ private:
     // Current ESC UART is a Prolific PL2303 (067b:2303). Unique by-id is the
     // primary selector; physical topology is only a deterministic fallback.
     declare_parameter<std::string>("serial_auto_path_contains", "");
-    declare_parameter<int>("serial_baud", 1000000);
+    declare_parameter<int>("serial_baud", 115200);
     declare_parameter<double>("serial_tx_rate_hz", 50.0);
     declare_parameter<double>("serial_reconnect_sec", 0.25);
     declare_parameter<double>("serial_ack_timeout_sec", 0.60);
@@ -434,6 +461,11 @@ private:
     perception_state_timeout_sec_ = std::clamp(get_parameter("perception_state_timeout_sec").as_double(), 0.05, 2.0);
     manual_release_hold_sec_ = std::clamp(get_parameter("manual_release_hold_sec").as_double(), 0.0, 2.0);
     require_autonomy_gate_ = get_parameter("require_autonomy_gate").as_bool();
+    raw_commissioning_enabled_ = get_parameter("raw_commissioning_enabled").as_bool();
+    raw_commissioning_topic_ = get_parameter("raw_commissioning_topic").as_string();
+    raw_commissioning_timeout_sec_ = std::clamp(get_parameter("raw_commissioning_timeout_sec").as_double(), 0.05, 1.0);
+    raw_commissioning_max_erpm_ = std::clamp(get_parameter("raw_commissioning_max_erpm").as_double(), 100.0, 20000.0);
+    raw_commissioning_max_steering_deg_ = std::clamp(get_parameter("raw_commissioning_max_steering_deg").as_double(), 1.0, 30.0);
 
     speed_max_mps_ = std::max(0.01, get_parameter("speed_max").as_double());
     yaw_max_deg_s_ = std::clamp(get_parameter("yaw_max_deg_s").as_double(), 1.0, 180.0);
@@ -448,6 +480,24 @@ private:
     track_width_m_ = std::max(0.0, get_parameter("track_width_m").as_double());
     min_speed_for_nav_steering_mps_ = std::max(
       0.001, get_parameter("min_speed_for_nav_steering_mps").as_double());
+    yaw_rate_feedback_enabled_ = get_parameter("yaw_rate_feedback_enabled").as_bool();
+    yaw_rate_feedback_imu_topic_ = get_parameter("yaw_rate_feedback_imu_topic").as_string();
+    yaw_rate_feedback_kp_deg_per_rps_ = std::clamp(
+      get_parameter("yaw_rate_feedback_kp_deg_per_rps").as_double(), 0.0, 30.0);
+    yaw_rate_feedback_ki_deg_per_rad_ = std::clamp(
+      get_parameter("yaw_rate_feedback_ki_deg_per_rad").as_double(), 0.0, 20.0);
+    yaw_rate_feedback_integral_limit_deg_ = std::clamp(
+      get_parameter("yaw_rate_feedback_integral_limit_deg").as_double(), 0.0, 20.0);
+    yaw_rate_feedback_correction_limit_deg_ = std::clamp(
+      get_parameter("yaw_rate_feedback_correction_limit_deg").as_double(), 0.0, 20.0);
+    yaw_rate_feedback_timeout_sec_ = std::clamp(
+      get_parameter("yaw_rate_feedback_timeout_sec").as_double(), 0.02, 1.0);
+    yaw_rate_feedback_min_speed_mps_ = std::max(
+      0.01, get_parameter("yaw_rate_feedback_min_speed_mps").as_double());
+    yaw_rate_setpoint_slew_rps2_ = std::clamp(
+      get_parameter("yaw_rate_setpoint_slew_rps2").as_double(), 0.0, 20.0);
+    yaw_rate_feedback_deadband_rps_ = std::clamp(
+      get_parameter("yaw_rate_feedback_deadband_rps").as_double(), 0.0, 0.5);
     invert_steering_ = get_parameter("invert_steering").as_bool();
     invert_drive_ = get_parameter("invert_drive").as_bool();
 
@@ -664,12 +714,16 @@ private:
     bool serial_enabled_touched = false;
     double drive_scale = drive_odometry_calibration_scale_;
     bool drive_scale_touched = false;
+    bool raw_commissioning_requested = raw_commissioning_enabled_;
+    bool raw_commissioning_touched = false;
 
     try {
       for (const auto & parameter : parameters) {
         const std::string & name = parameter.get_name();
         if (name == "serial_enabled") {
           serial_enabled_requested = parameter.as_bool(); serial_enabled_touched = true;
+        } else if (name == "raw_commissioning_enabled") {
+          raw_commissioning_requested = parameter.as_bool(); raw_commissioning_touched = true;
         } else if (name == "drive_odometry_calibration_scale") {
           drive_scale = parameter.as_double(); drive_scale_touched = true;
         } else if (name == "steering_feedback_calibration_enabled") {
@@ -733,6 +787,18 @@ private:
     } catch (const std::exception & exc) {
       result.reason = std::string("parameter type invalid: ") + exc.what();
       return result;
+    }
+
+    if (raw_commissioning_touched) {
+      raw_commissioning_enabled_ = raw_commissioning_requested;
+      if (!raw_commissioning_enabled_) {
+        std::lock_guard<std::mutex> lock(raw_commissioning_mutex_);
+        raw_commissioning_valid_ = false;
+        raw_commissioning_erpm_ = 0.0;
+        raw_commissioning_steering_deg_ = 0.0;
+      }
+      RCLCPP_WARN(get_logger(), "Raw actuator commissioning %s",
+        raw_commissioning_enabled_ ? "ENABLED" : "DISABLED");
     }
 
     if (drive_scale_touched) {
@@ -985,6 +1051,22 @@ private:
         maintenance_owner_ = msg->data.empty() ? "MAINTENANCE" : msg->data;
       });
 
+    raw_commissioning_sub_ = create_subscription<std_msgs::msg::Float64MultiArray>(
+      raw_commissioning_topic_, rclcpp::QoS(10).reliable(),
+      [this](std_msgs::msg::Float64MultiArray::ConstSharedPtr msg) {
+        if (!raw_commissioning_enabled_ || msg->data.size() < 2U) return;
+        const double erpm = msg->data[0];
+        const double steering_deg = msg->data[1];
+        if (!std::isfinite(erpm) || !std::isfinite(steering_deg) ||
+            std::abs(erpm) > raw_commissioning_max_erpm_ ||
+            std::abs(steering_deg) > raw_commissioning_max_steering_deg_) return;
+        std::lock_guard<std::mutex> lock(raw_commissioning_mutex_);
+        raw_commissioning_erpm_ = erpm;
+        raw_commissioning_steering_deg_ = steering_deg;
+        raw_commissioning_received_ = now();
+        raw_commissioning_valid_ = true;
+      });
+
     perception_state_sub_ = create_subscription<std_msgs::msg::String>(
       perception_state_topic_, rclcpp::QoS(10).reliable(),
       [this](std_msgs::msg::String::ConstSharedPtr msg) {
@@ -999,6 +1081,15 @@ private:
         perception_state_received_ = now();
         perception_intervening_ = !decision.empty() &&
           decision != "NAV2_PASS" && decision != "GUARD_ONLY_PASS";
+      });
+
+    yaw_rate_feedback_imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
+      yaw_rate_feedback_imu_topic_, rclcpp::QoS(rclcpp::KeepLast(5)).best_effort(),
+      [this](sensor_msgs::msg::Imu::ConstSharedPtr msg) {
+        if (!std::isfinite(msg->angular_velocity.z)) return;
+        std::lock_guard<std::mutex> lock(yaw_rate_feedback_mutex_);
+        yaw_rate_feedback_measured_rps_ = msg->angular_velocity.z;
+        yaw_rate_feedback_imu_received_ = now();
       });
 
     actuator_pub_ = create_publisher<geometry_msgs::msg::Twist>(output_topic_, cmd_qos);
@@ -1040,6 +1131,18 @@ private:
     yaw_rate_actual_pub_ = create_publisher<std_msgs::msg::Float64>("/esc/yaw_rate_actual_rps", 10);
     yaw_rate_kinematic_pub_ =
       create_publisher<std_msgs::msg::Float64>("/esc/kinematic_yaw_rate_rps", 10);
+    yaw_rate_feedback_target_pub_ =
+      create_publisher<std_msgs::msg::Float64>("/esc/yaw_rate_feedback/target_rps", 10);
+    yaw_rate_feedback_measured_pub_ =
+      create_publisher<std_msgs::msg::Float64>("/esc/yaw_rate_feedback/measured_rps", 10);
+    yaw_rate_feedback_error_pub_ =
+      create_publisher<std_msgs::msg::Float64>("/esc/yaw_rate_feedback/error_rps", 10);
+    yaw_rate_feedback_correction_pub_ =
+      create_publisher<std_msgs::msg::Float64>("/esc/yaw_rate_feedback/correction_deg", 10);
+    yaw_rate_feedback_active_pub_ =
+      create_publisher<std_msgs::msg::Bool>("/esc/yaw_rate_feedback/active", stateQos());
+    yaw_rate_feedback_status_pub_ =
+      create_publisher<std_msgs::msg::String>("/esc/yaw_rate_feedback/status", stateQos());
     odom_pub_ = create_publisher<nav_msgs::msg::Odometry>(odom_topic_, 10);
 
     // F411 owns the physical USB CDC. Ackermann exchanges the exact existing
@@ -1256,6 +1359,13 @@ private:
     return std::clamp(physical_deg, -op, op);
   }
 
+  double clampCommissioningSteeringDeg(double physical_deg) const
+  {
+    // Commissioning may exercise the measured mechanical endpoints (+/-30 deg)
+    // while production Nav2/teleop remains limited by operationalPhysicalLimitDeg() (+/-28 deg).
+    return std::clamp(physical_deg, leftPhysicalLimitDeg(), rightPhysicalLimitDeg());
+  }
+
   double steeringDegFor(const Selected & selected) const
   {
     if (selected.estop) return 0.0;
@@ -1295,6 +1405,107 @@ private:
     // persistent raw-endpoint mapping are applied only when building the STM command.
     steering_deg = clampPhysicalSteeringDeg(steering_deg);
     return steering_deg;
+  }
+
+  double applyYawRateFeedback(const Selected & selected, double feedforward_deg, const rclcpp::Time & t)
+  {
+    double measured_rps = 0.0;
+    rclcpp::Time received{0, 0, RCL_ROS_TIME};
+    {
+      std::lock_guard<std::mutex> lock(yaw_rate_feedback_mutex_);
+      measured_rps = yaw_rate_feedback_measured_rps_;
+      received = yaw_rate_feedback_imu_received_;
+    }
+
+    const bool imu_fresh = received.nanoseconds() > 0 &&
+      (t - received).seconds() >= 0.0 &&
+      (t - received).seconds() <= yaw_rate_feedback_timeout_sec_;
+    const bool active = yaw_rate_feedback_enabled_ && selected.nav2 && !selected.estop &&
+      selected.twist.linear.x >= yaw_rate_feedback_min_speed_mps_ && imu_fresh;
+
+    if (!active) {
+      yaw_rate_feedback_i_term_deg_ = 0.0;
+      yaw_rate_feedback_adjusted_target_rps_ = 0.0;
+      yaw_rate_feedback_last_update_ = t;
+      yaw_rate_feedback_last_error_rps_ = 0.0;
+      yaw_rate_feedback_last_correction_deg_ = 0.0;
+      yaw_rate_feedback_active_ = false;
+      publishYawRateFeedbackState(measured_rps, imu_fresh);
+      return feedforward_deg;
+    }
+
+    double dt = 1.0 / command_rate_hz_;
+    if (yaw_rate_feedback_last_update_.nanoseconds() > 0) {
+      dt = std::clamp((t - yaw_rate_feedback_last_update_).seconds(), 1.0e-4, 0.2);
+    }
+    yaw_rate_feedback_last_update_ = t;
+
+    const double op_rad = operationalPhysicalLimitDeg() * kPi / 180.0;
+    const double max_feasible_rps =
+      std::abs(selected.twist.linear.x) * std::tan(op_rad) / wheelbase_m_;
+    const double requested_rps = std::clamp(
+      selected.twist.angular.z, -max_feasible_rps, max_feasible_rps);
+
+    if (!yaw_rate_feedback_active_) yaw_rate_feedback_adjusted_target_rps_ = measured_rps;
+    if (yaw_rate_setpoint_slew_rps2_ > 1.0e-9) {
+      const double max_step = yaw_rate_setpoint_slew_rps2_ * dt;
+      yaw_rate_feedback_adjusted_target_rps_ += std::clamp(
+        requested_rps - yaw_rate_feedback_adjusted_target_rps_, -max_step, max_step);
+    } else {
+      yaw_rate_feedback_adjusted_target_rps_ = requested_rps;
+    }
+
+    double error_rps = yaw_rate_feedback_adjusted_target_rps_ - measured_rps;
+    if (std::abs(error_rps) < yaw_rate_feedback_deadband_rps_) error_rps = 0.0;
+    const double p_term_deg = yaw_rate_feedback_kp_deg_per_rps_ * error_rps;
+    const double i_candidate = std::clamp(
+      yaw_rate_feedback_i_term_deg_ + yaw_rate_feedback_ki_deg_per_rad_ * error_rps * dt,
+      -yaw_rate_feedback_integral_limit_deg_, yaw_rate_feedback_integral_limit_deg_);
+
+    // REP-103 +wz is LEFT, while this controller's physical +steer is RIGHT.
+    // Therefore positive yaw-rate error requires a negative steering correction.
+    const double raw_correction_candidate = -(p_term_deg + i_candidate);
+    const double bounded_correction_candidate = std::clamp(
+      raw_correction_candidate, -yaw_rate_feedback_correction_limit_deg_,
+      yaw_rate_feedback_correction_limit_deg_);
+    const double provisional = feedforward_deg + bounded_correction_candidate;
+    const double saturated = clampPhysicalSteeringDeg(provisional);
+    const bool at_lower_limit = provisional < saturated - 1.0e-9;
+    const bool at_upper_limit = provisional > saturated + 1.0e-9;
+    const bool integration_drives_further =
+      (at_lower_limit && error_rps > 0.0) || (at_upper_limit && error_rps < 0.0);
+    if (!integration_drives_further) yaw_rate_feedback_i_term_deg_ = i_candidate;
+
+    const double correction_deg = std::clamp(
+      -(p_term_deg + yaw_rate_feedback_i_term_deg_),
+      -yaw_rate_feedback_correction_limit_deg_, yaw_rate_feedback_correction_limit_deg_);
+    const double result = clampPhysicalSteeringDeg(feedforward_deg + correction_deg);
+    yaw_rate_feedback_last_error_rps_ = error_rps;
+    yaw_rate_feedback_last_correction_deg_ = result - feedforward_deg;
+    yaw_rate_feedback_active_ = true;
+    publishYawRateFeedbackState(measured_rps, true);
+    return result;
+  }
+
+  void publishYawRateFeedbackState(double measured_rps, bool imu_fresh)
+  {
+    std_msgs::msg::Float64 scalar;
+    scalar.data = yaw_rate_feedback_adjusted_target_rps_;
+    yaw_rate_feedback_target_pub_->publish(scalar);
+    scalar.data = measured_rps; yaw_rate_feedback_measured_pub_->publish(scalar);
+    scalar.data = yaw_rate_feedback_last_error_rps_; yaw_rate_feedback_error_pub_->publish(scalar);
+    scalar.data = yaw_rate_feedback_last_correction_deg_; yaw_rate_feedback_correction_pub_->publish(scalar);
+    std_msgs::msg::Bool active; active.data = yaw_rate_feedback_active_; yaw_rate_feedback_active_pub_->publish(active);
+    std::ostringstream ss;
+    ss << "state=" << (yaw_rate_feedback_active_ ? "ACTIVE" : "STANDBY")
+       << ";enabled=" << (yaw_rate_feedback_enabled_ ? 1 : 0)
+       << ";imu_fresh=" << (imu_fresh ? 1 : 0)
+       << ";target_rps=" << yaw_rate_feedback_adjusted_target_rps_
+       << ";measured_rps=" << measured_rps
+       << ";error_rps=" << yaw_rate_feedback_last_error_rps_
+       << ";i_term_deg=" << yaw_rate_feedback_i_term_deg_
+       << ";correction_deg=" << yaw_rate_feedback_last_correction_deg_;
+    std_msgs::msg::String status; status.data = ss.str(); yaw_rate_feedback_status_pub_->publish(status);
   }
 
   double uncalibratedSteeringTargetDeg(double physical_deg)
@@ -1530,6 +1741,18 @@ private:
     return rpm;
   }
 
+  bool rawCommissioningSnapshot(const rclcpp::Time & t, double & erpm, double & steering_deg)
+  {
+    if (!raw_commissioning_enabled_) return false;
+    std::lock_guard<std::mutex> lock(raw_commissioning_mutex_);
+    if (!raw_commissioning_valid_ || raw_commissioning_received_.nanoseconds() <= 0) return false;
+    const double age = (t - raw_commissioning_received_).seconds();
+    if (age < 0.0 || age > raw_commissioning_timeout_sec_) return false;
+    erpm = raw_commissioning_erpm_;
+    steering_deg = raw_commissioning_steering_deg_;
+    return std::isfinite(erpm) && std::isfinite(steering_deg);
+  }
+
   void controlTick()
   {
     const auto t = now();
@@ -1542,13 +1765,25 @@ private:
       maintenance_owner = maintenance_owner_;
     }
     if (maintenance_owner.empty() || maintenance_owner == "RUNTIME") maintenance_owner = "MAINTENANCE";
-    const double steering_deg = maintenance_active ? 0.0 : steeringDegFor(selected);
+    double raw_erpm = 0.0, raw_steering_deg = 0.0;
+    const bool raw_commissioning_active = !maintenance_active && !selected.estop &&
+      rawCommissioningSnapshot(t, raw_erpm, raw_steering_deg);
+    const double steering_feedforward_deg = maintenance_active ? 0.0 :
+      (raw_commissioning_active ? clampCommissioningSteeringDeg(raw_steering_deg) : steeringDegFor(selected));
+    const double steering_deg = maintenance_active ? 0.0 :
+      (raw_commissioning_active ? steering_feedforward_deg :
+       applyYawRateFeedback(selected, steering_feedforward_deg, t));
 
     double protocol_cmd_deg = 0.0;  // display convention; converted to STM polarity below
-    double right_rpm = maintenance_active ? 0.0 : rightRpmFor(selected);
-    std::string effective_source = maintenance_active ? maintenance_owner : selected.source;
+    double right_rpm = maintenance_active ? 0.0 :
+      (raw_commissioning_active ? raw_erpm : rightRpmFor(selected));
+    std::string effective_source = maintenance_active ? maintenance_owner :
+      (raw_commissioning_active ? "RAW_COMMISSIONING" : selected.source);
 
     if (maintenance_active) {
+      resetCenterHold();
+    } else if (raw_commissioning_active) {
+      protocol_cmd_deg = steering_deg;
       resetCenterHold();
     } else if (steering_calibration_mode_enabled_ && !selected.estop) {
       // Direct calibration uses the freshest teleop Twist directly, not mux labels.
@@ -1602,7 +1837,12 @@ private:
     const double steering_stm_deg = stmFromUncalibratedDeg(protocol_cmd_deg);
 
     geometry_msgs::msg::Twist actuator = selected.twist;
-    if (maintenance_active || selected.estop || steering_calibration_mode_enabled_) actuator = geometry_msgs::msg::Twist{};
+    if (raw_commissioning_active) {
+      actuator = geometry_msgs::msg::Twist{};
+      actuator.linear.x = rawDriveMpsFromErpm(right_rpm);
+    }
+    if (maintenance_active || selected.estop || (steering_calibration_mode_enabled_ && !raw_commissioning_active))
+      actuator = geometry_msgs::msg::Twist{};
     actuator_pub_->publish(actuator);
 
     std_msgs::msg::String source_msg;
@@ -1610,7 +1850,8 @@ private:
     active_source_pub_->publish(source_msg);
 
     std_msgs::msg::Float64 drive_target;
-    drive_target.data = (maintenance_active || selected.estop || steering_calibration_mode_enabled_) ? 0.0 : selected.twist.linear.x;
+    drive_target.data = (maintenance_active || selected.estop || (steering_calibration_mode_enabled_ && !raw_commissioning_active)) ?
+      0.0 : (raw_commissioning_active ? rawDriveMpsFromErpm(right_rpm) : selected.twist.linear.x);
     drive_target_pub_->publish(drive_target);
     std_msgs::msg::Float64 steering_target;
     steering_target.data = steering_deg * kPi / 180.0;
@@ -1623,7 +1864,9 @@ private:
     SerialCommand serial_cmd;
     const double transport_steering_deg = transport_mode_ == "stm32" ? steering_deg : steering_stm_deg;
     serial_cmd.left_cdeg = static_cast<std::int16_t>(std::lround(transport_steering_deg * 100.0));
-    serial_cmd.right_rpm_x10 = static_cast<std::int16_t>(std::lround(right_rpm * 10.0));
+    serial_cmd.stm32_right_erpm = right_rpm;
+    const double legacy_right_x10 = std::clamp(right_rpm * 10.0, -32768.0, 32767.0);
+    serial_cmd.right_rpm_x10 = static_cast<std::int16_t>(std::lround(legacy_right_x10));
     serial_cmd.flags = selected.estop ? kFlagEstop : 0U;
     {
       std::lock_guard<std::mutex> lock(serial_command_mutex_);
@@ -1740,9 +1983,9 @@ private:
         continue;
       }
       ::cfmakeraw(&tty);
-      speed_t baud = B1000000;
-      if (serial_baud_ != 1000000) {
-        RCLCPP_WARN_ONCE(get_logger(), "F103 protocol is fixed at 1000000 baud; forcing 1000000.");
+      speed_t baud = B115200;
+      if (serial_baud_ != 115200) {
+        RCLCPP_WARN_ONCE(get_logger(), "F103 VESC protocol is fixed at standard 115200 baud; forcing 115200.");
       }
       ::cfsetispeed(&tty, baud);
       ::cfsetospeed(&tty, baud);
@@ -1920,7 +2163,8 @@ private:
 
   void requestVescValues(bool second)
   {
-    std::vector<std::uint8_t> payload{kVescGetValues};
+    std::vector<std::uint8_t> payload{kVescGetValuesSelective};
+    appendI32Be(payload, static_cast<std::int32_t>(kRuntimeValuesMask));
     if (second) payload = wrapRightMotor(payload);
     sendVescPayload(payload);
   }
@@ -1932,28 +2176,50 @@ private:
     sendVescPayload(payload);
   }
 
-  static double signedPositionDeg(double deg)
+  static double signedPositionDeg(double vesc_position_deg)
   {
-    while (deg >= 180.0) deg -= 360.0;
-    while (deg < -180.0) deg += 360.0;
-    return deg;
+    /* LEFT VESC position is intentionally the standard 0..360 widget:
+     *   0 -> -30 deg physical, 180 -> 0 deg center, 360 -> +30 deg.
+     * ROS/Nav2 must always see signed physical steering centered at zero. */
+    if (!std::isfinite(vesc_position_deg)) return 0.0;
+    while (vesc_position_deg < 0.0) vesc_position_deg += 360.0;
+    while (vesc_position_deg > 360.0) vesc_position_deg -= 360.0;
+    return std::clamp(-30.0 + (vesc_position_deg / 6.0), -30.0, 30.0);
   }
 
   void handleVescValues(const std::vector<std::uint8_t> &p)
   {
-    // Firmware's full COMM_GET_VALUES response follows VESC 6.00 field order.
-    if (p.size() < 59U || p[0] != kVescGetValues) return;
-    const double temp_mos_c = static_cast<double>(readI16Be(&p[1])) / 10.0;
-    const double current_motor_a = static_cast<double>(readI32Be(&p[5])) / 100.0;
-    const double current_in_a = static_cast<double>(readI32Be(&p[9])) / 100.0;
-    const double id_a = static_cast<double>(readI32Be(&p[13])) / 100.0;
-    const double iq_a = static_cast<double>(readI32Be(&p[17])) / 100.0;
-    const double duty = static_cast<double>(readI16Be(&p[21])) / 1000.0;
-    const double rpm = static_cast<double>(readI32Be(&p[23]));
-    const double vbus_v = static_cast<double>(readI16Be(&p[27])) / 10.0;
-    const std::uint8_t fault = p[53];
-    const double position_deg = static_cast<double>(readI32Be(&p[54])) / 1000000.0;
-    const std::uint8_t vesc_id = p[58];
+    double temp_mos_c = 0.0, current_motor_a = 0.0, current_in_a = 0.0;
+    double id_a = 0.0, iq_a = 0.0, duty = 0.0, rpm = 0.0, vbus_v = 0.0, position_deg = 0.0;
+    std::uint8_t fault = 255U, vesc_id = 255U;
+    if (p.size() >= 59U && p[0] == kVescGetValues) {
+      temp_mos_c = static_cast<double>(readI16Be(&p[1])) / 10.0;
+      current_motor_a = static_cast<double>(readI32Be(&p[5])) / 100.0;
+      current_in_a = static_cast<double>(readI32Be(&p[9])) / 100.0;
+      id_a = static_cast<double>(readI32Be(&p[13])) / 100.0;
+      iq_a = static_cast<double>(readI32Be(&p[17])) / 100.0;
+      duty = static_cast<double>(readI16Be(&p[21])) / 1000.0;
+      rpm = static_cast<double>(readI32Be(&p[23]));
+      vbus_v = static_cast<double>(readI16Be(&p[27])) / 10.0;
+      fault = p[53];
+      position_deg = static_cast<double>(readI32Be(&p[54])) / 1000000.0;
+      vesc_id = p[58];
+    } else if (p.size() == 37U && p[0] == kVescGetValuesSelective &&
+               static_cast<std::uint32_t>(readI32Be(&p[1])) == kRuntimeValuesMask) {
+      temp_mos_c = static_cast<double>(readI16Be(&p[5])) / 10.0;
+      current_motor_a = static_cast<double>(readI32Be(&p[7])) / 100.0;
+      current_in_a = static_cast<double>(readI32Be(&p[11])) / 100.0;
+      id_a = static_cast<double>(readI32Be(&p[15])) / 100.0;
+      iq_a = static_cast<double>(readI32Be(&p[19])) / 100.0;
+      duty = static_cast<double>(readI16Be(&p[23])) / 1000.0;
+      rpm = static_cast<double>(readI32Be(&p[25]));
+      vbus_v = static_cast<double>(readI16Be(&p[29])) / 10.0;
+      fault = p[31];
+      position_deg = static_cast<double>(readI32Be(&p[32])) / 1000000.0;
+      vesc_id = p[36];
+    } else {
+      return;
+    }
     const auto t = std::chrono::steady_clock::now();
 
     {
@@ -1999,7 +2265,7 @@ private:
   void handleVescPayload(const std::vector<std::uint8_t> &payload)
   {
     if (payload.empty()) return;
-    if (payload[0] == kVescGetValues) { handleVescValues(payload); return; }
+    if (payload[0] == kVescGetValues || payload[0] == kVescGetValuesSelective) { handleVescValues(payload); return; }
     if (payload.size() >= 23U && payload[0] == kVescCustomAppData &&
         payload[1] == kHbMagic0 && payload[2] == kHbMagic1 &&
         payload[3] == kHbVersion && payload[4] == kHbGetSteeringCal && payload[5] == 0U) {
@@ -2113,16 +2379,19 @@ private:
     const auto now_steady = std::chrono::steady_clock::now();
     const SerialCommand cmd = currentSafeCommand(now_steady);
     const double steering_deg = static_cast<double>(cmd.left_cdeg) * 0.01;
-    const double right_rpm = static_cast<double>(cmd.right_rpm_x10) * 0.1;
+    const double right_rpm = cmd.stm32_right_erpm;
     sendVescSetPos(steering_deg);
     sendVescSetRpm(right_rpm);
 
-    if (++vesc_runtime_tick_ >= 3U) {
-      vesc_runtime_tick_ = 0U;
-      requestVescValues(false);
-      requestVescValues(true);
-      if (++steering_cal_tick_ >= 5U) { steering_cal_tick_ = 0U; requestSteeringCalibration(); }
-    }
+    // RT data contract: each motor gets one standard COMM_GET_VALUES_SELECTIVE
+    // request on every 50-Hz transport tick. The compact mask keeps dual-motor
+    // feedback inside the 115200 VESC UART budget while preserving 50-Hz Nav2 data.
+    requestVescValues(false);
+    requestVescValues(true);
+    // Project-specific steering calibration state is lower-rate application data.
+    // 50 Hz / 2.5 is represented by a steady-clock deadline elsewhere; keep this
+    // lightweight state request at 10 Hz and HMI/application telemetry at 20 Hz.
+    if (++steering_cal_tick_ >= 5U) { steering_cal_tick_ = 0U; requestSteeringCalibration(); }
 
     bool timed_out = true;
     {
@@ -2353,10 +2622,16 @@ private:
 
   double calibratedSteeringDeg(double measured_raw_deg) const
   {
-    // Keep ACK feedback in its protocol/encoder domain, then map it to the REAL
-    // wheel angle when physical calibration exists. Before that calibration is
-    // certified, use the SAFE operational wheel span as a bounded estimate; do
-    // not scale protocol feedback by the STM +/-90 degree command domain.
+    /* STM32/F103 already exposes signed, calibrated physical wheel degrees.
+     * Do not apply the obsolete three-point STM protocol calibration again;
+     * doing so moves a true 0-degree center away from ROS zero. */
+    if (transport_mode_ == "stm32") {
+      const double physical_deg = clampPhysicalSteeringDeg(measured_raw_deg);
+      return std::abs(physical_deg) <= steering_straight_deadband_deg_ ? 0.0 : physical_deg;
+    }
+
+    // Legacy non-STM transports keep ACK feedback in their protocol domain,
+    // then map it to the real wheel angle using the saved calibration.
     const double protocol_fb_deg = measured_raw_deg * (invert_steering_ ? -1.0 : 1.0);
     if (steering_physical_lut_enabled_ && steering_physical_lut_valid_) {
       const std::vector<double> * fb_lut = nullptr;
@@ -2449,8 +2724,8 @@ private:
     boolean.data = ack_fresh && left_ready;
     steer_connected_pub_->publish(boolean);
 
-    const double steering_uncalibrated_deg =
-      steering_deg * (invert_steering_ ? -1.0 : 1.0);
+    const double steering_uncalibrated_deg = transport_mode_ == "stm32" ?
+      steering_deg : steering_deg * (invert_steering_ ? -1.0 : 1.0);
     const double steering_calibrated_deg = calibratedSteeringDeg(steering_deg);
 
     const auto diag_now = std::chrono::steady_clock::now();
@@ -2656,13 +2931,33 @@ private:
   double steering_center_bias_from_left_deg_{0.0};
   double steering_center_bias_from_right_deg_{0.0};
   int last_steering_direction_{0};
+
+  bool yaw_rate_feedback_enabled_{true};
+  std::string yaw_rate_feedback_imu_topic_{"/imu/data"};
+  double yaw_rate_feedback_kp_deg_per_rps_{2.0};
+  double yaw_rate_feedback_ki_deg_per_rad_{0.30};
+  double yaw_rate_feedback_integral_limit_deg_{2.0};
+  double yaw_rate_feedback_correction_limit_deg_{4.0};
+  double yaw_rate_feedback_timeout_sec_{0.25};
+  double yaw_rate_feedback_min_speed_mps_{0.10};
+  double yaw_rate_setpoint_slew_rps2_{1.0};
+  double yaw_rate_feedback_deadband_rps_{0.01};
+  std::mutex yaw_rate_feedback_mutex_;
+  double yaw_rate_feedback_measured_rps_{0.0};
+  rclcpp::Time yaw_rate_feedback_imu_received_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time yaw_rate_feedback_last_update_{0, 0, RCL_ROS_TIME};
+  double yaw_rate_feedback_adjusted_target_rps_{0.0};
+  double yaw_rate_feedback_i_term_deg_{0.0};
+  double yaw_rate_feedback_last_error_rps_{0.0};
+  double yaw_rate_feedback_last_correction_deg_{0.0};
+  bool yaw_rate_feedback_active_{false};
+
   std::string transport_mode_{"stm32"};
   std::string stm32_tx_topic_{"/stmf4/vesc/runtime_tx"};
   std::string stm32_rx_topic_{"/stmf4/vesc/rx"};
   std::string stm32_connected_topic_{"/stmf4/vesc/connected"};
   std::uint16_t stm32_sequence_{0U};
   std::atomic<bool> maintenance_mode_active_{false};
-  std::uint32_t vesc_runtime_tick_{0U};
   std::uint32_t steering_cal_tick_{0U};
   bool steering_calibrated_{false};
   bool steering_homed_{false};
@@ -2680,7 +2975,7 @@ private:
   std::string serial_device_{"auto"};
   std::string serial_auto_id_contains_{"Prolific_Technology_Inc._USB-Serial_Controller"};
   std::string serial_auto_path_contains_{};
-  int serial_baud_{1000000};
+  int serial_baud_{115200};
   double serial_tx_rate_hz_{50.0};
   double serial_reconnect_sec_{0.25};
   double serial_ack_timeout_sec_{0.60};
@@ -2700,6 +2995,17 @@ private:
   double diagnostic_drive_target_rpm_{0.0};
   double diagnostic_steering_target_deg_{0.0};
   double diagnostic_steering_raw_target_deg_{0.0};
+
+  bool raw_commissioning_enabled_{false};
+  std::string raw_commissioning_topic_{"/esc/commissioning/raw_actuator"};
+  double raw_commissioning_timeout_sec_{0.25};
+  double raw_commissioning_max_erpm_{10000.0};
+  double raw_commissioning_max_steering_deg_{30.0};
+  std::mutex raw_commissioning_mutex_;
+  double raw_commissioning_erpm_{0.0};
+  double raw_commissioning_steering_deg_{0.0};
+  rclcpp::Time raw_commissioning_received_{0, 0, RCL_ROS_TIME};
+  bool raw_commissioning_valid_{false};
 
   // Arbitration state
   std::mutex state_mutex_;
@@ -2772,6 +3078,8 @@ private:
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr global_estop_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr maintenance_owner_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr perception_state_sub_;
+  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr raw_commissioning_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr yaw_rate_feedback_imu_sub_;
   rclcpp::Subscription<std_msgs::msg::UInt8MultiArray>::SharedPtr stm32_rx_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr stm32_connected_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr maintenance_sub_;
@@ -2798,6 +3106,12 @@ private:
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr steering_actual_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr yaw_rate_actual_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr yaw_rate_kinematic_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr yaw_rate_feedback_target_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr yaw_rate_feedback_measured_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr yaw_rate_feedback_error_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr yaw_rate_feedback_correction_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr yaw_rate_feedback_active_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr yaw_rate_feedback_status_pub_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
   rclcpp::TimerBase::SharedPtr control_timer_, stm32_transport_timer_;
 };

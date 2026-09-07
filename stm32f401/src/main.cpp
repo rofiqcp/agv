@@ -6,6 +6,7 @@
 #include <Arduino.h>
 #include <SPI.h>
 #include <TFT_eSPI.h>
+#include <HardwareTimer.h>
 #include <math.h>
 #include <string.h>
 #include <stdlib.h>
@@ -34,6 +35,36 @@ TFT_eSPI tft = TFT_eSPI();
 VehicleTelemetry gTelemetry = defaultTelemetry();
 Neo3Sensors gNeo3;
 VescGateway gVesc;
+
+// Application watchdog: unlike IWDG this timer is stopped before ROM-DFU, so
+// firmware updates cannot be interrupted. The ISR only resets when the entire
+// cooperative main loop fails to complete for several seconds.
+static HardwareTimer *gAppWatchdogTimer = nullptr;
+static volatile uint32_t gMainLoopHeartbeatMs = 0U;
+static volatile bool gAppWatchdogArmed = false;
+static constexpr uint32_t APP_WATCHDOG_TIMEOUT_MS = 3500U;
+
+static void appWatchdogIsr() {
+  if (!gAppWatchdogArmed) return;
+  const uint32_t now = HAL_GetTick();
+  if (static_cast<uint32_t>(now - gMainLoopHeartbeatMs) > APP_WATCHDOG_TIMEOUT_MS) {
+    NVIC_SystemReset();
+  }
+}
+
+static void startAppWatchdog() {
+  gMainLoopHeartbeatMs = HAL_GetTick();
+  gAppWatchdogTimer = new HardwareTimer(TIM11);
+  gAppWatchdogTimer->setOverflow(100000U, MICROSEC_FORMAT);
+  gAppWatchdogTimer->attachInterrupt(appWatchdogIsr);
+  gAppWatchdogTimer->resume();
+  gAppWatchdogArmed = true;
+}
+
+static void stopAppWatchdog() {
+  gAppWatchdogArmed = false;
+  if (gAppWatchdogTimer != nullptr) gAppWatchdogTimer->pause();
+}
 
 static PageId currentPage = PAGE_SPLASH;
 static CameraSubPage currentCameraTab = CAM_VIEW;
@@ -127,6 +158,7 @@ __attribute__((used, section(".preinit_array")))
 static PreinitFn const gEarlyDfuHook = earlySystemDfuCheck;
 
 static void enterSystemDfu() {
+  stopAppWatchdog();
   // Finish acknowledgement and force a clean CDC disconnect before reset.
   Serial.flush();
   delay(40);
@@ -601,6 +633,8 @@ static void checkRosLinkTimeout() {
   if ((uint32_t)(millis() - lastRosHeartbeatMs) > timeoutMs) forceRosOffline();
 }
 
+static uint32_t gDfuArmDeadlineMs = 0u;
+
 static void handleSerialCommand(char* command) {
   while (*command == ' ' || *command == '\t') command++;
   if (!*command) return;
@@ -634,8 +668,21 @@ static void handleSerialCommand(char* command) {
     publishCameraTab();
     return;
   }
-  if (!strcmp(command, "BOOT:DFU")) {
-    // Fail-safe: never leave a latched drive command active during firmware update.
+  if (!strcmp(command, "BOOT:DFU:ARM")) {
+    // Two-step software DFU: a single stale/corrupted CDC line must never reboot
+    // the F411 while Nav2 is running. Confirmation is valid for only 2 seconds.
+    gDfuArmDeadlineMs = millis() + 2000u;
+    printBoth("ACK:DFU:ARMED");
+    return;
+  }
+  if (!strcmp(command, "BOOT:DFU:CONFIRM")) {
+    const uint32_t now = millis();
+    if (gDfuArmDeadlineMs == 0u || (int32_t)(gDfuArmDeadlineMs - now) <= 0) {
+      gDfuArmDeadlineMs = 0u;
+      printBoth("ERR:DFU:NOT_ARMED");
+      return;
+    }
+    gDfuArmDeadlineMs = 0u;
     if (activeDriveControl == CTRL_FORWARD || activeDriveControl == CTRL_REVERSE) {
       sendDriveStop();
       activeDriveControl = CTRL_NONE;
@@ -643,6 +690,10 @@ static void handleSerialCommand(char* command) {
     printBoth("ACK:DFU");
     delay(80);
     enterSystemDfu();
+    return;
+  }
+  if (!strcmp(command, "BOOT:DFU")) {
+    printBoth("ERR:DFU:TWO_STEP_REQUIRED");
     return;
   }
   if (!strcmp(command, "GOTO:HOME")) { showPage(PAGE_HOME); return; }
@@ -973,6 +1024,7 @@ void setup() {
 
   initDisplay();
   restartSplash();
+  startAppWatchdog();
 }
 
 void loop() {
@@ -992,6 +1044,7 @@ void loop() {
       pollSerialGui();
       gVesc.poll();
     }
+    gMainLoopHeartbeatMs = HAL_GetTick();
     return;
   }
 
@@ -1035,4 +1088,7 @@ void loop() {
     ledMs = millis();
     digitalWrite(PC13, !digitalRead(PC13));
   }
+  // Feed only after one complete main-loop iteration. A blocking USB/TFT/I2C
+  // call therefore cannot keep the watchdog alive accidentally.
+  gMainLoopHeartbeatMs = HAL_GetTick();
 }

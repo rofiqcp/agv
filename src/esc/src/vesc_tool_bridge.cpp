@@ -256,7 +256,7 @@ bool parseDouble(const std::string &s, double *value) {
 class VescToolBridge final : public rclcpp::Node {
  public:
   VescToolBridge() : Node("vesc_tool_bridge") {
-    poll_hz_ = std::clamp(declare_parameter<double>("maintenance_poll_hz", 10.0), 1.0, 25.0);
+    poll_hz_ = std::clamp(declare_parameter<double>("maintenance_poll_hz", 20.0), 1.0, 25.0);
     tcp_service_hz_ = std::clamp(declare_parameter<double>("tcp_service_hz", 1000.0), 100.0, 2000.0);
     max_abs_duty_ = std::clamp(declare_parameter<double>("max_abs_duty", 0.95), 0.01, 0.99);
     max_abs_current_a_ = std::clamp(declare_parameter<double>("max_abs_current_a", 20.0), 0.1, 100.0);
@@ -285,16 +285,22 @@ class VescToolBridge final : public rclcpp::Node {
 
     rx_sub_ = create_subscription<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/rx", rclcpp::QoS(100).reliable(),
       [this](std_msgs::msg::UInt8MultiArray::ConstSharedPtr m) { consume(m->data); });
+    gateway_sub_ = create_subscription<std_msgs::msg::Bool>("/hmi/connected", stateQos(),
+      [this](std_msgs::msg::Bool::ConstSharedPtr m) { gateway_connected_ = m->data; publishStatus(); });
     transport_sub_ = create_subscription<std_msgs::msg::Bool>("/stmf4/vesc/connected", stateQos(),
       [this](std_msgs::msg::Bool::ConstSharedPtr m) { transport_connected_ = m->data; publishStatus(); });
     speed_sub_ = create_subscription<std_msgs::msg::Float64>("/esc/drive_actual_mps", 10,
       [this](std_msgs::msg::Float64::ConstSharedPtr m) { if (std::isfinite(m->data)) speed_mps_ = m->data; });
     mux_sub_ = create_subscription<std_msgs::msg::String>("/esc/mux/active_source", stateQos(),
-      [this](std_msgs::msg::String::ConstSharedPtr m) { mux_source_ = m->data; });
+      [this](std_msgs::msg::String::ConstSharedPtr m) {
+        if (mux_source_ == m->data) return;
+        mux_source_ = m->data;
+        publishStatus("mux_source_changed");
+      });
     command_sub_ = create_subscription<std_msgs::msg::String>("/esc/vesc/tool_command", 20,
       [this](std_msgs::msg::String::ConstSharedPtr m) { command(m->data); });
 
-    transition_timer_ = create_wall_timer(20ms, [this]() { transitionTick(); });
+    transition_timer_ = create_wall_timer(2ms, [this]() { transitionTick(); });
     poll_timer_ = create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::duration<double>(1.0 / poll_hz_)), [this]() { pollTick(); });
     tcp_timer_ = create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -389,6 +395,19 @@ class VescToolBridge final : public rclcpp::Node {
     std_msgs::msg::UInt8MultiArray m;
     m.data = frame({COMM_FW_VERSION});
     runtime_probe_pub_->publish(m);
+  }
+
+  void sendRuntimeSafeStop() {
+    if (!runtime_probe_pub_) return;
+    // Explicit zero-current barrier BEFORE changing the F411 route. This keeps
+    // safety independent of Ackermann callback scheduling and lets a standards-
+    // compliant TCP client keep its first request buffered without a 250-ms
+    // artificial handshake pause.
+    for (int motor = 1; motor <= 2; ++motor) {
+      std::vector<std::uint8_t> p{COMM_SET_CURRENT}; appendI32(p, 0);
+      const auto packet = frame(motorPayload(motor, std::move(p)));
+      if (!packet.empty()) { std_msgs::msg::UInt8MultiArray m; m.data = packet; runtime_probe_pub_->publish(m); }
+    }
   }
 
   void sendMaintenanceSafeStop() {
@@ -500,36 +519,37 @@ class VescToolBridge final : public rclcpp::Node {
           tcp_pending_rx_.clear(); tcp_pending_tx_.clear();
           publishOwner();
           publishStatus("vesc_tcp_valid_suspended_by_python");
-        } else if (!vehicleIdleForMaintenance() || transition_ != Transition::NONE || maintenance_active_) {
+        } else if (transition_ != Transition::NONE) {
+          // A previous owner can still be inside the mandatory safe-stop route
+          // transition. Keep the new VESC Tool socket and its first valid frame
+          // queued; once transitionTick() reaches NONE this same frame will arm
+          // the client. Never turn a safety barrier into a reconnect timeout.
+          publishStatus("vesc_tcp_valid_waiting_route_transition");
+          return;
+        } else if (!vehicleIdleForMaintenance() || maintenance_active_) {
           forceRuntimeAfterTcp("tcp_valid_frame_rejected_vehicle_not_idle_or_busy");
           return;
         } else {
           tcp_client_armed_ = true;
           publishOwner();
-          if (transport_connected_) {
+          if (gateway_connected_) {
             beginEnter();
             publishStatus("tcp_valid_frame_entering_maintenance");
           } else {
             tcp_probe_pending_ = true;
             tcp_probe_deadline_ = now + 1500ms;
             tcp_probe_next_ = now;
-            publishStatus("tcp_valid_frame_probe_runtime_link");
+            publishStatus("tcp_valid_frame_waiting_f411_hotplug");
           }
         }
       }
     }
 
     if (tcp_probe_pending_) {
-      if (transport_connected_) {
+      if (gateway_connected_) {
         tcp_probe_pending_ = false;
         beginEnter();
-        publishStatus("tcp_probe_ok_entering_maintenance");
-      } else if (now >= tcp_probe_next_) {
-        // Keep a standards-compatible TCP client connected while the F411/F103
-        // runtime link is coming up. Do not turn startup latency into a false
-        // TCP timeout; ownership remains RUNTIME until the probe succeeds.
-        sendRuntimeProbe();
-        tcp_probe_next_ = now + 150ms;
+        publishStatus("tcp_f411_hotplug_ok_entering_maintenance");
       }
     }
 
@@ -632,8 +652,12 @@ class VescToolBridge final : public rclcpp::Node {
     const auto now = std::chrono::steady_clock::now();
     if (!python_tcp_client_armed_) {
       if (containsValidVescFrame(python_pending_rx_)) {
-        if (transition_ == Transition::EXIT_STOP || transition_ == Transition::EXIT_ROUTE) {
-          forceRuntimeAfterPython("python_valid_frame_retry_runtime_transition");
+        if (transition_ != Transition::NONE) {
+          // Python has the highest maintenance priority, but route changes still
+          // have to finish their zero-current barrier. Keep the socket and first
+          // VESC frame pending instead of closing it; it will arm immediately
+          // after transitionTick() completes.
+          publishStatus("python_valid_frame_waiting_route_transition");
           return;
         }
         if (!vehicleIdleForMaintenance()) {
@@ -650,29 +674,24 @@ class VescToolBridge final : public rclcpp::Node {
           publishStatus("python_valid_frame_preempted_lower_maintenance");
         } else {
           publishOwner();
-          if (transport_connected_) {
+          if (gateway_connected_) {
             beginEnter();
             publishStatus("python_valid_frame_entering_maintenance");
           } else {
             python_probe_pending_ = true;
             python_probe_deadline_ = now + 1500ms;
             python_probe_next_ = now;
-            publishStatus("python_valid_frame_probe_runtime_link");
+            publishStatus("python_valid_frame_waiting_f411_hotplug");
           }
         }
       }
     }
 
     if (python_probe_pending_) {
-      if (transport_connected_) {
+      if (gateway_connected_) {
         python_probe_pending_ = false;
         beginEnter();
-        publishStatus("python_probe_ok_entering_maintenance");
-      } else if (now >= python_probe_next_) {
-        // Python maintenance has the same raw-VESC TCP semantics as port 65102.
-        // Keep the socket alive while transport reconnects; do not manufacture
-        // an application-visible timeout for a recoverable USB startup delay.
-        sendRuntimeProbe(); python_probe_next_ = now + 150ms;
+        publishStatus("python_f411_hotplug_ok_entering_maintenance");
       }
     }
 
@@ -691,7 +710,8 @@ class VescToolBridge final : public rclcpp::Node {
   void publishStatus(const std::string &event = "") {
     std_msgs::msg::String m; std::ostringstream o;
     o << "{\"mode\":\"" << (maintenance_active_ ? "maintenance" : "runtime")
-      << "\",\"transport_connected\":" << (transport_connected_ ? "true" : "false")
+      << "\",\"gateway_connected\":" << (gateway_connected_ ? "true" : "false")
+      << ",\"transport_connected\":" << (transport_connected_ ? "true" : "false")
       << ",\"speed_mps\":" << speed_mps_ << ",\"mux\":\"" << mux_source_
       << "\",\"owner\":\"" << maintenanceOwner() << "\""
       << ",\"python_tcp_server\":" << (python_tcp_server_fd_ >= 0 ? "true" : "false")
@@ -708,16 +728,27 @@ class VescToolBridge final : public rclcpp::Node {
   }
 
   bool safeToEnter() const {
-    return transport_connected_ && vehicleIdleForMaintenance();
+    // /stmf4/vesc/connected is intentionally freshness-based and becomes false
+    // while no VESC requests are flowing. It must NOT force a probe round-trip
+    // before every TCP session. /hmi/connected proves the 1-Mbaud Mini-PC<->F411
+    // gateway is physically open; the buffered first VESC frame then proves the
+    // F411<->F103 link after the maintenance route is selected.
+    return gateway_connected_ && vehicleIdleForMaintenance();
   }
 
   void beginEnter() {
     if (maintenance_active_ || transition_ != Transition::NONE) return;
     if (!safeToEnter()) { publishStatus("maintenance_rejected_vehicle_not_idle"); return; }
-    publishActive(true);  // Ackermann emits its bounded safe-stop while F411 still owns RUNTIME.
+    // Barrier order is strict: explicit VESC current=0 on RUNTIME, then publish
+    // maintenance_active so Ackermann also fail-closes, then switch F411 route.
+    // Two short current-zero packets are <3 ms on the validated 115200 link;
+    // 12 ms leaves ample ROS/USB scheduling margin without timing out a 60-ms
+    // first VESC request.
+    sendRuntimeSafeStop();
+    publishActive(true);
     publishOwner();
     transition_ = Transition::ENTER;
-    transition_at_ = std::chrono::steady_clock::now() + 150ms;
+    transition_at_ = std::chrono::steady_clock::now() + 8ms;
     publishStatus("maintenance_safe_stop");
   }
 
@@ -737,7 +768,7 @@ class VescToolBridge final : public rclcpp::Node {
     if (transition_ == Transition::ENTER) {
       publishMode("MAINTENANCE");
       transition_ = Transition::ENTER_ROUTE;
-      transition_at_ = std::chrono::steady_clock::now() + 100ms;
+      transition_at_ = std::chrono::steady_clock::now() + 4ms;
       publishStatus("maintenance_route_switch");
     } else if (transition_ == Transition::ENTER_ROUTE) {
       transition_ = Transition::NONE;
@@ -771,8 +802,10 @@ class VescToolBridge final : public rclcpp::Node {
   void pollTick() {
     if (!maintenance_active_ || transition_ != Transition::NONE || tcp_client_armed_ || python_tcp_client_armed_) return;
     if (std::chrono::steady_clock::now() < explicit_request_hold_until_) return;
-    sendPayload(poll_motor_, {COMM_GET_VALUES});
-    poll_motor_ = poll_motor_ == 1 ? 2 : 1;
+    // Internal Web/maintenance application view: 20 Hz per motor. External
+    // Python/VESC Tool TCP clients own their own polling cadence and bypass this.
+    sendPayload(1, {COMM_GET_VALUES});
+    sendPayload(2, {COMM_GET_VALUES});
   }
 
   void command(const std::string &raw) {
@@ -1011,9 +1044,9 @@ class VescToolBridge final : public rclcpp::Node {
     } else if (p[0] == COMM_CUSTOM_APP_DATA) handleCustom(motor,p);
   }
 
-  double poll_hz_{10.0}, tcp_service_hz_{1000.0};
+  double poll_hz_{20.0}, tcp_service_hz_{1000.0};
   double max_abs_duty_{0.95}, max_abs_current_a_{20.0}, max_abs_rpm_{10000.0};
-  bool maintenance_active_{false}, transport_connected_{false}, tcp_enabled_{true}, python_tcp_enabled_{true};
+  bool maintenance_active_{false}, gateway_connected_{false}, transport_connected_{false}, tcp_enabled_{true}, python_tcp_enabled_{true};
   bool tcp_probe_pending_{false}, python_probe_pending_{false};
   bool tcp_client_armed_{false}, python_tcp_client_armed_{false};
   int tcp_port_{65102}, tcp_server_fd_{-1}, tcp_client_fd_{-1};
@@ -1034,7 +1067,7 @@ class VescToolBridge final : public rclcpp::Node {
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr mode_pub_, owner_pub_, status_pub_, telemetry_pub_, left_values_pub_, right_values_pub_, config_pub_, tuning_pub_, position_pub_, steering_pub_, command_state_pub_, raw_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr active_pub_;
   rclcpp::Subscription<std_msgs::msg::UInt8MultiArray>::SharedPtr rx_sub_;
-  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr transport_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr gateway_sub_, transport_sub_;
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr speed_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr mux_sub_, command_sub_;
   rclcpp::TimerBase::SharedPtr transition_timer_, poll_timer_, tcp_timer_;

@@ -6,15 +6,10 @@ import time
 import cv2
 import numpy as np
 import rclpy
-import torch
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CompressedImage
 from std_msgs.msg import String
-from torchvision.models.detection import (
-    SSDLite320_MobileNet_V3_Large_Weights,
-    ssdlite320_mobilenet_v3_large,
-)
 
 # TorchVision COCO label -> project internal safety label.
 # Internal mapping is deliberately kept compatible with the thesis/runtime:
@@ -40,23 +35,9 @@ class SemanticObstacleNode(Node):
         self.score_threshold = float(self.get_parameter("score_threshold").value)
         self.period = 1.0 / max(0.1, float(self.get_parameter("inference_hz").value))
         self.enabled = bool(self.get_parameter("enabled").value)
-        threads = max(1, int(self.get_parameter("cpu_threads").value))
-        torch.set_num_threads(threads)
-        torch.set_num_interop_threads(1)
-        torch.hub.set_dir(str(self.get_parameter("torch_hub_dir").value))
-
-        weights = SSDLite320_MobileNet_V3_Large_Weights.DEFAULT
-        checkpoint = os.path.join(
-            str(self.get_parameter("torch_hub_dir").value),
-            "checkpoints",
-            "ssdlite320_mobilenet_v3_large_coco-a79551df.pth",
-        )
-        if not os.path.isfile(checkpoint):
-            raise RuntimeError(
-                "Semantic COCO checkpoint missing: " + checkpoint +
-                ". Run models/model.sh before launch."
-            )
-        self.model = ssdlite320_mobilenet_v3_large(weights=weights).eval()
+        self.torch = None
+        self.model = None
+        self.backend_error = ""
         self.raw_detections = []
         self.raw_image_width = 1280
         self.raw_image_height = 720
@@ -77,10 +58,37 @@ class SemanticObstacleNode(Node):
 
         self.last_inference = 0.0
         self.last_status = 0.0
-        self.get_logger().info(
-            "COCO semantic detector ready: internal classes 0=person, 2=car, 3=motorcycle; "
-            f"threshold={self.score_threshold:.2f} rate={1.0/self.period:.2f} Hz"
-        )
+        if self.enabled:
+            try:
+                import torch
+                from torchvision.models.detection import (
+                    SSDLite320_MobileNet_V3_Large_Weights,
+                    ssdlite320_mobilenet_v3_large,
+                )
+                threads = max(1, int(self.get_parameter("cpu_threads").value))
+                torch.set_num_threads(threads)
+                torch.set_num_interop_threads(1)
+                torch.hub.set_dir(str(self.get_parameter("torch_hub_dir").value))
+                checkpoint = os.path.join(
+                    str(self.get_parameter("torch_hub_dir").value), "checkpoints",
+                    "ssdlite320_mobilenet_v3_large_coco-a79551df.pth")
+                if not os.path.isfile(checkpoint):
+                    raise RuntimeError("checkpoint missing: " + checkpoint)
+                weights = SSDLite320_MobileNet_V3_Large_Weights.DEFAULT
+                self.model = ssdlite320_mobilenet_v3_large(weights=weights).eval()
+                self.torch = torch
+            except Exception as exc:
+                self.backend_error = str(exc)
+                self.enabled = False
+                self.get_logger().warning(
+                    "Semantic detector backend unavailable; node remains alive and fail-closed: " + self.backend_error)
+                self.publish_status("BACKEND_UNAVAILABLE", error=self.backend_error)
+        if self.enabled:
+            self.get_logger().info(
+                "COCO semantic detector ready: internal classes 0=person, 2=car, 3=motorcycle; "
+                f"threshold={self.score_threshold:.2f} rate={1.0/self.period:.2f} Hz")
+        else:
+            self.get_logger().info("Semantic detector disabled/unavailable; no inference will run")
 
     def publish_status(self, state, **extra):
         now = time.monotonic()
@@ -146,9 +154,9 @@ class SemanticObstacleNode(Node):
                 self.publish_status("DECODE_FAILED")
                 return
             rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-            tensor = torch.from_numpy(rgb).permute(2, 0, 1).float().div_(255.0)
+            tensor = self.torch.from_numpy(rgb).permute(2, 0, 1).float().div_(255.0)
             started = time.perf_counter()
-            with torch.inference_mode():
+            with self.torch.inference_mode():
                 output = self.model([tensor])[0]
             inference_ms = (time.perf_counter() - started) * 1000.0
         except Exception as exc:

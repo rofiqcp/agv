@@ -15,7 +15,7 @@ from ament_index_python.packages import PackageNotFoundError, get_package_share_
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument, EmitEvent, IncludeLaunchDescription, LogInfo,
-    OpaqueFunction, RegisterEventHandler, SetEnvironmentVariable)
+    OpaqueFunction, RegisterEventHandler, SetEnvironmentVariable, TimerAction)
 from launch.conditions import IfCondition, UnlessCondition
 from launch.event_handlers import OnProcessExit
 from launch.events import Shutdown
@@ -448,6 +448,7 @@ def generate_launch_description() -> LaunchDescription:
     imu_speed_params = os.path.join(nav_config_dir, 'imu_speed.yaml')
     mag_heading_params = os.path.join(nav_config_dir, 'mag_heading.yaml')
     mppi_closed_loop_params = os.path.join(nav_config_dir, 'mppi_closed_loop.yaml')
+    precision_params = os.path.join(nav_config_dir, 'precision.yaml')
     trajectory_safety_params = os.path.join(nav_config_dir, 'trajectory_safety.yaml')
     stage3_params = os.path.join(nav_config_dir, 'stage3_navigation.yaml')
     collision_params = os.path.join(nav_config_dir, 'collision_monitor_production.yaml')
@@ -648,10 +649,16 @@ def generate_launch_description() -> LaunchDescription:
         parameters=[ekf_params, {'use_sim_time': LaunchConfiguration('use_sim_time')}],
         remappings=[('odometry/filtered', '/odometry/filtered_map'), ('set_pose', '/ekf_global/set_pose')],
     )
+    # Delay EKF startup until map image/camera initialization has released the CPU.
+    # Runtime EKF frequency is unchanged; this only removes startup deadline misses.
+    delayed_ekf = TimerAction(period=5.0, actions=[local_ekf, global_ekf])
     localization_core = Node(
         package='navigation', executable='localization_core', name='localization_core',
         output='screen', respawn=True, respawn_delay=2.0,
-        parameters=[localization_params, {'use_sim_time': LaunchConfiguration('use_sim_time')}],
+        parameters=[localization_params, {
+            'allow_manual_pose_for_motion': ParameterValue(LaunchConfiguration('stage3_commissioning_mode'), value_type=bool),
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+        }],
     )
     mag_heading_fusion = Node(
         package='navigation', executable='mag_heading_fusion', name='mag_heading_fusion',
@@ -950,6 +957,13 @@ def generate_launch_description() -> LaunchDescription:
         name='mppi_closed_loop_supervisor', output='screen', respawn=True, respawn_delay=2.0,
         parameters=[mppi_closed_loop_params, {'use_sim_time': LaunchConfiguration('use_sim_time')}])
 
+    vehicle_dynamics_observer = Node(
+        package='navigation', executable='vehicle_dynamics_observer',
+        name='vehicle_dynamics_observer', output='screen', respawn=True, respawn_delay=2.0,
+        parameters=[precision_params, {
+            'wheelbase_m': float(_yaml_ros_param(vehicle_params, 'vehicle', 'wheelbase_m', 0.70)),
+            'use_sim_time': LaunchConfiguration('use_sim_time')}])
+
     mode_rviz = PythonExpression(["'", LaunchConfiguration('mode'), "'.lower() == 'rviz'"])
     mode_gui = PythonExpression(["'", LaunchConfiguration('mode'), "'.lower() == 'gui'"])
     mode_web = PythonExpression(["'", LaunchConfiguration('mode'), "'.lower() == 'web'"])
@@ -1037,9 +1051,9 @@ def generate_launch_description() -> LaunchDescription:
             condition=IfCondition(camera_only_enabled),
             msg='[AGV] PERCEPTION OFF: camera-only aktif; raw/preview kamera jalan, model/inference OFF.'),
         robot_state, joint_state_visualizer, gnss, imu, hmi_bridge, esc_runtime,
-        local_ekf, global_ekf, localization_core, mag_heading_fusion, imu_speed_diagnostic,
+        delayed_ekf, localization_core, mag_heading_fusion, imu_speed_diagnostic,
         camera_only, perception_cpu, perception_gpu, semantic_obstacle,
         map_server, lifecycle_map, controller, planner, behavior, cmd_vel_router, smoother, collision, navigator,
         lifecycle_smoother, lifecycle_with_collision, lifecycle_without_collision,
-        trajectory_safety, navigation_core, mppi_closed_loop, native_gui, stop_when_gui_closes, web_gui, rviz,
+        trajectory_safety, navigation_core, mppi_closed_loop, vehicle_dynamics_observer, native_gui, stop_when_gui_closes, web_gui, rviz,
     ])

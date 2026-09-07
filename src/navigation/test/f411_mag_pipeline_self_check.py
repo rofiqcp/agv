@@ -13,7 +13,9 @@ def req(ok, msg):
         raise AssertionError(msg)
 
 req("DeclareLaunchArgument('hmi_port', default_value='auto')" in launch, "F411 launch selector must default to auto")
-req('local_ekf, global_ekf, localization_core, mag_heading_fusion,' in launch, "mag_heading_fusion is defined but not launched")
+req("mag_heading_fusion = Node(" in launch, "mag_heading_fusion node definition missing")
+req("delayed_ekf = TimerAction(period=5.0, actions=[local_ekf, global_ekf])" in launch, "delayed EKF startup contract missing")
+req("delayed_ekf, localization_core, mag_heading_fusion, imu_speed_diagnostic" in launch, "delayed EKF / mag fusion actions are not in LaunchDescription")
 req("'gnss_source'" in launch and "stm32=NEO3 via HMI USB CDC" in launch, "STM32 NEO3 launch contract missing")
 mp = mag['mag_heading_fusion']['ros__parameters']
 req(mp['neo3_mag_topic'] == '/neo3/mag', 'NEO3 magnetometer topic mismatch')

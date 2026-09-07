@@ -71,7 +71,8 @@ void Neo3Sensors::begin() {
   Wire.setSDA(PB9);
   Wire.setSCL(PB8);
   Wire.begin();
-  Wire.setClock(400000);
+  // 100 kHz is ample for 20-Hz IST8310 and gives more cable margin.
+  Wire.setClock(100000);
 
   delay(5);
   ist_ok_ = initIst8310();
@@ -484,7 +485,7 @@ bool Neo3Sensors::sendUbx(uint8_t cls, uint8_t id, const uint8_t *payload, uint1
 
 bool Neo3Sensors::configureGnss() {
   // UBX-CFG-VALSET v0, RAM layer only. Never writes BBR/flash.
-  uint8_t payload[80]{};
+  uint8_t payload[160]{};
   uint16_t pos = 0;
   payload[pos++] = 0x00; payload[pos++] = 0x01; payload[pos++] = 0x00; payload[pos++] = 0x00;
 
@@ -504,55 +505,94 @@ bool Neo3Sensors::configureGnss() {
   logical(0x10760001UL, true);  // UART2 OUT UBX
   u1(0x20910007UL, 1U);        // NAV-PVT UART1 every navigation epoch
   u1(0x20910008UL, 1U);        // NAV-PVT UART2 every navigation epoch
+  // At 10 Hz, the M9N default NMEA set can saturate 38400 baud. Keep only
+  // compact UBX NAV-PVT on both candidate UARTs; configuration is RAM-only.
+  const uint32_t nmea_uart_keys[] = {
+    0x209100bbUL,0x209100bcUL, // GGA UART1/UART2
+    0x209100caUL,0x209100cbUL, // GLL
+    0x209100c0UL,0x209100c1UL, // GSA
+    0x209100c5UL,0x209100c6UL, // GSV
+    0x209100acUL,0x209100adUL, // RMC
+    0x209100b1UL,0x209100b2UL  // VTG
+  };
+  for (uint32_t key : nmea_uart_keys) u1(key, 0U);
   u1(0x20110021UL, 4U);        // automotive dynamic model
   u2(0x30210001UL, 100U);      // measurement period 100 ms = 10 Hz
   u2(0x30210002UL, 1U);        // one nav solution / measurement
   return sendUbx(0x06, 0x8A, payload, pos);
 }
 
-bool Neo3Sensors::istWrite(uint8_t reg, uint8_t value) {
-  Wire.beginTransmission(IST8310_ADDR);
-  Wire.write(reg);
-  Wire.write(value);
+bool Neo3Sensors::istWriteAt(uint8_t addr, uint8_t reg, uint8_t value) {
+  Wire.beginTransmission(addr); Wire.write(reg); Wire.write(value);
   return Wire.endTransmission() == 0;
 }
 
-bool Neo3Sensors::istRead(uint8_t reg, uint8_t *dst, uint8_t count) {
+bool Neo3Sensors::istReadAt(uint8_t addr, uint8_t reg, uint8_t *dst, uint8_t count) {
   if (dst == nullptr || count == 0) return false;
-  Wire.beginTransmission(IST8310_ADDR);
-  Wire.write(reg);
+  Wire.beginTransmission(addr); Wire.write(reg);
   if (Wire.endTransmission(false) != 0) return false;
-  const uint8_t got = Wire.requestFrom(IST8310_ADDR, count);
-  if (got != count) {
-    while (Wire.available()) (void)Wire.read();
-    return false;
-  }
+  const uint8_t got = Wire.requestFrom(addr, count);
+  if (got != count) { while (Wire.available()) (void)Wire.read(); return false; }
   for (uint8_t i = 0; i < count; ++i) dst[i] = static_cast<uint8_t>(Wire.read());
   return true;
 }
 
+bool Neo3Sensors::istWrite(uint8_t reg, uint8_t value) { return istWriteAt(ist_addr_, reg, value); }
+bool Neo3Sensors::istRead(uint8_t reg, uint8_t *dst, uint8_t count) { return istReadAt(ist_addr_, reg, dst, count); }
+
+
+void Neo3Sensors::recoverIstBus() {
+  Wire.end();
+  pinMode(PB9, INPUT_PULLUP);
+  pinMode(PB8, OUTPUT_OPEN_DRAIN);
+  digitalWrite(PB8, HIGH);
+  delayMicroseconds(5);
+  for (uint8_t i = 0; i < 9; ++i) {
+    digitalWrite(PB8, LOW); delayMicroseconds(5);
+    digitalWrite(PB8, HIGH); delayMicroseconds(5);
+  }
+  pinMode(PB8, INPUT_PULLUP);
+  pinMode(PB9, INPUT_PULLUP);
+  Wire.setSDA(PB9); Wire.setSCL(PB8); Wire.begin(); Wire.setClock(100000);
+  delay(2);
+}
+
 bool Neo3Sensors::initIst8310() {
-  // Reset before probing WHO_AM_I. IST8310's WHO_AM_I register is writable and
-  // can remain corrupted after short power cycles/bus noise; ArduPilot uses the
-  // same reset-before-probe sequence for this reason.
-  if (!istWrite(IST8310_CTRL2, 0x01)) return false;
-  delay(20);
-  uint8_t who = 0;
-  if (!istRead(IST8310_WHOAMI_REG, &who, 1) || who != IST8310_WHOAMI) return false;
-
-  // Recommended averaging and set/reset pulse settings.
-  if (!istWrite(IST8310_AVGCNTL, 0x24)) return false; // X/Z 16x + Y 16x averaging
-  if (!istWrite(IST8310_PDCNTL, 0xC0)) return false;  // normal set/reset pulse duration
-  // Keep CTRL3 at its reset value. Single-conversion mode is deterministic.
+  recoverIstBus();
+  ist_init_error_ = 1;
+  ist_whoami_ = 0;
+  bool found = false;
+  const uint8_t order[] = {ist_addr_, IST8310_ADDR, 0x0C, 0x0D, 0x0F};
+  for (uint8_t idx = 0; idx < sizeof(order); ++idx) {
+    const uint8_t addr = order[idx];
+    if (addr < IST8310_ADDR_MIN || addr > IST8310_ADDR_MAX) continue;
+    bool duplicate = false;
+    for (uint8_t j = 0; j < idx; ++j) if (order[j] == addr) duplicate = true;
+    if (duplicate) continue;
+    uint8_t who = 0xFF;
+    if (istReadAt(addr, IST8310_WHOAMI_REG, &who, 1) &&
+        (who == IST8310_WHOAMI || who == IST8310J_WHOAMI)) {
+      ist_addr_ = addr; ist_whoami_ = who; found = true; break;
+    }
+  }
+  if (!found) {
+    // Prime a newly powered/hot-plugged sensor for the next retry, but do not
+    // block the main loop waiting for POR. GNSS/VESC remain first-class traffic.
+    for (uint8_t addr = IST8310_ADDR_MIN; addr <= IST8310_ADDR_MAX; ++addr)
+      (void)istWriteAt(addr, IST8310_CTRL2, 0x01);
+    return false;
+  }
+  ist_init_error_ = 2;
+  if (!istWrite(IST8310_AVGCNTL, 0x24)) return false;
+  if (!istWrite(IST8310_PDCNTL, 0xC0)) return false;
   if (!istWrite(IST8310_CTRL3, 0x00)) return false;
-
-  // Read-back verification catches a marginal I2C connection that ACKs writes
-  // but does not retain the intended configuration.
   uint8_t avg = 0, pd = 0, ctrl3 = 0;
   if (!istRead(IST8310_AVGCNTL, &avg, 1) || avg != 0x24 ||
       !istRead(IST8310_PDCNTL, &pd, 1) || pd != 0xC0 ||
-      !istRead(IST8310_CTRL3, &ctrl3, 1) || ctrl3 != 0x00) return false;
-
+      !istRead(IST8310_CTRL3, &ctrl3, 1) || ctrl3 != 0x00) {
+    ist_init_error_ = 3; return false;
+  }
+  ist_init_error_ = 0;
   ist_error_count_ = 0;
   startIstMeasurement();
   return true;
@@ -688,7 +728,7 @@ void Neo3Sensors::publishHardwareStatus(bool force) {
   const uint32_t now_ms = millis();
   if (!force && static_cast<uint32_t>(now_ms - last_hw_publish_ms_) < HW_PUBLISH_MS) return;
   last_hw_publish_ms_ = now_ms;
-  char line[96]; CdcLineBuffer out(line, sizeof(line));
+  char line[128]; CdcLineBuffer out(line, sizeof(line));
   out.print(F("SENS:HW:"));
   out.print(++hw_sequence_); out.print(',');
   out.print(now_ms); out.print(',');
@@ -697,7 +737,12 @@ void Neo3Sensors::publishHardwareStatus(bool force) {
   out.print(ist_ok_ ? 1 : 0); out.print(',');
   out.print(switch_pressed_ ? 1 : 0); out.print(',');
   out.print(safety_led_on_ ? 1 : 0); out.print(',');
-  out.println(config_attempts_);
+  out.print(config_attempts_); out.print(',');
+  out.print(ist_addr_); out.print(',');
+  out.print(ist_whoami_); out.print(',');
+  out.print(ist_init_error_); out.print(',');
+  out.print(digitalRead(PB9)); out.print(',');
+  out.println(digitalRead(PB8));
   (void)out.flushToUsb();
 }
 

@@ -70,8 +70,11 @@ private:
   };
 
   static constexpr uint8_t IST8310_ADDR = 0x0E;
+  static constexpr uint8_t IST8310_ADDR_MIN = 0x0C;
+  static constexpr uint8_t IST8310_ADDR_MAX = 0x0F;
   static constexpr uint8_t IST8310_WHOAMI_REG = 0x00;
   static constexpr uint8_t IST8310_WHOAMI = 0x10;
+  static constexpr uint8_t IST8310J_WHOAMI = 0xA3;
   static constexpr uint8_t IST8310_STAT1 = 0x02;
   static constexpr uint8_t IST8310_DATA_XL = 0x03;
   static constexpr uint8_t IST8310_CTRL1 = 0x0A;
@@ -110,9 +113,12 @@ private:
   static void appendU8(uint8_t *payload, uint16_t &pos, uint8_t value);
 
   bool initIst8310();
+  void recoverIstBus();
   void pollIst8310();
   bool istRead(uint8_t reg, uint8_t *dst, uint8_t count);
   bool istWrite(uint8_t reg, uint8_t value);
+  bool istReadAt(uint8_t addr, uint8_t reg, uint8_t *dst, uint8_t count);
+  bool istWriteAt(uint8_t addr, uint8_t reg, uint8_t value);
   void startIstMeasurement();
   void publishMag(int16_t x, int16_t y, int16_t z);
 
@@ -157,6 +163,9 @@ private:
   uint32_t hw_sequence_{0};
 
   bool ist_ok_{false};
+  uint8_t ist_addr_{IST8310_ADDR};
+  uint8_t ist_whoami_{0};
+  uint8_t ist_init_error_{0};
   uint32_t last_ist_retry_ms_{0};
   uint32_t last_ist_measurement_ms_{0};
   uint32_t last_mag_publish_ms_{0};

@@ -561,15 +561,22 @@ private:
     // The autonomous gate is the last software interlock before the ESC mux.
     // Do not open it merely because localization is ready: the STM link must
     // also have a fresh ACK with both actuator-ready status bits.
+    // Commissioning mode is intentionally a bounded pre-certification mode: it
+    // keeps hard E-stop, ESC-ready ACK, map, smoother, and planning-localization
+    // gates active, but permits indoor motion before GNSS strict/certification is
+    // complete. clampCommand() enforces the commissioning speed cap.
+    const bool commissioning = stage3_commissioning_mode_ && !stage3_production_certified_;
     if (estop_ || !esc_ready_ || !map_ready_ || !velocity_smoother_active_ ||
-        !planning_localization_ready_ || !motion_localization_ready_) return false;
-    if (require_camera_calibration_ && !camera_calibration_validated_) return false;
-    if (require_steering_calibration_ && !steering_calibration_validated_) return false;
-    if (require_steering_circle_calibration_ && !steering_circle_calibration_validated_) return false;
-    if (require_drive_odometry_calibration_ && !drive_odometry_calibration_validated_) return false;
-    if (require_imu_calibration_ && !imu_calibration_validated_) return false;
-    if (require_stage3_production_certification_ && !stage3_production_certified_ &&
-        !stage3_commissioning_mode_) return false;
+        !planning_localization_ready_) return false;
+    if (!commissioning && !motion_localization_ready_) return false;
+    if (!commissioning) {
+      if (require_camera_calibration_ && !camera_calibration_validated_) return false;
+      if (require_steering_calibration_ && !steering_calibration_validated_) return false;
+      if (require_steering_circle_calibration_ && !steering_circle_calibration_validated_) return false;
+      if (require_drive_odometry_calibration_ && !drive_odometry_calibration_validated_) return false;
+      if (require_imu_calibration_ && !imu_calibration_validated_) return false;
+      if (require_stage3_production_certification_ && !stage3_production_certified_) return false;
+    }
     if (require_perception_for_motion_) {
       // Fresh state dari publisher lama/stale tidak boleh membuka actuator bila
       // instance perception aktif belum benar-benar memiliki kamera USB.

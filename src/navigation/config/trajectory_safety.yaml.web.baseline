@@ -32,6 +32,8 @@ trajectory_safety_supervisor:
 
     # Launch overrides metric_obstacle_safety_enabled from physical calibration state.
     metric_obstacle_safety_enabled: false
+    # Commissioning-only bypass; never default ON. Global E-stop/ESC watchdog remain active.
+    commissioning_bypass_enabled: false
     latency_compensation_enabled: true
     perception_latency_fallback_sec: 1.0
     latency_safety_margin_sec: 0.15

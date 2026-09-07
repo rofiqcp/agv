@@ -1,0 +1,19 @@
+vehicle_dynamics_observer:
+  ros__parameters:
+    update_rate_hz: 50.0
+    wheelbase_m: 0.70
+    message_timeout_sec: 0.30
+    sync_max_gap_sec: 0.08
+    steering_predictor_tau_sec: 0.12
+    steering_predictor_delay_sec: 0.04
+    offset_estimator_enabled: true
+    offset_process_noise_rad2: 1.0e-7
+    offset_measurement_noise_rps2: 0.0025
+    offset_initial_covariance_rad2: 0.01
+    offset_limit_deg: 5.0
+    offset_min_velocity_mps: 0.12
+    offset_max_yaw_rate_rps: 0.35
+    offset_max_steer_deg: 12.0
+    offset_max_steer_rate_deg_s: 20.0
+    fused_v_variance_fallback: 0.03
+    fused_w_variance_fallback: 0.02

@@ -22,12 +22,20 @@ require('Uart uart_{PB7, PB6}' in vesc_h, 'VESC must use F411 USART1 RX=PB7 TX=P
 require('Uart gnss_serial_{PA3, PA2}' in neo_h, 'NEO3 GNSS must use USART2 RX=PA3 TX=PA2')
 require('Wire.setSDA(PB9)' in neo_cpp and 'Wire.setSCL(PB8)' in neo_cpp,
         'NEO3 IST8310 I2C must use SDA=PB9 SCL=PB8')
-require(neo_cpp.find('istWrite(IST8310_CTRL2, 0x01)') < neo_cpp.find('istRead(IST8310_WHOAMI_REG'),
-        'IST8310 must soft-reset before WHO_AM_I probe')
+require('istWriteAt(addr, IST8310_CTRL2, 0x01)' in neo_cpp and
+        'IST8310_ADDR_MIN = 0x0C' in neo_h and 'IST8310_ADDR_MAX = 0x0F' in neo_h,
+        'IST8310 must reset/probe the PX4-observed 0x0C..0x0F hot-plug address range')
+require('IST8310J_WHOAMI = 0xA3' in neo_h and
+        'who == IST8310_WHOAMI || who == IST8310J_WHOAMI' in neo_cpp,
+        'IST8310 probe must accept both IST8310 and IST8310J device IDs')
 for token in ('IST8310_MAX_RAW_XY', 'IST8310_MAX_RAW_Z', 'const int16_t z = static_cast<int16_t>(-z_sensor)',
               'avg != 0x24', 'pd != 0xC0'):
     require(token in neo_cpp, f'IST8310 robustness contract missing: {token}')
-require('static constexpr uint32_t kBaud = 1000000' in vesc_h, 'VESC UART must remain 1000000')
+import re
+f411_m = re.search(r'kBaud\s*=\s*(115200|1000000)', vesc_h)
+f103_m = re.search(r'F103_VESC_UART_BAUD\s+(115200|1000000)u', (WS / 'hoverboard-firmware-hack-FOC/Src/vesc/f103_boot_layout.h').read_text(encoding='utf-8'))
+require(f411_m is not None and f103_m is not None, 'F411/F103 VESC baud must be explicit 115200 or 1000000')
+require(f411_m.group(1) == f103_m.group(1), 'F411 and F103 internal VESC UART baud must match')
 require('gVesc.begin()' in main and 'gVesc.poll()' in main, 'F411 VESC gateway lifecycle missing')
 require('VESC:MODE:RUNTIME' in vesc_cpp and 'VESC:MODE:MAINTENANCE' in vesc_cpp,
         'F411 VESC runtime/maintenance ownership missing')
@@ -42,10 +50,21 @@ require('mode != "RUNTIME" && mode != "NORMAL" && mode != "MAINTENANCE"' in brid
         'ROS F411 bridge must validate and forward RUNTIME/MAINTENANCE ownership dynamically')
 require('VESC:MODE:RUNTIME' in vesc_cpp and 'VESC:MODE:MAINTENANCE' in vesc_cpp,
         'F411 firmware must explicitly implement both VESC ownership modes')
+require('Serial.availableForWrite()' in vesc_cpp and 'usb_drop_frames_' in vesc_cpp,
+        'F411 USB CDC telemetry must be bounded/nonblocking')
+for token in ('kRuntimeNoValidFrameRecoverMs', 'recoverRuntimeUart', 'recovery_streak_', 'ever_valid_frame_', 'NVIC_SystemReset'):
+    require(token in vesc_h + vesc_cpp, f'F411 VESC recovery contract missing: {token}')
+for token in ('HardwareTimer *gAppWatchdogTimer', 'TIM11', 'APP_WATCHDOG_TIMEOUT_MS',
+              'gMainLoopHeartbeatMs = HAL_GetTick()', 'stopAppWatchdog()', 'NVIC_SystemReset'):
+    require(token in main, f'F411 application watchdog contract missing: {token}')
 require(str(hmi.get('serial_device', '')).lower() == 'auto', 'F411 serial_device must default to fail-safe auto discovery')
 require('STMICROELECTRONICS' in bridge and 'F411' in bridge and 'CDC' in bridge,
         'F411 auto-discovery identity guard missing')
 require(float(hmi.get('vesc_transport_timeout_sec', 0.0)) > 0.0, 'VESC transport watchdog missing')
+require(int(hmi.get('serial_baud', 0)) == 1000000, 'Mini-PC<->F411 USB CDC host setting must stay 1 Mbaud')
+require(int(hmi.get('vesc_uart_baud_expected', 0)) == int(f411_m.group(1)), 'ROS expected internal VESC baud must match firmware source')
+require('vesc_uart_baud_active_' in bridge and 'payload.find("baud=")' in bridge,
+        'ROS bridge must adapt internal VESC pacing to F411-reported baud without changing host USB')
 require('rx_count > 0UL' in bridge, 'VESC connected state must require real F103 RX traffic')
 require('const bool qualified_fix = receiver_valid && coordinates_valid' in bridge,
         'M9N no-fix telemetry must separate receiver link from fusion-valid LLH')

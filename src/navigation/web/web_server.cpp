@@ -1177,11 +1177,17 @@ class WebRosBridge {
     return true;
   }
 
-  bool publishTrialMotion(double erpm, double steeringDeg, bool active, QString *message) {
+  bool publishTrialMotion(const QString &experimentId, double erpm, double steeringDeg, bool active, QString *message) {
     if (readOnly_) return rejectReadOnly(message);
     if (!trialTwistPub_ || !trialSourcePub_) { if (message) *message = "Trial motion publisher belum siap"; return false; }
     if (!std::isfinite(erpm) || !std::isfinite(steeringDeg)) { if (message) *message = "Trial motion value tidak finite"; return false; }
     if (boolState("vesc_maintenance_active")) { if (message) *message = "Keluar dari VESC maintenance sebelum trial ROS"; return false; }
+    if (active && !boolState("connected.esc_feedback")) { if (message) *message = "Trial ditolak: ESC feedback belum fresh"; return false; }
+    const bool navCal = experimentId == QStringLiteral("N2.1") || experimentId == QStringLiteral("N3.1") || experimentId == QStringLiteral("N3.2");
+    if (active && navCal && !objectBoolState("gnss_quality", "gnss_fix_ok")) { if (message) *message = "Trial ditolak: GNSS fix belum qualified"; return false; }
+    const bool steerCal = experimentId == QStringLiteral("N3.1") || experimentId == QStringLiteral("N3.2");
+    if (active && steerCal && (!boolState("connected.imu") || !boolState("connected.neo3_mag"))) { if (message) *message = "Trial steering ditolak: IMU/IST8310 belum online"; return false; }
+    if (active && steerCal && !sourceConfigBool("vehicle", "vehicle.ros__parameters.drive_odometry_calibration_valid", false)) { if (message) *message = "Trial steering ditolak: drive odometry scale N2.1 belum certified"; return false; }
     const double wheelR = sourceConfigNumber("esc", "esc_ackermann.ros__parameters.drive_wheel_radius_m", 0.145);
     const double polePairs = sourceConfigNumber("esc", "esc_ackermann.ros__parameters.drive_motor_pole_pairs", 15.0);
     const double gear = sourceConfigNumber("esc", "esc_ackermann.ros__parameters.drive_gear_ratio", 1.0);
@@ -1416,6 +1422,23 @@ class WebRosBridge {
     return state_.value(key).toBool(false);
   }
 
+  bool objectBoolState(const QString &key, const QString &field) const {
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    return state_.value(key).toObject().value(field).toBool(false);
+  }
+
+  bool sourceConfigBool(const QString &fileKey, const QString &path, bool fallback) const {
+    try {
+      const auto candidates = configCandidates();
+      if (!candidates.contains(fileKey) || !QFileInfo::exists(candidates.value(fileKey))) return fallback;
+      const YAML::Node root = YAML::LoadFile(candidates.value(fileKey).toStdString());
+      const QJsonValue value = yamlPathValue(root, path.split('.', Qt::SkipEmptyParts));
+      return value.isBool() ? value.toBool() : fallback;
+    } catch (...) {
+      return fallback;
+    }
+  }
+
   double sourceConfigNumber(const QString &fileKey, const QString &path, double fallback) const {
     try {
       const auto candidates = configCandidates();
@@ -1462,6 +1485,7 @@ class WebRosBridge {
         {"/system/nav2_ready", "system.nav2_ready"},
         {"/navigation/mppi_closed_loop/ready", "mppi_closed_loop_ready"},
         {"/navigation/velocity_smoother/closed_loop_eligible", "smoother_closed_loop_eligible"},
+        {"/esc/yaw_rate_feedback/active", "yaw_rate_feedback_active"},
         {"/gnss/velocity_qualified", "gnss_velocity_qualified"}, {"/gnss/cog_qualified", "gnss_cog_qualified"},
         {"/gnss/velocity_fusion_active", "gnss_velocity_fusion_active"},
         {"/gnss/cog_fusion_active", "gnss_cog_fusion_active"},
@@ -1477,10 +1501,10 @@ class WebRosBridge {
       update("system.estop", msg->data);
     });
 
-    subscribe<std_msgs::msg::Bool>("/stmf4/vesc/connected", stateQos, [this](std_msgs::msg::Bool::ConstSharedPtr msg) {
+    subscribe<std_msgs::msg::Bool>("/stmf4/vesc/connected", latchedQos, [this](std_msgs::msg::Bool::ConstSharedPtr msg) {
       update("connected.vesc_transport", msg->data);
     });
-    subscribe<std_msgs::msg::Bool>("/esc/vesc/maintenance_active", stateQos, [this](std_msgs::msg::Bool::ConstSharedPtr msg) {
+    subscribe<std_msgs::msg::Bool>("/esc/vesc/maintenance_active", latchedQos, [this](std_msgs::msg::Bool::ConstSharedPtr msg) {
       update("vesc_maintenance_active", msg->data);
     });
 
@@ -1495,6 +1519,8 @@ class WebRosBridge {
         {"/system/sensor_status", "sensor_status"}, {"/navigation/goal_state", "goal_state"},
         {"/navigation/mppi_closed_loop/status", "mppi_status"},
         {"/navigation/velocity_smoother/qualification", "smoother_qualification"},
+        {"/precision/dynamics_status", "precision_dynamics_status"},
+        {"/esc/yaw_rate_feedback/status", "yaw_rate_feedback_status"},
         {"/perception/lane_safety_state", "lane_state"}, {"/perception/lane_control_state", "lane_control"},
         {"/yolop/lane_metrics", "lane_metrics"}, {"/perception/drivable_space", "drivable_space"},
         {"/perception/camera_health_state", "camera_health_state"}, {"/perception/near_field_state", "near_field_state"},
@@ -1509,7 +1535,7 @@ class WebRosBridge {
         {"/hmi/navigation_state", "hmi_navigation"},
         {"/hmi/manual_state", "hmi_manual"}, {"/hmi/status", "hmi_status"},
         {"/esc/foc/telemetry", "foc_telemetry"}, {"/esc/mux/active_source", "esc_mux"},
-        {"/stmf4/vesc/status", "vesc_transport_status"}, {"/esc/vesc/tool_status", "vesc_tool_status"},
+        {"/stmf4/vesc/status", "vesc_transport_status"}, {"/stmf4/vesc/error", "vesc_transport_error"}, {"/esc/vesc/tool_status", "vesc_tool_status"},
         {"/esc/vesc/tool_telemetry", "vesc_tool_telemetry"}, {"/esc/vesc/left_values", "vesc_left_values"}, {"/esc/vesc/right_values", "vesc_right_values"}, {"/esc/vesc/config_state", "vesc_config_state"},
         {"/esc/vesc/tuning_state", "vesc_tuning_state"}, {"/esc/vesc/position_state", "vesc_position_state"},
         {"/esc/vesc/steering_state", "vesc_steering_state"}, {"/esc/vesc/command_state", "vesc_command_state"}, {"/esc/vesc/raw_reply", "vesc_raw_reply"}};
@@ -1518,7 +1544,11 @@ class WebRosBridge {
       const QString topic = QString::fromLatin1(entry.first);
       const bool perceptionStream = topic.startsWith(QStringLiteral("/perception/")) ||
                                     topic.startsWith(QStringLiteral("/yolop/"));
-      const bool latchedStream = topic.startsWith(QStringLiteral("/hmi/"));
+      const bool latchedStream = topic.startsWith(QStringLiteral("/hmi/")) ||
+                                    topic.startsWith(QStringLiteral("/stmf4/vesc/")) ||
+                                    (topic.startsWith(QStringLiteral("/esc/vesc/")) &&
+                                     topic != QStringLiteral("/esc/vesc/raw_reply")) ||
+                                    topic == QStringLiteral("/esc/mux/active_source");
       const rclcpp::QoS & stringQos = perceptionStream ? sensorQos : (latchedStream ? latchedQos : stateQos);
       subscribe<std_msgs::msg::String>(entry.first, stringQos, [this, channel](std_msgs::msg::String::ConstSharedPtr msg) {
         const QString raw = QString::fromStdString(msg->data);
@@ -1581,6 +1611,15 @@ class WebRosBridge {
     velocitySubscribe("/gnss/vel_map", "gnss_vel_map");
     velocitySubscribe("/gnss/base_velocity", "gnss_base_vel");
     velocitySubscribe("/gnss/base_velocity_fusion", "gnss_base_vel_fusion");
+    subscribe<geometry_msgs::msg::TwistWithCovarianceStamped>(
+      "/vehicle/twist_fused", sensorQos,
+      [this](geometry_msgs::msg::TwistWithCovarianceStamped::ConstSharedPtr msg) {
+        update("vehicle_twist_fused", QJsonObject{
+          {"vx", msg->twist.twist.linear.x}, {"wz", msg->twist.twist.angular.z},
+          {"var_v", msg->twist.covariance[0]}, {"var_w", msg->twist.covariance[35]},
+          {"frame_id", QString::fromStdString(msg->header.frame_id)},
+          {"measurement_stamp_sec", double(msg->header.stamp.sec) + msg->header.stamp.nanosec * 1e-9}});
+      });
 
     subscribe<geometry_msgs::msg::PoseWithCovarianceStamped>(
         "/gnss/cog_heading_fusion", sensorQos,
@@ -1768,7 +1807,15 @@ class WebRosBridge {
         {"/esc/kinematic_yaw_rate_rps", "esc_kinematic_yaw_rate"},
         {"/navigation/mppi_closed_loop/velocity_error_mps", "mppi_velocity_error"},
         {"/navigation/mppi_closed_loop/steering_error_rad", "mppi_steering_error"},
-        {"/navigation/mppi_closed_loop/yaw_rate_error_rps", "mppi_yaw_error"}};
+        {"/navigation/mppi_closed_loop/yaw_rate_error_rps", "mppi_yaw_error"},
+        {"/precision/steering_predicted_rad", "precision_steering_predicted"},
+        {"/precision/steering_offset_rad", "precision_steering_offset"},
+        {"/precision/yaw_rate_innovation_rps", "precision_yaw_innovation"},
+        {"/precision/twist_sync_gap_sec", "precision_twist_sync_gap"},
+        {"/esc/yaw_rate_feedback/target_rps", "yaw_rate_feedback_target"},
+        {"/esc/yaw_rate_feedback/measured_rps", "yaw_rate_feedback_measured"},
+        {"/esc/yaw_rate_feedback/error_rps", "yaw_rate_feedback_error"},
+        {"/esc/yaw_rate_feedback/correction_deg", "yaw_rate_feedback_correction_deg"}};
     for (const auto &entry : floats) {
       const QString channel = QString::fromLatin1(entry.second);
       subscribe<std_msgs::msg::Float64>(entry.first, sensorQos, [this, channel](std_msgs::msg::Float64::ConstSharedPtr msg) {
@@ -1970,7 +2017,7 @@ class WebRosBridge {
     hmiRequestPub_ = node_->create_publisher<std_msgs::msg::String>("/hmi/request", 10);
     vescToolCommandPub_ = node_->create_publisher<std_msgs::msg::String>("/esc/vesc/tool_command", 20);
     trialTwistPub_ = node_->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel/teleop", 10);
-    trialSourcePub_ = node_->create_publisher<std_msgs::msg::String>("/teleop/active_source", 10);
+    trialSourcePub_ = node_->create_publisher<std_msgs::msg::String>("/teleop/active_source", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
   }
 };
 
@@ -1980,17 +2027,37 @@ class LocalHttpServer : public QObject {
     connect(&server_, &QTcpServer::newConnection, this, [this]() { acceptConnections(); });
     eventTimer_.setInterval(200);
     connect(&eventTimer_, &QTimer::timeout, this, [this]() { broadcastEvents(); });
+    bindRetryTimer_.setInterval(1000);
+    connect(&bindRetryTimer_, &QTimer::timeout, this, [this]() { retryListen(); });
     recordingTimer_.setInterval(200);
     connect(&recordingTimer_, &QTimer::timeout, this, [this]() { captureRecordingSample(); });
   }
 
   bool start(const QString &bindAddress, int port) {
+    if (!resolveStaticRoot()) return false;
     QHostAddress address;
     if (!address.setAddress(bindAddress)) {
       if (bindAddress == "localhost") address = QHostAddress::LocalHost;
       else return false;
     }
-    if (!server_.listen(address, static_cast<quint16>(port))) return false;
+    bindAddress_ = address;
+    bindAddressText_ = bindAddress;
+    bindPort_ = static_cast<quint16>(port);
+    if (!server_.listen(bindAddress_, bindPort_)) {
+      RCLCPP_WARN(rclcpp::get_logger("agv_web_gui"),
+        "Port web %s:%d belum tersedia (%s); node tetap hidup dan retry internal 1 Hz",
+        bindAddress.toUtf8().constData(), port, server_.errorString().toUtf8().constData());
+      bindRetryTimer_.start();
+      return true;
+    }
+    eventTimer_.start();
+    return true;
+  }
+
+  bool isListening() const { return server_.isListening(); }
+
+ private:
+  bool resolveStaticRoot() {
     try {
       staticRoot_ = QString::fromStdString(ament_index_cpp::get_package_share_directory("navigation")) + "/web/static";
     } catch (...) {
@@ -2000,16 +2067,22 @@ class LocalHttpServer : public QObject {
     if (!envRoot.isEmpty() && QDir(envRoot).exists()) staticRoot_ = envRoot;
     const QString canonicalRoot = QFileInfo(staticRoot_).canonicalFilePath();
     if (canonicalRoot.isEmpty() || !QFileInfo(canonicalRoot + "/index.html").isFile()) {
-      server_.close();
       staticRoot_.clear();
       return false;
     }
     staticRoot_ = canonicalRoot;
-    eventTimer_.start();
     return true;
   }
 
- private:
+  void retryListen() {
+    if (server_.isListening()) { bindRetryTimer_.stop(); return; }
+    if (!server_.listen(bindAddress_, bindPort_)) return;
+    bindRetryTimer_.stop();
+    eventTimer_.start();
+    RCLCPP_INFO(rclcpp::get_logger("agv_web_gui"), "Web GUI bind pulih otomatis: http://%s:%u",
+      bindAddressText_.toUtf8().constData(), static_cast<unsigned>(bindPort_));
+  }
+
   struct Request {
     QByteArray method;
     QString path;
@@ -2020,7 +2093,11 @@ class LocalHttpServer : public QObject {
   WebRosBridge *bridge_{nullptr};
   QTcpServer server_;
   QTimer eventTimer_;
+  QTimer bindRetryTimer_;
   QTimer recordingTimer_;
+  QHostAddress bindAddress_;
+  QString bindAddressText_;
+  quint16 bindPort_{0};
   QList<QPointer<QTcpSocket>> sseClients_;
   QString staticRoot_;
   int heartbeatTicks_{0};
@@ -2330,7 +2407,7 @@ class LocalHttpServer : public QObject {
         const bool nav_ready = !trialList(QStringLiteral("navigation"), QStringLiteral("N16.1")).isEmpty() || !trialList(QStringLiteral("navigation"), QStringLiteral("N17.1")).isEmpty();
         if (!esc_ready || !nav_ready) return sendJson(socket,409,QJsonObject{{"ok",false},{"message","Commissioning gate belum memenuhi ESC → Navigasi → Persepsi"},{"at_ms",nowMs()}});
       }
-      ok=bridge_->publishTrialMotion(json.value("erpm").toDouble(0.0),json.value("steering_deg").toDouble(0.0),active,&message);
+      ok=bridge_->publishTrialMotion(json.value("id").toString(), json.value("erpm").toDouble(0.0), json.value("steering_deg").toDouble(0.0), active, &message);
       return sendJson(socket,ok?200:409,QJsonObject{{"ok",ok},{"message",message},{"at_ms",nowMs()}});
     } else if (request.path == "/api/perception/inference") {
       ok = bridge_->setPerceptionInference(json.value("enabled").toBool(false), &message);
@@ -2606,13 +2683,20 @@ class LocalHttpServer : public QObject {
     return v;
   }
 
-  double configNumber(const QString &fileKey,const QString &path,double fallback) const {
+  QJsonValue configStoredValue(const QString &fileKey, const QString &path) const {
     try {
-      const auto c=configCandidates(); if(!c.contains(fileKey)) return fallback;
-      const YAML::Node root=YAML::LoadFile(c.value(fileKey).toStdString());
-      const QJsonValue v=yamlPathValue(root,path.split('.',Qt::SkipEmptyParts));
-      return v.isDouble() && std::isfinite(v.toDouble()) ? v.toDouble() : fallback;
-    } catch (...) { return fallback; }
+      const auto c = configCandidates();
+      if (!c.contains(fileKey)) return QJsonValue(QJsonValue::Undefined);
+      const YAML::Node root = YAML::LoadFile(c.value(fileKey).toStdString());
+      return yamlPathValue(root, path.split('.', Qt::SkipEmptyParts));
+    } catch (...) {
+      return QJsonValue(QJsonValue::Undefined);
+    }
+  }
+
+  double configNumber(const QString &fileKey,const QString &path,double fallback) const {
+    const QJsonValue v = configStoredValue(fileKey, path);
+    return v.isDouble() && std::isfinite(v.toDouble()) ? v.toDouble() : fallback;
   }
 
   static void putNumber(QJsonObject &o,const QString &key,const std::optional<double> &v) {
@@ -2656,7 +2740,16 @@ class LocalHttpServer : public QObject {
       const auto w=meanRecording("imu.gz"),wm=meanRecording("esc_kinematic_yaw_rate"),st=meanRecording("esc_steer_actual");
       if(w&&gnss&&std::abs(*w)>0.02)o["radius_gnss_gyro_m"]=std::abs(*gnss/(*w));
       if(wm&&esc&&std::abs(*wm)>0.02)o["radius_model_m"]=std::abs(*esc/(*wm));
-      if(st&&w&&gnss&&std::abs(*w)>0.02){const double track=configNumber("esc","esc_ackermann.ros__parameters.track_width_m",0.48);const double r=std::abs(*gnss/(*w));const double l=(r-0.5*track)*std::tan(std::abs(*st));if(std::isfinite(l)&&l>0)o["effective_wheelbase_candidate_m"]=l;}
+      if(st&&w&&gnss&&std::abs(*w)>0.02){
+        const double track=configNumber("esc","esc_ackermann.ros__parameters.track_width_m",0.48);
+        const double wb=configNumber("esc","esc_ackermann.ros__parameters.wheelbase_m",0.70);
+        const double r=std::abs(*gnss/(*w));
+        const double inner=std::max(1.0e-6,r-0.5*track);
+        const double l=inner*std::tan(std::abs(*st));
+        if(std::isfinite(l)&&l>0)o["effective_wheelbase_candidate_m"]=l;
+        const double required=std::atan(wb/inner);
+        if(std::abs(*st)>0.5*kPi/180.0 && std::isfinite(required)) o["steering_scale_candidate"]=required/std::abs(*st);
+      }
     }
     return o;
   }
@@ -2700,12 +2793,31 @@ class LocalHttpServer : public QObject {
     for(const auto&p:valid){if(std::abs(p.scale-med)>tol){rejected.append(p.id);continue;}xy+=p.raw*p.gnss;xx+=p.raw*p.raw;++accepted;}
     if(accepted<2||xx<=1e-9){if(message)*message="Trial valid setelah outlier rejection tidak cukup";return false;}
     const double scale=std::clamp(xy/xx,0.20,5.0);QString runtimeMessage;bool runtimeOk=true;
-    if(apply){QJsonValue saved;QString m;const QString iso=QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
-      runtimeOk=setYamlValueAtomic("esc","esc_ackermann.ros__parameters.drive_odometry_calibration_scale",scale,&m,&saved)&&
-        setYamlValueAtomic("vehicle","vehicle.ros__parameters.drive_odometry_calibration_scale",scale,&m,&saved)&&
-        setYamlValueAtomic("vehicle","vehicle.ros__parameters.drive_odometry_calibration_valid",true,&m,&saved)&&
-        setYamlValueAtomic("vehicle","vehicle.ros__parameters.drive_odometry_calibration_saved_at",iso,&m,&saved)&&
-        bridge_->setDriveOdometryScale(scale,&runtimeMessage);
+    if(apply){
+      const QString escPath="esc_ackermann.ros__parameters.drive_odometry_calibration_scale";
+      const QString vehiclePath="vehicle.ros__parameters.drive_odometry_calibration_scale";
+      const QString validPath="vehicle.ros__parameters.drive_odometry_calibration_valid";
+      const QJsonValue oldEsc=configStoredValue("esc",escPath),oldVehicle=configStoredValue("vehicle",vehiclePath),oldValid=configStoredValue("vehicle",validPath);
+      const double oldRuntime=oldEsc.isDouble()?oldEsc.toDouble():1.0;
+      runtimeOk=bridge_->setDriveOdometryScale(scale,&runtimeMessage);
+      if(runtimeOk){
+        QJsonValue saved;QString m;QVector<QPair<QPair<QString,QString>,QJsonValue>> written;
+        auto writeOne=[&](const QString &file,const QString &path,const QJsonValue &value,const QJsonValue &oldValue){
+          if(!setYamlValueAtomic(file,path,value,&m,&saved))return false;
+          written.push_back({{file,path},oldValue});return true;
+        };
+        runtimeOk=writeOne("esc",escPath,scale,oldEsc)&&writeOne("vehicle",vehiclePath,scale,oldVehicle)&&writeOne("vehicle",validPath,true,oldValid);
+        if(!runtimeOk){
+          QString rollbackMessage;QJsonValue rollbackSaved;
+          for(auto it=written.crbegin();it!=written.crend();++it){if(!it->second.isUndefined())setYamlValueAtomic(it->first.first,it->first.second,it->second,&rollbackMessage,&rollbackSaved);}
+          QString runtimeRollback;bridge_->setDriveOdometryScale(oldRuntime,&runtimeRollback);
+          runtimeMessage=QStringLiteral("YAML apply gagal; runtime/parameter utama di-rollback. ")+m+QStringLiteral(" | ")+runtimeRollback;
+        }else{
+          const QString iso=QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
+          QString stampMessage;QJsonValue stampSaved;
+          if(!setYamlValueAtomic("vehicle","vehicle.ros__parameters.drive_odometry_calibration_saved_at",iso,&stampMessage,&stampSaved))runtimeMessage+=QStringLiteral(" | warning timestamp YAML: ")+stampMessage;
+        }
+      }
     }
     QJsonObject store=loadTrialStore(),results=store.value("calibration_results").toObject(),nav=results.value("navigation").toObject();
     nav["N2.1"]=QJsonObject{{"optimal_scale",scale},{"accepted_trials",accepted},{"total_valid_trials",valid.size()},{"median_candidate",med},{"mad",mad},{"rejected_trial_ids",rejected},{"applied",apply&&runtimeOk},{"updated_at",QDateTime::currentDateTime().toString(Qt::ISODateWithMs)} };
@@ -2956,11 +3068,15 @@ int main(int argc, char **argv) {
     WebRosBridge bridge;
     LocalHttpServer server(&bridge);
     if (!server.start(bridge.bindAddress(), bridge.port())) {
-      RCLCPP_ERROR(rclcpp::get_logger("agv_web_gui"), "Gagal listen web GUI pada %s:%d",
-                   bridge.bindAddress().toUtf8().constData(), bridge.port());
+      RCLCPP_FATAL(rclcpp::get_logger("agv_web_gui"), "Web GUI gagal start: bind address/static root tidak valid");
     } else {
-      RCLCPP_INFO(rclcpp::get_logger("agv_web_gui"), "Web GUI aktif: http://%s:%d%s",
-                  bridge.bindAddress().toUtf8().constData(), bridge.port(), bridge.readOnly() ? " [READ ONLY]" : "");
+      if (server.isListening()) {
+        RCLCPP_INFO(rclcpp::get_logger("agv_web_gui"), "Web GUI aktif: http://%s:%d%s",
+                    bridge.bindAddress().toUtf8().constData(), bridge.port(), bridge.readOnly() ? " [READ ONLY]" : "");
+      } else {
+        RCLCPP_WARN(rclcpp::get_logger("agv_web_gui"), "Web GUI menunggu port %s:%d; retry internal aktif tanpa process respawn",
+                    bridge.bindAddress().toUtf8().constData(), bridge.port());
+      }
       if (bridge.bindAddress() != "127.0.0.1" && bridge.bindAddress() != "::1" && bridge.bindAddress() != "localhost") {
         RCLCPP_WARN(rclcpp::get_logger("agv_web_gui"),
                     "Web GUI di-bind non-loopback. Gunakan jaringan tepercaya; endpoint kontrol tidak memakai autentikasi eksternal.");

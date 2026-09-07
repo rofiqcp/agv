@@ -2054,6 +2054,36 @@ private:
       last_reject_reason_ = "initialpose ditolak: local odom belum tersedia";
       return;
     }
+    // Explicit indoor commissioning path. When enabled by the launch-level
+    // stage3_commissioning_mode, /initialpose is a temporary manual map anchor.
+    // It is NEVER appended to persistent GNSS calibration samples.
+    if (allow_manual_pose_for_motion_) {
+      navigation_math::Pose2D manual_map_base;
+      manual_map_base.x = msg->pose.pose.position.x;
+      manual_map_base.y = msg->pose.pose.position.y;
+      manual_map_base.yaw = yawFromQuaternion(msg->pose.pose.orientation);
+      if (!navigation_math::finite3(manual_map_base.x, manual_map_base.y, manual_map_base.yaw) ||
+          !mapPoseInBounds(manual_map_base)) {
+        last_reject_reason_ = "manual initialpose tidak finite/di luar map";
+        return;
+      }
+      if (!vehicleStationaryUnlocked()) {
+        last_reject_reason_ = "manual initialpose ditolak: robot harus diam";
+        return;
+      }
+      anchor_map_odom_ = navigation_math::mapOdomFromBase(manual_map_base, odom_base_);
+      anchor_valid_ = true;
+      anchor_mode_ = "MANUAL";
+      initial_heading_latched_ = true;
+      initial_map_heading_rad_ = manual_map_base.yaw;
+      initial_odom_yaw_rad_ = odom_base_.yaw;
+      last_reject_reason_.clear();
+      RCLCPP_WARN(get_logger(),
+        "MANUAL COMMISSIONING ANCHOR: map=(%.3f,%.3f,%.1fdeg), GNSS samples unchanged",
+        manual_map_base.x, manual_map_base.y,
+        manual_map_base.yaw * 180.0 / 3.14159265358979323846);
+      return;
+    }
     if (!have_last_raw_map_base_) {
       last_reject_reason_ = "initialpose ditolak: raw GNSS map pose belum tersedia";
       return;

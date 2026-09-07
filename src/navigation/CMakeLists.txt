@@ -120,6 +120,13 @@ ament_target_dependencies(
   mppi_closed_loop_supervisor
   rclcpp std_msgs geometry_msgs nav_msgs)
 
+# Precision observer: co-register ESC longitudinal speed + IMU yaw-rate, estimate
+# steering response/offset and publish innovations. Observer-only: never commands actuators.
+add_executable(vehicle_dynamics_observer src/vehicle_dynamics_observer.cpp)
+ament_target_dependencies(
+  vehicle_dynamics_observer
+  rclcpp sensor_msgs std_msgs geometry_msgs nav_msgs)
+
 # Global field test nodes: independent localization without /odometry/filtered dependency
 add_executable(global_field_test_localizer src/global_field_test_localizer.cpp)
 target_include_directories(global_field_test_localizer PRIVATE include)
@@ -172,6 +179,7 @@ if(BUILD_TESTING)
     precision_part1_self_check
     precision_part2_self_check
     precision_part3_self_check
+    precision_upgrade_self_check
     project_consistency_self_check
     stage1_foundation_self_check
     stage2_localization_foundation_self_check
@@ -221,6 +229,7 @@ install(TARGETS
     cmd_vel_router
     navigation_core
     mppi_closed_loop_supervisor
+    vehicle_dynamics_observer
     trajectory_safety_supervisor
     global_field_test_localizer
     global_test_odom_bridge

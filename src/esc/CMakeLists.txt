@@ -23,6 +23,7 @@ find_package(rclcpp REQUIRED)
 find_package(rcl_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 
 if(BUILD_TESTING)
@@ -51,7 +52,7 @@ ament_target_dependencies(motor_teleop rclcpp geometry_msgs std_msgs)
 
 # Single actuator owner: TELEOP/NAV2 mux + Ackermann conversion + robust STM UART.
 add_executable(ackermann_controller_server src/ackermann_controller_server.cpp)
-ament_target_dependencies(ackermann_controller_server rclcpp rcl_interfaces geometry_msgs nav_msgs std_msgs)
+ament_target_dependencies(ackermann_controller_server rclcpp rcl_interfaces geometry_msgs nav_msgs sensor_msgs std_msgs)
 
 add_executable(vesc_tool_bridge src/vesc_tool_bridge.cpp)
 ament_target_dependencies(vesc_tool_bridge rclcpp std_msgs)

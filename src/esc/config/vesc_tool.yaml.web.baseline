@@ -1,10 +1,12 @@
 vesc_tool_bridge:
   ros__parameters:
-    maintenance_poll_hz: 10.0
+    maintenance_poll_hz: 20.0
     tcp_service_hz: 1000.0
     max_abs_duty: 0.95
     max_abs_current_a: 20.0
     max_abs_rpm: 10000.0
+    # Highest-priority Python hardware tools use 65101. VESC Tool remains on
+    # 65102 and can stay connected while Python temporarily owns maintenance.
     python_tcp_enabled: true
     python_tcp_port: 65101
     tcp_enabled: true

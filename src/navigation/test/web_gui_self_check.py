@@ -41,6 +41,15 @@ for bad in ("https://", "http://cdn", "unpkg.com", "cdnjs", "jsdelivr"):
     if bad in html or bad in js or bad in css: fail(f"web GUI must remain offline/self-contained: {bad}")
 if "EventSource('/api/events')" not in js:
     fail("frontend realtime SSE connection missing")
+# Main domain ↔ physical HMI pages must stay aligned after the old sensors page was removed.
+for token in ("GPS:'navigation'", "navigation:'GPS'", "CAMERA:'perception'", "ACTUATOR:'esc'"):
+    if token not in js: fail(f"HMI/Web domain mapping missing {token}")
+# Browser quick PNG must use the same white report convention as the Matplotlib backend.
+for token in ("body.style.setProperty('--chart-bg','#ffffff')", "ctx.fillStyle='#ffffff'", "drawExperimentChart(index)"):
+    if token not in js: fail(f"white report PNG export contract missing {token}")
+exporter = (ROOT / "tools/export_trial_artifacts.py").read_text(encoding="utf-8")
+for token in ('facecolor="white"', "fig.savefig(path, dpi=180, facecolor=\"white\""):
+    if token not in exporter: fail(f"Matplotlib white report export missing {token}")
 if '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">' not in html:
     fail("responsive viewport meta missing")
 if '<link rel="icon" href="data:,">' not in html:

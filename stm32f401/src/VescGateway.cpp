@@ -1,6 +1,7 @@
 #include "VescGateway.h"
 
 #include <string.h>
+#include <stdio.h>
 
 int VescGateway::hexNibble(char c) {
   if (c >= '0' && c <= '9') return c - '0';
@@ -28,14 +29,35 @@ const char *VescGateway::ownerName(Owner owner) {
 void VescGateway::begin() {
   uart_.begin(kBaud);
   // STM32 Arduino defaults UART and USB CDC to the same NVIC priority (1).
-  // At 1 Mbaud a new byte arrives every ~10 us, so USB must not delay USART1
-  // byte service. VESC transport gets the highest peripheral priority; USB stays
-  // at 1 and I2C at 2. This only affects the F411 bridge, not F103 motor timing.
+  // USART1 is the dedicated F103 VESC link. Keep its IRQ at the highest
+  // peripheral priority even at the standard 115200 baud so motor-active USB/HMI
+  // traffic cannot delay RX service. USB CDC to the mini PC remains 1 Mbaud.
   HAL_NVIC_SetPriority(USART1_IRQn, 0, 0);
   owner_ = Owner::RUNTIME;
   last_rx_ms_ = millis();
+  last_valid_frame_ms_ = last_rx_ms_;
+  last_runtime_tx_ms_ = 0U;
+  last_recovery_ms_ = 0U;
+  recovery_tx_marker_ = 0U;
+  recovery_streak_ = 0U;
+  ever_valid_frame_ = false;
   last_status_ms_ = 0;
   publishStatus(true);
+}
+
+bool VescGateway::writeUsbBounded(const uint8_t *data, size_t len, uint32_t timeout_ms) {
+  if (data == nullptr || len == 0U) return false;
+  const uint32_t start = millis();
+  size_t sent = 0U;
+  while (sent < len && static_cast<uint32_t>(millis() - start) < timeout_ms) {
+    const int room = Serial.availableForWrite();
+    if (room <= 0) { delay(1); continue; }
+    const size_t chunk = std::min(len - sent, static_cast<size_t>(room));
+    const size_t n = Serial.write(data + sent, chunk);
+    if (n == 0U) { delay(1); continue; }
+    sent += n;
+  }
+  return sent == len;
 }
 
 bool VescGateway::forwardHex(const char *hex, Owner source) {
@@ -64,6 +86,7 @@ bool VescGateway::forwardHex(const char *hex, Owner source) {
   }
   const size_t written = uart_.write(bytes, count);
   tx_bytes_ += static_cast<uint32_t>(written);
+  if (source == Owner::RUNTIME && written == count) last_runtime_tx_ms_ = millis();
   if (written != count) {
     Serial.println(F("VESC:ERR:UART_TX"));
     return false;
@@ -87,9 +110,14 @@ void VescGateway::publishRxFrame(const uint8_t *data, size_t len) {
     line[out++] = hex[b & 0x0F];
   }
   line[out++] = '\n';
-  const size_t written = Serial.write(reinterpret_cast<const uint8_t *>(line), out);
-  if (written == out) ++rx_frames_;
-  else rx_frame_errors_ += static_cast<uint32_t>(out - written);
+  if (owner_ == Owner::RUNTIME) {
+    if (Serial.availableForWrite() < static_cast<int>(out) ||
+        Serial.write(reinterpret_cast<const uint8_t *>(line), out) != out) ++usb_drop_frames_;
+    return;
+  }
+  // Maintenance/config replies may exceed one CDC queue. Stream them with a
+  // bounded deadline: reliable while the host is present, but never an infinite block.
+  if (!writeUsbBounded(reinterpret_cast<const uint8_t *>(line), out, 400U)) ++usb_drop_frames_;
 }
 
 void VescGateway::serviceRxFrames() {
@@ -159,6 +187,11 @@ void VescGateway::serviceRxFrames() {
       continue;
     }
 
+    ++rx_frames_;
+    last_valid_frame_ms_ = millis();
+    ever_valid_frame_ = true;
+    recovery_streak_ = 0U;
+    recovery_tx_marker_ = tx_bytes_;
     publishRxFrame(rx_chunk_, total);
     const size_t remain = rx_len_ - total;
     if (remain > 0U) memmove(rx_chunk_, rx_chunk_ + total, remain);
@@ -166,36 +199,50 @@ void VescGateway::serviceRxFrames() {
   }
 }
 
+void VescGateway::recoverRuntimeUart(uint32_t now) {
+  rx_len_ = 0U;
+  uart_.end();
+  uart_.begin(kBaud);
+  HAL_NVIC_SetPriority(USART1_IRQn, 0, 0);
+  ++uart_recovery_count_;
+  if (recovery_streak_ < 0xffU) ++recovery_streak_;
+  last_recovery_ms_ = now;
+  last_valid_frame_ms_ = now;
+  last_rx_ms_ = now;
+  recovery_tx_marker_ = tx_bytes_;
+}
+
+void VescGateway::recoveryTick(uint32_t now) {
+  if (owner_ != Owner::RUNTIME || last_runtime_tx_ms_ == 0U) return;
+  if (static_cast<uint32_t>(now - last_runtime_tx_ms_) > 500U) return;
+  if (static_cast<uint32_t>(now - last_valid_frame_ms_) < kRuntimeNoValidFrameRecoverMs) return;
+  if (static_cast<uint32_t>(now - last_recovery_ms_) < kRuntimeRecoverCooldownMs) return;
+  if (tx_bytes_ == recovery_tx_marker_) return;
+  recoverRuntimeUart(now);
+  if (ever_valid_frame_ && recovery_streak_ >= kRuntimeRecoverBeforeReset) NVIC_SystemReset();
+}
+
 void VescGateway::publishStatus(bool force) {
   const uint32_t now = millis();
   if (!force && static_cast<uint32_t>(now - last_status_ms_) < kStatusPeriodMs) return;
   last_status_ms_ = now;
-  Serial.print(F("VESC:STAT:mode="));
-  Serial.print(ownerName(owner_));
-  Serial.print(F(",baud="));
-  Serial.print(kBaud);
-  Serial.print(F(",rx="));
-  Serial.print(rx_bytes_);
-  Serial.print(F(",tx="));
-  Serial.print(tx_bytes_);
-  Serial.print(F(",reject="));
-  Serial.print(rejected_bytes_);
-  Serial.print(F(",frames="));
-  Serial.print(rx_frames_);
-  Serial.print(F(",frame_err="));
-  Serial.print(rx_frame_errors_);
-  Serial.print(F(",age_ms="));
-  Serial.print(static_cast<uint32_t>(now - last_rx_ms_));
-  Serial.print(F(",rx_lvl="));
-  Serial.print(digitalRead(PB7));
-  Serial.print(F(",tx_lvl="));
-  Serial.print(digitalRead(PB6));
-  Serial.print(F(",brr="));
-  Serial.print(USART1->BRR, HEX);
-  Serial.print(F(",cr1="));
-  Serial.print(USART1->CR1, HEX);
-  Serial.print(F(",sr="));
-  Serial.println(USART1->SR, HEX);
+  char line[320];
+  const int n = snprintf(line, sizeof(line),
+    "VESC:STAT:mode=%s,baud=%lu,rx=%lu,tx=%lu,reject=%lu,frames=%lu,frame_err=%lu,"
+    "usb_drop=%lu,valid_age_ms=%lu,recover=%lu,age_ms=%lu,rx_lvl=%d,tx_lvl=%d,brr=%lX,cr1=%lX,sr=%lX\n",
+    ownerName(owner_), static_cast<unsigned long>(kBaud),
+    static_cast<unsigned long>(rx_bytes_), static_cast<unsigned long>(tx_bytes_),
+    static_cast<unsigned long>(rejected_bytes_), static_cast<unsigned long>(rx_frames_),
+    static_cast<unsigned long>(rx_frame_errors_), static_cast<unsigned long>(usb_drop_frames_),
+    static_cast<unsigned long>(now - last_valid_frame_ms_), static_cast<unsigned long>(uart_recovery_count_),
+    static_cast<unsigned long>(now - last_rx_ms_), digitalRead(PB7), digitalRead(PB6),
+    static_cast<unsigned long>(USART1->BRR), static_cast<unsigned long>(USART1->CR1),
+    static_cast<unsigned long>(USART1->SR));
+  if (n <= 0 || static_cast<size_t>(n) >= sizeof(line)) return;
+  if (Serial.availableForWrite() < n) { ++usb_drop_frames_; return; }
+  if (Serial.write(reinterpret_cast<const uint8_t *>(line), static_cast<size_t>(n)) != static_cast<size_t>(n)) {
+    ++usb_drop_frames_;
+  }
 }
 
 bool VescGateway::handleHostCommand(const char *command) {
@@ -225,6 +272,9 @@ bool VescGateway::handleHostCommand(const char *command) {
   }
   if (strcmp(command, "VESC:MODE:RUNTIME") == 0 || strcmp(command, "VESC:MODE:NORMAL") == 0) {
     owner_ = Owner::RUNTIME;
+    recovery_streak_ = 0U;
+    last_valid_frame_ms_ = millis();
+    recovery_tx_marker_ = tx_bytes_;
     while (uart_.available() > 0) (void)uart_.read();
     rx_len_ = 0U;
     Serial.println(F("VESC:MODE:RUNTIME"));
@@ -233,6 +283,7 @@ bool VescGateway::handleHostCommand(const char *command) {
   }
   if (strcmp(command, "VESC:MODE:MAINTENANCE") == 0) {
     owner_ = Owner::MAINTENANCE;
+    recovery_streak_ = 0U;
     while (uart_.available() > 0) (void)uart_.read();
     rx_len_ = 0U;
     Serial.println(F("VESC:MODE:MAINTENANCE"));
@@ -268,5 +319,6 @@ void VescGateway::poll() {
     last_rx_ms_ = millis();
   }
   serviceRxFrames();
+  recoveryTick(now);
   if (owner_ == Owner::RUNTIME) publishStatus(false);
 }

@@ -90,27 +90,58 @@ def _request_software_dfu(port):
     print(f"[USB-DFU] Requesting ROM DFU through {port} ...")
     try:
         import serial
-        with serial.Serial(port, 1000000, timeout=0.20, write_timeout=1.0) as ser:
+
+        def collect_until(ser, needle, seconds):
+            deadline = time.monotonic() + seconds
+            chunks = []
+            text = ""
+            while time.monotonic() < deadline:
+                try:
+                    waiting = ser.in_waiting
+                    if waiting:
+                        chunks.append(ser.read(min(waiting, 1024)))
+                        text = b"".join(chunks).decode(errors="replace")
+                        if needle in text:
+                            return text
+                except OSError:
+                    break
+                time.sleep(0.01)
+            return text
+
+        with serial.Serial(port, 1000000, timeout=0.03, write_timeout=1.0) as ser:
             time.sleep(0.15)
             ser.reset_input_buffer()
-            # Terminate any partial command left in the MCU parser by a previous
-            # process that closed the CDC port mid-frame, then start from a clean line.
-            # Multiple terminators flush any partial telemetry command left when
-            # stmf4_hmi_bridge closed the CDC stream mid-frame.
             ser.write(b"\n\n\n")
             ser.flush()
-            time.sleep(0.08)
+            time.sleep(0.05)
             ser.reset_input_buffer()
-            ser.write(b"BOOT:DFU\n")
-            ser.flush()
-            time.sleep(0.20)
-            try:
-                reply = ser.read(256).decode(errors="replace").strip()
-            except OSError:
-                reply = ""
+
+            reply = ""
+            for _ in range(3):
+                ser.write(b"BOOT:DFU:ARM\n")
+                ser.flush()
+                reply = collect_until(ser, "ACK:DFU:ARMED", 0.55)
+                if "ACK:DFU:ARMED" in reply:
+                    break
+                ser.reset_input_buffer()
             if reply:
-                print("[USB-DFU] CDC reply:", reply.replace("\r", " "))
-            return "ERR:UNKNOWN_COMMAND:BOOT:DFU" not in reply
+                tail = reply[-800:].replace("\r", " ").replace("\n", " | ")
+                print("[USB-DFU] CDC reply tail:", tail)
+            if "ACK:DFU:ARMED" in reply:
+                ser.write(b"BOOT:DFU:CONFIRM\n")
+                ser.flush()
+                confirm = collect_until(ser, "ACK:DFU", 0.45)
+                if confirm:
+                    print("[USB-DFU] DFU confirm seen")
+                time.sleep(0.20)
+                return True
+
+            if "UNKNOWN_COMMAND" in reply:
+                ser.write(b"BOOT:DFU\n")
+                ser.flush()
+                time.sleep(0.20)
+                return True
+            return False
     except Exception as exc:
         print(f"[USB-DFU] CDC trigger detail: {exc}")
         return True
