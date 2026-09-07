@@ -541,8 +541,8 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('perception_respawn', default_value='true'),
         DeclareLaunchArgument('stage3_commissioning_mode', default_value='false'),
         DeclareLaunchArgument('start_web_gui', default_value='true'),
-        DeclareLaunchArgument('web_bind_address', default_value='127.0.0.1'),
-        DeclareLaunchArgument('web_port', default_value='5000'),
+        DeclareLaunchArgument('web_bind_address', default_value='127.0.0.1', choices=['127.0.0.1']),
+        DeclareLaunchArgument('web_port', default_value='5000', choices=['5000']),
         DeclareLaunchArgument('web_read_only', default_value='false'),
     ]
 
@@ -613,12 +613,13 @@ def generate_launch_description() -> LaunchDescription:
             'transport_mode': LaunchConfiguration('esc_transport_mode'),
             'serial_device': LaunchConfiguration('esc_port'),
             'serial_enabled': LaunchConfiguration('esc_serial_enabled'),
-            # Manual teleop is already rate-shaped in motor_teleop.cpp. Feed it
-            # directly to the C++ ESC mux so short joystick commands are not
-            # attenuated a second time by the Nav2 velocity_smoother. Autonomous
-            # commands still enter through /cmd_vel after router + smoother.
+            # Main runtime has ONE command chain for both joystick and autonomy:
+            # motor_teleop -> cmd_vel_router -> velocity_smoother -> /cmd_vel -> Ackermann.
+            # Direct Ackermann teleop subscription is intentionally pointed at an unused
+            # topic here, while router source metadata preserves TELEOP steering semantics.
             'require_autonomy_gate': 'false',
-            'teleop_topic': '/cmd_vel/teleop',
+            'teleop_topic': '/cmd_vel/ackermann_direct_teleop_disabled',
+            'teleop_source_topic': '/navigation/cmd_mux/source',
             'active_source_topic': '/esc/mux/active_source',
             'nav2_topic': '/cmd_vel',
         }.items(),

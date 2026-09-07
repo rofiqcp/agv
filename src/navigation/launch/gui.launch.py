@@ -163,8 +163,8 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("perception_respawn", default_value="true"),
         DeclareLaunchArgument("stage3_commissioning_mode", default_value="false"),
         DeclareLaunchArgument("start_web_gui", default_value="true"),
-        DeclareLaunchArgument("web_bind_address", default_value="127.0.0.1"),
-        DeclareLaunchArgument("web_port", default_value="5000"),
+        DeclareLaunchArgument("web_bind_address", default_value="127.0.0.1", choices=["127.0.0.1"]),
+        DeclareLaunchArgument("web_port", default_value="5000", choices=["5000"]),
         DeclareLaunchArgument("web_read_only", default_value="false"),
     ]
 

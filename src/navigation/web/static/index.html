@@ -71,6 +71,7 @@
             <article class="health-card" data-health="camera"><div class="health-icon">C</div><div><span>CAMERA</span><b id="healthCamera">OFFLINE</b><small id="healthCameraDetail">Astra Pro</small></div><i class="health-led"></i></article>
             <article class="health-card" data-health="esc"><div class="health-icon">E</div><div><span>ESC</span><b id="healthEsc">OFFLINE</b><small id="healthEscDetail">serial / ACK</small></div><i class="health-led"></i></article>
             <article class="health-card" data-health="hmi"><div class="health-icon">H</div><div><span>HMI TFT</span><b id="healthHmi">OFFLINE</b><small id="healthHmiDetail">STM32F411 USB CDC</small></div><i class="health-led"></i></article>
+            <article class="health-card" data-health="joystick"><div class="health-icon">J</div><div><span>JOYSTICK</span><b id="healthJoystick">OFFLINE</b><small id="healthJoystickDetail">telemetry only • bukan gate</small></div><i class="health-led"></i></article>
             <article class="health-card" data-health="localization"><div class="health-icon">L</div><div><span>LOCALIZATION</span><b id="healthLocalization">WAIT</b><small id="healthLocalizationDetail">map → odom → base</small></div><i class="health-led"></i></article>
             <article class="health-card" data-health="nav2"><div class="health-icon">N</div><div><span>NAV2</span><b id="healthNav2">WAIT</b><small id="healthNav2Detail">planner / controller</small></div><i class="health-led"></i></article>
           </div>
@@ -79,7 +80,7 @@
             <article class="panel">
               <div class="panel-head"><div><span class="eyebrow">COMMAND CHAIN</span><h2>Velocity Pipeline</h2></div></div>
               <div class="pipeline">
-                <div><span>Nav2</span><b id="pipeNav">0.00</b></div><em>→</em><div><span>Safety</span><b id="pipeSafety">0.00</b></div><em>→</em><div><span>Final</span><b id="pipeFinal">0.00</b></div><em>→</em><div><span>Actuator</span><b id="pipeActuator">0.00</b></div>
+                <div><span id="pipeInputLabel">Selected input</span><b id="pipeNav">0.00</b></div><em>→</em><div><span>Router / pre-smoother</span><b id="pipeSafety">0.00</b></div><em>→</em><div><span>Velocity Smoother</span><b id="pipeFinal">0.00</b></div><em>→</em><div><span>Ackermann / actuator</span><b id="pipeActuator">0.00</b></div>
               </div>
               <canvas class="spark" id="speedSpark" width="900" height="180"></canvas>
             </article>
@@ -210,7 +211,7 @@
               <div class="vesc-primary-readout">
                 <div><span>Duty</span><b id="vescDuty">--</b></div><div><span>Motor Current</span><b id="vescMotorCurrent">--</b></div><div><span>eRPM</span><b id="vescRpm">--</b></div><div><span>Position</span><b id="vescPosition">--</b></div><div><span>Vbus</span><b id="vescVbus">--</b></div><div><span>Fault</span><b id="vescFault">--</b></div>
               </div>
-              <div class="vesc-secondary-readout"><span>Iq <b id="vescIq">--</b></span><span>Id <b id="vescId">--</b></span><span>Input I <b id="vescInputCurrent">--</b></span><span>Vq <b id="vescVq">--</b></span><span>Vd <b id="vescVd">--</b></span><span>MOS <b id="vescTemp">--</b></span><span id="vescSelectedRole">LEFT / STEERING</span></div>
+              <div class="vesc-secondary-readout"><span>Iq <b id="vescIq">--</b></span><span>Id <b id="vescId">--</b></span><span>Input I <b id="vescInputCurrent">--</b></span><span>Vq <b id="vescVq">--</b></span><span>Vd <b id="vescVd">--</b></span><span>MOS <b id="vescTemp">--</b></span><span>Raw encoder <b id="vescRawEncoderMain">--</b></span><span id="vescSelectedRole">LEFT / STEERING</span></div>
               <details><summary>Semua nilai decoded motor terpilih</summary><div class="json-pretty vesc-all-vars" id="vescAllVariables">Waiting...</div></details>
             </section>
 
@@ -235,6 +236,20 @@
                 <div><span>PID Error</span><b id="vescRotorPidErr">--</b><small>setpoint − position</small></div>
               </div>
               <details><summary>Decoded rotor snapshot motor terpilih</summary><div class="json-pretty vesc-reply" id="vescRotorDetail">Waiting for rotor snapshot...</div></details>
+            </section>
+
+            <section class="vesc-section" id="vescDriveScaleSection">
+              <div class="vesc-section-head"><div><span class="eyebrow">ACKERMANN DRIVE CALIBRATION</span><h3>Speed → eRPM Scale</h3></div><span class="status-chip waiting" id="vescDriveScaleState">WAIT</span></div>
+              <div class="vesc-form-row">
+                <label>Native eRPM / (m/s)<input id="vescDriveNativeErpmPerMps" type="number" readonly></label>
+                <label>Calibration scale<input id="vescDriveScaleInput" type="number" min="0.2" max="5" step="0.001"></label>
+              </div>
+              <div class="vesc-form-row">
+                <label>Effective command eRPM / (m/s)<input id="vescDriveEffectiveErpmPerMps" type="number" readonly></label>
+                <label>Example at 0.50 m/s<input id="vescDriveExampleErpm" type="number" readonly></label>
+              </div>
+              <div class="button-row"><button class="primary-btn" id="vescDriveScaleSave">Save + Apply Scale</button><button class="soft-btn" id="vescDriveScaleReload">Reload</button></div>
+              <p class="hint">Formula runtime: eRPM command = speed[m/s] × native_eRPM_per_mps ÷ calibration_scale. Nilai ini juga mengkalibrasi feedback kecepatan ESC. Perubahan runtime hanya diterapkan saat kendaraan berhenti.</p>
             </section>
 
             <section class="vesc-section">
@@ -574,8 +589,8 @@
   </div>
   <div class="toast-stack" id="toastStack" aria-live="polite"></div>
   <div class="modal-backdrop" id="confirmModal"><div class="modal"><span class="eyebrow">CONFIRM ACTION</span><h2 id="confirmTitle">Confirm</h2><p id="confirmText"></p><div class="button-row"><button class="soft-btn grow" id="confirmNo">Cancel</button><button class="danger-btn grow" id="confirmYes">Continue</button></div></div></div>
-  <script src="/app.js?v=20260904-sse-fallback-v1-bab4-report-v2" defer></script>
-  <script src="/vesc_workbench.js?v=20260907-rotor-snapshot-v6" defer></script>
+  <script src="/app.js?v=20260907-joystick-chain-v2" defer></script>
+  <script src="/vesc_workbench.js?v=20260907-drive-scale-v7" defer></script>
   <script src="/export_tools.js?v=20260904-bab4-report-v1" defer></script>
 </body>
 </html>

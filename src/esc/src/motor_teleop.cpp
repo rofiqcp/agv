@@ -203,6 +203,14 @@ public:
     estop_pub_ = create_publisher<std_msgs::msg::Bool>(
         "/teleop/emergency_stop_latched",
         rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
+    joystick_connected_pub_ = create_publisher<std_msgs::msg::Bool>(
+        "/teleop/joystick_connected",
+        rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
+    joystick_status_pub_ = create_publisher<std_msgs::msg::String>(
+        "/teleop/joystick_status",
+        rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
+    publish_gamepad_link(false);
+    publish_gamepad_status("state=DISCONNECTED;ready=0;reason=startup");
 
     running_.store(true);
     keyboard_thread_ = std::thread(&MotorTeleop::keyboard_loop, this);
@@ -817,6 +825,9 @@ private:
 
       init_button_snapshot(dev);
       set_gamepad_connected(true, 0.0, 0.0);
+      publish_gamepad_status(
+        std::string("state=CONNECTED_WAIT_CENTER;ready=0;device=") + best.path +
+        ";name=" + best.name);
       gamepad_absent_logged_ = false;
 
       RCLCPP_INFO(get_logger(),
@@ -957,6 +968,9 @@ private:
         }
         dev.ready = true;
         dev.wait_center_logged = false;
+        publish_gamepad_status(
+          std::string("state=READY;ready=1;device=") + dev.candidate.path +
+          ";name=" + dev.candidate.name);
         RCLCPP_INFO(get_logger(), "[JOY] READY center raw: %s=%.1f %s=%.1f",
                     abs_code_name(dev.candidate.forward_code), dev.forward_center,
                     abs_code_name(dev.candidate.yaw_code), dev.yaw_center);
@@ -981,11 +995,30 @@ private:
     return true;
   }
 
+  void publish_gamepad_link(bool connected) {
+    if (!joystick_connected_pub_) return;
+    std_msgs::msg::Bool msg;
+    msg.data = connected;
+    joystick_connected_pub_->publish(msg);
+  }
+
+  void publish_gamepad_status(const std::string &text) {
+    if (!joystick_status_pub_) return;
+    std_msgs::msg::String msg;
+    msg.data = text;
+    joystick_status_pub_->publish(msg);
+  }
+
   void set_gamepad_connected(bool connected, double forward, double yaw_fraction) {
-    std::lock_guard<std::mutex> lock(joy_mutex_);
-    gamepad_connected_ = connected;
-    joy_forward_fraction_ = connected ? forward : 0.0;
-    joy_yaw_fraction_ = connected ? yaw_fraction : 0.0;
+    bool changed = false;
+    {
+      std::lock_guard<std::mutex> lock(joy_mutex_);
+      changed = gamepad_connected_ != connected;
+      gamepad_connected_ = connected;
+      joy_forward_fraction_ = connected ? forward : 0.0;
+      joy_yaw_fraction_ = connected ? yaw_fraction : 0.0;
+    }
+    if (changed) publish_gamepad_link(connected);
   }
 
   void close_gamepad(GamepadDevice &dev, const char *reason) {
@@ -998,6 +1031,9 @@ private:
     dev.ready = false;
     dev.button_down.clear();
     set_gamepad_connected(false, 0.0, 0.0);
+    publish_gamepad_status(
+      std::string("state=DISCONNECTED;ready=0;device=") + path +
+      ";name=" + name + ";reason=" + reason);
     ++gamepad_disconnect_count_;
     RCLCPP_WARN(get_logger(), "[JOY] DISCONNECT #%llu %s (%s) | %s | output joystick langsung 0, auto-reconnect aktif",
                 static_cast<unsigned long long>(gamepad_disconnect_count_), path.c_str(), name.c_str(), reason);
@@ -1337,6 +1373,8 @@ private:
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr source_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr limits_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr estop_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr joystick_connected_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr joystick_status_pub_;
   rclcpp::TimerBase::SharedPtr timer_;
 
   mutable std::mutex state_mutex_;

@@ -831,6 +831,10 @@ class VescToolBridge final : public rclcpp::Node {
     // diagnostic in parallel at the same maintenance rate (50 Hz per motor).
     sendCustom(1, HB_GET_ROTOR_SNAPSHOT);
     sendCustom(2, HB_GET_ROTOR_SNAPSHOT);
+    // Raw TIM4 is part of the steering-calibration snapshot, not stock rotor
+    // position. Refresh it at 10 Hz: fast enough for Web diagnostics while
+    // keeping the 1 Mbaud F411<->F103 link well below unnecessary packet load.
+    if ((slow_poll_divider_ % 5U) == 0U) sendCustom(1, HB_GET_STEERING_CAL);
     if (++slow_poll_divider_ >= 25U) {
       slow_poll_divider_ = 0U;
       sendPayload(slow_poll_motor_, {COMM_GET_VALUES});

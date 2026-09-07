@@ -23,17 +23,19 @@ launch = (ROOT / "launch/esc.launch.py").read_text()
 # shadowed by the exact esc_ackermann YAML node scope. Direct executable runs
 # still receive safe C++ defaults, while autonomous.launch routes all motion
 # through cmd_vel_router -> velocity_smoother -> /cmd_vel.
-for key in ("nav2_topic", "teleop_topic", "active_source_topic",
+for key in ("nav2_topic", "teleop_topic", "teleop_source_topic", "active_source_topic",
             "require_autonomy_gate", "transport_mode", "serial_device", "serial_enabled"):
     if key in ack:
         fail(f"runtime routing key must not be node-scoped in ackermann.yaml: {key}")
 for token in (
     'DeclareLaunchArgument("nav2_topic", default_value="/cmd_vel")',
     'DeclareLaunchArgument("teleop_topic", default_value="/cmd_vel/teleop")',
+    'DeclareLaunchArgument("teleop_source_topic", default_value="/teleop/active_source")',
     'DeclareLaunchArgument("transport_mode", default_value="stm32")',
     'DeclareLaunchArgument("serial_enabled", default_value="true")',
     '"nav2_topic": LaunchConfiguration("nav2_topic")',
     '"teleop_topic": LaunchConfiguration("teleop_topic")',
+    '"teleop_source_topic": LaunchConfiguration("teleop_source_topic")',
     '"transport_mode": LaunchConfiguration("transport_mode")',
     '"serial_enabled": ParameterValue(LaunchConfiguration("serial_enabled"), value_type=bool)',
 ):
@@ -114,6 +116,9 @@ if "physical_deg / operational_deg" not in source or "(-physical_deg) / operatio
 if '<< " stm_range=+/-" << steering_max_deg_' not in source:
     fail("ESC status must expose the STM/FOC protocol range separately from wheel angle")
 teleop_source = (ROOT / "src/motor_teleop.cpp").read_text()
+for token in ("/teleop/joystick_connected", "/teleop/joystick_status", "publish_gamepad_link(false)"):
+    if token not in teleop_source:
+        fail(f"joystick observability contract missing: {token}")
 if 'RCLCPP_WARN(get_logger(), "[TTY] /dev/tty tidak dapat dibuka' in teleop_source:
     fail("headless /dev/tty fallback must not be reported as a warning")
 if "TransformBroadcaster" in source or "sendTransform" in source:

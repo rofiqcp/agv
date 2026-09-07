@@ -1,7 +1,6 @@
 # ESC serial may be disabled while keeping ROS interfaces alive; disabled always reports READY=false.
 esc_ackermann:
   ros__parameters:
-    teleop_source_topic: /teleop/active_source
     teleop_estop_topic: /teleop/emergency_stop_latched
     hmi_topic: /hmi/cmd_vel
     hmi_source_topic: /hmi/active_source

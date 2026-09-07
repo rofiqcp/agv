@@ -48,10 +48,10 @@ motor_teleop:
     joy_forward_deadzone: 0.12
     joy_forward_full_scale_threshold: 0.90
 
-    # Manual teleop smoothing. Speed starts at 0.20 m/s and MUST be raised with L1.
-    # Full-stick reaches the currently selected speed level; L1 can raise it to
-    # speed_max=0.5 m/s. Native VESC conversion is ~494 ERPM at 0.5 m/s for r=0.145m, 15 pole-pairs, gear=1.
-    teleop_velocity_smoothing_enabled: true
+    # Main autonomous.launch routes joystick through Nav2 velocity_smoother, so
+    # motor_teleop must not apply a second acceleration ramp. Standalone esc.launch
+    # can re-enable this parameter explicitly if it intentionally bypasses the router.
+    teleop_velocity_smoothing_enabled: false
     teleop_accel_limit_mps2: 1.50
     teleop_decel_limit_mps2: 2.50
     teleop_zero_snap_mps: 0.015

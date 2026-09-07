@@ -26,6 +26,8 @@ for token in ("add_executable(agv_web_gui", "Qt5::Network", "web/static", "agv_w
     if token not in cmake: fail(f"CMake web integration missing {token}")
 for token in ("start_web_gui", "web_bind_address", "web_port", "127.0.0.1", "agv_web_gui"):
     if token not in auto: fail(f"autonomous launch web contract missing {token}")
+for token in ("choices=['127.0.0.1']", "choices=['5000']", 'ROS Web wajib localhost (127.0.0.1)', 'ROS Web wajib port 5000'):
+    if token not in (auto + cpp): fail(f"strict localhost:5000 web contract missing {token}")
 for token in ("start_web_gui", "web_bind_address", "web_port"):
     if token not in gui: fail(f"gui launch does not forward {token}")
 for endpoint in ("/api/events", "/api/state", "/api/health", "/api/camera.jpg", "/api/map.png",

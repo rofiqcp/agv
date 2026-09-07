@@ -10,8 +10,8 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 def generate_launch_description():
     args = [
-        DeclareLaunchArgument("bind_address", default_value="127.0.0.1"),
-        DeclareLaunchArgument("port", default_value="5000"),
+        DeclareLaunchArgument("bind_address", default_value="127.0.0.1", choices=["127.0.0.1"]),
+        DeclareLaunchArgument("port", default_value="5000", choices=["5000"]),
         DeclareLaunchArgument("read_only", default_value="false"),
         DeclareLaunchArgument("camera_jpeg_fps", default_value="5.0"),
         DeclareLaunchArgument("use_sim_time", default_value="false"),

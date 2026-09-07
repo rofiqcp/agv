@@ -44,6 +44,7 @@ def generate_launch_description():
         DeclareLaunchArgument("serial_enabled", default_value="true"),
         DeclareLaunchArgument("nav2_topic", default_value="/cmd_vel"),
         DeclareLaunchArgument("teleop_topic", default_value="/cmd_vel/teleop"),
+        DeclareLaunchArgument("teleop_source_topic", default_value="/teleop/active_source"),
         DeclareLaunchArgument("active_source_topic", default_value="/esc/mux/active_source"),
         DeclareLaunchArgument("require_autonomy_gate", default_value="true"),
     ]
@@ -88,6 +89,7 @@ def generate_launch_description():
                 "serial_enabled": ParameterValue(LaunchConfiguration("serial_enabled"), value_type=bool),
                 "nav2_topic": LaunchConfiguration("nav2_topic"),
                 "teleop_topic": LaunchConfiguration("teleop_topic"),
+                "teleop_source_topic": LaunchConfiguration("teleop_source_topic"),
                 "active_source_topic": LaunchConfiguration("active_source_topic"),
                 "require_autonomy_gate": ParameterValue(
                     LaunchConfiguration("require_autonomy_gate"), value_type=bool),

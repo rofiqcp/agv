@@ -738,10 +738,17 @@ class WebRosBridge {
     tfListener_ = std::make_shared<tf2_ros::TransformListener>(*tfBuffer_, node_, false);
     bindAddress_ = QString::fromStdString(node_->declare_parameter<std::string>("bind_address", "127.0.0.1"));
     const auto configuredPort = node_->declare_parameter<std::int64_t>("port", 5000);
-    if (configuredPort < 1 || configuredPort > 65535) {
-      throw std::invalid_argument("web port must be within 1..65535");
+    // Deployment contract: the operator ROS Web must stay loopback-only on
+    // localhost:5000. Reject overrides instead of silently exposing another
+    // interface/port, so launch, footer, bookmarks and safety assumptions agree.
+    if (bindAddress_ != "127.0.0.1" && bindAddress_ != "localhost") {
+      throw std::invalid_argument("ROS Web wajib localhost (127.0.0.1)");
     }
-    port_ = static_cast<int>(configuredPort);
+    if (configuredPort != 5000) {
+      throw std::invalid_argument("ROS Web wajib port 5000");
+    }
+    bindAddress_ = "127.0.0.1";
+    port_ = 5000;
     readOnly_ = node_->declare_parameter<bool>("read_only", false);
     cameraJpegFps_ = std::clamp(node_->declare_parameter<double>("camera_jpeg_fps", 5.0), 0.5, 12.0);
     setupRos();
@@ -1475,6 +1482,7 @@ class WebRosBridge {
         {"/imu/mag_heading_valid", "imu_mag_heading_valid"},
         {"/neo3/safety_switch", "neo3_safety_switch"},
         {"/hmi/connected", "connected.hmi"},
+        {"/teleop/joystick_connected", "connected.joystick"},
         {"/perception/camera_connected", "connected.camera"}, {"/esc/ready", "connected.esc_ready"},
         {"/esc/armed", "connected.esc_armed"}, {"/esc/feedback_valid", "connected.esc_feedback"},
         {"/esc/drive/connected", "connected.esc_drive"}, {"/esc/steer/connected", "connected.esc_steer"},
@@ -1534,6 +1542,8 @@ class WebRosBridge {
         {"/hmi/camera_tab", "hmi_camera_tab"}, {"/hmi/waypoints", "hmi_waypoints"},
         {"/hmi/navigation_state", "hmi_navigation"},
         {"/hmi/manual_state", "hmi_manual"}, {"/hmi/status", "hmi_status"},
+        {"/teleop/joystick_status", "joystick_status"},
+        {"/navigation/cmd_mux/source", "nav_cmd_mux"},
         {"/esc/foc/telemetry", "foc_telemetry"}, {"/esc/mux/active_source", "esc_mux"},
         {"/stmf4/vesc/status", "vesc_transport_status"}, {"/stmf4/vesc/error", "vesc_transport_error"}, {"/esc/vesc/tool_status", "vesc_tool_status"},
         {"/esc/vesc/tool_telemetry", "vesc_tool_telemetry"}, {"/esc/vesc/left_values", "vesc_left_values"}, {"/esc/vesc/right_values", "vesc_right_values"}, {"/esc/vesc/config_state", "vesc_config_state"},
@@ -1789,6 +1799,8 @@ class WebRosBridge {
       });
     };
     twistSubscribe("/cmd_vel_nav_raw", "cmd_nav");
+    twistSubscribe("/cmd_vel/teleop", "cmd_teleop");
+    twistSubscribe("/cmd_vel/pre_smoother", "cmd_pre_smoother");
     twistSubscribe("/cmd_vel/perception_advisory", "cmd_perception_advisory");
     twistSubscribe("/cmd_vel/autonomy_integrated", "cmd_autonomy_integrated");
     twistSubscribe("/cmd_vel/nav2_pre_collision", "cmd_pre_collision");
@@ -3078,10 +3090,6 @@ int main(int argc, char **argv) {
       } else {
         RCLCPP_WARN(rclcpp::get_logger("agv_web_gui"), "Web GUI menunggu port %s:%d; retry internal aktif tanpa process respawn",
                     bridge.bindAddress().toUtf8().constData(), bridge.port());
-      }
-      if (bridge.bindAddress() != "127.0.0.1" && bridge.bindAddress() != "::1" && bridge.bindAddress() != "localhost") {
-        RCLCPP_WARN(rclcpp::get_logger("agv_web_gui"),
-                    "Web GUI di-bind non-loopback. Gunakan jaringan tepercaya; endpoint kontrol tidak memakai autentikasi eksternal.");
       }
       QTimer rosShutdownGuard;
       rosShutdownGuard.setInterval(200);

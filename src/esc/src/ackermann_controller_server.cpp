@@ -1237,9 +1237,20 @@ private:
 
     if (nav2_fresh && gate_ok) {
       selected.twist = clampTwist(nav2_.cmd);
-      selected.nav2 = true;
-      selected.source = perception_state_fresh ?
-        (std::string("PERCEPTION:") + perception_decision_) : "NAV2";
+      // In the main stack /cmd_vel is the unified, smoothed command. The router
+      // source tells us whether angular.z still represents manual normalized
+      // steering or an autonomous yaw-rate request. This preserves steering
+      // semantics while guaranteeing joystick commands pass the velocity smoother.
+      const bool routed_teleop = source_fresh &&
+        (teleop_source_ == "TELEOP" || teleop_source_ == "TELEOP_RELEASE_HOLD");
+      if (routed_teleop) {
+        selected.teleop = true;
+        selected.source = teleop_source_;
+      } else {
+        selected.nav2 = true;
+        selected.source = perception_state_fresh ?
+          (std::string("PERCEPTION:") + perception_decision_) : "NAV2";
+      }
       return selected;
     }
 
