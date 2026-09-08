@@ -2,6 +2,7 @@
 import json
 import os
 import time
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -30,7 +31,7 @@ class SemanticObstacleNode(Node):
         self.declare_parameter("inference_hz", 2.0)
         self.declare_parameter("cpu_threads", 1)
         self.declare_parameter("enabled", True)
-        self.declare_parameter("torch_hub_dir", "/home/otomasi/ros/models/torch")
+        self.declare_parameter("torch_hub_dir", "models/torch")
 
         self.score_threshold = float(self.get_parameter("score_threshold").value)
         self.period = 1.0 / max(0.1, float(self.get_parameter("inference_hz").value))
@@ -68,9 +69,12 @@ class SemanticObstacleNode(Node):
                 threads = max(1, int(self.get_parameter("cpu_threads").value))
                 torch.set_num_threads(threads)
                 torch.set_num_interop_threads(1)
-                torch.hub.set_dir(str(self.get_parameter("torch_hub_dir").value))
+                root = Path(os.environ.get("AGV_ROOT", str(Path.home() / "agv"))).expanduser().resolve()
+                configured_hub = Path(str(self.get_parameter("torch_hub_dir").value)).expanduser()
+                hub_dir = configured_hub if configured_hub.is_absolute() else root / configured_hub
+                torch.hub.set_dir(str(hub_dir))
                 checkpoint = os.path.join(
-                    str(self.get_parameter("torch_hub_dir").value), "checkpoints",
+                    str(hub_dir), "checkpoints",
                     "ssdlite320_mobilenet_v3_large_coco-a79551df.pth")
                 if not os.path.isfile(checkpoint):
                     raise RuntimeError("checkpoint missing: " + checkpoint)

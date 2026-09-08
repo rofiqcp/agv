@@ -3,7 +3,7 @@ yahboom_mag_planar_calibration:
   source: 8-direction CW static fit against calibrated IST8310 ENU heading
   direction: CW
   created_at: '2026-09-08T22:10:10.327832'
-  raw_csv: /home/otomasi/ros/calibration/heading_8dir_raw_20260908_212631.csv
+  raw_csv: calibration/heading_8dir_raw_20260908_212631.csv
   sample_count: 352
   segment_count: 8
   transition_check_pass: true

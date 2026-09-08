@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Environment portable untuk workspace AGV.
+# Folder project tetap bernama "agv"; lokasi HOME boleh berbeda antar PC.
+
+export AGV_ROOT="${AGV_ROOT:-$HOME/agv}"
+export AGV_PYTHON="${AGV_PYTHON:-/usr/bin/python3}"
+export PATH="$HOME/.local/bin:$PATH"
+
+export AGV_CONFIG_DIR="${AGV_CONFIG_DIR:-$AGV_ROOT/src/navigation/config}"
+export AGV_ESC_CONFIG_DIR="${AGV_ESC_CONFIG_DIR:-$AGV_ROOT/src/esc/config}"
+export AGV_PERCEPTION_CONFIG_DIR="${AGV_PERCEPTION_CONFIG_DIR:-$AGV_ROOT/src/perception/config}"
+export AGV_STMF4_CONFIG_DIR="${AGV_STMF4_CONFIG_DIR:-$AGV_ROOT/src/stmf4/config}"
+
+export YOLOPV2_PT_PATH="${YOLOPV2_PT_PATH:-$AGV_ROOT/models/yolopv2.pt}"
+export YOLOP_ENGINE_PATH="${YOLOP_ENGINE_PATH:-$AGV_ROOT/models/yolopv2.engine}"
+export ASTRA_YOLOP_MODELS_DIR="${ASTRA_YOLOP_MODELS_DIR:-$AGV_ROOT/models}"
+
+if [[ -f /opt/ros/humble/setup.bash ]]; then
+  # shellcheck disable=SC1091
+  source /opt/ros/humble/setup.bash
+fi
+
+if [[ -f "$AGV_ROOT/install/setup.bash" ]]; then
+  # shellcheck disable=SC1090
+  source "$AGV_ROOT/install/setup.bash"
+fi

@@ -24,7 +24,7 @@ Steering target/actual dan RPM tersedia dari topic ESC yang sudah ada. Kolom aru
 ## Build dan run
 
 ```bash
-cd /home/otomasi/mobil_stage3_ws
+cd $AGV_ROOT
 colcon build --packages-select navigation --symlink-install
 source install/setup.bash
 export QT_QPA_PLATFORM=xcb

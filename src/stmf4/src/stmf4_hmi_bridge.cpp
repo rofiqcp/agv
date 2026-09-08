@@ -47,6 +47,18 @@ namespace fs = std::filesystem;
 namespace {
 constexpr double kPi = 3.14159265358979323846;
 
+fs::path agvRootPath() {
+  if (const char * root = std::getenv("AGV_ROOT"); root && *root) return fs::path(root).lexically_normal();
+  if (const char * home = std::getenv("HOME"); home && *home) return (fs::path(home) / "agv").lexically_normal();
+  return (fs::current_path() / "agv").lexically_normal();
+}
+
+std::string resolveAgvPath(const std::string & value) {
+  if (value.empty()) return value;
+  const fs::path p(value);
+  return (p.is_absolute() ? p : agvRootPath() / p).lexically_normal().string();
+}
+
 std::string upper(std::string s) {
   std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
   return s;
@@ -176,7 +188,7 @@ private:
     declare_parameter<double>("teleop_yaw_max_deg_s", 80.0);
     declare_parameter<bool>("invert_hmi_steering", true);
     declare_parameter<std::string>("default_mode", "AUTO");
-    declare_parameter<std::string>("waypoint_file", "/home/otomasi/ros/data/hmi_waypoints.tsv");
+    declare_parameter<std::string>("waypoint_file", "data/hmi_waypoints.tsv");
     declare_parameter<double>("waypoint_pose_timeout_sec", 2.5);
     declare_parameter<double>("neo3_sensor_timeout_sec", 2.0);
     declare_parameter<std::string>("neo3_gnss_frame_id", "gnss_link");
@@ -203,7 +215,7 @@ private:
     teleop_yaw_max_rps_ = std::clamp(get_parameter("teleop_yaw_max_deg_s").as_double(), 1.0, 180.0) * kPi / 180.0;
     invert_hmi_steering_ = get_parameter("invert_hmi_steering").as_bool();
     mode_ = upper(trim(get_parameter("default_mode").as_string())) == "MANUAL" ? "MANUAL" : "AUTO";
-    waypoint_file_ = get_parameter("waypoint_file").as_string();
+    waypoint_file_ = resolveAgvPath(get_parameter("waypoint_file").as_string());
     waypoint_pose_timeout_sec_ = std::clamp(get_parameter("waypoint_pose_timeout_sec").as_double(), 0.25, 10.0);
     neo3_sensor_timeout_sec_ = std::clamp(get_parameter("neo3_sensor_timeout_sec").as_double(), 0.5, 10.0);
     neo3_gnss_frame_id_ = get_parameter("neo3_gnss_frame_id").as_string();

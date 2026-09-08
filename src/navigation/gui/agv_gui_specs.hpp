@@ -71,7 +71,7 @@ inline QVector<TabDef> buildTabs() {
     });
     t.specs.push_back(SettingSpec{
       QStringLiteral("Camera / Backend"),QStringLiteral("YOLOPv2 checkpoint (.pt)"),QStringLiteral("perception"),QStringLiteral("perception.ros__parameters.pt_model_path"),QStringLiteral("text"),-1000000000.0,1000000000.0,0.01,4,QStringList{
-      },QStringLiteral(""),QStringLiteral("Dipakai saat perception_mode:=cpu; dibaca langsung oleh LibTorch tanpa ONNX. Gunakan auto untuk mencari YOLOPV2_PT_PATH, <workspace>/models/yolopv2.pt, ~/ros/models/yolopv2.pt, atau ~/models/yolopv2.pt.")
+      },QStringLiteral(""),QStringLiteral("Dipakai saat perception_mode:=cpu; dibaca langsung oleh LibTorch tanpa ONNX. Gunakan auto untuk mencari YOLOPV2_PT_PATH atau $AGV_ROOT/models/yolopv2.pt (fallback $HOME/agv/models/yolopv2.pt).")
     });
     t.specs.push_back(SettingSpec{
       QStringLiteral("Camera / Backend"),QStringLiteral("CPU inference FPS"),QStringLiteral("perception"),QStringLiteral("perception.ros__parameters.cpu_inference_fps"),QStringLiteral("float"),0.5,30.0,0.5,1,QStringList{

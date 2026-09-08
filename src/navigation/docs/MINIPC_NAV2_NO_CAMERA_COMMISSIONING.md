@@ -20,7 +20,7 @@ COG GNSS masih boleh dipakai sebagai **diagnostic/qualification**, tetapi tidak 
 ## 2. Build
 
 ```bash
-cd /home/otomasi/ros
+cd $AGV_ROOT
 source /opt/ros/humble/setup.bash
 rosdep install --from-paths src --ignore-src -r -y
 colcon build --symlink-install --packages-select esc navigation
@@ -82,21 +82,21 @@ Perception sengaja default OFF. Aktifkan CPU/GPU hanya setelah model dan camera 
 ## 5. Preflight
 
 ```bash
-ros2 run navigation minipc_nav2_preflight.py --workspace /home/otomasi/ros
+ros2 run navigation minipc_nav2_preflight.py --workspace $AGV_ROOT
 ```
 
 Setelah launch:
 
 ```bash
 ros2 run navigation minipc_nav2_preflight.py \
-  --workspace /home/otomasi/ros --runtime --require-hardware
+  --workspace $AGV_ROOT --runtime --require-hardware
 ```
 
 Untuk commissioning ESC:
 
 ```bash
 ros2 run navigation minipc_nav2_preflight.py \
-  --workspace /home/otomasi/ros --runtime --require-hardware \
+  --workspace $AGV_ROOT --runtime --require-hardware \
   --require-esc --expect-esc-node
 ```
 

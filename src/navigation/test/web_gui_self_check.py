@@ -90,7 +90,7 @@ for token in ("WEB_TUNING", "resolveMetricPath", "drawExperimentChart", "drawExp
               "drawExperimentEsc", "saveTuningField", "startWebRecording", "stopWebRecording", "setRecordingUi"):
     if token not in js: fail(f"BAB IV web behavior missing {token}")
 for token in ("setYamlValueAtomic", "patchExistingYamlScalar", "captureRecordingSample",
-              "saveRecordingFiles", "/home/otomasi/ros/data", "navigasi", "presepsi",
+              "saveRecordingFiles", "agvPath", "navigasi", "presepsi",
               "download_url", "global_costmap_meta", "local_costmap_meta",
               "foc_thesis", "bbox_calibration",
               "localization_cpp.yaml", "mppi_closed_loop.yaml"):

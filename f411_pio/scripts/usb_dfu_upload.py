@@ -13,9 +13,10 @@ MANUAL_DFU_WAIT_S = 60.0
 UPLOAD_LOCK = "/tmp/adv_f411_dfu_upload.lock"
 _upload_lock_fd = None
 
+AGV_ROOT = os.path.abspath(os.environ.get("AGV_ROOT", os.path.join(os.path.expanduser("~"), "agv")))
 ROS_PROCESS_MARKERS = (
     "/opt/ros/",
-    "/home/otomasi/ros/install/",
+    os.path.join(AGV_ROOT, "install") + os.sep,
     "ros2 launch ",
     "ros2 run ",
 )

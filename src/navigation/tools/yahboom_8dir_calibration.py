@@ -10,6 +10,12 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu, MagneticField
 from std_msgs.msg import Bool,Float64,Float64MultiArray
 G=9.80665
+AGV_ROOT=Path(os.environ.get('AGV_ROOT', str(Path.home()/'agv'))).expanduser().resolve()
+
+def portable_path(path):
+    resolved=Path(path).expanduser().resolve()
+    try:return str(resolved.relative_to(AGV_ROOT))
+    except ValueError:return str(resolved)
 
 def wrap(a): return math.atan2(math.sin(a),math.cos(a))
 def qdeg(a): return math.degrees(wrap(a))
@@ -80,7 +86,7 @@ class Cal(Node):
         kin=self.fresh('kin',default=None);neo=self.fresh('neo');actual_rel=float('nan')
         if math.isfinite(self.start_heading) and math.isfinite(neo):actual_rel=qdeg(neo-self.start_heading)
         nextseg=min(8,self.segment+1 if self.mode in ('WAIT_MOVE','TRANSITION','STATIC_CANDIDATE') else max(1,self.segment))
-        d={'status':status or ('COMPLETE' if self.finished else 'RUNNING'),'direction':self.direction,'state':self.mode,'segment':self.segment,'next_segment':nextseg,'progress':self.segment/8.0,'instruction':instruction,'start_heading_deg':qdeg(self.start_heading) if math.isfinite(self.start_heading) else None,'target_heading_deg':self.target_deg(nextseg) if math.isfinite(self.start_heading) else None,'target_relative_deg':self.sign*45*(nextseg-1),'actual_relative_deg':actual_rel if math.isfinite(actual_rel) else None,'neo_heading_deg':qdeg(neo) if math.isfinite(neo) else None,'gyro_z_rps':kin[2] if kin else None,'acc_norm_mps2':kin[7] if kin else None,'static':bool(kin[-1]) if kin else False,'mounting_state':ms,'mounting_ok':mok,'mounting_detail':mdetail,'raw_sensor_vectors':raw,'transition_checks':self.checks,'raw_csv':str(self.raw),'segments_csv':str(self.seg),'meta_json':str(self.meta),'updated_at':datetime.now().astimezone().isoformat(timespec='milliseconds')}
+        d={'status':status or ('COMPLETE' if self.finished else 'RUNNING'),'direction':self.direction,'state':self.mode,'segment':self.segment,'next_segment':nextseg,'progress':self.segment/8.0,'instruction':instruction,'start_heading_deg':qdeg(self.start_heading) if math.isfinite(self.start_heading) else None,'target_heading_deg':self.target_deg(nextseg) if math.isfinite(self.start_heading) else None,'target_relative_deg':self.sign*45*(nextseg-1),'actual_relative_deg':actual_rel if math.isfinite(actual_rel) else None,'neo_heading_deg':qdeg(neo) if math.isfinite(neo) else None,'gyro_z_rps':kin[2] if kin else None,'acc_norm_mps2':kin[7] if kin else None,'static':bool(kin[-1]) if kin else False,'mounting_state':ms,'mounting_ok':mok,'mounting_detail':mdetail,'raw_sensor_vectors':raw,'transition_checks':self.checks,'raw_csv':portable_path(self.raw),'segments_csv':portable_path(self.seg),'meta_json':portable_path(self.meta),'updated_at':datetime.now().astimezone().isoformat(timespec='milliseconds')}
         tmp=self.statefile.with_suffix('.tmp');tmp.write_text(json.dumps(d,indent=2));os.replace(tmp,self.statefile)
     def candidate(self):
         if self.mode=='TRANSITION' and self.segment>0:
@@ -106,9 +112,9 @@ class Cal(Node):
     def summary(self):
         with self.seg.open('w',newline='') as f:
             cols=list(self.segments[0].keys()) if self.segments else ['segment'];w=csv.DictWriter(f,fieldnames=cols);w.writeheader();w.writerows(self.segments)
-        meta={'status':'COMPLETE' if self.finished else 'RUNNING','expected_rotation':self.direction,'transition_checks':self.checks,'segments':self.segments,'raw_csv':str(self.raw),'segments_csv':str(self.seg),'updated_at':datetime.now().astimezone().isoformat()};tmp=self.meta.with_suffix('.tmp');tmp.write_text(json.dumps(meta,indent=2));os.replace(tmp,self.meta)
+        meta={'status':'COMPLETE' if self.finished else 'RUNNING','expected_rotation':self.direction,'transition_checks':self.checks,'segments':self.segments,'raw_csv':portable_path(self.raw),'segments_csv':portable_path(self.seg),'updated_at':datetime.now().astimezone().isoformat()};tmp=self.meta.with_suffix('.tmp');tmp.write_text(json.dumps(meta,indent=2));os.replace(tmp,self.meta)
     def run_fit(self):
-        r=subprocess.run(['/usr/bin/python3',str(self.fit_script),str(self.raw),'--meta-json',str(self.meta),'--direction',self.direction],capture_output=True,text=True,timeout=25)
+        r=subprocess.run([os.environ.get('AGV_PYTHON','/usr/bin/python3'),str(self.fit_script),str(self.raw),'--meta-json',str(self.meta),'--direction',self.direction],capture_output=True,text=True,timeout=25)
         fit=self.root/'yahboom_mag_planar_latest.yaml';detail=(r.stdout or r.stderr).strip()[-600:];self.write_state('PASS' if r.returncode==0 else 'FAIL',detail);return r.returncode==0
     def tick(self):
         if self.finished:return
@@ -132,7 +138,7 @@ class Cal(Node):
         self.write_state('RUNNING',instr)
 
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('--direction',choices=['CW','CCW'],required=True);ap.add_argument('--root',default='/home/otomasi/ros/calibration');ap.add_argument('--fit-script',default='');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('--direction',choices=['CW','CCW'],required=True);ap.add_argument('--root',default=str(Path(os.environ.get('AGV_ROOT', str(Path.home()/'agv'))) / 'calibration'));ap.add_argument('--fit-script',default='');a=ap.parse_args()
     lock=open('/tmp/agv_yahboom_8dir_calibration.lock','w');
     try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
     except BlockingIOError:raise SystemExit('another Yahboom calibration is already running')

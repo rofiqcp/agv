@@ -107,7 +107,7 @@ def write_config(root: Path):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root", default="/home/otomasi/ros/data/datasets/coco_obstacles")
+    parser.add_argument("--root", default=str(Path(os.environ.get("AGV_ROOT", str(Path.home() / "agv"))) / "data/datasets/coco_obstacles"))
     parser.add_argument("--split", choices=["train2017", "val2017", "both"], default="both")
     parser.add_argument("--download-images", action="store_true")
     parser.add_argument("--max-images", type=int, default=0, help="0 means all matching images")

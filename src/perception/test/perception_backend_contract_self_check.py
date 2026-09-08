@@ -51,8 +51,8 @@ for token in (
     require(token in cpu, f"CPU direct PT backend token missing: {token}")
 require("readNetFromONNX" not in cpu and "onnx_model_path" not in cpu,
         "CPU backend still contains ONNX inference path")
-require('declare_parameter<std::string>("pt_model_path", "/home/otomasi/ros/models/yolopv2.pt")' in cpu, "CPU workspace model default missing")
-require("resolveCpuModelPath" in cpu and "YOLOPV2_PT_PATH" in cpu, "CPU portable model discovery missing")
+require('declare_parameter<std::string>("pt_model_path", "auto")' in cpu, "CPU portable model default missing")
+require("resolveCpuModelPath" in cpu and "YOLOPV2_PT_PATH" in cpu and "AGV_ROOT" in cpu, "CPU portable model discovery missing")
 require("resolveCpuThreadCount" in cpu and "torch::set_num_interop_threads(1)" in cpu,
         "CPU anti-oversubscription policy missing")
 require('source=yolop_annotated' in cpu and 'source=camera_raw' in cpu,
@@ -76,7 +76,7 @@ require(params.get("perception_mode") == "off", "Mini-PC YAML must default to ca
 require(params.get("inference_enabled") is False, "YOLOPv2 inference must default OFF")
 require("web_lazy_cpu_enabled" in autonomous and "perception_inference_enabled" in autonomous,
         "web mode must keep one lazy CPU camera owner with explicit inference toggle")
-require(params.get("pt_model_path") == "/home/otomasi/ros/models/yolopv2.pt", "YAML PT path must point to workspace models/yolopv2.pt")
+require(params.get("pt_model_path") == "auto", "YAML PT path must use portable auto discovery")
 require(float(params.get("cpu_inference_fps", 0.0)) >= 0.5, "CPU inference FPS missing")
 require(1 <= int(params.get("cpu_threads", 0)) <= 4, "CPU thread policy must use a bounded mini-PC thread count")
 for token in ("lane_metrics_topic", "drivable_space_topic", "perception_obstacle_metrics_topic", "near_field_state_topic"):

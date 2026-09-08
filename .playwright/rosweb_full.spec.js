@@ -1,6 +1,6 @@
 const {test,expect}=require("@playwright/test");
 const fs=require("fs");
-const OUT="/home/otomasi/ros/data/playwright_rosweb"; fs.mkdirSync(OUT,{recursive:true});
+const path=require("path"); const ROOT=process.env.AGV_ROOT||path.resolve(__dirname,".."); const OUT=path.join(ROOT,"data/playwright_rosweb"); fs.mkdirSync(OUT,{recursive:true});
 
 test("ROS Web all tabs and subtabs",async({page})=>{
   const errs=[]; const badResp=[];

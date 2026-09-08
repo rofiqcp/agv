@@ -18,8 +18,14 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 
+def _agv_root() -> Path:
+    configured = os.environ.get("AGV_ROOT", "").strip()
+    return Path(configured).expanduser().resolve() if configured else (Path.home() / "agv").resolve()
+
+
 def _runtime_path(value: str) -> Path:
-    return Path(os.path.expandvars(os.path.expanduser(value))).resolve()
+    expanded = Path(os.path.expandvars(os.path.expanduser(value)))
+    return expanded.resolve() if expanded.is_absolute() else (_agv_root() / expanded).resolve()
 
 
 
@@ -42,17 +48,14 @@ def _discover_cpu_model(configured: str, share_path: str = "") -> str:
             idx = parts.index("install")
             workspace = Path(*parts[:idx]) if idx > 0 else Path("/")
             candidates.append(workspace / "models" / "yolopv2.pt")
-    candidates.extend([
-        Path.home() / "ros" / "models" / "yolopv2.pt",
-        Path("/home/otomasi/ros/models/yolopv2.pt"),
-    ])
+    candidates.append(_agv_root() / "models" / "yolopv2.pt")
     for candidate in candidates:
         candidate = candidate.expanduser().resolve()
         if candidate.is_file() and candidate.stat().st_size > 0:
             return str(candidate)
     # Keep a deterministic, portable expected location for the launch error.
     return str(candidates[0].expanduser().resolve()) if candidates else str(
-        (Path.home() / "ros" / "models" / "yolopv2.pt").resolve())
+        (_agv_root() / "models" / "yolopv2.pt").resolve())
 
 
 def _validate_dynamic_links(executable: Path, label: str) -> None:
@@ -179,7 +182,7 @@ def generate_launch_description() -> LaunchDescription:
             "config_file", default_value=os.path.join(share, "config", "astra_yolop_gpu.yaml")),
         DeclareLaunchArgument("perception_mode", default_value="cpu"),
         DeclareLaunchArgument("engine_path", default_value=os.environ.get(
-            "YOLOP_ENGINE_PATH", "/home/otomasi/ros/models/yolopv2.engine")),
+            "YOLOP_ENGINE_PATH", str(_agv_root() / "models" / "yolopv2.engine"))),
         DeclareLaunchArgument("pt_model_path", default_value=default_pt_model),
         DeclareLaunchArgument("cpu_inference_fps", default_value="2.0"),
         DeclareLaunchArgument("cpu_threads", default_value="0"),

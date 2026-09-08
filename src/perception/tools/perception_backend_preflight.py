@@ -54,11 +54,8 @@ def discover_cpu_model(workspace: Path, configured: str, override: str | None) -
     if configured.lower() != "auto":
         path = Path(configured).expanduser()
         return path.resolve() if path.is_absolute() else (workspace / path).resolve()
-    candidates = [
-        workspace / "models/yolopv2.pt",
-        Path.home() / "ros/models/yolopv2.pt",
-        Path("/home/otomasi/ros/models/yolopv2.pt"),
-    ]
+    agv_root = Path(os.environ.get("AGV_ROOT", str(Path.home() / "agv"))).expanduser().resolve()
+    candidates = [workspace / "models/yolopv2.pt", agv_root / "models/yolopv2.pt"]
     for candidate in candidates:
         if candidate.is_file() and candidate.stat().st_size > 0:
             return candidate.resolve()

@@ -1987,14 +1987,21 @@ private:
   // intentionally NOT copied into src/install so the ROS source package stays small
   // and there is no silent model-selection fallback.
   std::string resolveEnginePath(const std::string & requested) {
-    static constexpr const char * kRequiredEnginePath =
-      "/home/otomasi/ros/models/yolopv2.engine";
-    const fs::path required = normalizedPath(fs::path(kRequiredEnginePath));
+    const char * configured_root = std::getenv("AGV_ROOT");
+    const char * home = std::getenv("HOME");
+    const fs::path root = configured_root && *configured_root ? fs::path(configured_root) :
+      (home && *home ? fs::path(home) / "agv" : fs::current_path() / "agv");
+    const fs::path required = normalizedPath(root / "models/yolopv2.engine");
+    fs::path selected = required;
+    if (!requested.empty() && requested != "auto") {
+      const fs::path value(requested);
+      selected = normalizedPath(value.is_absolute() ? value : root / value);
+    }
 
-    if (!requested.empty() && normalizedPath(fs::path(requested)) != required) {
+    if (selected != required) {
       throw std::runtime_error(
         std::string("engine_path harus persis: ") + required.string() +
-        " ; path lain sengaja ditolak agar model runtime tidak ambigu. Diterima: " + requested);
+        " ; path lain sengaja ditolak agar model runtime tidak ambigu. Diterima: " + selected.string());
     }
     if (!nonEmptyRegularFile(required)) {
       throw std::runtime_error(
@@ -2007,7 +2014,7 @@ private:
   // Mendeklarasikan seluruh parameter agar dapat dibaca dari YAML/launch.
   // Fungsi: Mendeklarasikan seluruh parameter kamera, GPU, projection, publisher, lane safety, obstacle, dan mixer.
   void declareParameters() {
-    declare_parameter<std::string>("engine_path", "/home/otomasi/ros/models/yolopv2.engine");
+    declare_parameter<std::string>("engine_path", "auto");
     declare_parameter<int>("gpu_device", 0);
     declare_parameter<std::string>("rgb_device", "auto");
     declare_parameter<int>("rgb_width", 1280);

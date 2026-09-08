@@ -77,7 +77,7 @@ def resolve_one(label: str, matches: list[Path], expected: tuple[str, str], fail
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--workspace", default="/home/otomasi/ros")
+    ap.add_argument("--workspace", default=os.environ.get("AGV_ROOT", str(Path.home() / "agv")))
     args = ap.parse_args()
     ws = Path(args.workspace).expanduser().resolve()
 

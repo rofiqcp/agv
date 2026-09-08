@@ -56,13 +56,23 @@ def _yaml_ros_param(path: str, node_name: str, key: str, default):
 
 
 
+def _agv_root() -> Path:
+    configured = os.environ.get("AGV_ROOT", "").strip()
+    return Path(configured).expanduser().resolve() if configured else (Path.home() / "agv").resolve()
+
+
+def _runtime_path(value: str) -> Path:
+    candidate = Path(os.path.expandvars(os.path.expanduser(value)))
+    return candidate.resolve() if candidate.is_absolute() else (_agv_root() / candidate).resolve()
+
+
 def _discover_cpu_model(configured: str, perception_share: str = "") -> str:
     env = os.environ.get("YOLOPV2_PT_PATH", "").strip()
     if env:
-        return str(Path(os.path.expandvars(os.path.expanduser(env))).resolve())
+        return str(_runtime_path(env))
     configured = (configured or "auto").strip()
     if configured and configured.lower() != "auto":
-        return str(Path(os.path.expandvars(os.path.expanduser(configured))).resolve())
+        return str(_runtime_path(configured))
     candidates = []
     if perception_share:
         share = Path(perception_share).resolve(); parts = list(share.parts)
@@ -71,12 +81,12 @@ def _discover_cpu_model(configured: str, perception_share: str = "") -> str:
             workspace = Path(*parts[:idx]) if idx > 0 else Path("/")
             # Model runtime dikelola di root workspace: <workspace>/models/yolopv2.pt.
             candidates.append(workspace / "models" / "yolopv2.pt")
-    candidates.extend([Path.home()/"ros"/"models"/"yolopv2.pt", Path("/home/otomasi/ros/models/yolopv2.pt")])
+    candidates.append(_agv_root() / "models" / "yolopv2.pt")
     for candidate in candidates:
         candidate = candidate.expanduser().resolve()
         if candidate.is_file() and candidate.stat().st_size > 0:
             return str(candidate)
-    return str((candidates[0] if candidates else Path.home()/"ros"/"models"/"yolopv2.pt").expanduser().resolve())
+    return str((candidates[0] if candidates else _agv_root()/"models"/"yolopv2.pt").expanduser().resolve())
 
 
 def generate_launch_description() -> LaunchDescription:

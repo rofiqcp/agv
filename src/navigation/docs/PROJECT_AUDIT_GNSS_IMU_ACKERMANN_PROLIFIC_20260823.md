@@ -156,7 +156,7 @@ Current code merotasi covariance ENU→map→body dan kemudian memberi variance 
 
 ### 3.11 Perception portability
 
-Path TensorRT model dan beberapa converter defaults masih deployment-specific `/home/otomasi1/...`. Autonomous launch sudah mendukung override `YOLOP_ENGINE_PATH`. Path tidak diganti secara membabi buta karena dapat merupakan lokasi model target yang benar. Untuk deployment portable, pindahkan model path ke environment/service configuration di Stage 3 setelah target path dipastikan.
+Path TensorRT model dan beberapa converter defaults masih deployment-specific `$AGV_ROOT/...`. Autonomous launch sudah mendukung override `YOLOP_ENGINE_PATH`. Path tidak diganti secara membabi buta karena dapat merupakan lokasi model target yang benar. Untuk deployment portable, pindahkan model path ke environment/service configuration di Stage 3 setelah target path dipastikan.
 
 CUDA root sekarang dibuat `CACHE PATH`, sehingga build tidak lagi terkunci mutlak pada satu lokasi compiler.
 

@@ -8,7 +8,7 @@ Runtime memakai satu selector: `perception_mode:=off|cpu|gpu`. Untuk profil Mini
 | `cpu` | aktif | `yolopv2.pt` auto-discovery | direct TorchScript LibTorch CPU |
 | `gpu` | aktif | TensorRT `.engine` | CUDA + TensorRT |
 
-CPU **tidak menggunakan ONNX** saat runtime. Model CPU dicari dari `YOLOPV2_PT_PATH`, `<workspace>/models/yolopv2.pt`, `~/ros/models/yolopv2.pt`, `~/models/yolopv2.pt`, lalu jalur Jetson lama sebagai fallback kompatibilitas.
+CPU **tidak menggunakan ONNX** saat runtime. Model CPU dicari dari `YOLOPV2_PT_PATH`, `<workspace>/models/yolopv2.pt`, `$AGV_ROOT/models/yolopv2.pt`, `~/models/yolopv2.pt`, lalu jalur Jetson lama sebagai fallback kompatibilitas.
 
 ## CPU Mini-PC
 

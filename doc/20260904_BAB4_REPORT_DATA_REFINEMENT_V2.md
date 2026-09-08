@@ -1,7 +1,7 @@
 # Penyempurnaan Akuisisi Data Laporan BAB IV V2
 
 Tanggal: 2026-09-04
-Target: `/home/otomasi/ros/src/navigation/web`
+Target: `$AGV_ROOT/src/navigation/web`
 
 ## Tujuan
 Bagian ungu **LAPORAN BAB IV** dipisahkan secara konseptual dari workspace tuning Navigasi. Workspace tuning lama tetap dipertahankan dan tidak diubah. Bagian laporan hanya menampilkan tabel, grafik, serta metrik yang diperlukan untuk menjawab rumusan masalah laporan.

@@ -27,7 +27,7 @@ Reset baseline juga diaktifkan untuk domain Persepsi agar kalibrasi dapat dikemb
 ## Verifikasi
 - Build `perception` Release, sequential 1 worker: PASS (`Summary: 1 package finished`).
 - Self-check keseluruhan: `42 PASS, 0 FAIL`.
-- Live frame: `/home/otomasi/ros/log/20260904_lane_safety_v3_live.jpg`.
+- Live frame: `$AGV_ROOT/log/20260904_lane_safety_v3_live.jpg`.
 - Live indoor tanpa drivable/lane: hanya dua garis miring abu-abu; tanpa garis horizontal dan tanpa label status.
 - Kontrak sintetis PASS: no-drivable→GRAY, drivable/no-lane→GREEN, warning→YELLOW, touch→RED.
 - Calibration shift PASS untuk center, left, dan right offset independen.

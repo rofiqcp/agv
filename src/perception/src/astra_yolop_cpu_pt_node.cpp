@@ -180,26 +180,38 @@ bool regularNonEmptyFile(const std::string & path)
   return fs::is_regular_file(path, error) && !error && fs::file_size(path, error) > 0U && !error;
 }
 
+fs::path agvRootPath()
+{
+  if (const char * root = std::getenv("AGV_ROOT"); root && *root) {
+    return fs::path(root).lexically_normal();
+  }
+  if (const char * home = std::getenv("HOME"); home && *home) {
+    return (fs::path(home) / "agv").lexically_normal();
+  }
+  return (fs::current_path() / "agv").lexically_normal();
+}
+
+fs::path resolveAgvPath(const fs::path & value)
+{
+  return value.is_absolute() ? value.lexically_normal() : (agvRootPath() / value).lexically_normal();
+}
+
 std::string resolveCpuModelPath(const std::string & requested)
 {
   if (!requested.empty() && requested != "auto") {
-    return fs::path(requested).lexically_normal().string();
+    return resolveAgvPath(fs::path(requested)).string();
   }
 
   std::vector<fs::path> candidates;
   if (const char * env = std::getenv("YOLOPV2_PT_PATH"); env && *env) {
     candidates.emplace_back(env);
   }
-  if (const char * home = std::getenv("HOME"); home && *home) {
-    candidates.emplace_back(fs::path(home) / "ros/models/yolopv2.pt");
-  }
+  candidates.emplace_back(agvRootPath() / "models/yolopv2.pt");
   std::error_code error;
   const fs::path cwd = fs::current_path(error);
   if (!error) {
     candidates.emplace_back(cwd / "models/yolopv2.pt");
   }
-  // Lokasi deployment Mini-PC yang disepakati.
-  candidates.emplace_back("/home/otomasi/ros/models/yolopv2.pt");
 
   for (const auto & candidate : candidates) {
     if (regularNonEmptyFile(candidate.string())) return candidate.lexically_normal().string();
@@ -285,7 +297,7 @@ public:
 private:
   void declareParameters()
   {
-    declare_parameter<std::string>("pt_model_path", "/home/otomasi/ros/models/yolopv2.pt");
+    declare_parameter<std::string>("pt_model_path", "auto");
     declare_parameter<bool>("inference_enabled", false);
     declare_parameter<double>("cpu_inference_fps", 2.0);
     // Benchmark full-stack i5-7500 menunjukkan 2 thread paling stabil; 3-4 thread

@@ -33,7 +33,7 @@ for token in ('IST8310_MAX_RAW_XY', 'IST8310_MAX_RAW_Z', 'const int16_t z = stat
     require(token in neo_cpp, f'IST8310 robustness contract missing: {token}')
 import re
 f411_m = re.search(r'kBaud\s*=\s*(115200|1000000)', vesc_h)
-f103_m = re.search(r'F103_VESC_UART_BAUD\s+(115200|1000000)u', (WS / 'hoverboard-firmware-hack-FOC/Src/vesc/f103_boot_layout.h').read_text(encoding='utf-8'))
+f103_m = re.search(r'F103_VESC_UART_BAUD\s+(115200|1000000)u', (WS / 'hoverboard-vesc/Src/vesc/f103_boot_layout.h').read_text(encoding='utf-8'))
 require(f411_m is not None and f103_m is not None, 'F411/F103 VESC baud must be explicit 115200 or 1000000')
 require(f411_m.group(1) == f103_m.group(1), 'F411 and F103 internal VESC UART baud must match')
 require('gVesc.begin()' in main and 'gVesc.poll()' in main, 'F411 VESC gateway lifecycle missing')

@@ -249,8 +249,8 @@
       "neo_mag_norm_mean_ut": 68.9059567747243
     }
   ],
-  "raw_csv": "/home/otomasi/ros/calibration/heading_8dir_raw_20260908_212631.csv",
-  "segments_csv": "/home/otomasi/ros/calibration/heading_8dir_segments_20260908_212631.csv",
+  "raw_csv": "calibration/heading_8dir_raw_20260908_212631.csv",
+  "segments_csv": "calibration/heading_8dir_segments_20260908_212631.csv",
   "updated_at": "2026-09-08T23:07:08.881897",
   "thresholds": {
     "static_hold_sec": 1.2,

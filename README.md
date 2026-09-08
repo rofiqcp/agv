@@ -5,22 +5,22 @@
 Clone repository AGV **beserta seluruh Git submodule** dengan satu perintah:
 
 ```bash
-git clone --recurse-submodules -b v1 https://github.com/rofiqcp/agv.git ~/ros
-cd ~/ros
+git clone --recurse-submodules -b v1 https://github.com/rofiqcp/agv.git $HOME/agv
+cd $HOME/agv
 git submodule status
 ```
 
 Jika repository sudah terlanjur di-clone tanpa submodule:
 
 ```bash
-cd ~/ros
+cd $HOME/agv
 git submodule update --init --recursive
 ```
 
 Repository firmware dapat dibuka langsung di: [rofiqcp/hoverboard-vesc](https://github.com/rofiqcp/hoverboard-vesc).
 Folder `hoverboard-vesc` yang tampil di GitHub sebagai submodule akan membuka commit SHA yang dipin oleh repository AGV; hal ini memang perilaku standar GitHub untuk menjaga versi firmware tetap reproducible.
 
-Repository ini berisi source code workspace ROS 2 untuk Autonomous Ground Vehicle (AGV) pada `/home/otomasi/ros`.
+Repository ini berisi source code workspace ROS 2 untuk Autonomous Ground Vehicle (AGV) pada `$AGV_ROOT`.
 
 ## Target Environment
 
@@ -55,7 +55,7 @@ Folder hasil build ROS 2 (`build/`, `install/`, dan `log/`) tidak disimpan ke Gi
 
 Firmware STM32F103 dipisahkan dari source ROS 2 dan ditautkan sebagai Git submodule:
 
-- Path lokal: `/home/otomasi/ros/hoverboard-vesc`
+- Path lokal: `$AGV_ROOT/hoverboard-vesc`
 - Repository: `https://github.com/rofiqcp/hoverboard-vesc`
 - Branch firmware: `v1`
 - Repository AGV menyimpan pointer commit firmware yang sudah dipilih, bukan menyalin seluruh riwayat firmware.
@@ -69,14 +69,14 @@ git clone --recurse-submodules -b v1 https://github.com/rofiqcp/agv.git ros
 Jika repository AGV sudah terlanjur di-clone tanpa submodule:
 
 ```bash
-cd /home/otomasi/ros
+cd $AGV_ROOT
 git submodule update --init --recursive
 ```
 
 Untuk mengikuti commit terbaru branch `v1` firmware lalu menyimpan pointer baru di AGV:
 
 ```bash
-cd /home/otomasi/ros
+cd $AGV_ROOT
 git submodule update --remote --merge hoverboard-vesc
 git add .gitmodules hoverboard-vesc
 git commit -m "chore: update hoverboard-vesc submodule"
@@ -90,20 +90,20 @@ Perubahan source firmware harus di-commit dan di-push dari dalam folder
 Model binary tidak masuk repository karena ukurannya besar. Unduh model resmi YOLOPv2 dengan:
 
 ```bash
-cd /home/otomasi/ros/models
+cd $AGV_ROOT/models
 ./model.sh
 ```
 
 Model akan tersedia sebagai:
 
 ```text
-/home/otomasi/ros/models/yolopv2.pt
+$AGV_ROOT/models/yolopv2.pt
 ```
 
 ## Build
 
 ```bash
-cd /home/otomasi/ros
+cd $AGV_ROOT
 source /opt/ros/humble/setup.bash
 colcon build --symlink-install
 source install/setup.bash
@@ -118,7 +118,7 @@ colcon build --symlink-install --packages-select esc perception navigation
 ## Menjalankan Autonomous Stack
 
 ```bash
-cd /home/otomasi/ros
+cd $AGV_ROOT
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 launch navigation autonomous.launch.py

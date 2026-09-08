@@ -232,10 +232,13 @@ fs::path resolveModelsDirectory(const Options &options) {
   std::vector<fs::path> candidates;
   std::set<std::string> seen;
 
-  // Keep generated model artifacts outside src/install. This is also the
-  // only runtime engine directory used by perception_node.
-  addCandidate(candidates, seen,
-    "/home/otomasi/ros/models");
+  // Keep generated model artifacts outside src/install. AGV_ROOT is the
+  // portable workspace contract; fallback is $HOME/agv.
+  if (const char * root = std::getenv("AGV_ROOT"); root && *root) {
+    addCandidate(candidates, seen, fs::path(root) / "models");
+  } else if (const char * home = std::getenv("HOME"); home && *home) {
+    addCandidate(candidates, seen, fs::path(home) / "agv/models");
+  }
 
   if (const char *environment = std::getenv("ASTRA_YOLOP_MODELS_DIR")) {
     addCandidate(candidates, seen, environment);

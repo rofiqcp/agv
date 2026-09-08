@@ -1,7 +1,7 @@
 # Audit Runtime ROS dan Integrasi Laporan BAB IV — 2026-09-04
 
 ## Ruang lingkup
-Audit workspace `/home/otomasi/ros` mencakup paket `esc`, `navigation`, `perception`, dan `stmf4`, konfigurasi YAML, launch ROS 2, self-check, lifecycle runtime, serta integrasi ROS Web.
+Audit workspace `$AGV_ROOT` mencakup paket `esc`, `navigation`, `perception`, dan `stmf4`, konfigurasi YAML, launch ROS 2, self-check, lifecycle runtime, serta integrasi ROS Web.
 
 ## Temuan dan perbaikan
 - Ditemukan instance stack ROS lama berjalan bersamaan dan memicu konflik lock HMI/port web; proses duplikat dibersihkan sebelum pengujian ulang.

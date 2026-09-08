@@ -15,7 +15,7 @@ stmf4_hmi_bridge:
     teleop_yaw_max_deg_s: 80.0
     invert_hmi_steering: false
     default_mode: AUTO
-    waypoint_file: /home/otomasi/ros/data/hmi_waypoints.tsv
+    waypoint_file: data/hmi_waypoints.tsv
     waypoint_pose_timeout_sec: 2.5
     neo3_sensor_timeout_sec: 2.0
     neo3_gnss_frame_id: gnss_link

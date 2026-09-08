@@ -1,6 +1,7 @@
 """Astra YOLOP GPU dengan satu RViz mandiri berlatensi rendah."""
 
 import os
+from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -102,7 +103,7 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument(
                 "engine_path",
-                default_value="/home/otomasi/ros/models/yolopv2.engine",
+                default_value=str(_agv_root() / "models" / "yolopv2.engine"),
             ),
             DeclareLaunchArgument(
                 "rviz_config",

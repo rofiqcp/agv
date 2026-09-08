@@ -12,7 +12,7 @@ def require(cond, msg):
         raise SystemExit("FAIL: " + msg)
 
 for token in (
-    'declare_parameter<std::string>("pt_model_path", "/home/otomasi/ros/models/yolopv2.pt")',
+    'declare_parameter<std::string>("pt_model_path", "auto")',
     'torch::jit::load(pt_model_path_, torch::kCPU)',
     'module_.eval()',
     'torch::InferenceMode',
@@ -22,6 +22,7 @@ for token in (
     'anchor_heads.size() != 3U',
     'YOLOPv2 CPU TorchScript lazy-load + warm-up + 8-output contract: PASS',
     'resolveCpuModelPath',
+    'AGV_ROOT',
     'resolveCpuThreadCount',
     'torch::set_num_interop_threads(1)',
     'pipeline_p95_ms',

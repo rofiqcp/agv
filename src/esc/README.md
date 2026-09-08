@@ -63,7 +63,7 @@ Only `esc_ackermann` opens the serial port. `motor_teleop` contains no UART send
 ## Build
 
 ```bash
-cd /home/otomasi/ros
+cd $AGV_ROOT
 source /opt/ros/humble/setup.bash
 colcon build --symlink-install --packages-select esc navigation
 source install/setup.bash

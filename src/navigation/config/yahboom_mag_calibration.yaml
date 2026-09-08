@@ -2,7 +2,7 @@ yahboom_mag_calibration:
   valid: true
   source: 8-direction CW static fit against calibrated IST8310 ENU heading
   created_at: '2026-09-08T21:35:22.127586'
-  raw_csv: /home/otomasi/ros/calibration/heading_8dir_raw_20260908_212631.csv
+  raw_csv: calibration/heading_8dir_raw_20260908_212631.csv
   sample_count: 352
   segment_count: 8
   cw_transition_check_pass: true

@@ -15,7 +15,7 @@ yolopv2.pt
 Unduh model resmi CAIC-AD/YOLOPv2 dengan:
 
 ```bash
-cd /home/otomasi/ros/models
+cd $AGV_ROOT/models
 chmod +x model.sh
 ./model.sh
 ```
@@ -43,7 +43,7 @@ Mapping runtime proyek tetap:
 Checkpoint disiapkan dengan:
 
 ```bash
-cd /home/otomasi/ros/models
+cd $AGV_ROOT/models
 chmod +x semantic_model.sh
 ./semantic_model.sh
 ```

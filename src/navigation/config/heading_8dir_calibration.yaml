@@ -2,8 +2,8 @@ heading_8dir_calibration:
   valid: true
   saved_at: '2026-09-08T20:20:00+07:00'
   method: 8-static-heading planar XY affine + gyro-relative deviation LUT
-  raw_csv: /home/otomasi/ros/calibration/heading_8dir_raw_20260908_202227.csv
-  segments_csv: /home/otomasi/ros/calibration/heading_8dir_segments_20260908_202227.csv
+  raw_csv: calibration/heading_8dir_raw_20260908_202227.csv
+  segments_csv: calibration/heading_8dir_segments_20260908_202227.csv
   segments: 8
   static_samples_total: 358
   neo3:

@@ -90,6 +90,21 @@ constexpr double kPi = 3.14159265358979323846;
 
 double nowMs() { return static_cast<double>(QDateTime::currentMSecsSinceEpoch()); }
 
+QString agvRootPath() {
+  const QString configured = qEnvironmentVariable("AGV_ROOT").trimmed();
+  if (!configured.isEmpty()) return QDir::cleanPath(QFileInfo(configured).absoluteFilePath());
+  return QDir::cleanPath(QDir::home().filePath(QStringLiteral("agv")));
+}
+
+QString agvPath(const QString &relativePath) {
+  return QDir::cleanPath(QDir(agvRootPath()).filePath(relativePath));
+}
+
+QString agvPythonPath() {
+  const QString configured = qEnvironmentVariable("AGV_PYTHON").trimmed();
+  return configured.isEmpty() ? QStringLiteral("/usr/bin/python3") : configured;
+}
+
 double yawFromQuat(double x, double y, double z, double w) {
   const double siny = 2.0 * (w * z + x * y);
   const double cosy = 1.0 - 2.0 * (y * y + z * z);
@@ -283,7 +298,8 @@ QJsonObject loadConfigSnapshot() {
   }
   root["paths"] = paths;
   root["files"] = files;
-  root["model_expected"] = "/home/otomasi/ros/models/yolopv2.pt";
+  root["model_expected"] = agvPath(QStringLiteral("models/yolopv2.pt"));
+  root["agv_root"] = agvRootPath();
   root["generated_at_ms"] = nowMs();
   return root;
 }
@@ -2243,14 +2259,14 @@ class LocalHttpServer : public QObject {
 
   QString navigationSharePath() const {
     try { return QString::fromStdString(ament_index_cpp::get_package_share_directory("navigation")); }
-    catch (...) { return QStringLiteral("/home/otomasi/ros/install/navigation/share/navigation"); }
+    catch (...) { return agvPath(QStringLiteral("install/navigation/share/navigation")); }
   }
 
   QJsonObject imuCalibrationStatus() const {
     QJsonObject out{{"running", imuCalibrationProcess_.state()!=QProcess::NotRunning},
                     {"process_state", static_cast<int>(imuCalibrationProcess_.state())},
                     {"last_output", imuCalibrationLastOutput_.right(1200)}};
-    const QString statePath=QStringLiteral("/home/otomasi/ros/calibration/yahboom_calibration_state.json");
+    const QString statePath=agvPath(QStringLiteral("calibration/yahboom_calibration_state.json"));
     QFile sf(statePath);
     if (sf.open(QIODevice::ReadOnly)) {
       QJsonParseError e{}; const auto d=QJsonDocument::fromJson(sf.readAll(),&e);
@@ -2258,7 +2274,7 @@ class LocalHttpServer : public QObject {
         for (auto it=d.object().constBegin(); it!=d.object().constEnd(); ++it) out[it.key()]=it.value();
       }
     }
-    const QString fitPath=QStringLiteral("/home/otomasi/ros/calibration/yahboom_mag_planar_latest.yaml");
+    const QString fitPath=agvPath(QStringLiteral("calibration/yahboom_mag_planar_latest.yaml"));
     if (QFileInfo(fitPath).isFile()) {
       try { out["fit"] = yamlToJson(YAML::LoadFile(fitPath.toStdString())); }
       catch (const std::exception &e) { out["fit_error"]=QString::fromUtf8(e.what()); }
@@ -2276,9 +2292,9 @@ class LocalHttpServer : public QObject {
     const QString script=navigationSharePath()+QStringLiteral("/tools/yahboom_8dir_calibration.py");
     if (!QFileInfo(script).isFile()) { if(message)*message="Backend calibration script tidak ditemukan: "+script; return false; }
     imuCalibrationLastOutput_.clear();
-    imuCalibrationProcess_.setProgram(QStringLiteral("/usr/bin/python3"));
+    imuCalibrationProcess_.setProgram(agvPythonPath());
     imuCalibrationProcess_.setArguments({script,QStringLiteral("--direction"),d});
-    imuCalibrationProcess_.setWorkingDirectory(QStringLiteral("/home/otomasi/ros"));
+    imuCalibrationProcess_.setWorkingDirectory(agvRootPath());
     imuCalibrationProcess_.start();
     if (!imuCalibrationProcess_.waitForStarted(1200)) { if(message)*message="Gagal start backend kalibrasi"; return false; }
     if(message)*message=QStringLiteral("Wizard Yahboom 8 arah %1 dimulai; ikuti target animasi dan tahan diam tiap posisi.").arg(d);
@@ -2289,7 +2305,7 @@ class LocalHttpServer : public QObject {
     if (imuCalibrationProcess_.state()==QProcess::NotRunning) { if(message)*message="Tidak ada kalibrasi aktif"; return false; }
     imuCalibrationProcess_.terminate();
     if (!imuCalibrationProcess_.waitForFinished(1200)) { imuCalibrationProcess_.kill(); imuCalibrationProcess_.waitForFinished(700); }
-    const QString path=QStringLiteral("/home/otomasi/ros/calibration/yahboom_calibration_state.json");
+    const QString path=agvPath(QStringLiteral("calibration/yahboom_calibration_state.json"));
     QJsonObject st=imuCalibrationStatus(); st["status"]="STOPPED"; st["instruction"]="Dihentikan operator; hasil tidak boleh di-apply"; st["running"]=false;
     QSaveFile f(path); if(f.open(QIODevice::WriteOnly)){f.write(QJsonDocument(st).toJson(QJsonDocument::Indented));f.commit();}
     if(message)*message="Kalibrasi Yahboom dihentikan; gate apply tetap tertutup";
@@ -2301,7 +2317,7 @@ class LocalHttpServer : public QObject {
     if (imuCalibrationProcess_.state()!=QProcess::NotRunning) { if(message)*message="Tunggu kalibrasi selesai"; return false; }
     QString stationary; if(!bridge_->vehicleStationary(&stationary)){if(message)*message=stationary;return false;}
     const QString script=navigationSharePath()+QStringLiteral("/tools/yahboom_apply_calibration.py");
-    QProcess proc; proc.setProgram(QStringLiteral("/usr/bin/python3")); proc.setArguments({script,QStringLiteral("--workspace"),QStringLiteral("/home/otomasi/ros")}); proc.start();
+    QProcess proc; proc.setProgram(agvPythonPath()); proc.setArguments({script,QStringLiteral("--workspace"),agvRootPath()}); proc.start();
     if(!proc.waitForStarted(1000) || !proc.waitForFinished(6000)){proc.kill();if(message)*message="Apply calibration backend timeout";return false;}
     QJsonParseError pe{}; const QJsonDocument doc=QJsonDocument::fromJson(proc.readAllStandardOutput().trimmed(),&pe);
     if(pe.error!=QJsonParseError::NoError || !doc.isObject()){if(message)*message="Apply backend menghasilkan response invalid";return false;}
@@ -2693,7 +2709,7 @@ class LocalHttpServer : public QObject {
 
   static QString gitRevision() {
     QProcess p;
-    p.setWorkingDirectory(QStringLiteral("/home/otomasi/ros"));
+    p.setWorkingDirectory(agvRootPath());
     p.start(QStringLiteral("git"), {QStringLiteral("rev-parse"), QStringLiteral("--short=12"), QStringLiteral("HEAD")});
     if (!p.waitForFinished(1200) || p.exitStatus() != QProcess::NormalExit || p.exitCode() != 0) return QStringLiteral("unknown");
     const QString out = QString::fromUtf8(p.readAllStandardOutput()).trimmed();
@@ -2777,7 +2793,7 @@ class LocalHttpServer : public QObject {
     if (!bridge_) { if (message) *message = QStringLiteral("ROS bridge tidak tersedia"); return false; }
     const QByteArray jpeg = bridge_->cameraJpeg();
     if (jpeg.isEmpty()) { if (message) *message = QStringLiteral("Camera frame belum tersedia"); return false; }
-    const QString root = QStringLiteral("/home/otomasi/ros/data/presepsi/evidence");
+    const QString root = agvPath(QStringLiteral("data/presepsi/evidence"));
     if (!QDir().mkpath(root)) { if (message) *message = QStringLiteral("Gagal membuat folder evidence"); return false; }
     QString safe = label.trimmed();
     safe.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9_.-]+")), QStringLiteral("_"));
@@ -2830,7 +2846,7 @@ class LocalHttpServer : public QObject {
                        {"started_at", recordingStartedIso_}, {"sample_rate_hz", recordingRateHz_},
                        {"elapsed_s", recording_ && recordingStartedMs_ > 0 ? (nowMs() - recordingStartedMs_) / 1000.0 : 0.0},
                        {"samples", recordingRows_.size()}, {"record_paths", QJsonArray::fromStringList(recordingPaths_)},
-                       {"report_root", QStringLiteral("/home/otomasi/ros/data")}};
+                       {"report_root", agvPath(QStringLiteral("data"))}};
   }
 
   bool startRecording(const QJsonObject &json, QString *message) {
@@ -2946,7 +2962,7 @@ class LocalHttpServer : public QObject {
     }
     const QString domain = subsystem == QStringLiteral("navigation") ? QStringLiteral("navigasi") :
                            subsystem == QStringLiteral("perception") ? QStringLiteral("presepsi") : QStringLiteral("esc");
-    const QString dataRoot = QDir(QStringLiteral("/home/otomasi/ros/data")).filePath(domain);
+    const QString dataRoot = QDir(agvPath(QStringLiteral("data"))).filePath(domain);
     if (!QDir().mkpath(dataRoot)) {
       if (message) *message = QStringLiteral("Gagal membuat folder data: ") + dataRoot;
       return false;
@@ -2975,7 +2991,7 @@ class LocalHttpServer : public QObject {
   }
 
   QString trialStorePath() const {
-    return QStringLiteral("/home/otomasi/ros/data/experiment_trials.yaml");
+    return agvPath(QStringLiteral("data/experiment_trials.yaml"));
   }
 
   QJsonObject loadTrialStore() const {
@@ -3184,8 +3200,8 @@ class LocalHttpServer : public QObject {
     QJsonObject spec{{"live_series",recordingLiveSeries_},{"graphs",recordingGraphs_}};
     if(!writeJson(tmpSummary,QJsonDocument(summary))||!writeJson(tmpTrials,QJsonDocument(trials))||!writeJson(tmpSpec,QJsonDocument(spec))){if(message)*message="Gagal menulis temporary export spec";return false;}
     QString base=csvPath;if(base.endsWith(".csv"))base.chop(4);const QString xlsx=base+".xlsx";
-    QProcess proc;proc.setProgram(QStringLiteral("/home/otomasi/.hermes/venv/bin/python3"));
-    proc.setArguments({QStringLiteral("/home/otomasi/ros/src/navigation/tools/export_trial_artifacts.py"),"--csv",csvPath,"--summary",tmpSummary,"--trials",tmpTrials,"--spec",tmpSpec,"--xlsx",xlsx,"--png-prefix",base});
+    QProcess proc;proc.setProgram(agvPythonPath());
+    proc.setArguments({agvPath(QStringLiteral("src/navigation/tools/export_trial_artifacts.py")),"--csv",csvPath,"--summary",tmpSummary,"--trials",tmpTrials,"--spec",tmpSpec,"--xlsx",xlsx,"--png-prefix",base});
     proc.start();const bool started=proc.waitForStarted(3000);const bool done=started&&proc.waitForFinished(60000);
     const QByteArray out=proc.readAllStandardOutput(),err=proc.readAllStandardError();QFile::remove(tmpSummary);QFile::remove(tmpTrials);QFile::remove(tmpSpec);
     if(!done||proc.exitStatus()!=QProcess::NormalExit||proc.exitCode()!=0){if(message)*message=QStringLiteral("Exporter gagal: ")+QString::fromUtf8(err).left(600);return false;}
@@ -3206,7 +3222,7 @@ class LocalHttpServer : public QObject {
     const QString domain = recordingSubsystem_ == QStringLiteral("navigation") ? QStringLiteral("navigasi") :
                            recordingSubsystem_ == QStringLiteral("perception") ? QStringLiteral("presepsi") :
                            QStringLiteral("esc");
-    const QString dataRoot = QDir(QStringLiteral("/home/otomasi/ros/data")).filePath(domain);
+    const QString dataRoot = QDir(agvPath(QStringLiteral("data"))).filePath(domain);
     if (!QDir().mkpath(dataRoot)) {
       if (message) *message = QStringLiteral("Gagal membuat folder data: ") + dataRoot;
       return false;
@@ -3263,7 +3279,7 @@ class LocalHttpServer : public QObject {
     }
 
     // Browser download memakai buffer memory yang sama; tidak membuat summary,
-    // manifest, config JSON, atau folder run tambahan di /home/otomasi/ros/data.
+    // manifest, config JSON, atau folder run tambahan di AGV_ROOT/data.
     lastDownloadCsv_ = csv;
     lastDownloadName_ = fileName;
     if (result) {

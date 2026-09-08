@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Unduh dan verifikasi bobot resmi YOLOPv2 untuk backend CPU Mini-PC.
 
-Default target sengaja berada di source tree agar workspace dapat dipindah tanpa
-path /home/otomasi/ros yang hard-coded:
-    src/perception/models/yolopv2.pt
+Default target mengikuti AGV_ROOT (fallback $HOME/agv) agar workspace portable:
+    $AGV_ROOT/models/yolopv2.pt
 """
 from __future__ import annotations
 
@@ -22,7 +21,8 @@ EXPECTED_SHA256 = "f2a8c8374203ae3e67ff9c184e931f763957de92a993b23269e4e721627f1
 
 
 def default_target() -> Path:
-    return Path(__file__).resolve().parents[1] / "models" / "yolopv2.pt"
+    root = Path(os.environ.get("AGV_ROOT", str(Path.home() / "agv"))).expanduser().resolve()
+    return root / "models" / "yolopv2.pt"
 
 
 def sha256_file(path: Path) -> str:

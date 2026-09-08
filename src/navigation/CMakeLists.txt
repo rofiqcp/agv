@@ -196,6 +196,10 @@ if(BUILD_TESTING)
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/${check_name}.py)
   endforeach()
 
+  add_test(
+    NAME portable_path_contract_self_check
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/check_portable_paths.py)
+
   set(NAVIGATION_CPP_SELF_CHECKS
     gnss_global_fusion_math_self_check
     gnss_vyaw_math_self_check

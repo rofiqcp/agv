@@ -6,6 +6,7 @@ warning exception dan tanpa mengubah jalur TensorRT/CUDA utama.
 """
 
 import os
+from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -96,7 +97,7 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument(
                 "engine_path",
-                default_value="/home/otomasi/ros/models/yolopv2.engine",
+                default_value=str(_agv_root() / "models" / "yolopv2.engine"),
             ),
             DeclareLaunchArgument("rgb_device", default_value="auto"),
             DeclareLaunchArgument("rgb_width", default_value="1280"),

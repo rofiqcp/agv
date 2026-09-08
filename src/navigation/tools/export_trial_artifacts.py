@@ -1,4 +1,4 @@
-#!/home/otomasi/.hermes/venv/bin/python3
+#!/usr/bin/env python3
 """Export one experiment trial to report-ready XLSX and Matplotlib PNG files."""
 from __future__ import annotations
 

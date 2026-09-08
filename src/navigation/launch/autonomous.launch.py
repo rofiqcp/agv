@@ -366,8 +366,14 @@ def _yaml_ros_param(path: str, node_name: str, key: str, default):
         return default
 
 
+def _agv_root() -> Path:
+    configured = os.environ.get('AGV_ROOT', '').strip()
+    return Path(configured).expanduser().resolve() if configured else (Path.home() / 'agv').resolve()
+
+
 def _runtime_model_path(value: str) -> Path:
-    return Path(os.path.expandvars(os.path.expanduser(value))).resolve()
+    candidate = Path(os.path.expandvars(os.path.expanduser(value)))
+    return candidate.resolve() if candidate.is_absolute() else (_agv_root() / candidate).resolve()
 
 
 def _discover_cpu_model(configured: str, perception_share: str = "") -> str:
@@ -385,12 +391,12 @@ def _discover_cpu_model(configured: str, perception_share: str = "") -> str:
             workspace = Path(*parts[:idx]) if idx > 0 else Path("/")
             # Model runtime dikelola di root workspace: <workspace>/models/yolopv2.pt.
             candidates.append(workspace / "models" / "yolopv2.pt")
-    candidates.extend([Path.home()/"ros"/"models"/"yolopv2.pt", Path("/home/otomasi/ros/models/yolopv2.pt")])
+    candidates.append(_agv_root() / "models" / "yolopv2.pt")
     for candidate in candidates:
         candidate = candidate.expanduser().resolve()
         if candidate.is_file() and candidate.stat().st_size > 0:
             return str(candidate)
-    return str((candidates[0] if candidates else Path.home()/"ros"/"models"/"yolopv2.pt").expanduser().resolve())
+    return str((candidates[0] if candidates else _agv_root()/"models"/"yolopv2.pt").expanduser().resolve())
 
 
 def _validate_dynamic_links(executable: Path, label: str) -> None:
@@ -851,7 +857,7 @@ def generate_launch_description() -> LaunchDescription:
             'inference_hz': 1.0,
             'cpu_threads': 1,
             'enabled': True,
-            'torch_hub_dir': '/home/otomasi/ros/models/torch',
+            'torch_hub_dir': str(_agv_root() / 'models' / 'torch'),
             'use_sim_time': LaunchConfiguration('use_sim_time'),
         }],
     )

@@ -12,6 +12,11 @@ from geometry_msgs.msg import PoseWithCovarianceStamped
 from std_msgs.msg import Bool, Float64, Float64MultiArray
 
 G=9.80665
+AGV_ROOT=Path(os.environ.get('AGV_ROOT', str(Path.home()/'agv'))).expanduser().resolve()
+def portable_path(path):
+    resolved=Path(path).expanduser().resolve()
+    try:return str(resolved.relative_to(AGV_ROOT))
+    except ValueError:return str(resolved)
 
 def yaw_from_q(q):
     return math.atan2(2.0*(q.w*q.z + q.x*q.y), 1.0 - 2.0*(q.y*q.y + q.z*q.z))
@@ -35,7 +40,7 @@ class Logger(Node):
     def __init__(self):
         super().__init__('heading_8dir_calibration_logger')
         ts=datetime.now().strftime('%Y%m%d_%H%M%S')
-        root=Path('/home/otomasi/ros/calibration')
+        root=Path(os.environ.get('AGV_ROOT', str(Path.home()/'agv'))) / 'calibration'
         root.mkdir(parents=True, exist_ok=True)
         self.raw_path=root/f'heading_8dir_raw_{ts}.csv'
         self.seg_path=root/f'heading_8dir_segments_{ts}.csv'
@@ -114,10 +119,10 @@ class Logger(Node):
         cols=['segment','samples','duration_sec','imu_mean_deg','imu_std_deg','inertial_mean_deg','inertial_std_deg','validated_mean_deg','validated_std_deg','neo_mean_deg','neo_std_deg','inertial_neo_residual_deg','gyro_z_mean_rps','gyro_norm_mean_rps','acc_norm_mean','yah_mag_x_mean_lsb','yah_mag_y_mean_lsb','yah_mag_z_mean_lsb','yah_mag_norm_mean_lsb','map_yaw_from_enu_mean_deg','neo_mag_norm_mean_ut']
         with self.seg_path.open('w',newline='') as f:
             w=csv.DictWriter(f,fieldnames=cols); w.writeheader(); w.writerows(self.segments)
-        meta={'status':'COMPLETE' if len(self.segments)>=8 else 'RUNNING','expected_rotation':self.expected_rotation,'transition_checks':self.transition_checks,'segments':self.segments,'raw_csv':str(self.raw_path),'segments_csv':str(self.seg_path),'updated_at':datetime.now().isoformat(),'thresholds':{'static_hold_sec':self.static_hold,'gyro_enter_rps':self.gyro_enter,'gyro_exit_rps':self.gyro_exit,'acc_enter_tol_mps2':self.acc_tol_enter,'acc_exit_tol_mps2':self.acc_tol_exit,'capture_target_sec':self.capture_target_sec}}
+        meta={'status':'COMPLETE' if len(self.segments)>=8 else 'RUNNING','expected_rotation':self.expected_rotation,'transition_checks':self.transition_checks,'segments':self.segments,'raw_csv':portable_path(self.raw_path),'segments_csv':portable_path(self.seg_path),'updated_at':datetime.now().isoformat(),'thresholds':{'static_hold_sec':self.static_hold,'gyro_enter_rps':self.gyro_enter,'gyro_exit_rps':self.gyro_exit,'acc_enter_tol_mps2':self.acc_tol_enter,'acc_exit_tol_mps2':self.acc_tol_exit,'capture_target_sec':self.capture_target_sec}}
         self.meta_path.write_text(json.dumps(meta,indent=2)); self.done_path.write_text(json.dumps(meta,indent=2))
     def run_yahboom_fit(self):
-        cmd=['/usr/bin/python3','/home/otomasi/ros/tools/yahboom_mag_planar_fit.py',str(self.raw_path),'--meta-json',str(self.meta_path)]
+        cmd=[os.environ.get('AGV_PYTHON','/usr/bin/python3'), str(Path(os.environ.get('AGV_ROOT', str(Path.home()/'agv'))) / 'tools/yahboom_mag_planar_fit.py'), str(self.raw_path), '--meta-json', str(self.meta_path)]
         try:
             r=subprocess.run(cmd,text=True,capture_output=True,timeout=20)
             if r.stdout.strip(): print(r.stdout.strip(),flush=True)

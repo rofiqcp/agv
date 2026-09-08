@@ -2,7 +2,7 @@
 
 Lokasi default model yang dipakai source ini:
 
-    /home/otomasi/ros/models/yolopv2.pt
+    $AGV_ROOT/models/yolopv2.pt
 
 Bobot resmi YOLOPv2 V0.0.1 berukuran 156380200 byte dengan SHA-256:
 

@@ -2,8 +2,8 @@ perception:
   ros__parameters:
     perception_mode: 'off'
     inference_enabled: false
-    engine_path: /home/otomasi/ros/models/yolopv2.engine
-    pt_model_path: /home/otomasi/ros/models/yolopv2.pt
+    engine_path: models/yolopv2.engine
+    pt_model_path: auto
     gpu_device: 0
     cpu_inference_fps: 2.0
     cpu_threads: 2

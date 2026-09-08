@@ -27,14 +27,14 @@ The ESC UART is a Prolific PL2303 (`067b:2303`). The revised ESC node first reso
 Read-only USB identity validation can be run before launch:
 
 ```bash
-cd ~/ros
-python3 src/navigation/tools/serial_usb_preflight.py --workspace ~/ros
+cd $AGV_ROOT
+python3 src/navigation/tools/serial_usb_preflight.py --workspace $AGV_ROOT
 ```
 
 Recommended validation after launch:
 
 ```bash
-cd ~/ros
+cd $AGV_ROOT
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 bash src/verify_minipc_runtime.sh

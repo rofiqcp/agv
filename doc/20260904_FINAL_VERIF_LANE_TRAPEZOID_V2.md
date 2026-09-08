@@ -1,7 +1,7 @@
 # Final Verification Live Lane Trapezoid v2 — 2026-09-04
 
 ## Scope
-- Workspace: `/home/otomasi/ros`
+- Workspace: `$AGV_ROOT`
 - Mode: `autonomous.launch.py mode:=web`
 - Safety constraint: tidak mengirim GoalPose dan tidak mengirim request command motor nonzero.
 - ROS runtime: `ROS_DOMAIN_ID=42`, `ROS_LOCALHOST_ONLY=1`.

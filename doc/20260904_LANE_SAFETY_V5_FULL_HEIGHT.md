@@ -25,7 +25,7 @@ Safety line harus berupa dua sisi trapesium terbuka yang membentang dari ujung a
 
 ## Verifikasi Live
 - Build package `perception` Release: PASS.
-- Frame live: `/home/otomasi/ros/log/20260904_lane_safety_v5_fullheight_live.jpg`.
+- Frame live: `$AGV_ROOT/log/20260904_lane_safety_v5_fullheight_live.jpg`.
 - Source frame: `yolop_annotated`.
 - Pada scene indoor tanpa lane/drivable evidence, kedua garis tampil abu-abu.
 - Garis membentang dari sekitar Y=2% hingga Y=98% frame.

@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
-import argparse, csv, json, math
+import argparse, csv, json, math, os
 from datetime import datetime
 from pathlib import Path
 import numpy as np
 import yaml
+
+AGV_ROOT=Path(os.environ.get('AGV_ROOT', str(Path.home()/'agv'))).expanduser().resolve()
+def portable_path(path):
+    resolved=Path(path).expanduser().resolve()
+    try:return str(resolved.relative_to(AGV_ROOT))
+    except ValueError:return str(resolved)
 
 def wrap(a): return math.atan2(math.sin(a), math.cos(a))
 def cmean(v): return math.atan2(sum(math.sin(x) for x in v), sum(math.cos(x) for x in v))
@@ -82,7 +88,7 @@ def main():
     expected_sign=-1.0 if direction=='CW' else 1.0
     transition_ok=all(any(expected_sign*d > 5.0 for d in grouped[s]) and not any(expected_sign*d < -5.0 for d in grouped[s]) for s in range(1,8))
     valid=transition_ok and rms<3.0 and mx<5.0 and len(rows)>=200
-    out={'yahboom_mag_planar_calibration':{'valid':bool(valid),'source':f'8-direction {direction} static fit against calibrated IST8310 ENU heading','direction':direction,'created_at':datetime.now().isoformat(),'raw_csv':str(Path(a.raw_csv).resolve()),'sample_count':len(rows),'segment_count':8,'transition_check_pass':bool(transition_ok),'map_yaw_from_enu_rad':float(map_ref),'map_yaw_spread_deg':float(math.degrees(map_spread)),'bias_xy_lsb':[float(bias[0]),float(bias[1])],'matrix_xy_per_lsb':[float(W[0,0]),float(W[0,1]),float(W[1,0]),float(W[1,1])],'yaw_sign':float(sign),'yaw_offset_rad':float(off),'heading_lut_input_rad':knots,'heading_lut_correction_rad':corr,'corrected_norm_mean':float(np.mean(corrected_norm)),'corrected_norm_std':float(np.std(corrected_norm)),'validation':{'rms_error_deg':float(rms),'max_abs_error_deg':float(mx),'pass':bool(valid)},'scope':'planar XY only; Z/3D spherical calibration requires multi-axis rotation'}}
+    out={'yahboom_mag_planar_calibration':{'valid':bool(valid),'source':f'8-direction {direction} static fit against calibrated IST8310 ENU heading','direction':direction,'created_at':datetime.now().isoformat(),'raw_csv':portable_path(a.raw_csv),'sample_count':len(rows),'segment_count':8,'transition_check_pass':bool(transition_ok),'map_yaw_from_enu_rad':float(map_ref),'map_yaw_spread_deg':float(math.degrees(map_spread)),'bias_xy_lsb':[float(bias[0]),float(bias[1])],'matrix_xy_per_lsb':[float(W[0,0]),float(W[0,1]),float(W[1,0]),float(W[1,1])],'yaw_sign':float(sign),'yaw_offset_rad':float(off),'heading_lut_input_rad':knots,'heading_lut_correction_rad':corr,'corrected_norm_mean':float(np.mean(corrected_norm)),'corrected_norm_std':float(np.std(corrected_norm)),'validation':{'rms_error_deg':float(rms),'max_abs_error_deg':float(mx),'pass':bool(valid)},'scope':'planar XY only; Z/3D spherical calibration requires multi-axis rotation'}}
     root=Path(a.raw_csv).parent; stamp=Path(a.raw_csv).stem.replace('heading_8dir_raw_','')
     dest=root/f'yahboom_mag_planar_{stamp}.yaml'; dest.write_text(yaml.safe_dump(out,sort_keys=False)); (root/'yahboom_mag_planar_latest.yaml').write_text(yaml.safe_dump(out,sort_keys=False))
     print(f'YAHBOOM_PLANAR_FIT valid={valid} direction={direction} samples={len(rows)} transition_ok={transition_ok} rms={rms:.3f}deg max={mx:.3f}deg yaml={dest}',flush=True)

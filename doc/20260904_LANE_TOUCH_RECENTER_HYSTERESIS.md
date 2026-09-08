@@ -2,7 +2,7 @@
 
 Tanggal: 2026-09-04
 Device: otomasi
-Repo: `/home/otomasi/ros`
+Repo: `$AGV_ROOT`
 
 ## Tujuan
 

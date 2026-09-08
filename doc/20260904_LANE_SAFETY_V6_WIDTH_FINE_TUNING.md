@@ -2,7 +2,7 @@
 
 Tanggal: 2026-09-04
 Device: otomasi
-Repo: `/home/otomasi/ros`
+Repo: `$AGV_ROOT`
 
 ## Tujuan
 Melebarkan safety line sedikit dari baseline V5 tanpa membuat sisi atas terlalu terbuka atau mengubah bentuk open-trapezoid full-height.

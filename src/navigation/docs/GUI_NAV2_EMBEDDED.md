@@ -58,7 +58,7 @@ Planner sebenarnya adalah **Smac Hybrid-A*** dengan motion model `DUBIN`. Jadi i
 ## Build dan jalankan
 
 ```bash
-cd /home/otomasi/ros
+cd $AGV_ROOT
 source /opt/ros/humble/setup.bash
 rosdep install --from-paths src --ignore-src -r -y
 colcon build --symlink-install --packages-select esc perception navigation
