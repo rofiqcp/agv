@@ -7,7 +7,7 @@
   <link rel="icon" href="data:,">
   <title>ADV Operator Console</title>
   <link rel="stylesheet" href="/styles.css?v=20260904-bab4-report-v1">
-  <link rel="stylesheet" href="/vesc_mp_theme.css?v=20260908-v4">
+  <link rel="stylesheet" href="/vesc_mp_theme.css?v=20260908-final-v5">
 </head>
 <body>
   <div class="app-shell">
@@ -311,6 +311,14 @@
               <span id="vescTcpState" hidden></span>
             </div>
 
+            <section class="vesc-section" id="vescGraphSection">
+              <div class="vesc-section-head vesc-scope-section-head"><div><span class="eyebrow">LIVE SCOPE • VESC-STYLE</span><h3>LEFT + RIGHT Realtime Scope</h3></div><div class="vesc-scope-tools"><button class="soft-btn" id="vescScopeWindow">10 s</button><button class="soft-btn active" id="vescScopeAutoY" aria-pressed="true">Auto Y</button><button class="soft-btn" id="vescScopeFreeze" aria-pressed="false">Freeze</button><button class="soft-btn" id="vescScopeClear">Clear</button></div></div>
+              <div class="vesc-chart-grid">
+                <article class="vesc-chart-card"><div class="vesc-chart-head"><div><b>LEFT • Steering</b><span id="vescChartLeftState">WAIT</span></div><div class="vesc-chart-presets" data-vesc-presets="1"></div><div class="vesc-trace-checks" data-vesc-traces="1"></div></div><canvas id="vescChartLeft" width="1000" height="260"></canvas><div class="vesc-chart-foot" id="vescChartLeftFoot">Waiting telemetry</div></article>
+                <article class="vesc-chart-card"><div class="vesc-chart-head"><div><b>RIGHT • Velocity</b><span id="vescChartRightState">WAIT</span></div><div class="vesc-chart-presets" data-vesc-presets="2"></div><div class="vesc-trace-checks" data-vesc-traces="2"></div></div><canvas id="vescChartRight" width="1000" height="260"></canvas><div class="vesc-chart-foot" id="vescChartRightFoot">Waiting telemetry</div></article>
+              </div>
+            </section>
+
             <section class="vesc-section" id="vescUtilitySection">
               <div class="vesc-section-head"><div><span class="eyebrow">CONNECTION / FIRMWARE / TERMINAL</span><h3>VESC Engineering Utilities</h3></div><small>Maintenance-only commands preserve runtime authority separation.</small></div>
               <div class="vesc-utility-grid">
@@ -348,14 +356,6 @@
             <section class="vesc-section" id="vescFaultSection">
               <div class="vesc-section-head"><div><span class="eyebrow">FAULT HISTORY</span><h3>Motor Fault & Link Events</h3></div><div class="button-row compact"><span class="status-chip" id="vescFaultSummary">0 EVENTS</span><button class="soft-btn" id="vescFaultClear">Clear History</button></div></div>
               <div class="vesc-fault-history" id="vescFaultHistory"><div class="empty-state">No motor fault events in this browser session.</div></div>
-            </section>
-
-            <section class="vesc-section" id="vescGraphSection">
-              <div class="vesc-section-head vesc-scope-section-head"><div><span class="eyebrow">LIVE SCOPE • VESC-STYLE</span><h3>LEFT + RIGHT Realtime Scope</h3></div><div class="vesc-scope-tools"><button class="soft-btn" id="vescScopeWindow">10 s</button><button class="soft-btn active" id="vescScopeAutoY" aria-pressed="true">Auto Y</button><button class="soft-btn" id="vescScopeFreeze" aria-pressed="false">Freeze</button><button class="soft-btn" id="vescScopeClear">Clear</button></div></div>
-              <div class="vesc-chart-grid">
-                <article class="vesc-chart-card"><div class="vesc-chart-head"><div><b>LEFT • Steering</b><span id="vescChartLeftState">WAIT</span></div><div class="vesc-chart-presets" data-vesc-presets="1"></div><div class="vesc-trace-checks" data-vesc-traces="1"></div></div><canvas id="vescChartLeft" width="1000" height="260"></canvas><div class="vesc-chart-foot" id="vescChartLeftFoot">Waiting telemetry</div></article>
-                <article class="vesc-chart-card"><div class="vesc-chart-head"><div><b>RIGHT • Velocity</b><span id="vescChartRightState">WAIT</span></div><div class="vesc-chart-presets" data-vesc-presets="2"></div><div class="vesc-trace-checks" data-vesc-traces="2"></div></div><canvas id="vescChartRight" width="1000" height="260"></canvas><div class="vesc-chart-foot" id="vescChartRightFoot">Waiting telemetry</div></article>
-              </div>
             </section>
 
             <section class="vesc-section" id="vescRotorSection">
@@ -745,9 +745,9 @@
   </div>
   <div class="toast-stack" id="toastStack" aria-live="polite"></div>
   <div class="modal-backdrop" id="confirmModal"><div class="modal"><span class="eyebrow">CONFIRM ACTION</span><h2 id="confirmTitle">Confirm</h2><p id="confirmText"></p><div class="button-row"><button class="soft-btn grow" id="confirmNo">Cancel</button><button class="danger-btn grow" id="confirmYes">Continue</button></div></div></div>
-  <script src="/app.js?v=20260908-mp-v4" defer></script>
+  <script src="/app.js?v=20260908-final-v5" defer></script>
   <script src="/vesc_workbench.js?v=20260908-dual-runtime-v10" defer></script>
-  <script src="/replay.js?v=20260908-replay-v1" defer></script>
+  <script src="/replay.js?v=20260908-final-v5" defer></script>
   <script src="/export_tools.js?v=20260904-bab4-report-v1" defer></script>
 </body>
 </html>

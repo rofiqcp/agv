@@ -671,6 +671,1025 @@ inline QVector<ExperimentSpec> buildExperimentCatalog(const QString &subsystem) 
     return out;
   }
 
+  /* ------------------------- NAVIGASI (legacy, unreachable for navigation) ------------------------- */
+  add("navigation", QStringLiteral("4.1"), QStringLiteral("4.1 Pengujian Sensor"), "4.1.1",
+  QStringLiteral("4.1.1 Pengujian GNSS"),
+  {
+    "Sebaran posisi GNSS statis", "Kualitas satelit, pDOP, dan hAcc GNSS"
+  },
+  {
+    {
+      "Parameter", "Nilai YAML Aktual", "Fungsi"
+    },
+    {
+      "Metrik", "Hasil"
+    }
+  },
+  {
+    {
+      "Satelit", "gnss_quality.sat"
+    }, {
+      "DOP", "gnss_quality.dop"
+    }, {
+      "hAcc", "gnss_quality.hacc_m"
+    }
+  },
+  {
+    { "sample_rate", "Sample Rate (Hz)", "float", "", "", "10.0" },
+    { "duration", "Durasi (s)", "float", "", "", "30.0" },
+    { "variation", "Variasi / Run", "string", "", "", "variasi-1" },
+    { "condition", "Kondisi", "string", "", "", "statis" },
+    { "gt_x", "Ground Truth X", "float", "", "", "0.0", "", true },
+    { "gt_y", "Ground Truth Y", "float", "", "", "0.0", "", true },
+    { "min_satellites", "Min Satellites", "yaml_readonly", "gnss", "data_cuav_node.ros__parameters.min_satellites" },
+    { "max_dop", "Max DOP", "yaml_readonly", "gnss", "data_cuav_node.ros__parameters.max_dop" },
+    { "max_hacc_m", "Max hAcc (m)", "yaml_readonly", "gnss", "data_cuav_node.ros__parameters.max_hacc_m" },
+    { "nav_rate", "navigation_rate_hz", "float", "gnss", "data_cuav_node.ros__parameters.navigation_rate_hz", "10.0" },
+    { "nav_model", "Dynamic Model", "yaml_readonly", "gnss", "data_cuav_node.ros__parameters.dynamic_model" }
+  },
+  {
+    { "scatter", {}, "gnss_fix.lat", "gnss_fix.lon" },
+    { "time_series", { "Satelit", "DOP", "hAcc" } }
+  });
+  add("navigation", QStringLiteral("4.1"), QStringLiteral("4.1 Pengujian Sensor"), "4.1.2",
+  QStringLiteral("4.1.2 Pengujian IMU"),
+  {
+    "Noise gyro-Z IMU ketika kendaraan diam", "Linearitas heading IMU"
+  },
+  {
+    {
+      "Sumbu", "Mean gyro saat diam (rad/s)", "Std (rad/s)"
+    },
+    {
+      "Heading referensi", "Heading IMU", "Error"
+    }
+  },
+  {
+    {
+      "Gyro Z", "imu.gz"
+    }, {
+      "Yaw", "imu.yaw_rad"
+    }, {
+      "Yaw residual", "imu_status.yaw_residual"
+    }
+  });
+  add("navigation", QStringLiteral("4.1"), QStringLiteral("4.1 Pengujian Sensor"), "4.1.3",
+  QStringLiteral("4.1.3 Pengujian Encoder Steering dan Feedback RPM"),
+  {
+    "Linearitas feedback RPM", "Linearitas encoder steering"
+  },
+  {
+    {
+      "RPM perintah", "RPM feedback", "Error", "Error relatif"
+    },
+    {
+      "Steering perintah", "Feedback", "Error"
+    }
+  },
+  {
+    {
+      "Steer target", "esc_steer_target"
+    }, {
+      "Steer actual", "esc_steer_actual"
+    },
+    {
+      "Drive target", "esc_drive_target"
+    }, {
+      "Drive actual", "esc_drive_actual"
+    }
+  });
+  add("navigation", QStringLiteral("4.2"), QStringLiteral("4.2 Pengujian dan Tuning Extended Kalman Filter Lokal"), "4.2.1",
+  QStringLiteral("4.2.1 Pengujian Parameter frequency"),
+  {
+    "Pengaruh frequency terhadap RMSE dan latency EKF lokal"
+  },
+  {
+    {
+      "frequency", "RMSE v", "RMSE yaw-rate", "Latency median", "CPU EKF", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  },
+  {
+    { "sample_rate", "Sample Rate (Hz)", "float", "", "", "20.0" },
+    { "duration", "Durasi (s)", "float", "", "", "30.0" },
+    { "variation", "Variasi / Run", "string", "", "", "frequency-1" },
+    { "condition", "Kondisi", "string", "", "", "lintasan lurus" },
+    { "frequency", "EKF Lokal frequency (Hz)", "float", "ekf", "ekf_filter_node_odom.ros__parameters.frequency", "20.0" },
+    { "sensor_timeout", "Sensor timeout (s)", "yaml_readonly", "ekf", "ekf_filter_node_odom.ros__parameters.sensor_timeout" }
+  });
+  add("navigation", QStringLiteral("4.2"), QStringLiteral("4.2 Pengujian dan Tuning Extended Kalman Filter Lokal"), "4.2.2",
+  QStringLiteral("4.2.2 Pengujian Parameter sensor_timeout"),
+  {
+    "Pengaruh sensor timeout EKF lokal"
+  },
+  {
+    {
+      "sensor timeout", "Episode predict-only/menit", "Error akhir 10 m", "Respons terhadap stale", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.2"), QStringLiteral("4.2 Pengujian dan Tuning Extended Kalman Filter Lokal"), "4.2.3",
+  QStringLiteral("4.2.3 Pengujian odom0_twist_rejection_threshold"),
+  {
+    "Pengaruh twist rejection threshold EKF lokal"
+  },
+  {
+    {
+      "Threshold", "Outlier tertolak", "Measurement valid ikut tertolak", "RMSE posisi lokal", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.2"), QStringLiteral("4.2 Pengujian dan Tuning Extended Kalman Filter Lokal"), "4.2.4",
+  QStringLiteral("4.2.4 Pengujian process_noise_covariance"),
+  {
+    "Pengaruh process noise EKF lokal"
+  },
+  {
+    {
+      "Set", "Q(vx)", "Q(vyaw)", "Karakter"
+    },
+    {
+      "Set Q", "RMSE v", "RMSE yaw-rate", "Waktu respons perubahan", "Noise output v", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.2"), QStringLiteral("4.2 Pengujian dan Tuning Extended Kalman Filter Lokal"), "4.2.5",
+  QStringLiteral("4.2.5 Pengujian predict_to_current_time"),
+  {
+    "Pengaruh predict_to_current_time EKF lokal"
+  },
+  {
+    {
+      "Mode", "RMSE v", "Median latency", "Age state saat publish", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.2"), QStringLiteral("4.2 Pengujian dan Tuning Extended Kalman Filter Lokal"), "4.2.6",
+  QStringLiteral("4.2.6 Validasi Konfigurasi Akhir EKF Lokal"),
+  {
+    "Perbandingan odometri ESC dan EKF lokal pada lintasan lurus"
+  },
+  {
+    {
+      "Metrik validasi", "Baseline 30 Hz", "Konfigurasi tuning"
+    }
+  },
+  {
+    {
+      "ESC v", "esc_odom.v"
+    }, {
+      "EKF v", "ekf_local.v"
+    }, {
+      "ESC w", "esc_odom.w"
+    }, {
+      "EKF w", "ekf_local.w"
+    }
+  });
+  add("navigation", QStringLiteral("4.3"), QStringLiteral("4.3 Pengujian dan Tuning Extended Kalman Filter Global"), "4.3.1",
+  QStringLiteral("4.3.1 Pengujian Parameter frequency"),
+  {
+    "Pengaruh frequency EKF global"
+  },
+  {
+    {
+      "frequency", "RMSE posisi statis", "Respons dinamis", "CPU", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  },
+  {
+    { "sample_rate", "Sample Rate (Hz)", "float", "", "", "10.0" },
+    { "duration", "Durasi (s)", "float", "", "", "60.0" },
+    { "variation", "Variasi / Run", "string", "", "", "frequency-1" },
+    { "condition", "Kondisi", "string", "", "", "statis" },
+    { "frequency", "EKF Global frequency (Hz)", "float", "ekf", "ekf_filter_node_map.ros__parameters.frequency", "10.0" },
+    { "sensor_timeout", "Sensor timeout (s)", "yaml_readonly", "ekf", "ekf_filter_node_map.ros__parameters.sensor_timeout" },
+    { "pose_threshold", "odom0_pose_rejection_threshold", "yaml_readonly", "ekf", "ekf_filter_node_map.ros__parameters.odom0_pose_rejection_threshold" }
+  });
+  add("navigation", QStringLiteral("4.3"), QStringLiteral("4.3 Pengujian dan Tuning Extended Kalman Filter Global"), "4.3.2",
+  QStringLiteral("4.3.2 Pengujian Parameter sensor_timeout"),
+  {
+    "Pengaruh sensor timeout EKF global"
+  },
+  {
+    {
+      "sensor timeout", "Kontinuitas output", "Peak error setelah gap", "Keterangan"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.3"), QStringLiteral("4.3 Pengujian dan Tuning Extended Kalman Filter Global"), "4.3.3",
+  QStringLiteral("4.3.3 Pengujian odom0_pose_rejection_threshold"),
+  {
+    "Pengaruh pose rejection threshold EKF global"
+  },
+  {
+    {
+      "Threshold", "Spike tertolak", "Measurement valid tertolak", "RMSE posisi", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.3"), QStringLiteral("4.3 Pengujian dan Tuning Extended Kalman Filter Global"), "4.3.4",
+  QStringLiteral("4.3.4 Pengujian process_noise_covariance Posisi X-Y"),
+  {
+    "Pengaruh process noise posisi EKF global"
+  },
+  {
+    {
+      "Qx=Qy", "Std statis", "RMSE dinamis", "Waktu respons", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.3"), QStringLiteral("4.3 Pengujian dan Tuning Extended Kalman Filter Global"), "4.3.5",
+  QStringLiteral("4.3.5 Pengujian predict_to_current_time"),
+  {
+    "Pengaruh predict_to_current_time EKF global"
+  },
+  {
+    {
+      "Mode", "RMSE dinamis", "Peak error", "Karakter output", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.3"), QStringLiteral("4.3 Pengujian dan Tuning Extended Kalman Filter Global"), "4.3.6",
+  QStringLiteral("4.3.6 Validasi Konfigurasi Akhir EKF Global"),
+  {
+    "Perbandingan scatter GNSS map dan EKF global akhir"
+  },
+  {
+    {
+      "Metrik", "GNSS map raw", "EKF global tuning"
+    }
+  },
+  {
+    {
+      "Map X", "localization_state.map_x"
+    }, {
+      "EKF X", "ekf_global.x"
+    },
+    {
+      "Map Y", "localization_state.map_y"
+    }, {
+      "EKF Y", "ekf_global.y"
+    }
+  });
+  add("navigation", QStringLiteral("4.4"), QStringLiteral("4.4 Pengujian dan Tuning Koreksi Global LocalizationCore"), "4.4.1",
+  QStringLiteral("4.4.1 Pengujian Kalibrasi Koordinat ENU terhadap Map"),
+  {
+    "Kalibrasi multi-titik ENU terhadap map"
+  },
+  {
+    {
+      "Titik", "Error sebelum", "Error sesudah", "ΔX sebelum", "ΔY sebelum", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.4"), QStringLiteral("4.4 Pengujian dan Tuning Koreksi Global LocalizationCore"), "4.4.2",
+  QStringLiteral("4.4.2 Pengujian startup_gnss_samples"),
+  {
+    "Pengaruh jumlah sampel GNSS startup"
+  },
+  {
+    {
+      "Sampel", "Waktu anchor", "Std posisi awal", "Error awal", "Anchor ulang", "Status"
+    }
+  },
+  {
+    {
+      "Satelit", "gnss_quality.sat"
+    }, {
+      "DOP", "gnss_quality.dop"
+    }, {
+      "hAcc", "gnss_quality.hacc_m"
+    }
+  });
+  add("navigation", QStringLiteral("4.4"), QStringLiteral("4.4 Pengujian dan Tuning Koreksi Global LocalizationCore"), "4.4.3",
+  QStringLiteral("4.4.3 Pengujian strict_correction_alpha"),
+  {
+    "Pengaruh strict_correction_alpha pada kondisi diam"
+  },
+  {
+    {
+      "Alpha diam", "Error posisi", "Settling time", "Max Δ map→odom", "Std posisi akhir", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.4"), QStringLiteral("4.4 Pengujian dan Tuning Koreksi Global LocalizationCore"), "4.4.4",
+  QStringLiteral("4.4.4 Pengujian strict_moving_correction_alpha"),
+  {
+    "Pengaruh strict_moving_correction_alpha"
+  },
+  {
+    {
+      "Alpha", "RMSE global", "Max Δ map→odom", "Settling time", "Tracking RMSE", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.4"), QStringLiteral("4.4 Pengujian dan Tuning Koreksi Global LocalizationCore"), "4.4.5",
+  QStringLiteral("4.4.5 Pengujian strict_max_correction_m"),
+  {
+    "Trade-off batas koreksi dan tracking"
+  },
+  {
+    {
+      "Batas", "Peak TF step", "Konvergensi", "Tracking RMSE", "Peak tracking", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.4"), QStringLiteral("4.4 Pengujian dan Tuning Koreksi Global LocalizationCore"), "4.4.6",
+  QStringLiteral("4.4.6 Validasi Konfigurasi Akhir LocalizationCore"),
+  {
+    "Gambar 4.24 Perbandingan error koreksi global baseline dan hasil tuning"
+  },
+  {
+    {
+      "Metrik", "Baseline", "Hasil tuning", "Perubahan", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.5"), QStringLiteral("4.5 Pengujian dan Tuning Global Costmap"), "4.5.1",
+  QStringLiteral("4.5.1 Pengujian footprint_padding"),
+  {
+    "Pengaruh footprint_padding terhadap path"
+  },
+  {
+    {
+      "Padding", "Min clearance", "Path length", "Koridor sukses", "Tracking RMSE", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.5"), QStringLiteral("4.5 Pengujian dan Tuning Global Costmap"), "4.5.2",
+  QStringLiteral("4.5.2 Pengujian inflation_radius"),
+  {
+    "Trade-off inflation_radius dan clearance"
+  },
+  {
+    {
+      "Radius", "Min clearance", "Path length", "Planning time", "Koridor sukses", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.5"), QStringLiteral("4.5 Pengujian dan Tuning Global Costmap"), "4.5.3",
+  QStringLiteral("4.5.3 Pengujian cost_scaling_factor"),
+  {
+    "Pengaruh cost_scaling_factor pada clearance path"
+  },
+  {
+    {
+      "Faktor", "Min clearance", "Path length", "Planning time", "Tracking RMSE", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.5"), QStringLiteral("4.5 Pengujian dan Tuning Global Costmap"), "4.5.4",
+  QStringLiteral("4.5.4 Validasi Konfigurasi Akhir Global Costmap"),
+  {
+    "Ringkasan konfigurasi akhir global costmap"
+  },
+  {
+    {
+      "Konfigurasi", "Path length", "Min clearance", "Planning time", "Tracking RMSE", "Goal success"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Heading error", "derived.path_heading_error_rad"
+    },
+    {
+      "Path length", "nav_path.length_m"
+    }, {
+      "Plan latency", "nav_path.planning_latency_ms"
+    }
+  });
+  add("navigation", QStringLiteral("4.6"), QStringLiteral("4.6 Pengujian dan Tuning Smac Hybrid-A* Planner"), "4.6.1",
+  QStringLiteral("4.6.1 Pengujian minimum_turning_radius"),
+  {
+    "Pengaruh minimum_turning_radius"
+  },
+  {
+    {
+      "Rmin", "Planning time", "Path length", "Tracking RMSE", "Steering saturasi", "Status"
+    }
+  },
+  {
+    {
+      "Gyro Z", "imu.gz"
+    }, {
+      "Yaw", "imu.yaw_rad"
+    }, {
+      "Yaw residual", "imu_status.yaw_residual"
+    }
+  });
+  add("navigation", QStringLiteral("4.6"), QStringLiteral("4.6 Pengujian dan Tuning Smac Hybrid-A* Planner"), "4.6.2",
+  QStringLiteral("4.6.2 Pengujian downsampling_factor"),
+  {
+    "Trade-off downsampling dan tracking"
+  },
+  {
+    {
+      "Downsampling", "Planning time", "Min clearance", "Tracking RMSE", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.6"), QStringLiteral("4.6 Pengujian dan Tuning Smac Hybrid-A* Planner"), "4.6.3",
+  QStringLiteral("4.6.3 Pengujian angle_quantization_bins"),
+  {
+    "Pengaruh angle_quantization_bins"
+  },
+  {
+    {
+      "Bins", "Resolusi heading", "Planning time", "Tracking RMSE", "Variasi steering", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.6"), QStringLiteral("4.6 Pengujian dan Tuning Smac Hybrid-A* Planner"), "4.6.4",
+  QStringLiteral("4.6.4 Pengujian cost_penalty"),
+  {
+    "Pengaruh cost_penalty terhadap clearance dan panjang path"
+  },
+  {
+    {
+      "cost penalty", "Min clearance", "Path length", "Planning time", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.6"), QStringLiteral("4.6 Pengujian dan Tuning Smac Hybrid-A* Planner"), "4.6.5",
+  QStringLiteral("4.6.5 Pengujian analytic_expansion_max_length"),
+  {
+    "Pengaruh analytic_expansion_max_length"
+  },
+  {
+    {
+      "Max length", "Planning time", "Clearance dekat goal", "Final tracking RMSE", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.6"), QStringLiteral("4.6 Pengujian dan Tuning Smac Hybrid-A* Planner"), "4.6.6",
+  QStringLiteral("4.6.6 Pengujian non_straight_penalty"),
+  {
+    "Pengaruh non_straight_penalty"
+  },
+  {
+    {
+      "Penalty", "Perubahan arah steering", "Path length", "Tracking RMSE", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.6"), QStringLiteral("4.6 Pengujian dan Tuning Smac Hybrid-A* Planner"), "4.6.7",
+  QStringLiteral("4.6.7 Validasi Konfigurasi Akhir Smac Hybrid-A*"),
+  {
+    "Perbandingan bentuk path baseline dan hasil tuning"
+  },
+  {
+    {
+      "Parameter", "Baseline source", "Hasil tuning aktual", "Perubahan utama"
+    },
+    {
+      "Metrik skenario gabungan", "Baseline", "Hasil tuning aktual", "Perubahan"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Heading error", "derived.path_heading_error_rad"
+    },
+    {
+      "Path length", "nav_path.length_m"
+    }, {
+      "Plan latency", "nav_path.planning_latency_ms"
+    }
+  });
+  add("navigation", QStringLiteral("4.7"), QStringLiteral("4.7 Pengujian dan Tuning MPPI Ackermann Controller"), "4.7.1",
+  QStringLiteral("4.7.1 Pengujian controller_frequency dan model_dt"),
+  {
+    "Pengaruh controller_frequency terhadap tracking dan CPU"
+  },
+  {
+    {
+      "Pasangan", "Tracking RMSE", "Latency", "CPU", "Miss cycle", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.7"), QStringLiteral("4.7 Pengujian dan Tuning MPPI Ackermann Controller"), "4.7.2",
+  QStringLiteral("4.7.2 Pengujian time_steps atau Prediction Horizon"),
+  {
+    "Pengaruh prediction horizon MPPI"
+  },
+  {
+    {
+      "time_steps", "CTE RMSE", "Max CTE", "Compute time", "Std steering", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.7"), QStringLiteral("4.7 Pengujian dan Tuning MPPI Ackermann Controller"), "4.7.3",
+  QStringLiteral("4.7.3 Pengujian PathAlignCritic cost_weight"),
+  {
+    "Pengaruh PathAlignCritic terhadap tracking"
+  },
+  {
+    {
+      "Weight", "CTE RMSE", "Heading RMSE", "Std steering", "Time-to-goal", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.7"), QStringLiteral("4.7 Pengujian dan Tuning MPPI Ackermann Controller"), "4.7.4",
+  QStringLiteral("4.7.4 Pengujian PathFollowCritic cost_weight"),
+  {
+    "Pengaruh PathFollowCritic terhadap cross-track error"
+  },
+  {
+    {
+      "Weight", "CTE RMSE", "Max CTE", "Recovery time", "Std steering", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.7"), QStringLiteral("4.7 Pengujian dan Tuning MPPI Ackermann Controller"), "4.7.5",
+  QStringLiteral("4.7.5 Pengujian PathAngleCritic cost_weight"),
+  {
+    "Pengaruh PathAngleCritic terhadap heading error"
+  },
+  {
+    {
+      "Weight", "CTE RMSE", "Heading RMSE", "Std steering", "Time-to-goal", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.7"), QStringLiteral("4.7 Pengujian dan Tuning MPPI Ackermann Controller"), "4.7.6",
+  QStringLiteral("4.7.6 Pengujian vx_max"),
+  {
+    "Trade-off vx_max terhadap waktu tempuh dan CTE"
+  },
+  {
+    {
+      "vx_max", "CTE RMSE", "Max CTE", "Waktu tempuh", "Steering saturasi", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.7"), QStringLiteral("4.7 Pengujian dan Tuning MPPI Ackermann Controller"), "4.7.7",
+  QStringLiteral("4.7.7 Konsistensi minimum_turning_r MPPI dengan Planner"),
+  {
+    "Validasi minimum_turning_radius MPPI"
+  },
+  {
+    {
+      "Rmin MPPI", "CTE RMSE", "Saturasi steering", "Radius aktual minimum", "Status"
+    }
+  },
+  {
+    {
+      "Gyro Z", "imu.gz"
+    }, {
+      "Yaw", "imu.yaw_rad"
+    }, {
+      "Yaw residual", "imu_status.yaw_residual"
+    }
+  });
+  add("navigation", QStringLiteral("4.7"), QStringLiteral("4.7 Pengujian dan Tuning MPPI Ackermann Controller"), "4.7.8",
+  QStringLiteral("4.7.8 Validasi Konfigurasi Akhir MPPI"),
+  {
+    "Ringkasan konfigurasi akhir MPPI"
+  },
+  {
+    {
+      "Konfigurasi", "CTE RMSE", "Max CTE", "Heading RMSE", "Waktu", "Steering saturasi"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "v error", "derived.velocity_error_mps"
+    },
+    {
+      "steer error", "derived.steering_error_rad"
+    }, {
+      "yaw error", "derived.yaw_error_rps"
+    }
+  });
+  add("navigation", QStringLiteral("4.8"), QStringLiteral("4.8 Pengujian dan Tuning Pipeline Command dan Velocity Smoother"), "4.8.1",
+  QStringLiteral("4.8.1 Pengujian Kecepatan Minimum Stabil Kendaraan"),
+  {
+    "Penentuan kecepatan minimum stabil"
+  },
+  {
+    {
+      "Command", "Actual speed", "Kontinu", "Gejala", "Status"
+    }
+  },
+  {
+    {
+      "Gyro Z", "imu.gz"
+    }, {
+      "Yaw", "imu.yaw_rad"
+    }, {
+      "Yaw residual", "imu_status.yaw_residual"
+    }
+  });
+  add("navigation", QStringLiteral("4.8"), QStringLiteral("4.8 Pengujian dan Tuning Pipeline Command dan Velocity Smoother"), "4.8.2",
+  QStringLiteral("4.8.2 Pengujian Harmonisasi Low-Speed Deadband"),
+  {
+    "Pengaruh low-speed deadband terhadap final approach"
+  },
+  {
+    {
+      "Threshold set", "Endpoint error", "Start-stop/run", "Command dipotong", "Time-to-goal", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.8"), QStringLiteral("4.8 Pengujian dan Tuning Pipeline Command dan Velocity Smoother"), "4.8.3",
+  QStringLiteral("4.8.3 Pengujian smoothing_frequency"),
+  {
+    "Pengaruh smoothing_frequency pada command"
+  },
+  {
+    {
+      "Frekuensi", "Mean Δ command", "Latency", "Speed oscillation", "CTE RMSE", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.8"), QStringLiteral("4.8 Pengujian dan Tuning Pipeline Command dan Velocity Smoother"), "4.8.4",
+  QStringLiteral("4.8.4 Pengujian max_accel dan max_decel"),
+  {
+    "Pengaruh acceleration/deceleration limit"
+  },
+  {
+    {
+      "Accel/Decel", "Overshoot speed", "Stop error", "Waktu", "Peak jerk", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.8"), QStringLiteral("4.8 Pengujian dan Tuning Pipeline Command dan Velocity Smoother"), "4.8.5",
+  QStringLiteral("4.8.5 Validasi Konfigurasi Akhir Pipeline Command"),
+  {
+    "Ringkasan konfigurasi akhir pipeline command"
+  },
+  {
+    {
+      "Parameter", "Baseline", "Hasil tuning"
+    }
+  },
+  {
+    {
+      "Nav v", "cmd_nav.linear_x"
+    }, {
+      "Integrated v", "cmd_autonomy_integrated.linear_x"
+    },
+    {
+      "Final v", "cmd_final.linear_x"
+    }, {
+      "Actual v", "esc_drive_actual"
+    }
+  });
+  add("navigation", QStringLiteral("4.9"), QStringLiteral("4.9 Pengujian Goal Checker dan Validasi Akurasi Navigasi"), "4.9.1",
+  QStringLiteral("4.9.1 Pengujian xy_goal_tolerance"),
+  {
+    "Hubungan xy_goal_tolerance dan error posisi akhir"
+  },
+  {
+    {
+      "Tolerance", "Nav2 success", "Endpoint RMSE", "Max error", "Time-to-goal", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.9"), QStringLiteral("4.9 Pengujian Goal Checker dan Validasi Akurasi Navigasi"), "4.9.2",
+  QStringLiteral("4.9.2 Pengujian yaw_goal_tolerance"),
+  {
+    "Pengaruh yaw_goal_tolerance"
+  },
+  {
+    {
+      "Yaw tolerance", "Success", "Mean yaw error", "Time-to-goal", "Retry/reversal", "Status"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.9"), QStringLiteral("4.9 Pengujian Goal Checker dan Validasi Akurasi Navigasi"), "4.9.3",
+  QStringLiteral("4.9.3 Validasi Navigasi End-to-End"),
+  {
+    "Sebaran posisi akhir pengujian berulang"
+  },
+  {
+    {
+      "Skenario", "CTE RMSE", "Heading RMSE", "Mean endpoint error", "Std endpoint", "Success"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.9"), QStringLiteral("4.9 Pengujian Goal Checker dan Validasi Akurasi Navigasi"), "4.9.4",
+  QStringLiteral("4.9.4 Rekapitulasi Parameter Navigasi Akhir"),
+  {
+    "Ringkasan parameter navigasi akhir"
+  },
+  {
+    {
+      "Lapisan", "Parameter", "Kandidat hasil tuning"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
+  add("navigation", QStringLiteral("4.10"), QStringLiteral("4.10 Ringkasan Hubungan Hasil Pengujian"), "4.10",
+  QStringLiteral("4.10 Ringkasan Hubungan Hasil Pengujian"),
+  {
+  },
+  {
+    {
+      "Lapisan", "Ringkasan hasil", "Keterkaitan"
+    }
+  },
+  {
+    {
+      "CTE", "derived.cte_m"
+    }, {
+      "Endpoint", "derived.endpoint_error_m"
+    }, {
+      "Heading", "derived.path_heading_error_rad"
+    }
+  });
   /* ------------------------- PERSEPSI ------------------------- */
   // FINAL BAB IV acquisition leaves.  The existing 4.1--4.11 perception
   // leaves below remain the detailed commissioning/tuning workspace.  These

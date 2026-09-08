@@ -23,10 +23,10 @@ def count_catalog(subsystem: str) -> int:
 
 
 checks = [
-    (count_catalog("navigation") >= 84, "navigation catalog must preserve at least 84 report leaves"),
+    (count_catalog("navigation") == 34, "navigation catalog must contain 34 reachable N0..N17 commissioning leaves"),
     (count_catalog("perception") == 35, "perception catalog must contain 35 report leaves"),
     (count_catalog("steering") == 22, "ESC/Ackermann catalog must contain 22 ordered report leaves"),
-    ('"4.9.1"' in CATALOG and '"4.9.4"' in CATALOG, "navigation section 4.9 must be covered"),
+    ('"N16.1"' in CATALOG and '"N17.1"' in CATALOG, "navigation end-to-end and final certified leaves must be covered"),
     (all(token in CATALOG for token in (
         'LEFT — Validasi Encoder ABI TIM4, Hard Stop, Center, dan Home',
         'RIGHT — Validasi Hall, Detect Hall, Arah, dan Pole Pair',
@@ -36,8 +36,8 @@ checks = [
      "ESC catalog must preserve LEFT encoder, RIGHT Hall, per-motor FOC, and Ackermann dependency order"),
     (all(token in CATALOG for token in ('"Raw TIM4"', '"RIGHT RPM"', '"RIGHT Duty"', '"Yaw rate Ackermann"', '"Yaw-rate error"')),
      "ESC report tables must preserve sensor-specific and Ackermann evidence columns"),
-    ("Gambar 4.24 Perbandingan error koreksi global baseline dan hasil tuning" in CATALOG,
-     "navigation figure-only section 4.4.6 must be exposed"),
+    ("N11.2 Smoother dan Final Global Path Quality" in CATALOG,
+     "navigation planner/path-quality evidence leaf must be exposed"),
     ("Gambar 4.1 Diagram alir pipeline sistem persepsi visual" in CATALOG,
      "perception pipeline figure must be exposed"),
     ('"experiment_navigation"' in SPECS and '"experiment_perception"' in SPECS

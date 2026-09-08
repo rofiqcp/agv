@@ -251,7 +251,7 @@
   ],
   "raw_csv": "/home/otomasi/ros/calibration/heading_8dir_raw_20260908_212631.csv",
   "segments_csv": "/home/otomasi/ros/calibration/heading_8dir_segments_20260908_212631.csv",
-  "updated_at": "2026-09-08T21:30:15.884895",
+  "updated_at": "2026-09-08T23:07:08.881897",
   "thresholds": {
     "static_hold_sec": 1.2,
     "gyro_enter_rps": 0.025,
