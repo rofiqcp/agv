@@ -78,6 +78,9 @@ ImuNode::ImuNode(const rclcpp::NodeOptions & options)
     this->declare_parameter<double>("data_timeout_sec", 6.0));
   configure_output_on_connect_ = this->declare_parameter<bool>("configure_output_on_connect", true);
   persist_output_config_ = this->declare_parameter<bool>("persist_output_config", false);
+  configure_algorithm_on_connect_ = this->declare_parameter<bool>("configure_algorithm_on_connect", true);
+  algorithm_mode_ = static_cast<int>(std::clamp<int64_t>(
+    this->declare_parameter<int64_t>("algorithm_mode", 1), 0, 1));
   output_content_mask_ = static_cast<int>(std::clamp<int64_t>(
     this->declare_parameter<int64_t>("output_content_mask", 0x000E), 0, 0x07FF));
   // ACC/GYRO/ANGLE cukup untuk EKF; bandwidth 921600 memberi margin besar untuk rate tinggi.
@@ -114,7 +117,11 @@ ImuNode::ImuNode(const rclcpp::NodeOptions & options)
   pitch_offset_rad_ = this->declare_parameter<double>("pitch_offset_rad", 0.0);
   yaw_offset_rad_ = this->declare_parameter<double>("yaw_offset_rad", 0.0);
   magnetic_declination_rad_ = this->declare_parameter<double>("magnetic_declination_radians", 0.0);
-  mag_scale_tesla_per_lsb_ = this->declare_parameter<double>("mag_scale_tesla_per_lsb", 1e-7);
+  vector_x_sign_ = this->declare_parameter<double>("vector_x_sign", -1.0) < 0.0 ? -1.0 : 1.0;
+  vector_y_sign_ = this->declare_parameter<double>("vector_y_sign", -1.0) < 0.0 ? -1.0 : 1.0;
+  vector_z_sign_ = this->declare_parameter<double>("vector_z_sign", 1.0) < 0.0 ? -1.0 : 1.0;
+  publish_mag_tesla_ = this->declare_parameter<bool>("publish_mag_tesla", false);
+  mag_scale_tesla_per_lsb_ = this->declare_parameter<double>("mag_scale_tesla_per_lsb", 0.0);
   use_magnetic_yaw_ = this->declare_parameter<bool>("use_magnetic_yaw", false);
   const double configured_mag_yaw_sign = this->declare_parameter<double>("mag_yaw_sign", -1.0);
   mag_yaw_sign_ = configured_mag_yaw_sign < 0.0 ? -1.0 : 1.0;
@@ -169,15 +176,19 @@ ImuNode::ImuNode(const rclcpp::NodeOptions & options)
       !valid_variance(linear_acceleration_covariance_)) {
     throw std::invalid_argument("IMU covariance diagonal must be finite and strictly positive");
   }
-  if (!std::isfinite(mag_scale_tesla_per_lsb_) || mag_scale_tesla_per_lsb_ <= 0.0) {
-    throw std::invalid_argument("mag_scale_tesla_per_lsb must be finite and positive");
+  if (!std::isfinite(mag_scale_tesla_per_lsb_) || mag_scale_tesla_per_lsb_ < 0.0) {
+    throw std::invalid_argument("mag_scale_tesla_per_lsb must be finite and non-negative");
+  }
+  if (publish_mag_tesla_ && mag_scale_tesla_per_lsb_ <= 0.0) {
+    throw std::invalid_argument("publish_mag_tesla=true requires a calibrated positive mag_scale_tesla_per_lsb");
   }
   RCLCPP_INFO(
     this->get_logger(),
     "IMU yaw conversion: source=%s angle=normalize(%+.0f*yaw_raw + %.6f) "
-    "mag=normalize(%+.0f*atan2(My,Mx) + %.6f) declination=%.6f; gyro_z_ros=%+.0f*gyro_z_raw",
+    "mag=normalize(%+.0f*atan2(My,Mx) + %.6f) declination=%.6f; gyro_z_ros=%+.0f*gyro_z_raw; vector_sign=[%+.0f,%+.0f,%+.0f]",
     use_magnetic_yaw_ ? "MAG_FILTERED" : "ANGLE", yaw_sign_, yaw_offset_rad_,
-    mag_yaw_sign_, mag_yaw_offset_rad_, magnetic_declination_rad_, yaw_sign_);
+    mag_yaw_sign_, mag_yaw_offset_rad_, magnetic_declination_rad_, vector_z_sign_,
+    vector_x_sign_, vector_y_sign_, vector_z_sign_);
   auto_detect_ = (port_ == "auto");
 
   // USB-UART pada sensor 10 Hz tidak memerlukan timeout 2 ms. Margin 20 ms
@@ -189,6 +200,7 @@ ImuNode::ImuNode(const rclcpp::NodeOptions & options)
 
   pub_imu_ = this->create_publisher<sensor_msgs::msg::Imu>("imu/data", qos);
   pub_mag_ = this->create_publisher<sensor_msgs::msg::MagneticField>("imu/mag", qos);
+  pub_mag_raw_lsb_ = this->create_publisher<std_msgs::msg::Float64MultiArray>("imu/mag_raw_lsb", qos);
   pub_connected_ = this->create_publisher<std_msgs::msg::Bool>(
     "/imu/connected", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
   if (publish_raw_) {
@@ -330,14 +342,18 @@ bool ImuNode::configureSensorOutput(bool persistent)
   if (!writeSensorRegister(0x02, static_cast<uint16_t>(output_content_mask_))) return false;
   std::this_thread::sleep_for(std::chrono::milliseconds(80));
   if (!writeSensorRegister(0x03, static_cast<uint16_t>(output_rate_code_))) return false;
+  if (configure_algorithm_on_connect_) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(80));
+    if (!writeSensorRegister(0x24, static_cast<uint16_t>(algorithm_mode_))) return false;
+  }
   if (persistent) {
     std::this_thread::sleep_for(std::chrono::milliseconds(80));
     if (!writeSensorRegister(0x00, 0x0000)) return false;  // SAVE
   }
   RCLCPP_INFO(
     this->get_logger(),
-    "IMU stream config applied: RSW=0x%04X RRATE=0x%02X persistent=%s",
-    output_content_mask_, output_rate_code_, persistent ? "yes" : "no");
+    "IMU stream config applied: RSW=0x%04X RRATE=0x%02X AXIS6=%d persistent=%s",
+    output_content_mask_, output_rate_code_, algorithm_mode_, persistent ? "yes" : "no");
   return true;
 }
 
@@ -568,9 +584,9 @@ bool ImuNode::publishImu()
   // Bila paket gyro/accel belum pernah diterima, tandai field tersebut sebagai
   // tidak tersedia sesuai kontrak sensor_msgs/Imu, bukan memublikasikan nol palsu.
   if (gyro_fresh) {
-    msg.angular_velocity.x = (invert_roll_ ? -1.0 : 1.0) * gx_ * M_PI / 180.0 - gyro_bias_[0];
-    msg.angular_velocity.y = (invert_pitch_ ? -1.0 : 1.0) * gy_ * M_PI / 180.0 - gyro_bias_[1];
-    msg.angular_velocity.z = yaw_sign_ * gz_ * M_PI / 180.0 - gyro_bias_[2];
+    msg.angular_velocity.x = vector_x_sign_ * gx_ * M_PI / 180.0 - gyro_bias_[0];
+    msg.angular_velocity.y = vector_y_sign_ * gy_ * M_PI / 180.0 - gyro_bias_[1];
+    msg.angular_velocity.z = vector_z_sign_ * gz_ * M_PI / 180.0 - gyro_bias_[2];
     msg.angular_velocity_covariance[0] = angular_velocity_covariance_[0];
     msg.angular_velocity_covariance[4] = angular_velocity_covariance_[1];
     msg.angular_velocity_covariance[8] = angular_velocity_covariance_[2];
@@ -582,11 +598,9 @@ bool ImuNode::publishImu()
     // Koreksi mounting planar 180 derajat harus konsisten untuk seluruh vektor.
     // Jika roll/pitch dibalik, sumbu body X/Y sensor juga berlawanan terhadap
     // base_footprint. Z tidak berubah untuk rotasi murni 180 derajat terhadap Z.
-    const double accel_x_sign = invert_roll_ ? -1.0 : 1.0;
-    const double accel_y_sign = invert_pitch_ ? -1.0 : 1.0;
-    msg.linear_acceleration.x = accel_x_sign * ax_ - accel_bias_[0];
-    msg.linear_acceleration.y = accel_y_sign * ay_ - accel_bias_[1];
-    msg.linear_acceleration.z = az_ - accel_bias_[2];
+    msg.linear_acceleration.x = vector_x_sign_ * ax_ - accel_bias_[0];
+    msg.linear_acceleration.y = vector_y_sign_ * ay_ - accel_bias_[1];
+    msg.linear_acceleration.z = vector_z_sign_ * az_ - accel_bias_[2];
     msg.linear_acceleration_covariance[0] = linear_acceleration_covariance_[0];
     msg.linear_acceleration_covariance[4] = linear_acceleration_covariance_[1];
     msg.linear_acceleration_covariance[8] = linear_acceleration_covariance_[2];
@@ -598,16 +612,29 @@ bool ImuNode::publishImu()
   return true;
 }
 
-// Fungsi: Menerbitkan magnetometer dalam satuan Tesla beserta covariance sensor.
+// Fungsi: Menerbitkan raw magnetometer Yahboom dalam LSB resmi protokol, tetapi
+// sudah diputar ke frame body REP-103 yang sama dengan accel/gyro. Ini adalah
+// jalur kalibrasi yang benar karena dokumen Yahboom tidak menetapkan LSB->Tesla.
+void ImuNode::publishMagRawLsb()
+{
+  if (!pub_mag_raw_lsb_) return;
+  std_msgs::msg::Float64MultiArray msg;
+  msg.data = {vector_x_sign_ * mx_, vector_y_sign_ * my_, vector_z_sign_ * mz_};
+  pub_mag_raw_lsb_->publish(msg);
+}
+
+// Fungsi: Menerbitkan sensor_msgs/MagneticField hanya jika skala Tesla/LSB sudah
+// benar-benar dikalibrasi. Jangan pernah mengarang unit fisik dari raw LSB.
 void ImuNode::publishMag()
 {
+  publishMagRawLsb();
+  if (!publish_mag_tesla_) return;
   sensor_msgs::msg::MagneticField msg;
   msg.header.stamp = this->now();
   msg.header.frame_id = frame_id_;
-  // sensor_msgs/MagneticField menggunakan Tesla. Skala default 1 mG/LSB.
-  msg.magnetic_field.x = mx_ * mag_scale_tesla_per_lsb_;
-  msg.magnetic_field.y = my_ * mag_scale_tesla_per_lsb_;
-  msg.magnetic_field.z = mz_ * mag_scale_tesla_per_lsb_;
+  msg.magnetic_field.x = vector_x_sign_ * mx_ * mag_scale_tesla_per_lsb_;
+  msg.magnetic_field.y = vector_y_sign_ * my_ * mag_scale_tesla_per_lsb_;
+  msg.magnetic_field.z = vector_z_sign_ * mz_ * mag_scale_tesla_per_lsb_;
   pub_mag_->publish(msg);
 }
 

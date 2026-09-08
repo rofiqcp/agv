@@ -20,7 +20,7 @@ mag_heading_fusion:
     neo3_heading_variance_rad2: 0.02
     max_heading_rate_rps: 3.0
     rate_gate_margin_rad: 0.35
-    enable_imu_mag_heading: true
+    enable_imu_mag_heading: false
     enable_neo3_mag_heading: true
     imu_inertial_heading_topic: /imu/inertial_heading
     validated_heading_topic: /heading/validated_fusion

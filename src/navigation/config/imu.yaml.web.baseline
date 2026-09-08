@@ -14,6 +14,8 @@ data_imu_node:
     debug: false
     configure_output_on_connect: true
     persist_output_config: false
+    configure_algorithm_on_connect: true
+    algorithm_mode: 1
     output_content_mask: 30
     output_rate_code: 8
     orientation_packet_timeout_sec: 8.0
@@ -27,11 +29,14 @@ data_imu_node:
     invert_roll: true
     invert_pitch: true
     invert_yaw: false
-    yaw_sign: -1.0
+    yaw_sign: 1.0
     roll_offset_rad: 0.0
     pitch_offset_rad: 0.0
-    yaw_offset_rad: 0.2051809117
+    yaw_offset_rad: 0.0
     magnetic_declination_radians: 0.0
+    vector_x_sign: -1.0
+    vector_y_sign: -1.0
+    vector_z_sign: 1.0
     accel_bias:
     - 0.0
     - 0.0
@@ -62,7 +67,8 @@ data_imu_node:
     - 0.25
     - 0.25
     - 0.36
-    mag_scale_tesla_per_lsb: 1.0e-07
+    publish_mag_tesla: false
+    mag_scale_tesla_per_lsb: 0.0
     use_magnetic_yaw: true
     mag_yaw_sign: -1.0
     mag_yaw_offset_rad: 1.5451826276

@@ -7,6 +7,8 @@ ROOT = Path(__file__).resolve().parents[1]
 launch = (ROOT / "launch/autonomous.launch.py").read_text(encoding="utf-8")
 ekf = yaml.safe_load((ROOT / "config/ekf.yaml").read_text(encoding="utf-8"))
 mag = yaml.safe_load((ROOT / "config/mag_heading.yaml").read_text(encoding="utf-8"))
+imu = yaml.safe_load((ROOT / "config/imu.yaml").read_text(encoding="utf-8"))
+imu_src = (ROOT / "src/imu_node.cpp").read_text(encoding="utf-8")
 
 def req(ok, msg):
     if not ok:
@@ -21,6 +23,16 @@ mp = mag['mag_heading_fusion']['ros__parameters']
 req(mp['neo3_mag_topic'] == '/neo3/mag', 'NEO3 magnetometer topic mismatch')
 req(mp['imu_mag_topic'] == '/imu/mag', 'IMU magnetometer topic mismatch')
 req(mp['map_yaw_topic'] == '/localization/map_yaw_from_enu', 'map yaw dependency mismatch')
+req(mp.get('enable_imu_mag_heading') is False, 'Yahboom MAG must stay out of heading fusion until physical calibration is valid')
+ip = imu['data_imu_node']['ros__parameters']
+req(ip.get('baudrate') == 921600 and ip.get('auto_baud') is True, 'Yahboom serial must prefer/probe 921600 baud')
+req(ip.get('publish_rate_hz') == 50 and ip.get('output_rate_code') == 8, 'Yahboom hardware/ROS rate must be 50 Hz')
+req(ip.get('output_content_mask') == 30, 'Yahboom stream must contain ACC+GYRO+ANGLE+MAG')
+req(ip.get('configure_algorithm_on_connect') is True and ip.get('algorithm_mode') == 1, 'Yahboom must run 6-axis relative-yaw mode while MAG is calibrated externally')
+req(ip.get('vector_x_sign') == -1.0 and ip.get('vector_y_sign') == -1.0 and ip.get('vector_z_sign') == 1.0, 'Yahboom vectors must apply Rz(pi): [-X,-Y,+Z] into REP-103 body frame')
+req(ip.get('yaw_sign') == 1.0, 'Yahboom gyro/yaw sign must follow REP-103: +Z is CCW')
+req(ip.get('publish_mag_tesla') is False and float(ip.get('mag_scale_tesla_per_lsb', -1.0)) == 0.0, 'Do not publish fabricated Tesla units for Yahboom raw LSB')
+req('imu/mag_raw_lsb' in imu_src and 'vector_z_sign_ * gz_' in imu_src, 'Yahboom raw MAG/body-frame and gyro-Z contract missing in driver')
 req(mp.get('neo3_mag_yaw_sign') == 1.0, '8-direction calibration requires corrected NEO3 yaw sign')
 req(mp.get('neo3_planar_calibration_enabled') is True, 'NEO3 planar calibration must be enabled')
 req(len(mp.get('neo3_mag_bias_xy_ut', [])) == 2, 'NEO3 XY bias calibration missing')

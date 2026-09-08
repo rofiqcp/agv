@@ -85,3 +85,18 @@ Runtime final: inertial `170.087 deg`, NEO3 `170.022 deg`, validated `169.977 de
 Yahboom magnetometer tetap diagnostic-only/rejected karena norm medan masih ratusan hingga >1000 uT, jauh di luar Earth-field gate 15–100 uT.
 
 Parameter runtime berada di `src/navigation/config/mag_heading.yaml`; bukti dan metadata lengkap berada di `src/navigation/config/heading_8dir_calibration.yaml`.
+
+## Koreksi frame/unit Yahboom sebelum kalibrasi CW (21:xx WIB)
+
+- Audit protokol resmi memastikan ACC = raw/32768*16g dan GYRO = raw/32768*2000 deg/s; rumus parser sudah benar.
+- Magnetometer HX/HY/HZ resmi hanya didefinisikan sebagai raw LSB. Asumsi lama 1 LSB = 0.1 uT dihapus dari runtime.
+- Mounting planar 180 derajat dikonversi konsisten sebagai Rz(pi): vector body = [-Xsensor, -Ysensor, +Zsensor].
+- Karena itu accel, gyro, dan raw magnetometer sekarang memakai transformasi vektor yang sama ke REP-103 body frame.
+- Gyro Z tidak lagi dibalik: +Z adalah CCW dan CW harus menghasilkan gyro_z negatif, sesuai REP-103.
+- `/imu/mag_raw_lsb` menjadi sumber kalibrasi Yahboom; `/imu/mag` Tesla fail-closed/nonaktif sampai skala Tesla/LSB benar-benar terkalibrasi.
+- AHRS internal Yahboom diset runtime `AXIS6=1` (6-axis relative yaw) agar magnetometer yang belum dikalibrasi tidak menarik yaw internal.
+- IST8310 tetap absolute magnetic-heading owner sampai kalibrasi Yahboom lulus.
+- Register hardware terverifikasi: BAUD=0x09 (921600), RRATE=0x08 (50 Hz), RSW=0x001E, GYRORANGE=0x03, ACCRANGE=0x03, ORIENT=0, FILTK=30.
+- Runtime setelah patch: `/imu/data` 49.41 Hz; accel norm 9.803 m/s2; gyro diam mean ~0 rad/s; raw Yahboom body-frame hidup.
+- GNSS bridge mengubah course NED ke ENU dengan `pi/2-course_ned`, velocity `[East,North,Up]`; sehingga yaw navigation dan gyro memakai tanda +CCW yang sama.
+- Safety tetap fail-closed; perubahan ini tidak mengaktifkan autonomous motion.

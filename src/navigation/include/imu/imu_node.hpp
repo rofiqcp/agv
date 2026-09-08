@@ -7,6 +7,7 @@
 #include <sensor_msgs/msg/magnetic_field.hpp>
 #include <std_msgs/msg/byte_multi_array.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/float64_multi_array.hpp>
 #include <serial/serial.h>
 
 #include <memory>
@@ -26,6 +27,7 @@ private:
   void pollSerial();
   bool publishImu();
   void publishMag();
+  void publishMagRawLsb();
   void publishRaw(const std::vector<uint8_t> & packet);
   bool parsePacket(const std::vector<uint8_t> & packet);
   bool configureSensorOutput(bool persistent = false);
@@ -54,6 +56,8 @@ private:
   // output/rate; tidak mengubah kalibrasi, axis, atau baud sensor.
   bool configure_output_on_connect_ = true;
   bool persist_output_config_ = false;
+  bool configure_algorithm_on_connect_ = true;
+  int algorithm_mode_ = 1;  // 1=6-axis: yaw relatif; mag diproses terpisah oleh ROS
   int output_content_mask_ = 0x001E;  // ACC + GYRO + ANGLE + MAG
   int output_rate_code_ = 0x06;       // 10 Hz: ~46% UART load at 9600 baud
   double orientation_packet_timeout_sec_ = 2.0;
@@ -76,11 +80,17 @@ private:
   bool invert_pitch_ = false;
   bool invert_yaw_ = false;
   double yaw_sign_ = 1.0;
+  // Transformasi vektor sensor -> REP-103 base-aligned frame. Untuk mounting
+  // 180 deg terhadap Z: X=-Xsensor, Y=-Ysensor, Z=+Zsensor.
+  double vector_x_sign_ = -1.0;
+  double vector_y_sign_ = -1.0;
+  double vector_z_sign_ = 1.0;
   double roll_offset_rad_ = 0.0;
   double pitch_offset_rad_ = 0.0;
   double yaw_offset_rad_ = 0.0;
   double magnetic_declination_rad_ = 0.0;
-  double mag_scale_tesla_per_lsb_ = 1e-7;
+  double mag_scale_tesla_per_lsb_ = 0.0;
+  bool publish_mag_tesla_ = false;
   // Absolute yaw may use the onboard magnetometer instead of WIT ANGLE yaw.
   // ANGLE yaw was observed to jump while stationary; MAG is used only after a
   // field north-reference calibration and is filtered/bounded before EKF fusion.
@@ -146,6 +156,7 @@ private:
   // ROS
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr pub_imu_;
   rclcpp::Publisher<sensor_msgs::msg::MagneticField>::SharedPtr pub_mag_;
+  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_mag_raw_lsb_;
   rclcpp::Publisher<std_msgs::msg::ByteMultiArray>::SharedPtr pub_raw_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr pub_connected_;
   rclcpp::TimerBase::SharedPtr timer_;
