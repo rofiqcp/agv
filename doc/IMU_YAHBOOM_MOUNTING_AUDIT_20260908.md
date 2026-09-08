@@ -100,3 +100,11 @@ Parameter runtime berada di `src/navigation/config/mag_heading.yaml`; bukti dan 
 - Runtime setelah patch: `/imu/data` 49.41 Hz; accel norm 9.803 m/s2; gyro diam mean ~0 rad/s; raw Yahboom body-frame hidup.
 - GNSS bridge mengubah course NED ke ENU dengan `pi/2-course_ned`, velocity `[East,North,Up]`; sehingga yaw navigation dan gyro memakai tanda +CCW yang sama.
 - Safety tetap fail-closed; perubahan ini tidak mengaktifkan autonomous motion.
+
+## Run CW ulang + auto-fit magnetometer Yahboom
+
+- Logger CW direstart fresh dan kini merekam `/localization/map_yaw_from_enu` agar referensi IST8310 dapat dikonversi kembali ke heading ENU sebelum fitting Yahboom.
+- Ringkasan per posisi menyimpan mean Hx/Hy/Hz raw LSB Yahboom, bukan hanya norm.
+- Setelah STATIC_8, logger otomatis menjalankan `tools/yahboom_mag_planar_fit.py`.
+- Auto-fit menghitung bias XY, whitening/soft-iron 2D, yaw sign, ENU yaw offset, dan 8-knot residual LUT; hasil ditulis ke `calibration/yahboom_mag_planar_latest.yaml`.
+- Kandidat hanya valid bila 8 segmen lengkap, 7 transisi CW lulus, >=200 sampel statis, RMS <3 deg dan max error <5 deg. Runtime tidak diaktifkan otomatis sebelum hasil diaudit.
