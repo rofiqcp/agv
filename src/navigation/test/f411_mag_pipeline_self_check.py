@@ -21,6 +21,16 @@ mp = mag['mag_heading_fusion']['ros__parameters']
 req(mp['neo3_mag_topic'] == '/neo3/mag', 'NEO3 magnetometer topic mismatch')
 req(mp['imu_mag_topic'] == '/imu/mag', 'IMU magnetometer topic mismatch')
 req(mp['map_yaw_topic'] == '/localization/map_yaw_from_enu', 'map yaw dependency mismatch')
+req(mp.get('neo3_mag_yaw_sign') == 1.0, '8-direction calibration requires corrected NEO3 yaw sign')
+req(mp.get('neo3_planar_calibration_enabled') is True, 'NEO3 planar calibration must be enabled')
+req(len(mp.get('neo3_mag_bias_xy_ut', [])) == 2, 'NEO3 XY bias calibration missing')
+req(len(mp.get('neo3_mag_matrix_xy', [])) == 4, 'NEO3 XY calibration matrix missing')
+req(mp.get('neo3_heading_lut_enabled') is True, 'NEO3 8-direction heading LUT must be enabled')
+req(len(mp.get('neo3_heading_lut_input_rad', [])) == 8, 'NEO3 heading LUT must contain 8 knots')
+req(len(mp.get('neo3_heading_lut_correction_rad', [])) == 8, 'NEO3 correction LUT must contain 8 values')
+cal = yaml.safe_load((ROOT / 'config/heading_8dir_calibration.yaml').read_text(encoding='utf-8'))['heading_8dir_calibration']
+req(cal.get('valid') is True and cal.get('validation', {}).get('pass') is True, '8-direction calibration evidence must be valid')
+req(float(cal['validation']['static_heading_max_abs_error_deg']) < 5.0, '8-direction replay must remain inside consensus gate')
 g = ekf['ekf_filter_node_map']['ros__parameters']
 req(g['pose1'] == '/heading/validated_fusion', 'global EKF validated heading input mismatch')
 req('pose2' not in g, 'global EKF must not fuse raw second magnetic heading directly')

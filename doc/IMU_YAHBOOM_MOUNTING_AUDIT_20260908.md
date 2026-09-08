@@ -68,3 +68,20 @@
 - LocalizationCore kini menerima `/heading/validated_fusion`; saat startup stationary melakukan one-time map->odom heading alignment, lalu koreksi berikutnya bounded.
 - Verifikasi akhir: map->odom 156.266 deg, map->base_footprint 156.267 deg, global EKF 156.373 deg, validated heading ~156.47 deg.
 - `/system/autonomy_motion_allowed=false`; perubahan heading/TF tidak membuka actuation.
+
+## Kalibrasi heading 8 arah — 2026-09-08 20:42 WIB
+
+Dataset: `calibration/heading_8dir_raw_20260908_202227.csv` dan `calibration/heading_8dir_segments_20260908_202227.csv`.
+Delapan segmen statis berhasil dipisahkan otomatis dari periode transisi; total replay valid 357 sampel statis.
+
+Temuan utama: konfigurasi lama NEO3 memakai sign yaw terbalik. Yahboom gyro/inertial bergerak menurun saat rotasi, sedangkan NEO3 lama bergerak menaik. Sign NEO3 dikoreksi menjadi `+1.0`.
+
+Kalibrasi NEO3 yang diterapkan: planar XY hard/soft-iron + 8-knot circular heading-deviation LUT. Bias XY = `[7.647139, -1.691540] uT`; matrix XY = `[[0.947118, 0.336764],[-0.254316,0.965409]]`. Kalibrasi Z tidak diestimasi karena dataset hanya rotasi horizontal.
+
+Offline replay melalui algoritma runtime lengkap (planar correction + tilt compensation + LUT): RMS error heading `0.3109 deg`, worst-case `1.3276 deg`, jauh di bawah consensus gate `5 deg`.
+
+Runtime final: inertial `170.087 deg`, NEO3 `170.022 deg`, validated `169.977 deg`, global EKF `170.161 deg`, TF map->base `169.981 deg`. `autonomy_motion_allowed=false` tetap fail-closed.
+
+Yahboom magnetometer tetap diagnostic-only/rejected karena norm medan masih ratusan hingga >1000 uT, jauh di luar Earth-field gate 15–100 uT.
+
+Parameter runtime berada di `src/navigation/config/mag_heading.yaml`; bukti dan metadata lengkap berada di `src/navigation/config/heading_8dir_calibration.yaml`.
