@@ -84,17 +84,19 @@ need(local.get("odom0") == "/esc/odom" and enabled(local.get("odom0_config")) ==
      "local EKF must fuse ESC vx only; kinematic yaw-rate is diagnostic")
 need(local.get("twist0") == "/gnss/base_velocity_fusion" and enabled(local.get("twist0_config")) == {6},
      "local EKF must fuse independent GNSS vx")
-need(local.get("imu0") == "/imu/data" and enabled(local.get("imu0_config")) == {5, 11} and local.get("imu0_relative") is True,
-     "local EKF must fuse relative IMU yaw+gyro-Z")
+need(local.get("imu0") == "/imu/data" and enabled(local.get("imu0_config")) == {11} and local.get("imu0_relative") is True,
+     "local EKF must fuse IMU gyro-Z only")
 need(global_.get("odom0") == "/odometry/gnss_map" and enabled(global_.get("odom0_config")) == {0, 1},
      "global EKF must fuse GNSS map x/y")
 need(global_.get("twist0") == "/gnss/base_velocity_fusion" and enabled(global_.get("twist0_config")) == {6},
      "global EKF must fuse GNSS vx")
-for key, topic in (("pose0", "/gnss/cog_heading_fusion"), ("pose1", "/neo3/mag_heading_fusion"), ("pose2", "/imu/mag_heading_fusion")):
-    need(global_.get(key) == topic and enabled(global_.get(key + "_config")) == {5},
-         f"global EKF absolute heading source invalid: {key}")
-need(global_.get("imu0") == "/imu/data" and enabled(global_.get("imu0_config")) == {5, 11} and global_.get("imu0_relative") is True,
-     "global EKF must fuse relative IMU yaw+gyro-Z")
+need(global_.get("pose0") == "/gnss/cog_heading_fusion" and enabled(global_.get("pose0_config")) == {5},
+     "global EKF COG heading source invalid")
+need(global_.get("pose1") == "/heading/validated_fusion" and enabled(global_.get("pose1_config")) == {5},
+     "global EKF validated heading source invalid")
+need("pose2" not in global_, "global EKF must not fuse raw second magnetic heading directly")
+need(global_.get("imu0") == "/imu/data" and enabled(global_.get("imu0_config")) == {11} and global_.get("imu0_relative") is True,
+     "global EKF must fuse IMU gyro-Z only")
 
 esc = params(ESC / "config/ackermann.yaml", "esc_ackermann")
 esc_launch = (ESC / "launch/esc.launch.py").read_text(encoding="utf-8")

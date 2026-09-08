@@ -80,7 +80,7 @@ ImuNode::ImuNode(const rclcpp::NodeOptions & options)
   persist_output_config_ = this->declare_parameter<bool>("persist_output_config", false);
   output_content_mask_ = static_cast<int>(std::clamp<int64_t>(
     this->declare_parameter<int64_t>("output_content_mask", 0x000E), 0, 0x07FF));
-  // ACC/GYRO/ANGLE cukup untuk EKF; MAG tidak dibutuhkan dan menghabiskan bandwidth 9600.
+  // ACC/GYRO/ANGLE cukup untuk EKF; bandwidth 921600 memberi margin besar untuk rate tinggi.
   // Minimal mask untuk lokalisasi: ACC(0x02)+GYRO(0x04)+ANGLE(0x08) = 0x000E.
   output_content_mask_ |= 0x000E;
   output_rate_code_ = static_cast<int>(std::clamp<int64_t>(
@@ -255,7 +255,7 @@ std::vector<std::string> ImuNode::detectPort()
 std::vector<int> ImuNode::candidateBaudrates() const
 {
   std::vector<int> out;
-  const std::array<int, 2> common{{baudrate_, 9600}};
+  const std::array<int, 6> common{{baudrate_, 921600, 460800, 230400, 115200, 9600}};
   for (const int baud : common) {
     if (baud <= 0) continue;
     if (std::find(out.begin(), out.end(), baud) == out.end()) out.push_back(baud);
@@ -324,7 +324,7 @@ bool ImuNode::configureSensorOutput(bool persistent)
   last_sensor_config_try_ = nowSec();
   // KEY unlock = 0xB588, RSW = output mask, RRATE = output rate.
   // Manual resmi meminta jeda sekitar 50-100 ms antar write register; 80 ms
-  // dipakai supaya command tidak saling menimpa pada UART 9600.
+  // dipakai supaya command konfigurasi tidak saling menimpa di sisi sensor.
   if (!writeSensorRegister(0x69, 0xB588)) return false;
   std::this_thread::sleep_for(std::chrono::milliseconds(80));
   if (!writeSensorRegister(0x02, static_cast<uint16_t>(output_content_mask_))) return false;
@@ -343,7 +343,7 @@ bool ImuNode::configureSensorOutput(bool persistent)
 
 // Fungsi: Membuka port serial IMU dan menyiapkan reconnect bila perangkat belum tersedia.
 // Pada mode auto, port baru diterima setelah frame WIT checksum-valid ditemukan;
-// baud 9600 dan 115200 sama-sama umum pada keluarga sensor ini.
+// Prioritaskan baud YAML, lalu probe 921600/460800/230400/115200/9600 untuk recovery.
 void ImuNode::openSerial(bool initial)
 {
   std::vector<std::string> ports;
@@ -579,8 +579,13 @@ bool ImuNode::publishImu()
   }
 
   if (accel_fresh) {
-    msg.linear_acceleration.x = ax_ - accel_bias_[0];
-    msg.linear_acceleration.y = ay_ - accel_bias_[1];
+    // Koreksi mounting planar 180 derajat harus konsisten untuk seluruh vektor.
+    // Jika roll/pitch dibalik, sumbu body X/Y sensor juga berlawanan terhadap
+    // base_footprint. Z tidak berubah untuk rotasi murni 180 derajat terhadap Z.
+    const double accel_x_sign = invert_roll_ ? -1.0 : 1.0;
+    const double accel_y_sign = invert_pitch_ ? -1.0 : 1.0;
+    msg.linear_acceleration.x = accel_x_sign * ax_ - accel_bias_[0];
+    msg.linear_acceleration.y = accel_y_sign * ay_ - accel_bias_[1];
     msg.linear_acceleration.z = az_ - accel_bias_[2];
     msg.linear_acceleration_covariance[0] = linear_acceleration_covariance_[0];
     msg.linear_acceleration_covariance[4] = linear_acceleration_covariance_[1];
@@ -831,7 +836,13 @@ void ImuNode::pollSerial()
     }
 
     const auto now = Clock::now();
-    const auto min_period = std::chrono::milliseconds(1000 / publish_rate_hz_);
+    // Sensor ANGLE/quaternion sendiri adalah boundary satu sampel. Jangan memakai
+    // gate persis 1/f karena jitter USB/timer sub-ms dapat membuat sampel 19.x ms
+    // ditolak pada target 50 Hz dan menghasilkan aliasing sekitar 25-33 Hz.
+    // Toleransi 20% tetap membatasi sumber yang lebih cepat, tetapi menerima
+    // boundary sensor nominal pada rate yang dikonfigurasi.
+    const auto nominal_period = std::chrono::duration<double>(1.0 / publish_rate_hz_);
+    const auto min_period = std::chrono::duration_cast<Clock::duration>(nominal_period * 0.80);
     if (published && (last_publish_time_.time_since_epoch().count() == 0 ||
         now - last_publish_time_ >= min_period)) {
       if (publishImu()) {

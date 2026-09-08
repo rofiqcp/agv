@@ -277,6 +277,8 @@ private:
     declare_parameter<bool>("enable_global_gnss_cog_fusion", false);
     declare_parameter<std::string>("gnss_velocity_fusion_topic", "/gnss/base_velocity_fusion");
     declare_parameter<std::string>("gnss_cog_fusion_topic", "/gnss/cog_heading_fusion");
+    declare_parameter<std::string>("validated_heading_topic", "/heading/validated_fusion");
+    declare_parameter<double>("validated_heading_timeout_sec", 0.75);
     declare_parameter<double>("gnss_velocity_fusion_min_variance", 0.0025);
     declare_parameter<double>("gnss_velocity_fusion_max_variance", 0.25);
     declare_parameter<double>("gnss_cog_fusion_min_variance_rad2", 0.00121846968);
@@ -487,6 +489,8 @@ private:
     enable_global_gnss_cog_fusion_ = get_parameter("enable_global_gnss_cog_fusion").as_bool();
     gnss_velocity_fusion_topic_ = get_parameter("gnss_velocity_fusion_topic").as_string();
     gnss_cog_fusion_topic_ = get_parameter("gnss_cog_fusion_topic").as_string();
+    validated_heading_topic_ = get_parameter("validated_heading_topic").as_string();
+    validated_heading_timeout_sec_ = std::clamp(get_parameter("validated_heading_timeout_sec").as_double(), 0.1, 3.0);
     gnss_velocity_fusion_min_variance_ = std::max(1.0e-8,
       get_parameter("gnss_velocity_fusion_min_variance").as_double());
     gnss_velocity_fusion_max_variance_ = std::max(gnss_velocity_fusion_min_variance_,
@@ -1533,6 +1537,10 @@ private:
     gnss_velocity_fit_sub_ = create_subscription<geometry_msgs::msg::TwistWithCovarianceStamped>(
       gnss_velocity_fit_topic_, sensor_qos,
       std::bind(&LocalizationCore::onGnssVelocityFit, this, std::placeholders::_1));
+    validated_heading_sub_ = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+      validated_heading_topic_, sensor_qos,
+      std::bind(&LocalizationCore::onValidatedHeading, this, std::placeholders::_1));
+
     imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
       imu_topic_, sensor_qos,
       std::bind(&LocalizationCore::onImu, this, std::placeholders::_1));
@@ -1720,6 +1728,40 @@ private:
     }
     last_imu_time_ = received;
     imu_samples_seen_ = std::min(1000000, imu_samples_seen_ + 1);
+  }
+
+  void onValidatedHeading(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg)
+  {
+    const double yaw = yawFromQuaternion(msg->pose.pose.orientation);
+    if (!std::isfinite(yaw)) return;
+    std::lock_guard<std::mutex> lock(mutex_);
+    validated_heading_yaw_rad_ = yaw;
+    last_validated_heading_time_ = now();
+    have_validated_heading_ = true;
+
+    if (!anchor_valid_ || !have_odom_) return;
+    const double desired_anchor_yaw = navigation_math::normalizeAngle(yaw - odom_base_.yaw);
+    const double innovation = navigation_math::normalizeAngle(desired_anchor_yaw - anchor_map_odom_.yaw);
+
+    // Startup alignment boleh satu kali langsung hanya ketika kendaraan benar-benar diam.
+    // Setelah latch, semua koreksi dibatasi agar map->odom tidak pernah jump saat bergerak.
+    if (!validated_heading_anchor_latched_ && vehicleStationaryUnlocked()) {
+      anchor_map_odom_.yaw = desired_anchor_yaw;
+      validated_heading_anchor_latched_ = true;
+      anchor_mode_ += "+VALIDATED_YAW_SEED";
+      RCLCPP_INFO(get_logger(),
+        "VALIDATED HEADING ALIGN: map_yaw=%.2fdeg local_yaw=%.2fdeg map->odom=%.2fdeg",
+        yaw * 180.0 / M_PI, odom_base_.yaw * 180.0 / M_PI,
+        anchor_map_odom_.yaw * 180.0 / M_PI);
+      return;
+    }
+
+    if (std::abs(innovation) <= global_ekf_yaw_max_innovation_rad_) {
+      const double step = std::clamp(global_ekf_yaw_correction_alpha_ * innovation,
+        -global_ekf_yaw_max_step_rad_, global_ekf_yaw_max_step_rad_);
+      anchor_map_odom_.yaw = navigation_math::normalizeAngle(anchor_map_odom_.yaw + step);
+      if (std::abs(step) > 1.0e-9) anchor_mode_ += "+VALIDATED_YAW";
+    }
   }
 
   // Model yaw Ackermann dari ESC dipertahankan sebagai sensor pembanding,
@@ -3007,6 +3049,8 @@ private:
   bool enable_global_gnss_cog_fusion_{false};
   std::string gnss_velocity_fusion_topic_{"/gnss/base_velocity_fusion"};
   std::string gnss_cog_fusion_topic_{"/gnss/cog_heading_fusion"};
+  std::string validated_heading_topic_{"/heading/validated_fusion"};
+  double validated_heading_timeout_sec_{0.75};
   double gnss_velocity_fusion_min_variance_{0.0025};
   double gnss_velocity_fusion_max_variance_{0.25};
   double gnss_cog_fusion_min_variance_rad2_{0.00121846968};
@@ -3167,6 +3211,10 @@ private:
   navigation_math::Pose2D global_ekf_pose_;
   double global_ekf_speed_mps_{0.0};
   double global_ekf_yaw_rate_rps_{0.0};
+  double validated_heading_yaw_rad_{0.0};
+  bool have_validated_heading_{false};
+  bool validated_heading_anchor_latched_{false};
+  rclcpp::Time last_validated_heading_time_{0,0,RCL_ROS_TIME};
   double global_x_var_{0.0};
   double global_y_var_{0.0};
   double global_yaw_var_{0.0};
@@ -3203,6 +3251,7 @@ private:
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr global_odom_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr initial_pose_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr validated_heading_sub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr planning_ready_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr motion_ready_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr mode_pub_;

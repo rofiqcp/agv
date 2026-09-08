@@ -1,23 +1,21 @@
-# IMU absolute orientation is the EKF yaw source; stale gyro does not suppress fresh yaw.
 data_imu_node:
   ros__parameters:
     port: auto
-    baudrate: 9600
-    auto_baud: false
+    baudrate: 921600
+    auto_baud: true
     baud_probe_sec: 0.5
-    # Primary selector: stable USB identity (CP2102 10c4:ea60).
     auto_port_id_contains: Silicon_Labs_CP2102
-    auto_port_path_contains: ""
+    auto_port_path_contains: ''
     frame_id: imu_link
     poll_interval_ms: 5
-    publish_rate_hz: 10
+    publish_rate_hz: 50
     data_timeout_sec: 6.0
     publish_raw: false
     debug: false
     configure_output_on_connect: true
     persist_output_config: false
     output_content_mask: 30
-    output_rate_code: 6
+    output_rate_code: 8
     orientation_packet_timeout_sec: 8.0
     orientation_publish_timeout_sec: 0.5
     gyro_packet_timeout_sec: 0.35
@@ -26,13 +24,13 @@ data_imu_node:
     sensor_config_retry_sec: 30.0
     orientation_reopen_sec: 20.0
     publish_orientation: true
-    invert_roll: false
-    invert_pitch: false
+    invert_roll: true
+    invert_pitch: true
     invert_yaw: false
     yaw_sign: -1.0
     roll_offset_rad: 0.0
     pitch_offset_rad: 0.0
-    yaw_offset_rad: 0.1923228413
+    yaw_offset_rad: 0.2051809117
     magnetic_declination_radians: 0.0
     accel_bias:
     - 0.0
@@ -68,8 +66,8 @@ data_imu_node:
     use_magnetic_yaw: true
     mag_yaw_sign: -1.0
     mag_yaw_offset_rad: 1.5451826276
-    mag_yaw_filter_alpha: 0.20
+    mag_yaw_filter_alpha: 0.2
     mag_yaw_max_step_rad: 0.0523598776
-    mag_yaw_packet_timeout_sec: 0.50
+    mag_yaw_packet_timeout_sec: 0.5
     mag_yaw_min_norm_ut: 100.0
     mag_yaw_max_norm_ut: 1000.0

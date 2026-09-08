@@ -17,7 +17,7 @@ bag=(ROOT/'tools/rosbag_regression.py').read_text(encoding='utf-8')
 
 if loc.get('gnss_velocity_fusion_topic')!='/gnss/base_velocity_fusion': fail('velocity fusion topic mismatch')
 if not loc.get('enable_global_gnss_velocity_fusion',False): fail('GNSS vx/vyaw fusion must be enabled')
-if loc.get('require_gnss_velocity_certification_for_fusion',True): fail('startup GNSS velocity cannot depend on ESC-based certification')
+if loc.get('require_gnss_velocity_certification_for_fusion') is not True: fail('production GNSS velocity fusion must remain fail-closed until field certification')
 if loc.get('enable_global_gnss_cog_fusion') is not True: fail('GNSS COG absolute yaw fusion must be enabled for production heading')
 if loc.get('enable_gnss_course_yaw_correction',True): fail('legacy GNSS direct yaw correction must remain disabled')
 cog_min=float(loc.get('cog_min_forward_speed_mps',0.0))
@@ -34,24 +34,26 @@ for key in ('gnss_yaw_rate_min_speed_mps','gnss_yaw_rate_max_abs_rps','gnss_yaw_
 
 if l.get('publish_tf') is not True: fail('local EKF must publish odom->base TF')
 if g.get('publish_tf') is not False: fail('global EKF must not compete for map->odom TF')
-# Local EKF: wheel/GNSS vx plus relative IMU yaw + gyro-Z. ESC kinematic yaw stays diagnostic.
+# Local EKF: wheel/GNSS vx plus IMU gyro-Z only. ESC kinematic yaw stays diagnostic.
 if l.get('twist0')!='/gnss/base_velocity_fusion' or enabled(l.get('twist0_config')) != [6]:
     fail('local EKF must fuse independent GNSS vx')
-if l.get('imu0')!='/imu/data' or enabled(l.get('imu0_config')) != [5,11] or l.get('imu0_relative') is not True:
-    fail('local EKF must fuse relative IMU yaw + gyro-Z')
+if l.get('imu0')!='/imu/data' or enabled(l.get('imu0_config')) != [11] or l.get('imu0_relative') is not True:
+    fail('local EKF must fuse IMU gyro-Z only')
 if l.get('odom0')!='/esc/odom' or enabled(l.get('odom0_config')) != [6]:
     fail('local EKF wheel odometry must remain auxiliary vx-only to avoid steering-slip yaw authority')
-# Global EKF: GNSS x/y + vx; COG and two tilt-compensated magnetometers provide
-# independent absolute yaw; IMU remains relative yaw + gyro-Z for short-term dynamics.
+# Global EKF: GNSS x/y + vx; COG plus pre-EKF validated heading provide absolute yaw; IMU gyro-Z provides short-term dynamics.
 if g.get('odom0')!='/odometry/gnss_map' or enabled(g.get('odom0_config')) != [0,1]:
     fail('global EKF must fuse GNSS absolute x/y')
 if g.get('twist0')!='/gnss/base_velocity_fusion' or enabled(g.get('twist0_config')) != [6]:
     fail('global EKF must fuse GNSS vx only')
-for key, topic in (('pose0','/gnss/cog_heading_fusion'), ('pose1','/neo3/mag_heading_fusion'), ('pose2','/imu/mag_heading_fusion')):
-    if g.get(key)!=topic or enabled(g.get(key+'_config')) != [5]:
-        fail(f'global EKF absolute heading source invalid: {key}={topic}')
-if g.get('imu0')!='/imu/data' or enabled(g.get('imu0_config')) != [5,11] or g.get('imu0_relative') is not True:
-    fail('global EKF must fuse relative IMU yaw + gyro-Z')
+if g.get('pose0')!='/gnss/cog_heading_fusion' or enabled(g.get('pose0_config')) != [5]:
+    fail('global EKF COG heading source invalid')
+if g.get('pose1')!='/heading/validated_fusion' or enabled(g.get('pose1_config')) != [5]:
+    fail('global EKF validated heading source invalid')
+if 'pose2' in g:
+    fail('global EKF must not fuse raw second magnetic heading directly')
+if g.get('imu0')!='/imu/data' or enabled(g.get('imu0_config')) != [11] or g.get('imu0_relative') is not True:
+    fail('global EKF must fuse IMU gyro-Z only')
 
 raw_start=cpp.find('const bool raw_cog_candidate')
 raw_end=cpp.find('const auto t = now();', raw_start)
@@ -74,4 +76,4 @@ for topic in ['/gnss/base_velocity_fusion','/gnss/fusion_status']:
     if topic not in bag: fail(f'rosbag topic missing: {topic}')
 for token in ['gnss_yaw_rate_min_speed_mps','enable_global_gnss_velocity_fusion','enable_global_gnss_cog_fusion']:
     if token not in gui: fail(f'GUI fusion setting missing: {token}')
-print('PASS GNSS COG + dual-mag + relative-IMU heading fusion contract')
+print('PASS GNSS COG + validated-heading + gyro-Z fusion contract')

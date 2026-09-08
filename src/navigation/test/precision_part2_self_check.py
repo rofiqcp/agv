@@ -92,8 +92,8 @@ if local.get("twist0") != "/gnss/base_velocity_fusion" or local.get("imu0") != "
     fail("local EKF must use gated GNSS velocity plus IMU")
 if [i for i,v in enumerate(local["twist0_config"]) if v] != [6]:
     fail("local EKF must take independent vx from GNSS velocity fusion")
-if [i for i,v in enumerate(local["imu0_config"]) if v] != [5, 11]:
-    fail("local EKF must take relative yaw + gyro-Z from IMU")
+if [i for i,v in enumerate(local["imu0_config"]) if v] != [11]:
+    fail("local EKF must take gyro-Z only from IMU")
 if local.get('imu0_relative') is not True:
     fail("local EKF IMU yaw must remain relative")
 if local.get('odom0') != '/esc/odom' or {i for i,v in enumerate(local.get('odom0_config',[])) if v} != {6}:

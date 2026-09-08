@@ -1,4 +1,3 @@
-# Localization bootstrap allows map display on sane degraded GNSS; autonomous motion still requires strict gate.
 localization_core:
   ros__parameters:
     reference_latitude: -7.050964918716
@@ -35,8 +34,8 @@ localization_core:
     gnss_quality_timeout_sec: 0.6
     gnss_velocity_covariance_min_variance: 1.0e-06
     gnss_velocity_covariance_max_variance: 1.0
-    require_gnss_velocity_certification_for_fusion: false
-    require_gnss_cog_certification_for_fusion: false
+    require_gnss_velocity_certification_for_fusion: true
+    require_gnss_cog_certification_for_fusion: true
     gnss_velocity_calibration_valid: false
     gnss_cog_calibration_valid: false
     gnss_velocity_calibration_saved_at: ''
@@ -69,13 +68,8 @@ localization_core:
     use_global_ekf_yaw_for_map_correction: true
     global_ekf_yaw_correction_alpha: 0.05
     global_ekf_yaw_max_step_rad: 0.00872664626
-    # Allow recovery from a bad startup magnetic seed (e.g. ~90 deg) once COG is
-    # motion-qualified. Per-update yaw correction remains rate-limited below.
     global_ekf_yaw_max_innovation_rad: 2.3561944902
     enable_gnss_course_yaw_correction: false
-    # Must be reachable in Stage-3 commissioning (speed cap 0.18 m/s).
-    # COG is still guarded by UBX course accuracy, sAcc, straight-motion, forward-only,
-    # velocity/course consistency and a hold timer before it may correct heading.
     cog_min_forward_speed_mps: 0.15
     cog_max_sacc_mps: 0.3
     cog_max_heading_accuracy_rad: 0.3490658504
@@ -142,7 +136,7 @@ localization_core:
     imu_topic: /imu/data
     local_odom_topic: /odometry/filtered
     global_odom_topic: /odometry/filtered_map
-    use_imu_initial_heading: true
+    use_imu_initial_heading: false
     allow_map_calibration_with_degraded_fix: true
     map_calibration_samples_file: ''
     multi_point_map_calibration: true

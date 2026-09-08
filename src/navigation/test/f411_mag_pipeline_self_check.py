@@ -14,7 +14,7 @@ def req(ok, msg):
 
 req("DeclareLaunchArgument('hmi_port', default_value='auto')" in launch, "F411 launch selector must default to auto")
 req("mag_heading_fusion = Node(" in launch, "mag_heading_fusion node definition missing")
-req("delayed_ekf = TimerAction(period=5.0, actions=[local_ekf, global_ekf])" in launch, "delayed EKF startup contract missing")
+req("delayed_ekf = TimerAction(period=20.0, actions=[local_ekf, global_ekf])" in launch, "delayed EKF startup contract missing")
 req("delayed_ekf, localization_core, mag_heading_fusion, imu_speed_diagnostic" in launch, "delayed EKF / mag fusion actions are not in LaunchDescription")
 req("'gnss_source'" in launch and "stm32=NEO3 via HMI USB CDC" in launch, "STM32 NEO3 launch contract missing")
 mp = mag['mag_heading_fusion']['ros__parameters']
@@ -22,7 +22,9 @@ req(mp['neo3_mag_topic'] == '/neo3/mag', 'NEO3 magnetometer topic mismatch')
 req(mp['imu_mag_topic'] == '/imu/mag', 'IMU magnetometer topic mismatch')
 req(mp['map_yaw_topic'] == '/localization/map_yaw_from_enu', 'map yaw dependency mismatch')
 g = ekf['ekf_filter_node_map']['ros__parameters']
-req(g['pose1'] == '/neo3/mag_heading_fusion', 'global EKF NEO3 magnetic heading input mismatch')
-req(g['pose2'] == '/imu/mag_heading_fusion', 'global EKF IMU magnetic heading input mismatch')
+req(g['pose1'] == '/heading/validated_fusion', 'global EKF validated heading input mismatch')
+req('pose2' not in g, 'global EKF must not fuse raw second magnetic heading directly')
+req(mp['neo3_heading_topic'] == '/neo3/mag_heading_fusion', 'NEO3 diagnostic heading topic mismatch')
+req(mp['imu_heading_topic'] == '/imu/mag_heading_fusion', 'Yahboom magnetic diagnostic heading topic mismatch')
 req(g['pose0'] == '/gnss/cog_heading_fusion', 'global EKF COG heading input mismatch')
 print('PASS f411_mag_pipeline_self_check')

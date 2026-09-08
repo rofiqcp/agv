@@ -54,6 +54,8 @@ public:
     declare_parameter<std::string>("map_yaw_topic", "/localization/map_yaw_from_enu");
     declare_parameter<std::string>("imu_heading_topic", "/imu/mag_heading_fusion");
     declare_parameter<std::string>("neo3_heading_topic", "/neo3/mag_heading_fusion");
+    declare_parameter<std::string>("imu_inertial_heading_topic", "/imu/inertial_heading");
+    declare_parameter<std::string>("validated_heading_topic", "/heading/validated_fusion");
     declare_parameter<std::string>("output_frame", "map");
     declare_parameter<double>("tilt_timeout_sec", 0.75);
     declare_parameter<double>("max_tilt_rad", 0.7853981634);
@@ -68,6 +70,10 @@ public:
     declare_parameter<double>("neo3_heading_variance_rad2", 0.06);
     declare_parameter<double>("max_heading_rate_rps", 3.0);
     declare_parameter<double>("rate_gate_margin_rad", 0.35);
+    declare_parameter<double>("consensus_max_error_rad", 0.0872664626);
+    declare_parameter<double>("consensus_hold_sec", 2.0);
+    declare_parameter<double>("consensus_timeout_sec", 0.5);
+    declare_parameter<double>("validated_heading_variance_rad2", 0.01);
     declare_parameter<bool>("enable_imu_mag_heading", true);
     declare_parameter<bool>("enable_neo3_mag_heading", true);
 
@@ -89,6 +95,10 @@ public:
     neo_variance_ = std::clamp(get_parameter("neo3_heading_variance_rad2").as_double(), 1.0e-4, 10.0);
     max_heading_rate_rps_ = std::clamp(get_parameter("max_heading_rate_rps").as_double(), 0.2, 10.0);
     rate_gate_margin_rad_ = std::clamp(get_parameter("rate_gate_margin_rad").as_double(), 0.05, kPi);
+    consensus_max_error_rad_ = std::clamp(get_parameter("consensus_max_error_rad").as_double(), 0.0087266463, 0.5235987756);
+    consensus_hold_sec_ = std::clamp(get_parameter("consensus_hold_sec").as_double(), 0.2, 30.0);
+    consensus_timeout_sec_ = std::clamp(get_parameter("consensus_timeout_sec").as_double(), 0.1, 2.0);
+    validated_variance_ = std::clamp(get_parameter("validated_heading_variance_rad2").as_double(), 1.0e-4, 1.0);
     enable_imu_ = get_parameter("enable_imu_mag_heading").as_bool();
     enable_neo_ = get_parameter("enable_neo3_mag_heading").as_bool();
 
@@ -115,6 +125,11 @@ public:
       get_parameter("imu_heading_topic").as_string(), sensor_qos);
     neo_heading_pub_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
       get_parameter("neo3_heading_topic").as_string(), sensor_qos);
+    inertial_heading_pub_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
+      get_parameter("imu_inertial_heading_topic").as_string(), sensor_qos);
+    validated_heading_pub_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
+      get_parameter("validated_heading_topic").as_string(), sensor_qos);
+    consensus_valid_pub_ = create_publisher<std_msgs::msg::Bool>("/heading/validated", state_qos);
     imu_valid_pub_ = create_publisher<std_msgs::msg::Bool>("/imu/mag_heading_valid", state_qos);
     neo_valid_pub_ = create_publisher<std_msgs::msg::Bool>("/neo3/mag_heading_valid", state_qos);
     status_pub_ = create_publisher<std_msgs::msg::String>("/system/magnetic_heading_status", state_qos);
@@ -143,8 +158,38 @@ private:
     if (!std::isfinite(roll) || !std::isfinite(pitch)) return;
     roll_rad_ = roll;
     pitch_rad_ = pitch;
-    last_tilt_time_ = now();
+    const auto t = now();
+    const double wz = msg->angular_velocity.z;
+    const double an = std::sqrt(msg->linear_acceleration.x*msg->linear_acceleration.x +
+                                msg->linear_acceleration.y*msg->linear_acceleration.y +
+                                msg->linear_acceleration.z*msg->linear_acceleration.z);
+    const bool stationary = std::isfinite(wz) && std::isfinite(an) &&
+      std::abs(wz) <= 0.03 && std::abs(an - 9.80665) <= 0.15;
+    if (stationary) {
+      if (stationary_since_.nanoseconds() == 0) stationary_since_ = t;
+      if ((t - stationary_since_).seconds() >= 2.0)
+        gyro_bias_z_rps_ = 0.98 * gyro_bias_z_rps_ + 0.02 * wz;
+    } else {
+      stationary_since_ = rclcpp::Time(0,0,RCL_ROS_TIME);
+    }
+    if (have_inertial_heading_ && last_inertial_time_.nanoseconds() != 0) {
+      const double dt = (t - last_inertial_time_).seconds();
+      if (dt > 0.0 && dt < 0.25 && std::isfinite(wz))
+        inertial_heading_rad_ = normalizeAngle(inertial_heading_rad_ + (wz - gyro_bias_z_rps_) * dt);
+    }
+    last_inertial_time_ = t;
+    if (have_inertial_heading_) {
+      geometry_msgs::msg::PoseWithCovarianceStamped pose;
+      pose.header.stamp = t; pose.header.frame_id = output_frame_;
+      pose.pose.pose.orientation = yawQuaternion(inertial_heading_rad_);
+      pose.pose.covariance.fill(0.0);
+      pose.pose.covariance[0]=pose.pose.covariance[7]=pose.pose.covariance[14]=pose.pose.covariance[21]=pose.pose.covariance[28]=1.0e6;
+      pose.pose.covariance[35] = 0.02;
+      inertial_heading_pub_->publish(pose);
+    }
+    last_tilt_time_ = t;
     have_tilt_ = true;
+    publishConsensusIfValid();
   }
 
   void setValid(Source source, bool valid) {
@@ -220,6 +265,50 @@ private:
     state.reject_reason.clear();
     ++state.accepted;
     setValid(source, true);
+    if (source == Source::NEO3 && !have_inertial_heading_) {
+      inertial_heading_rad_ = yaw_map;
+      have_inertial_heading_ = true;
+      last_inertial_time_ = t;
+      last_correction_time_ = t;
+    }
+    publishConsensusIfValid();
+  }
+
+  void publishConsensusIfValid() {
+    const auto t = now();
+    const bool inertial_fresh = have_inertial_heading_ && (t - last_inertial_time_).seconds() >= 0.0 && (t - last_inertial_time_).seconds() <= consensus_timeout_sec_;
+    const bool neo_fresh = neo_state_.valid && neo_state_.stamp.nanoseconds() != 0 && (t - neo_state_.stamp).seconds() >= 0.0 && (t - neo_state_.stamp).seconds() <= consensus_timeout_sec_;
+    const double err = (inertial_fresh && neo_fresh) ? std::abs(normalizeAngle(inertial_heading_rad_ - neo_state_.heading_rad)) : kPi;
+    const bool pair_ok = inertial_fresh && neo_fresh && err <= consensus_max_error_rad_;
+    if (!pair_ok) {
+      consensus_since_ = rclcpp::Time(0,0,RCL_ROS_TIME);
+      if (consensus_valid_) { consensus_valid_ = false; std_msgs::msg::Bool b; b.data=false; consensus_valid_pub_->publish(b); }
+      consensus_error_rad_ = err;
+      return;
+    }
+    if (consensus_since_.nanoseconds() == 0) consensus_since_ = t;
+    consensus_error_rad_ = err;
+    if ((t - consensus_since_).seconds() < consensus_hold_sec_) return;
+    if (last_correction_time_.nanoseconds() == 0) last_correction_time_ = t;
+    const double corr_dt = std::clamp((t - last_correction_time_).seconds(), 0.0, 0.25);
+    const double correction = normalizeAngle(neo_state_.heading_rad - inertial_heading_rad_);
+    const double max_step = 0.01745329252 * corr_dt; // maksimum 1 deg/s, tanpa heading jump
+    inertial_heading_rad_ = normalizeAngle(inertial_heading_rad_ + std::clamp(correction, -max_step, max_step));
+    last_correction_time_ = t;
+    const double w_neo = 1.0 / std::max(neo_variance_, 1.0e-4);
+    const double w_imu = 1.0 / 0.05;
+    const double sx = w_neo*std::cos(neo_state_.heading_rad) + w_imu*std::cos(inertial_heading_rad_);
+    const double sy = w_neo*std::sin(neo_state_.heading_rad) + w_imu*std::sin(inertial_heading_rad_);
+    const double yaw = std::atan2(sy, sx);
+    geometry_msgs::msg::PoseWithCovarianceStamped pose;
+    pose.header.stamp = t; pose.header.frame_id = output_frame_;
+    pose.pose.pose.orientation = yawQuaternion(yaw);
+    pose.pose.covariance.fill(0.0);
+    pose.pose.covariance[0]=pose.pose.covariance[7]=pose.pose.covariance[14]=pose.pose.covariance[21]=pose.pose.covariance[28]=1.0e6;
+    pose.pose.covariance[35] = std::max(validated_variance_, err*err);
+    validated_heading_pub_->publish(pose);
+    validated_heading_rad_ = yaw;
+    if (!consensus_valid_) { consensus_valid_=true; std_msgs::msg::Bool b; b.data=true; consensus_valid_pub_->publish(b); }
   }
 
   void publishStatus() {
@@ -234,7 +323,12 @@ private:
       ";imu_reject=" + imu_state_.reject_reason +
       ";neo3_reject=" + neo_state_.reject_reason +
       ";tilt_age_sec=" + std::to_string(tilt_age) +
-      ";map_yaw_age_sec=" + std::to_string(map_age);
+      ";map_yaw_age_sec=" + std::to_string(map_age) +
+      ";inertial_heading_deg=" + std::to_string(inertial_heading_rad_ * 180.0 / kPi) +
+      ";consensus_error_deg=" + std::to_string(consensus_error_rad_ * 180.0 / kPi) +
+      ";consensus_valid=" + (consensus_valid_ ? "true" : "false") +
+      ";validated_heading_deg=" + std::to_string(validated_heading_rad_ * 180.0 / kPi) +
+      ";gyro_bias_z_rps=" + std::to_string(gyro_bias_z_rps_);
     status_pub_->publish(msg);
   }
 
@@ -244,17 +338,22 @@ private:
   double imu_sign_{-1.0}, imu_offset_{1.5451826276}, neo_sign_{-1.0}, neo_offset_{1.5707963268};
   double imu_variance_{0.08}, neo_variance_{0.06};
   double max_heading_rate_rps_{3.0}, rate_gate_margin_rad_{0.35};
+  double consensus_max_error_rad_{0.0872664626}, consensus_hold_sec_{2.0}, consensus_timeout_sec_{0.5};
+  double validated_variance_{0.01}, inertial_heading_rad_{0.0}, validated_heading_rad_{0.0}, consensus_error_rad_{kPi};
   bool enable_imu_{true}, enable_neo_{true};
-  bool have_tilt_{false}, have_map_yaw_{false};
+  bool have_tilt_{false}, have_map_yaw_{false}, have_inertial_heading_{false}, consensus_valid_{false};
   double roll_rad_{0.0}, pitch_rad_{0.0}, map_yaw_from_enu_{0.0};
   rclcpp::Time last_tilt_time_{0, 0, RCL_ROS_TIME}, last_map_yaw_time_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time last_inertial_time_{0,0,RCL_ROS_TIME}, consensus_since_{0,0,RCL_ROS_TIME};
+  rclcpp::Time stationary_since_{0,0,RCL_ROS_TIME}, last_correction_time_{0,0,RCL_ROS_TIME};
+  double gyro_bias_z_rps_{0.0};
   HeadingState imu_state_, neo_state_;
 
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   rclcpp::Subscription<sensor_msgs::msg::MagneticField>::SharedPtr imu_mag_sub_, neo_mag_sub_;
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr map_yaw_sub_;
-  rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr imu_heading_pub_, neo_heading_pub_;
-  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr imu_valid_pub_, neo_valid_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr imu_heading_pub_, neo_heading_pub_, inertial_heading_pub_, validated_heading_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr imu_valid_pub_, neo_valid_pub_, consensus_valid_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
   rclcpp::TimerBase::SharedPtr status_timer_;
 };
