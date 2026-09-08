@@ -19,15 +19,28 @@ def lut_apply(y, knots, corr):
 
 def main():
     ap=argparse.ArgumentParser(); ap.add_argument('raw_csv'); ap.add_argument('--meta-json',default=''); a=ap.parse_args()
-    rows=[]
+    raw_rows=[]; map_samples=[]
     with open(a.raw_csv,newline='') as f:
         for r in csv.DictReader(f):
             try:
                 seg=int(r['segment']); st=r['state']; x=float(r['yah_mag_x_lsb']); y=float(r['yah_mag_y_lsb']);
                 neo=math.radians(float(r['neo_yaw_deg'])); my=math.radians(float(r['map_yaw_from_enu_deg']))
             except Exception: continue
-            if seg>0 and st.startswith('STATIC_') and all(math.isfinite(v) for v in (x,y,neo,my)):
-                rows.append((seg,x,y,wrap(neo-my)))
+            if math.isfinite(my): map_samples.append(my)
+            if seg in range(1,9) and st == f'STATIC_{seg}' and all(math.isfinite(v) for v in (x,y,neo)):
+                raw_rows.append((seg,x,y,neo,my))
+    if not map_samples: raise SystemExit('map_yaw_from_enu unavailable for calibration run')
+    map_ref=cmean(map_samples)
+    map_spread=max(abs(wrap(v-map_ref)) for v in map_samples)
+    if map_spread > math.radians(0.25):
+        raise SystemExit(f'map_yaw_from_enu changed during run: spread={math.degrees(map_spread):.3f} deg')
+    rows=[]
+    for seg,x,y,neo,my in raw_rows:
+        # map_yaw_from_enu is a map-calibration transform, not a high-rate sensor.
+        # When its low-rate publisher is stale in one IMU row, reuse the verified
+        # run-constant value instead of discarding a valid static MAG sample.
+        map_yaw = my if math.isfinite(my) else map_ref
+        rows.append((seg,x,y,wrap(neo-map_yaw)))
     segs=sorted(set(r[0] for r in rows))
     if segs != list(range(1,9)): raise SystemExit(f'need segments 1..8, got {segs}')
     means=[]
@@ -56,9 +69,19 @@ def main():
     rms=math.degrees(math.sqrt(sum(e*e for e in sample_err)/len(sample_err))); mx=math.degrees(max(abs(e) for e in sample_err))
     meta={}
     if a.meta_json and Path(a.meta_json).exists(): meta=json.loads(Path(a.meta_json).read_text())
-    cw=meta.get('transition_checks',[]); cw_ok=len(cw)==7 and all(bool(x.get('cw_ok')) for x in cw)
+    cw=meta.get('transition_checks',[])
+    grouped={s:[] for s in range(1,8)}
+    for item in cw:
+        try:
+            fs=int(item.get('from_segment')); d=float(item.get('gyro_delta_deg'))
+            if fs in grouped and math.isfinite(d) and abs(d)>=5.0: grouped[fs].append(d)
+        except Exception:
+            pass
+    # Debounce duplicates from stationary-state chatter: each transition must have
+    # at least one meaningful CW rotation and must not contain a meaningful CCW reversal.
+    cw_ok=all(any(d < -5.0 for d in grouped[s]) and not any(d > 5.0 for d in grouped[s]) for s in range(1,8))
     valid=cw_ok and rms<3.0 and mx<5.0 and len(rows)>=200
-    out={'yahboom_mag_planar_calibration':{'valid':bool(valid),'source':'8-direction CW static fit against calibrated IST8310 ENU heading','created_at':datetime.now().isoformat(),'raw_csv':str(Path(a.raw_csv).resolve()),'sample_count':len(rows),'segment_count':8,'cw_transition_check_pass':bool(cw_ok),'bias_xy_lsb':[float(bias[0]),float(bias[1])],'matrix_xy_per_lsb':[float(W[0,0]),float(W[0,1]),float(W[1,0]),float(W[1,1])],'yaw_sign':float(sign),'yaw_offset_rad':float(off),'heading_lut_input_rad':knots,'heading_lut_correction_rad':corr,'corrected_norm_mean':float(np.mean(corrected_norm)),'corrected_norm_std':float(np.std(corrected_norm)),'validation':{'rms_error_deg':float(rms),'max_abs_error_deg':float(mx),'pass':bool(valid)},'scope':'planar XY only; Z/3D spherical calibration requires multi-axis rotation'}}
+    out={'yahboom_mag_planar_calibration':{'valid':bool(valid),'source':'8-direction CW static fit against calibrated IST8310 ENU heading','created_at':datetime.now().isoformat(),'raw_csv':str(Path(a.raw_csv).resolve()),'sample_count':len(rows),'segment_count':8,'cw_transition_check_pass':bool(cw_ok),'map_yaw_from_enu_rad':float(map_ref),'map_yaw_spread_deg':float(math.degrees(map_spread)),'bias_xy_lsb':[float(bias[0]),float(bias[1])],'matrix_xy_per_lsb':[float(W[0,0]),float(W[0,1]),float(W[1,0]),float(W[1,1])],'yaw_sign':float(sign),'yaw_offset_rad':float(off),'heading_lut_input_rad':knots,'heading_lut_correction_rad':corr,'corrected_norm_mean':float(np.mean(corrected_norm)),'corrected_norm_std':float(np.std(corrected_norm)),'validation':{'rms_error_deg':float(rms),'max_abs_error_deg':float(mx),'pass':bool(valid)},'scope':'planar XY only; Z/3D spherical calibration requires multi-axis rotation'}}
     root=Path(a.raw_csv).parent; stamp=Path(a.raw_csv).stem.replace('heading_8dir_raw_','')
     dest=root/f'yahboom_mag_planar_{stamp}.yaml'; dest.write_text(yaml.safe_dump(out,sort_keys=False)); (root/'yahboom_mag_planar_latest.yaml').write_text(yaml.safe_dump(out,sort_keys=False))
     print(f'YAHBOOM_PLANAR_FIT valid={valid} samples={len(rows)} cw_ok={cw_ok} rms={rms:.3f}deg max={mx:.3f}deg yaml={dest}',flush=True)

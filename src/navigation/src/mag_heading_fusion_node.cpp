@@ -15,6 +15,7 @@
 #include "sensor_msgs/msg/magnetic_field.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/float64.hpp"
+#include "std_msgs/msg/float64_multi_array.hpp"
 #include "std_msgs/msg/string.hpp"
 
 namespace {
@@ -52,6 +53,7 @@ public:
   MagHeadingFusionNode() : Node("mag_heading_fusion") {
     declare_parameter<std::string>("imu_topic", "/imu/data");
     declare_parameter<std::string>("imu_mag_topic", "/imu/mag");
+    declare_parameter<std::string>("imu_raw_mag_topic", "/imu/mag_raw_lsb");
     declare_parameter<std::string>("neo3_mag_topic", "/neo3/mag");
     declare_parameter<std::string>("map_yaw_topic", "/localization/map_yaw_from_enu");
     declare_parameter<std::string>("imu_heading_topic", "/imu/mag_heading_fusion");
@@ -66,6 +68,15 @@ public:
     declare_parameter<double>("max_field_norm_ut", 100.0);
     declare_parameter<double>("imu_mag_yaw_sign", -1.0);
     declare_parameter<double>("imu_mag_yaw_offset_rad", 1.5451826276);
+    declare_parameter<bool>("imu_planar_calibration_enabled", false);
+    declare_parameter<std::vector<double>>("imu_mag_bias_xy_lsb", std::vector<double>{0.0, 0.0});
+    declare_parameter<std::vector<double>>("imu_mag_matrix_xy_per_lsb", std::vector<double>{1.0, 0.0, 0.0, 1.0});
+    declare_parameter<bool>("imu_heading_lut_enabled", false);
+    declare_parameter<std::vector<double>>("imu_heading_lut_input_rad", std::vector<double>{});
+    declare_parameter<std::vector<double>>("imu_heading_lut_correction_rad", std::vector<double>{});
+    declare_parameter<double>("imu_corrected_norm_min", 0.70);
+    declare_parameter<double>("imu_corrected_norm_max", 1.30);
+    declare_parameter<double>("imu_planar_max_tilt_rad", 0.2617993878);
     declare_parameter<double>("neo3_mag_yaw_sign", -1.0);
     declare_parameter<double>("neo3_mag_yaw_offset_rad", 1.5707963268);
     declare_parameter<bool>("neo3_planar_calibration_enabled", false);
@@ -87,6 +98,7 @@ public:
 
     imu_topic_ = get_parameter("imu_topic").as_string();
     imu_mag_topic_ = get_parameter("imu_mag_topic").as_string();
+    imu_raw_mag_topic_ = get_parameter("imu_raw_mag_topic").as_string();
     neo3_mag_topic_ = get_parameter("neo3_mag_topic").as_string();
     map_yaw_topic_ = get_parameter("map_yaw_topic").as_string();
     output_frame_ = get_parameter("output_frame").as_string();
@@ -97,6 +109,30 @@ public:
     max_norm_ut_ = std::max(min_norm_ut_ + 1.0, get_parameter("max_field_norm_ut").as_double());
     imu_sign_ = get_parameter("imu_mag_yaw_sign").as_double() >= 0.0 ? 1.0 : -1.0;
     imu_offset_ = get_parameter("imu_mag_yaw_offset_rad").as_double();
+    imu_planar_calibration_enabled_ = get_parameter("imu_planar_calibration_enabled").as_bool();
+    const auto imu_bias = get_parameter("imu_mag_bias_xy_lsb").as_double_array();
+    const auto imu_matrix = get_parameter("imu_mag_matrix_xy_per_lsb").as_double_array();
+    if (imu_bias.size() == 2) { imu_bias_x_lsb_ = imu_bias[0]; imu_bias_y_lsb_ = imu_bias[1]; }
+    else { RCLCPP_WARN(get_logger(), "Yahboom bias XY invalid size=%zu; calibration disabled", imu_bias.size()); imu_planar_calibration_enabled_ = false; }
+    if (imu_matrix.size() == 4) {
+      imu_m00_ = imu_matrix[0]; imu_m01_ = imu_matrix[1]; imu_m10_ = imu_matrix[2]; imu_m11_ = imu_matrix[3];
+      const double det = imu_m00_ * imu_m11_ - imu_m01_ * imu_m10_;
+      if (!std::isfinite(det) || std::abs(det) < 1.0e-12) { RCLCPP_WARN(get_logger(), "Yahboom XY matrix singular; calibration disabled"); imu_planar_calibration_enabled_ = false; }
+    } else { RCLCPP_WARN(get_logger(), "Yahboom matrix XY invalid size=%zu; calibration disabled", imu_matrix.size()); imu_planar_calibration_enabled_ = false; }
+    imu_heading_lut_enabled_ = get_parameter("imu_heading_lut_enabled").as_bool();
+    const auto imu_lut_in = get_parameter("imu_heading_lut_input_rad").as_double_array();
+    const auto imu_lut_corr = get_parameter("imu_heading_lut_correction_rad").as_double_array();
+    if (imu_heading_lut_enabled_) {
+      if (imu_lut_in.size() != imu_lut_corr.size() || imu_lut_in.size() < 4) { imu_heading_lut_enabled_ = false; }
+      else {
+        for (size_t i = 0; i < imu_lut_in.size(); ++i) if (std::isfinite(imu_lut_in[i]) && std::isfinite(imu_lut_corr[i])) imu_heading_lut_.emplace_back(normalizeAngle(imu_lut_in[i]), normalizeAngle(imu_lut_corr[i]));
+        std::sort(imu_heading_lut_.begin(), imu_heading_lut_.end(), [](const auto &a, const auto &b){ return a.first < b.first; });
+        if (imu_heading_lut_.size() < 4) imu_heading_lut_enabled_ = false;
+      }
+    }
+    imu_corrected_norm_min_ = std::max(0.05, get_parameter("imu_corrected_norm_min").as_double());
+    imu_corrected_norm_max_ = std::max(imu_corrected_norm_min_ + 0.05, get_parameter("imu_corrected_norm_max").as_double());
+    imu_planar_max_tilt_rad_ = std::clamp(get_parameter("imu_planar_max_tilt_rad").as_double(), 0.05, 0.7);
     neo_sign_ = get_parameter("neo3_mag_yaw_sign").as_double() >= 0.0 ? 1.0 : -1.0;
     neo_offset_ = get_parameter("neo3_mag_yaw_offset_rad").as_double();
     neo_planar_calibration_enabled_ = get_parameter("neo3_planar_calibration_enabled").as_bool();
@@ -147,6 +183,9 @@ public:
     imu_mag_sub_ = create_subscription<sensor_msgs::msg::MagneticField>(
       imu_mag_topic_, sensor_qos,
       [this](sensor_msgs::msg::MagneticField::ConstSharedPtr msg) { onMag(*msg, Source::IMU); });
+    imu_raw_mag_sub_ = create_subscription<std_msgs::msg::Float64MultiArray>(
+      imu_raw_mag_topic_, sensor_qos,
+      [this](std_msgs::msg::Float64MultiArray::ConstSharedPtr msg) { onImuRawMag(*msg); });
     neo_mag_sub_ = create_subscription<sensor_msgs::msg::MagneticField>(
       neo3_mag_topic_, sensor_qos,
       [this](sensor_msgs::msg::MagneticField::ConstSharedPtr msg) { onMag(*msg, Source::NEO3); });
@@ -244,6 +283,44 @@ private:
     if (dt <= 0.0 || dt > 2.0) return true;
     const double delta = std::abs(normalizeAngle(heading - state.heading_rad));
     return delta <= max_heading_rate_rps_ * dt + rate_gate_margin_rad_;
+  }
+
+  double applyImuHeadingLut(double yaw_enu) const {
+    if (!imu_heading_lut_enabled_ || imu_heading_lut_.size() < 2) return normalizeAngle(yaw_enu);
+    const double y = normalizeAngle(yaw_enu);
+    size_t hi = 0;
+    while (hi < imu_heading_lut_.size() && imu_heading_lut_[hi].first < y) ++hi;
+    double x0, x1, c0, c1, yy = y;
+    if (hi == 0) { x0=imu_heading_lut_.back().first; c0=imu_heading_lut_.back().second; x1=imu_heading_lut_.front().first+2.0*kPi; c1=imu_heading_lut_.front().second; yy+=2.0*kPi; }
+    else if (hi == imu_heading_lut_.size()) { x0=imu_heading_lut_.back().first; c0=imu_heading_lut_.back().second; x1=imu_heading_lut_.front().first+2.0*kPi; c1=imu_heading_lut_.front().second; }
+    else { x0=imu_heading_lut_[hi-1].first; c0=imu_heading_lut_[hi-1].second; x1=imu_heading_lut_[hi].first; c1=imu_heading_lut_[hi].second; }
+    const double f=std::clamp((yy-x0)/std::max(1.0e-9,x1-x0),0.0,1.0);
+    return normalizeAngle(y + c0 + f*normalizeAngle(c1-c0));
+  }
+
+  void onImuRawMag(const std_msgs::msg::Float64MultiArray &msg) {
+    if (!enable_imu_ || !imu_planar_calibration_enabled_) return;
+    HeadingState &state = imu_state_;
+    const auto reject = [&](const char *reason) { ++state.rejected; state.reject_reason=reason; setValid(Source::IMU,false); };
+    const auto t=now();
+    if (msg.data.size() < 3) { reject("raw_lsb_size"); return; }
+    if (!have_map_yaw_) { reject("map_yaw_unavailable"); return; }
+    if (!have_tilt_ || (t-last_tilt_time_).seconds() < 0.0 || (t-last_tilt_time_).seconds() > tilt_timeout_sec_) { reject("tilt_stale"); return; }
+    if (std::abs(roll_rad_) > imu_planar_max_tilt_rad_ || std::abs(pitch_rad_) > imu_planar_max_tilt_rad_) { reject("planar_tilt_out_of_range"); return; }
+    const double x=msg.data[0], y=msg.data[1];
+    if (!std::isfinite(x) || !std::isfinite(y)) { reject("non_finite_raw_lsb"); return; }
+    const double bx=x-imu_bias_x_lsb_, by=y-imu_bias_y_lsb_;
+    const double qx=imu_m00_*bx + imu_m01_*by;
+    const double qy=imu_m10_*bx + imu_m11_*by;
+    const double cn=std::hypot(qx,qy); imu_corrected_norm_=cn; state.norm_ut=std::numeric_limits<double>::quiet_NaN();
+    if (!std::isfinite(cn) || cn < imu_corrected_norm_min_ || cn > imu_corrected_norm_max_) { reject("corrected_norm_gate"); return; }
+    double yaw_enu=normalizeAngle(imu_sign_*std::atan2(qy,qx)+imu_offset_-declination_rad_);
+    yaw_enu=applyImuHeadingLut(yaw_enu);
+    const double yaw_map=normalizeAngle(yaw_enu+map_yaw_from_enu_);
+    if (!temporalGate(state,yaw_map,t)) { reject("heading_rate_gate"); return; }
+    geometry_msgs::msg::PoseWithCovarianceStamped pose; pose.header.stamp=t; pose.header.frame_id=output_frame_; pose.pose.pose.orientation=yawQuaternion(yaw_map); pose.pose.covariance.fill(0.0);
+    pose.pose.covariance[0]=pose.pose.covariance[7]=pose.pose.covariance[14]=pose.pose.covariance[21]=pose.pose.covariance[28]=1.0e6; pose.pose.covariance[35]=imu_variance_; imu_heading_pub_->publish(pose);
+    state.heading_rad=yaw_map; state.stamp=t; state.reject_reason.clear(); ++state.accepted; setValid(Source::IMU,true);
   }
 
   double applyNeoHeadingLut(double yaw_enu) const {
@@ -389,6 +466,7 @@ private:
     msg.data = std::string("imu_valid=") + (imu_state_.valid ? "true" : "false") +
       ";neo3_valid=" + (neo_state_.valid ? "true" : "false") +
       ";imu_norm_ut=" + std::to_string(imu_state_.norm_ut) +
+      ";imu_corrected_norm=" + std::to_string(imu_corrected_norm_) +
       ";neo3_norm_ut=" + std::to_string(neo_state_.norm_ut) +
       ";imu_reject=" + imu_state_.reject_reason +
       ";neo3_reject=" + neo_state_.reject_reason +
@@ -402,10 +480,15 @@ private:
     status_pub_->publish(msg);
   }
 
-  std::string imu_topic_, imu_mag_topic_, neo3_mag_topic_, map_yaw_topic_, output_frame_;
+  std::string imu_topic_, imu_mag_topic_, imu_raw_mag_topic_, neo3_mag_topic_, map_yaw_topic_, output_frame_;
   double tilt_timeout_sec_{0.75}, max_tilt_rad_{0.7853981634}, declination_rad_{0.0};
   double min_norm_ut_{15.0}, max_norm_ut_{100.0};
   double imu_sign_{-1.0}, imu_offset_{1.5451826276}, neo_sign_{-1.0}, neo_offset_{1.5707963268};
+  bool imu_planar_calibration_enabled_{false}, imu_heading_lut_enabled_{false};
+  double imu_bias_x_lsb_{0.0}, imu_bias_y_lsb_{0.0};
+  double imu_m00_{1.0}, imu_m01_{0.0}, imu_m10_{0.0}, imu_m11_{1.0};
+  double imu_corrected_norm_min_{0.70}, imu_corrected_norm_max_{1.30}, imu_planar_max_tilt_rad_{0.2617993878}, imu_corrected_norm_{0.0};
+  std::vector<std::pair<double,double>> imu_heading_lut_;
   bool neo_planar_calibration_enabled_{false}, neo_heading_lut_enabled_{false};
   double neo_bias_x_ut_{0.0}, neo_bias_y_ut_{0.0};
   double neo_m00_{1.0}, neo_m01_{0.0}, neo_m10_{0.0}, neo_m11_{1.0};
@@ -425,6 +508,7 @@ private:
 
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   rclcpp::Subscription<sensor_msgs::msg::MagneticField>::SharedPtr imu_mag_sub_, neo_mag_sub_;
+  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr imu_raw_mag_sub_;
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr map_yaw_sub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr imu_heading_pub_, neo_heading_pub_, inertial_heading_pub_, validated_heading_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr imu_valid_pub_, neo_valid_pub_, consensus_valid_pub_;

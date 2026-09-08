@@ -108,3 +108,15 @@ Parameter runtime berada di `src/navigation/config/mag_heading.yaml`; bukti dan 
 - Setelah STATIC_8, logger otomatis menjalankan `tools/yahboom_mag_planar_fit.py`.
 - Auto-fit menghitung bias XY, whitening/soft-iron 2D, yaw sign, ENU yaw offset, dan 8-knot residual LUT; hasil ditulis ke `calibration/yahboom_mag_planar_latest.yaml`.
 - Kandidat hanya valid bila 8 segmen lengkap, 7 transisi CW lulus, >=200 sampel statis, RMS <3 deg dan max error <5 deg. Runtime tidak diaktifkan otomatis sebelum hasil diaudit.
+
+## Hasil final kalibrasi magnetometer Yahboom 8 arah CW
+
+- Dataset final: `calibration/heading_8dir_raw_20260908_212631.csv`.
+- Bug fitter ditemukan: `STATIC_CANDIDATE` sempat ikut terpilih oleh `startswith(STATIC_)`; diperbaiki menjadi exact `STATIC_N`.
+- Duplicate transition chatter didebounce per perpindahan; meaningful reversal CCW tetap menyebabkan fail.
+- Hasil final: 352 sampel statis, 8/8 posisi, 7/7 transisi CW, RMS 0.23249 deg, max 0.77367 deg.
+- Hard-iron XY LSB = [3149.37857, -685.65556]. Soft-iron normalized matrix disimpan di `config/yahboom_mag_calibration.yaml`.
+- Runtime memakai `/imu/mag_raw_lsb`, corrected-norm gate 0.75..1.25, sign/offset + 8-knot LUT. Tidak ada konversi Tesla palsu.
+- Live setelah restart: Yahboom 170.10 deg, IST8310 170.51 deg, inertial 170.55 deg, validated 170.52 deg; Yahboom-IST8310 sekitar -0.41 deg; corrected norm 0.974.
+- `imu_valid=true`, `neo3_valid=true`, consensus tetap valid. Yahboom MAG hanya diagnostic; validated heading/EKF ownership tetap inertial + IST8310/GNSS sesuai arsitektur fail-closed.
+- Scope kalibrasi ini planar XY untuk AGV. Kalibrasi internal spherical 3D Yahboom tidak ditulis karena pengujian tidak mencakup rotasi multi-axis X/Y/Z.

@@ -23,7 +23,16 @@ mp = mag['mag_heading_fusion']['ros__parameters']
 req(mp['neo3_mag_topic'] == '/neo3/mag', 'NEO3 magnetometer topic mismatch')
 req(mp['imu_mag_topic'] == '/imu/mag', 'IMU magnetometer topic mismatch')
 req(mp['map_yaw_topic'] == '/localization/map_yaw_from_enu', 'map yaw dependency mismatch')
-req(mp.get('enable_imu_mag_heading') is False, 'Yahboom MAG must stay out of heading fusion until physical calibration is valid')
+req(mp.get('enable_imu_mag_heading') is True, 'Yahboom calibrated MAG diagnostic must be enabled after 8-direction validation')
+req(mp.get('imu_raw_mag_topic') == '/imu/mag_raw_lsb', 'Yahboom calibration must consume manufacturer raw LSB topic')
+req(mp.get('imu_planar_calibration_enabled') is True, 'Yahboom planar calibration must be enabled')
+req(len(mp.get('imu_mag_bias_xy_lsb', [])) == 2, 'Yahboom XY hard-iron bias missing')
+req(len(mp.get('imu_mag_matrix_xy_per_lsb', [])) == 4, 'Yahboom XY soft-iron matrix missing')
+req(mp.get('imu_heading_lut_enabled') is True, 'Yahboom 8-direction heading LUT must be enabled')
+req(len(mp.get('imu_heading_lut_input_rad', [])) == 8 and len(mp.get('imu_heading_lut_correction_rad', [])) == 8, 'Yahboom LUT must contain 8 knots/corrections')
+ycal = yaml.safe_load((ROOT / 'config/yahboom_mag_calibration.yaml').read_text(encoding='utf-8'))['yahboom_mag_calibration']
+req(ycal.get('valid') is True and ycal.get('validation', {}).get('pass') is True, 'Yahboom 8-direction calibration evidence must pass')
+req(float(ycal['validation']['rms_error_deg']) < 3.0 and float(ycal['validation']['max_abs_error_deg']) < 5.0, 'Yahboom replay must remain inside calibration gates')
 ip = imu['data_imu_node']['ros__parameters']
 req(ip.get('baudrate') == 921600 and ip.get('auto_baud') is True, 'Yahboom serial must prefer/probe 921600 baud')
 req(ip.get('publish_rate_hz') == 50 and ip.get('output_rate_code') == 8, 'Yahboom hardware/ROS rate must be 50 Hz')
