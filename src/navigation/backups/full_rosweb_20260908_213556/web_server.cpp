@@ -196,7 +196,6 @@ QMap<QString, QString> configCandidates() {
       {"localization", nav + "/localization_cpp.yaml"},
       {"gnss", nav + "/gnss.yaml"},
       {"imu", nav + "/imu.yaml"},
-      {"mag_heading", nav + "/mag_heading.yaml"},
       {"imu_speed", nav + "/imu_speed.yaml"},
       {"stage3", nav + "/stage3_navigation.yaml"},
       {"trajectory_safety", nav + "/trajectory_safety.yaml"},
@@ -816,8 +815,6 @@ class WebRosBridge {
     return localCostmapPng_;
   }
 
-  bool vehicleStationary(QString *reason) const { return vehicleStationaryForRuntimeApply(reason); }
-
   QJsonObject applyConfigChange(const QString &fileKey, const QString &yamlPath) {
     QJsonObject result{{"requested", true}, {"file_key", fileKey}, {"path", yamlPath}};
     const auto targets = runtimeTargetsForChange(fileKey, yamlPath);
@@ -1315,7 +1312,6 @@ class WebRosBridge {
     else if (fileKey == QStringLiteral("gnss")) add(QStringLiteral("data_cuav_node"),QStringLiteral("/data_cuav_node"));
     else if (fileKey == QStringLiteral("imu")) add(QStringLiteral("data_imu_node"),QStringLiteral("/data_imu_node"));
     else if (fileKey == QStringLiteral("imu_speed")) add(QStringLiteral("imu_speed_diagnostic"),QStringLiteral("/imu_speed_diagnostic"));
-    else if (fileKey == QStringLiteral("mag_heading")) add(QStringLiteral("mag_heading_fusion"),QStringLiteral("/mag_heading_fusion"));
     else if (fileKey == QStringLiteral("navigation_core")) add(QStringLiteral("navigation_core"),QStringLiteral("/navigation_core"));
     else if (fileKey == QStringLiteral("trajectory_safety")) add(QStringLiteral("trajectory_safety_supervisor"),QStringLiteral("/trajectory_safety_supervisor"));
     else if (fileKey == QStringLiteral("perception")) add(QStringLiteral("perception"),QStringLiteral("/perception"));
@@ -1528,7 +1524,6 @@ class WebRosBridge {
         {"/system/localization_state", "localization_state"}, {"/system/gnss_status", "gnss_status"},
         {"/gnss/state", "gnss_driver_state"}, {"/neo3/status", "neo3_status"},
         {"/system/magnetic_heading_status", "magnetic_heading_status"},
-        {"/imu/profile_status", "imu_profile_status"},
         {"/gnss/motion_diagnostics", "gnss_motion"},
         {"/gnss/motion_validation", "gnss_motion_validation"}, {"/gnss/fusion_status", "gnss_fusion_status"},
         {"/system/imu_status", "imu_status"}, {"/system/ekf_local_status", "ekf_local_status"},
@@ -1688,25 +1683,6 @@ class WebRosBridge {
     };
     magneticHeadingSubscribe("/neo3/mag_heading_fusion", "neo3_mag_heading");
     magneticHeadingSubscribe("/imu/mag_heading_fusion", "imu_mag_heading");
-
-    subscribe<std_msgs::msg::Float64MultiArray>("/imu/raw_sensor_vectors", sensorQos,
-      [this](std_msgs::msg::Float64MultiArray::ConstSharedPtr msg) {
-        if (msg->data.size() < 9U) return;
-        const double ax=msg->data[0], ay=msg->data[1], az=msg->data[2];
-        const double an=std::sqrt(ax*ax+ay*ay+az*az);
-        QString mounting=QStringLiteral("UNKNOWN"), detail=QStringLiteral("gravity belum stabil");
-        bool mountingOk=false;
-        if (std::isfinite(an) && std::abs(an-9.80665)<=1.5) {
-          if (az>7.2 && std::abs(ax)<4.5 && std::abs(ay)<4.5) { mounting="TOP_UP"; mountingOk=true; detail="horizontal/top-up"; }
-          else if (az<-7.2) { mounting="UPSIDE_DOWN"; detail="Z sensor terbalik"; }
-          else if (std::abs(ax)>7.2 || std::abs(ay)>7.2) { mounting="SIDE_MOUNTED"; detail="gravity dominan pada X/Y"; }
-          else { mounting="TILT_MISMATCH"; detail="sensor terlalu miring untuk kalibrasi planar"; }
-        }
-        update("imu_raw_sensor", QJsonObject{{"ax",ax},{"ay",ay},{"az",az},{"acc_norm",an},
-          {"gx",msg->data[3]},{"gy",msg->data[4]},{"gz",msg->data[5]},
-          {"mx_lsb",msg->data[6]},{"my_lsb",msg->data[7]},{"mz_lsb",msg->data[8]},
-          {"mounting_state",mounting},{"mounting_ok",mountingOk},{"mounting_detail",detail}});
-      });
 
     subscribe<sensor_msgs::msg::Imu>("/imu/data", sensorQos, [this](sensor_msgs::msg::Imu::ConstSharedPtr msg) {
       const auto &q = msg->orientation;
@@ -2082,11 +2058,6 @@ class LocalHttpServer : public QObject {
     connect(&recordingTimer_, &QTimer::timeout, this, [this]() { captureRecordingSample(); });
     hostTimer_.setInterval(1000);
     connect(&hostTimer_, &QTimer::timeout, this, [this]() { sampleHostMetrics(); });
-    imuCalibrationProcess_.setProcessChannelMode(QProcess::MergedChannels);
-    connect(&imuCalibrationProcess_, &QProcess::readyReadStandardOutput, this, [this]() {
-      imuCalibrationLastOutput_ += QString::fromUtf8(imuCalibrationProcess_.readAllStandardOutput());
-      if (imuCalibrationLastOutput_.size() > 4000) imuCalibrationLastOutput_ = imuCalibrationLastOutput_.right(4000);
-    });
   }
 
   bool start(const QString &bindAddress, int port) {
@@ -2205,8 +2176,6 @@ class LocalHttpServer : public QObject {
   QTimer bindRetryTimer_;
   QTimer recordingTimer_;
   QTimer hostTimer_;
-  QProcess imuCalibrationProcess_;
-  QString imuCalibrationLastOutput_;
   quint64 hostPrevTotal_{0};
   quint64 hostPrevIdle_{0};
   QHostAddress bindAddress_;
@@ -2214,7 +2183,6 @@ class LocalHttpServer : public QObject {
   quint16 bindPort_{0};
   QList<QPointer<QTcpSocket>> sseClients_;
   QString staticRoot_;
-  quint64 sseSequence_{0};
   int heartbeatTicks_{0};
   bool recording_{false};
   QString recordingSubsystem_;
@@ -2238,78 +2206,6 @@ class LocalHttpServer : public QObject {
   QString lastXlsxPath_;
   QString lastXlsxName_;
   QStringList lastGraphPaths_;
-
-  QString navigationSharePath() const {
-    try { return QString::fromStdString(ament_index_cpp::get_package_share_directory("navigation")); }
-    catch (...) { return QStringLiteral("/home/otomasi/ros/install/navigation/share/navigation"); }
-  }
-
-  QJsonObject imuCalibrationStatus() const {
-    QJsonObject out{{"running", imuCalibrationProcess_.state()!=QProcess::NotRunning},
-                    {"process_state", static_cast<int>(imuCalibrationProcess_.state())},
-                    {"last_output", imuCalibrationLastOutput_.right(1200)}};
-    const QString statePath=QStringLiteral("/home/otomasi/ros/calibration/yahboom_calibration_state.json");
-    QFile sf(statePath);
-    if (sf.open(QIODevice::ReadOnly)) {
-      QJsonParseError e{}; const auto d=QJsonDocument::fromJson(sf.readAll(),&e);
-      if (e.error==QJsonParseError::NoError && d.isObject()) {
-        for (auto it=d.object().constBegin(); it!=d.object().constEnd(); ++it) out[it.key()]=it.value();
-      }
-    }
-    const QString fitPath=QStringLiteral("/home/otomasi/ros/calibration/yahboom_mag_planar_latest.yaml");
-    if (QFileInfo::isFile(fitPath)) {
-      try { out["fit"] = yamlToJson(YAML::LoadFile(fitPath.toStdString())); }
-      catch (const std::exception &e) { out["fit_error"]=QString::fromUtf8(e.what()); }
-    }
-    return out;
-  }
-
-  bool startImuCalibration(const QString &direction, QString *message) {
-    if (bridge_->readOnly()) { if(message)*message="Web GUI read-only"; return false; }
-    if (imuCalibrationProcess_.state()!=QProcess::NotRunning) { if(message)*message="Kalibrasi Yahboom masih berjalan"; return false; }
-    QString stationary;
-    if (!bridge_->vehicleStationary(&stationary)) { if(message)*message=stationary; return false; }
-    const QString d=direction.trimmed().toUpper();
-    if (d!="CW" && d!="CCW") { if(message)*message="direction wajib CW atau CCW"; return false; }
-    const QString script=navigationSharePath()+QStringLiteral("/tools/yahboom_8dir_calibration.py");
-    if (!QFileInfo::isFile(script)) { if(message)*message="Backend calibration script tidak ditemukan: "+script; return false; }
-    imuCalibrationLastOutput_.clear();
-    imuCalibrationProcess_.setProgram(QStringLiteral("/usr/bin/python3"));
-    imuCalibrationProcess_.setArguments({script,QStringLiteral("--direction"),d});
-    imuCalibrationProcess_.setWorkingDirectory(QStringLiteral("/home/otomasi/ros"));
-    imuCalibrationProcess_.start();
-    if (!imuCalibrationProcess_.waitForStarted(1200)) { if(message)*message="Gagal start backend kalibrasi"; return false; }
-    if(message)*message=QStringLiteral("Wizard Yahboom 8 arah %1 dimulai; ikuti target animasi dan tahan diam tiap posisi.").arg(d);
-    return true;
-  }
-
-  bool stopImuCalibration(QString *message) {
-    if (imuCalibrationProcess_.state()==QProcess::NotRunning) { if(message)*message="Tidak ada kalibrasi aktif"; return false; }
-    imuCalibrationProcess_.terminate();
-    if (!imuCalibrationProcess_.waitForFinished(1200)) { imuCalibrationProcess_.kill(); imuCalibrationProcess_.waitForFinished(700); }
-    const QString path=QStringLiteral("/home/otomasi/ros/calibration/yahboom_calibration_state.json");
-    QJsonObject st=imuCalibrationStatus(); st["status"]="STOPPED"; st["instruction"]="Dihentikan operator; hasil tidak boleh di-apply"; st["running"]=false;
-    QSaveFile f(path); if(f.open(QIODevice::WriteOnly)){f.write(QJsonDocument(st).toJson(QJsonDocument::Indented));f.commit();}
-    if(message)*message="Kalibrasi Yahboom dihentikan; gate apply tetap tertutup";
-    return true;
-  }
-
-  bool applyImuCalibration(QString *message, QJsonObject *result) {
-    if (bridge_->readOnly()) { if(message)*message="Web GUI read-only"; return false; }
-    if (imuCalibrationProcess_.state()!=QProcess::NotRunning) { if(message)*message="Tunggu kalibrasi selesai"; return false; }
-    QString stationary; if(!bridge_->vehicleStationary(&stationary)){if(message)*message=stationary;return false;}
-    const QString script=navigationSharePath()+QStringLiteral("/tools/yahboom_apply_calibration.py");
-    QProcess proc; proc.setProgram(QStringLiteral("/usr/bin/python3")); proc.setArguments({script,QStringLiteral("--workspace"),QStringLiteral("/home/otomasi/ros")}); proc.start();
-    if(!proc.waitForStarted(1000) || !proc.waitForFinished(6000)){proc.kill();if(message)*message="Apply calibration backend timeout";return false;}
-    QJsonParseError pe{}; const QJsonDocument doc=QJsonDocument::fromJson(proc.readAllStandardOutput().trimmed(),&pe);
-    if(pe.error!=QJsonParseError::NoError || !doc.isObject()){if(message)*message="Apply backend menghasilkan response invalid";return false;}
-    QJsonObject r=doc.object(); if(result)*result=r;
-    if(proc.exitCode()!=0 || !r.value("ok").toBool(false)){if(message)*message=r.value("message").toString("Fit tidak lolos gate");return false;}
-    const QJsonObject runtime=bridge_->applyConfigChange(QStringLiteral("mag_heading"),QStringLiteral("mag_heading_fusion.ros__parameters.imu_mag_yaw_offset_rad"));
-    if(result)(*result)["runtime_apply"]=runtime;
-    if(message)*message=r.value("message").toString()+QStringLiteral(" Runtime: ")+runtime.value("status").toString();
-    return runtime.value("status").toString()!=QStringLiteral("RUNTIME_MISMATCH");
-  }
 
   void acceptConnections() {
     while (server_.hasPendingConnections()) {
@@ -2373,7 +2269,6 @@ class LocalHttpServer : public QObject {
     }
     if (request.method == "GET" && request.path == "/api/experiments") return sendJson(socket, 200, experimentCatalogJson());
     if (request.method == "GET" && request.path == "/api/config") return sendJson(socket, 200, loadConfigSnapshot());
-    if (request.method == "GET" && request.path == "/api/imu/calibration/status") return sendJson(socket, 200, imuCalibrationStatus());
     if (request.method == "GET" && request.path == "/api/experiment/record/status") {
       return sendJson(socket, 200, recordingStatus());
     }
@@ -2597,16 +2492,6 @@ class LocalHttpServer : public QObject {
       }
       ok=bridge_->publishTrialMotion(json.value("id").toString(), json.value("erpm").toDouble(0.0), json.value("steering_deg").toDouble(0.0), active, &message);
       return sendJson(socket,ok?200:409,QJsonObject{{"ok",ok},{"message",message},{"at_ms",nowMs()}});
-    } else if (request.path == "/api/imu/profile/optimal") {
-      if (bridge_->readOnly()) return sendJson(socket,403,QJsonObject{{"ok",false},{"message","Web GUI read-only"}});
-      QString stationary; if(!bridge_->vehicleStationary(&stationary)) return sendJson(socket,409,QJsonObject{{"ok",false},{"message",stationary}});
-      ok=bridge_->triggerService("/imu/configure_optimal_profile","imu_optimal_profile",&message);
-    } else if (request.path == "/api/imu/calibration/start") {
-      ok=startImuCalibration(json.value("direction").toString(),&message);
-    } else if (request.path == "/api/imu/calibration/stop") {
-      ok=stopImuCalibration(&message);
-    } else if (request.path == "/api/imu/calibration/apply") {
-      QJsonObject result;ok=applyImuCalibration(&message,&result);result["ok"]=ok;result["message"]=message;result["at_ms"]=nowMs();return sendJson(socket,ok?200:409,result);
     } else if (request.path == "/api/perception/inference") {
       ok = bridge_->setPerceptionInference(json.value("enabled").toBool(false), &message);
     } else if (request.path == "/api/navigation/goal") {
@@ -3172,9 +3057,7 @@ class LocalHttpServer : public QObject {
     socket->write(headers);
     socket->setProperty("sse", true);
     sseClients_.append(QPointer<QTcpSocket>(socket));
-    QJsonObject snapshotObject = bridge_->snapshot();
-    snapshotObject["__event_seq"] = QString::number(sseSequence_);
-    const QByteArray snapshot = QJsonDocument(snapshotObject).toJson(QJsonDocument::Compact);
+    const QByteArray snapshot = QJsonDocument(bridge_->snapshot()).toJson(QJsonDocument::Compact);
     socket->write("event: snapshot\ndata: " + snapshot + "\n\n");
     socket->flush();
   }
@@ -3183,13 +3066,9 @@ class LocalHttpServer : public QObject {
     for (int i = sseClients_.size() - 1; i >= 0; --i) {
       if (sseClients_[i].isNull() || sseClients_[i]->state() != QAbstractSocket::ConnectedState) sseClients_.removeAt(i);
     }
-    QJsonObject delta = bridge_->takeDelta();
+    const QJsonObject delta = bridge_->takeDelta();
     QByteArray payload;
-    if (!delta.isEmpty()) {
-      ++sseSequence_;
-      delta["__event_seq"] = QString::number(sseSequence_);
-      payload = "data: " + QJsonDocument(delta).toJson(QJsonDocument::Compact) + "\n\n";
-    }
+    if (!delta.isEmpty()) payload = "data: " + QJsonDocument(delta).toJson(QJsonDocument::Compact) + "\n\n";
     ++heartbeatTicks_;
     const bool heartbeat = heartbeatTicks_ >= 250;  // 5 s at 50 Hz event timer
     if (heartbeat) heartbeatTicks_ = 0;

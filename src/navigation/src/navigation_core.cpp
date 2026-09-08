@@ -167,6 +167,8 @@ private:
     // opt-in and applies a low speed cap; production remains fail-closed until
     // MPPI/safety/fault-injection evidence has been signed off.
     declare_parameter<bool>("require_stage3_production_certification", true);
+    declare_parameter<bool>("require_collision_monitor_for_production", true);
+    declare_parameter<bool>("require_perception_for_production", true);
     declare_parameter<bool>("stage3_production_certified", false);
     declare_parameter<bool>("stage3_commissioning_mode", false);
     declare_parameter<double>("stage3_commissioning_speed_cap_mps", 1.0);
@@ -224,6 +226,10 @@ private:
     imu_calibration_validated_ = get_parameter("imu_calibration_validated").as_bool();
     require_stage3_production_certification_ =
       get_parameter("require_stage3_production_certification").as_bool();
+    require_collision_monitor_for_production_ =
+      get_parameter("require_collision_monitor_for_production").as_bool();
+    require_perception_for_production_ =
+      get_parameter("require_perception_for_production").as_bool();
     stage3_production_certified_ = get_parameter("stage3_production_certified").as_bool();
     stage3_commissioning_mode_ = get_parameter("stage3_commissioning_mode").as_bool();
     stage3_commissioning_speed_cap_mps_ = std::max(
@@ -576,6 +582,16 @@ private:
       if (require_drive_odometry_calibration_ && !drive_odometry_calibration_validated_) return false;
       if (require_imu_calibration_ && !imu_calibration_validated_) return false;
       if (require_stage3_production_certification_ && !stage3_production_certified_) return false;
+      // Defense-in-depth: production flag saja tidak pernah cukup. Bahkan bila
+      // YAML stage3 salah diedit manual, actuator tetap tertutup tanpa collision
+      // monitor dan perception stream yang fresh.
+      if (stage3_production_certified_ && require_collision_monitor_for_production_ &&
+          !collision_monitor_enabled_) return false;
+      if (stage3_production_certified_ && require_perception_for_production_) {
+        if (!camera_connected_ || last_perception_time_.nanoseconds() == 0) return false;
+        const double production_perception_age = (t - last_perception_time_).seconds();
+        if (production_perception_age < 0.0 || production_perception_age > perception_timeout_sec_) return false;
+      }
     }
     if (require_perception_for_motion_) {
       // Fresh state dari publisher lama/stale tidak boleh membuka actuator bila
@@ -1299,6 +1315,8 @@ private:
   bool require_imu_calibration_{true};
   bool imu_calibration_validated_{false};
   bool require_stage3_production_certification_{true};
+  bool require_collision_monitor_for_production_{true};
+  bool require_perception_for_production_{true};
   bool stage3_production_certified_{false};
   bool stage3_commissioning_mode_{false};
   double stage3_commissioning_speed_cap_mps_{1.0};

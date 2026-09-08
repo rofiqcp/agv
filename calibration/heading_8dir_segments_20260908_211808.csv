@@ -1,0 +1,2 @@
+segment,samples,duration_sec,imu_mean_deg,imu_std_deg,inertial_mean_deg,inertial_std_deg,validated_mean_deg,validated_std_deg,neo_mean_deg,neo_std_deg,inertial_neo_residual_deg,gyro_z_mean_rps,gyro_norm_mean_rps,acc_norm_mean,yah_mag_norm_mean_lsb,neo_mag_norm_mean_ut
+1,39,0.895066451994353,-173.2763671875,0.0,170.19349006150105,0.06078642465863317,170.19839116698176,0.12819033603614352,170.200518892664,0.17352081206633455,-0.007028831162959209,0.0,0.0,9.804221037025844,6714.484338365776,72.70146501794522

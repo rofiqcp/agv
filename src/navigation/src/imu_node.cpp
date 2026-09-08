@@ -201,6 +201,18 @@ ImuNode::ImuNode(const rclcpp::NodeOptions & options)
   pub_imu_ = this->create_publisher<sensor_msgs::msg::Imu>("imu/data", qos);
   pub_mag_ = this->create_publisher<sensor_msgs::msg::MagneticField>("imu/mag", qos);
   pub_mag_raw_lsb_ = this->create_publisher<std_msgs::msg::Float64MultiArray>("imu/mag_raw_lsb", qos);
+  pub_raw_sensor_vectors_ = this->create_publisher<std_msgs::msg::Float64MultiArray>("imu/raw_sensor_vectors", qos);
+  pub_profile_status_ = this->create_publisher<std_msgs::msg::String>(
+    "/imu/profile_status", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
+  srv_configure_optimal_profile_ = this->create_service<std_srvs::srv::Trigger>(
+    "/imu/configure_optimal_profile",
+    [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+           std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+      std::string detail;
+      response->success = configureOptimalProfile(detail);
+      response->message = detail;
+      publishProfileStatus(response->success ? "PASS" : "FAIL", detail);
+    });
   pub_connected_ = this->create_publisher<std_msgs::msg::Bool>(
     "/imu/connected", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
   if (publish_raw_) {
@@ -211,6 +223,7 @@ ImuNode::ImuNode(const rclcpp::NodeOptions & options)
   ser_ = std::make_unique<serial::Serial>();
   openSerial(true);
   last_reconnect_try_ = nowSec();
+  publishProfileStatus(ser_ && ser_->isOpen() ? "READY" : "WAIT", "runtime profile initialized");
 
   // Polling serial tetap ringan; publish rate dibatasi terpisah pada publishImu().
   timer_ = this->create_wall_timer(
@@ -325,6 +338,76 @@ bool ImuNode::writeSensorRegister(uint8_t address, uint16_t value)
     logRateLimited("IMU config write gagal: " + std::string(e.what()), "warn");
     return false;
   }
+}
+
+// Fungsi: Menerbitkan profil serial/algoritma sebagai state machine untuk ROS Web.
+void ImuNode::publishProfileStatus(const std::string & state, const std::string & detail)
+{
+  if (!pub_profile_status_) return;
+  std_msgs::msg::String msg;
+  msg.data = "state=" + state + ";baud=" + std::to_string(baudrate_) +
+    ";rrate=" + std::to_string(output_rate_code_) +
+    ";rsw=" + std::to_string(output_content_mask_) +
+    ";axis6=" + std::to_string(algorithm_mode_) +
+    ";detail=" + detail;
+  pub_profile_status_->publish(msg);
+}
+
+// Fungsi: Terapkan profil AGV Yahboom resmi dan persisten. BAUD ditulis terakhir,
+// host ikut pindah ke 921600, kemudian SAVE dan checksum stream diverifikasi.
+bool ImuNode::configureOptimalProfile(std::string & detail)
+{
+  if (!ser_ || !ser_->isOpen()) {
+    detail = "serial Yahboom belum terbuka";
+    return false;
+  }
+  publishProfileStatus("APPLYING", "unlock dan tulis profil optimal");
+  const auto pause = []() { std::this_thread::sleep_for(std::chrono::milliseconds(90)); };
+  if (!writeSensorRegister(0x69, 0xB588)) { detail = "unlock gagal"; return false; }
+  pause();
+  if (!writeSensorRegister(0x02, 0x001E)) { detail = "RSW gagal"; return false; }
+  pause();
+  if (!writeSensorRegister(0x03, 0x0008)) { detail = "RRATE 50Hz gagal"; return false; }
+  pause();
+  if (!writeSensorRegister(0x24, 0x0001)) { detail = "AXIS6 gagal"; return false; }
+  pause();
+  if (!writeSensorRegister(0x25, 0x001E)) { detail = "FILTK gagal"; return false; }
+  pause();
+  if (!writeSensorRegister(0x23, 0x0000)) { detail = "ORIENT horizontal gagal"; return false; }
+  pause();
+  if (!writeSensorRegister(0x04, 0x0009)) { detail = "BAUD 921600 gagal"; return false; }
+  pause();
+  try {
+    ser_->setBaudrate(921600U);
+    baudrate_ = 921600;
+    try { ser_->flushInput(); } catch (...) {}
+  } catch (const std::exception & e) {
+    detail = std::string("host switch 921600 gagal: ") + e.what();
+    closeSerial();
+    last_reconnect_try_ = 0.0;
+    return false;
+  }
+  if (!writeSensorRegister(0x69, 0xB588)) { detail = "re-unlock @921600 gagal"; return false; }
+  pause();
+  if (!writeSensorRegister(0x00, 0x0000)) { detail = "SAVE profil gagal"; return false; }
+  std::this_thread::sleep_for(std::chrono::milliseconds(180));
+  try { ser_->flushInput(); } catch (...) {}
+  const bool verified = looksLikeWitStream(std::max(0.8, baud_probe_sec_));
+  if (!verified) {
+    detail = "profil ditulis tetapi stream 921600 belum checksum-valid; reconnect fail-closed";
+    closeSerial();
+    last_reconnect_try_ = 0.0;
+    return false;
+  }
+  output_content_mask_ = 0x001E;
+  output_rate_code_ = 0x08;
+  algorithm_mode_ = 1;
+  buf_.clear();
+  last_data_time_ = nowSec();
+  last_valid_packet_time_ = last_data_time_;
+  detail = "921600 baud / 50Hz / RSW 0x001E / AXIS6 1 / FILTK 30 tersimpan dan stream terverifikasi";
+  RCLCPP_INFO(this->get_logger(), "IMU optimal profile PASS: %s", detail.c_str());
+  return true;
 }
 
 // Fungsi: Memastikan sensor mengeluarkan ACC+GYRO+ANGLE pada rate yang dibutuhkan.
@@ -609,7 +692,19 @@ bool ImuNode::publishImu()
   }
 
   pub_imu_->publish(msg);
+  publishRawSensorVectors();
   return true;
+}
+
+// Fungsi: Diagnostik sensor-frame sebelum mounting transform. Nilai: accel SI,
+// gyro rad/s, lalu magnetometer raw LSB. Wizard memakai ini untuk mounting sanity-check.
+void ImuNode::publishRawSensorVectors()
+{
+  if (!pub_raw_sensor_vectors_) return;
+  std_msgs::msg::Float64MultiArray msg;
+  msg.data = {ax_, ay_, az_, gx_ * M_PI / 180.0, gy_ * M_PI / 180.0,
+              gz_ * M_PI / 180.0, mx_, my_, mz_};
+  pub_raw_sensor_vectors_->publish(msg);
 }
 
 // Fungsi: Menerbitkan raw magnetometer Yahboom dalam LSB resmi protokol, tetapi

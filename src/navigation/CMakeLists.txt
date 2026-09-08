@@ -78,7 +78,7 @@ ament_target_dependencies(gnss_node rclcpp sensor_msgs std_msgs geometry_msgs)
 
 add_executable(imu_node src/imu_node.cpp)
 target_include_directories(imu_node PRIVATE include)
-ament_target_dependencies(imu_node rclcpp sensor_msgs std_msgs)
+ament_target_dependencies(imu_node rclcpp sensor_msgs std_msgs std_srvs)
 
 # Diagnostic-only longitudinal speed estimator from IMU acceleration + optional gyro-assisted ZUPT.
 # It deliberately publishes no Odometry and is not wired into robot_localization.
@@ -156,6 +156,7 @@ if(BUILD_TESTING)
     avoidance_contract_self_check
     ekf_humble_config_self_check
     ekf_launch_validation_self_check
+    ekf_nav2_gate_chain_self_check
     gnss_driver_v2_part1_self_check
     gnss_global_fusion_part3_self_check
     gnss_motion_math_self_check

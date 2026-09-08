@@ -1,0 +1,37 @@
+{
+  "status": "RUNNING",
+  "expected_rotation": "CW",
+  "transition_checks": [],
+  "segments": [
+    {
+      "segment": 1,
+      "samples": 39,
+      "duration_sec": 0.895066451994353,
+      "imu_mean_deg": -173.2763671875,
+      "imu_std_deg": 0.0,
+      "inertial_mean_deg": 170.19349006150105,
+      "inertial_std_deg": 0.06078642465863317,
+      "validated_mean_deg": 170.19839116698176,
+      "validated_std_deg": 0.12819033603614352,
+      "neo_mean_deg": 170.200518892664,
+      "neo_std_deg": 0.17352081206633455,
+      "inertial_neo_residual_deg": -0.007028831162959209,
+      "gyro_z_mean_rps": 0.0,
+      "gyro_norm_mean_rps": 0.0,
+      "acc_norm_mean": 9.804221037025844,
+      "yah_mag_norm_mean_lsb": 6714.484338365776,
+      "neo_mag_norm_mean_ut": 72.70146501794522
+    }
+  ],
+  "raw_csv": "/home/otomasi/ros/calibration/heading_8dir_raw_20260908_211808.csv",
+  "segments_csv": "/home/otomasi/ros/calibration/heading_8dir_segments_20260908_211808.csv",
+  "updated_at": "2026-09-08T21:23:23.201541",
+  "thresholds": {
+    "static_hold_sec": 1.2,
+    "gyro_enter_rps": 0.025,
+    "gyro_exit_rps": 0.045,
+    "acc_enter_tol_mps2": 0.3,
+    "acc_exit_tol_mps2": 0.5,
+    "capture_target_sec": 0.85
+  }
+}

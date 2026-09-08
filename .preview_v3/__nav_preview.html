@@ -7,7 +7,7 @@
   <link rel="icon" href="data:,">
   <title>ADV Operator Console</title>
   <link rel="stylesheet" href="/styles.css?v=20260904-bab4-report-v1">
-  <link rel="stylesheet" href="/vesc_mp_theme.css?v=20260908-v4">
+  <link rel="stylesheet" href="/vesc_mp_theme.css?v=20260908-v1">
 </head>
 <body>
   <div class="app-shell">
@@ -46,7 +46,6 @@
           <button class="icon-button" id="themeButton" title="Mode tampilan">◐</button>
         </div>
       </header>
-      <nav class="workspace-tabs" id="workspaceTabs" aria-label="Engineering workspace tabs"></nav>
 
       <main class="content">
         <!-- OVERVIEW -->
@@ -66,7 +65,7 @@
             </article>
           </div>
 
-          <div class="section-title" id="overviewHealthSection"><div><span class="eyebrow">HARDWARE</span><h2>Sensor & Actuator Health</h2></div><span class="muted">Data aktual, bukan status sintetis</span></div>
+          <div class="section-title"><div><span class="eyebrow">HARDWARE</span><h2>Sensor & Actuator Health</h2></div><span class="muted">Data aktual, bukan status sintetis</span></div>
           <div class="health-grid">
             <article class="health-card" data-health="gnss"><div class="health-icon">G</div><div><span>GNSS</span><b id="healthGnss">OFFLINE</b><small id="healthGnssDetail">menunggu /gnss/connected</small></div><i class="health-led"></i></article>
             <article class="health-card" data-health="imu"><div class="health-icon">I</div><div><span>IMU</span><b id="healthImu">OFFLINE</b><small id="healthImuDetail">menunggu /imu/connected</small></div><i class="health-led"></i></article>
@@ -78,28 +77,17 @@
             <article class="health-card" data-health="nav2"><div class="health-icon">N</div><div><span>NAV2</span><b id="healthNav2">WAIT</b><small id="healthNav2Detail">planner / controller</small></div><i class="health-led"></i></article>
           </div>
 
-          <div class="section-title" id="overviewDataHealthSection"><div><span class="eyebrow">TELEMETRY INTEGRITY</span><h2>Data Health</h2></div><div class="status-pair"><span class="status-chip" id="dataHealthSummary">WAIT</span><span class="muted" id="sseIntegritySummary">SSE --</span></div></div>
-          <article class="panel data-health-panel">
-            <div class="data-health-table-wrap"><table class="engineering-table data-health-table"><thead><tr><th>Channel</th><th>Rate</th><th>Age</th><th>Jitter</th><th>Missing</th><th>State</th></tr></thead><tbody id="dataHealthRows"><tr><td colspan="6" class="empty-state">Menunggu telemetry...</td></tr></tbody></table></div>
-          </article>
-
-          <div class="section-title" id="overviewAuthoritySection"><div><span class="eyebrow">CONTROL AUTHORITY</span><h2>Command Authority</h2></div><span class="status-chip waiting" id="authorityChip">IDLE</span></div>
-          <article class="panel authority-panel">
-            <div class="authority-chain" id="authorityChain"><div data-authority="estop">E-STOP</div><em>›</em><div data-authority="python">PYTHON</div><em>›</em><div data-authority="vesc">VESC TOOL</div><em>›</em><div data-authority="manual">MANUAL</div><em>›</em><div data-authority="perception">PERCEPTION</div><em>›</em><div data-authority="nav2">NAV2</div><em>›</em><div data-authority="idle">IDLE</div></div>
-            <div class="authority-detail"><span>Active source</span><b id="authoritySource">--</b><span>Motion gate</span><b id="authorityMotion">--</b><span>ESC owner</span><b id="authorityEscOwner">--</b></div>
-          </article>
-
           <div class="two-col">
-            <article class="panel" id="overviewPipelineSection">
+            <article class="panel">
               <div class="panel-head"><div><span class="eyebrow">COMMAND CHAIN</span><h2>Velocity Pipeline</h2></div></div>
               <div class="pipeline">
                 <div><span id="pipeInputLabel">Selected input</span><b id="pipeNav">0.00</b></div><em>→</em><div><span>Router / pre-smoother</span><b id="pipeSafety">0.00</b></div><em>→</em><div><span>Velocity Smoother</span><b id="pipeFinal">0.00</b></div><em>→</em><div><span>Ackermann / actuator</span><b id="pipeActuator">0.00</b></div>
               </div>
               <canvas class="spark" id="speedSpark" width="900" height="180"></canvas>
             </article>
-            <article class="panel alert-panel" id="overviewAlertsSection">
+            <article class="panel alert-panel">
               <div class="panel-head"><div><span class="eyebrow">ATTENTION</span><h2>Active Conditions</h2></div><span class="count-badge" id="alertCount">0</span></div>
-              <div id="alerts" class="alert-list"><div class="empty-state">Belum ada data status.</div></div><div class="event-timeline-head"><b>EVENT TIMELINE</b><div><button class="soft-btn" id="eventExportBtn">Export</button><button class="soft-btn" id="eventClearBtn">Clear</button></div></div><div class="event-timeline" id="eventTimeline"><div class="empty-state">No runtime events yet.</div></div>
+              <div id="alerts" class="alert-list"><div class="empty-state">Belum ada data status.</div></div>
             </article>
           </div>
         </section>
@@ -114,13 +102,11 @@
                   <button class="soft-btn active" id="mapGoalTool" title="Set Goal Pose">◎ Goal</button>
                   <button class="soft-btn" id="mapInitialTool" title="Set Initial Pose">⊕ Initial</button>
                   <button class="soft-btn" id="mapPanTool" title="Pan map">✋ Pan</button>
-                  <button class="soft-btn" id="mapMeasureTool" title="Measure distance and bearing">⌁ Measure</button>
                   <span class="toolbar-separator"></span>
                   <button class="soft-btn icon-tool" id="mapZoomOutBtn" aria-label="Zoom out">−</button>
                   <span class="zoom-readout" id="mapZoomLabel">100%</span>
                   <button class="soft-btn icon-tool" id="mapZoomInBtn" aria-label="Zoom in">+</button>
                   <button class="soft-btn" id="mapCenterBtn">⌖ Center</button>
-                  <button class="soft-btn" id="mapFollowBtn" aria-pressed="false" title="Auto-follow robot without changing zoom">↟ Follow</button>
                   <button class="soft-btn" id="mapFitBtn">Fit</button>
                   <span class="toolbar-separator"></span>
                   <button class="soft-btn" id="mapLayerToggleBtn" aria-expanded="true">☷ Layers</button>
@@ -137,16 +123,10 @@
                   <label><input type="checkbox" id="layerGlobalPath" checked><i></i><span>Global Path</span></label>
                   <label><input type="checkbox" id="layerLocalPath" checked><i></i><span>Local Path</span></label>
                   <label><input type="checkbox" id="layerMppi" checked><i></i><span>MPPI Candidates</span></label>
-                  <label><input type="checkbox" id="layerTrail" checked><i></i><span>EKF Track</span></label>
-                  <label><input type="checkbox" id="layerGnssTrail"><i></i><span>GNSS Raw Track</span></label>
-                  <label><input type="checkbox" id="layerCovariance" checked><i></i><span>EKF Covariance</span></label>
-                  <label><input type="checkbox" id="layerFootprint" checked><i></i><span>Footprint</span></label>
                   <label><input type="checkbox" id="layerRobot" checked><i></i><span>Robot</span></label>
                   <label><input type="checkbox" id="layerGoal" checked><i></i><span>Goal + Heading</span></label>
-                  <div class="layer-opacity-row"><span>Global α</span><input type="range" id="globalCostmapOpacity" min="0" max="1" step="0.05" value="0.62"></div>
-                  <div class="layer-opacity-row"><span>Local α</span><input type="range" id="localCostmapOpacity" min="0" max="1" step="0.05" value="0.78"></div>
                 </aside>
-                <div class="map-legend"><span><i class="robot-key"></i>Robot</span><span><i class="path-key"></i>Global</span><span><i class="local-key"></i>Local</span><span><i class="mppi-key"></i>MPPI</span><span><i class="cost-low-key"></i>Low</span><span><i class="inflation-key"></i>Inflation</span><span><i class="cost-high-key"></i>High</span><span><i class="cost-lethal-key"></i>Lethal</span><span><i class="goal-key"></i>Goal</span></div>
+                <div class="map-legend"><span><i class="robot-key"></i>Robot</span><span><i class="path-key"></i>Global</span><span><i class="local-key"></i>Local</span><span><i class="mppi-key"></i>MPPI</span><span><i class="inflation-key"></i>Inflation</span><span><i class="goal-key"></i>Goal</span></div>
                 <div class="map-statusbar"><span id="mapCursor">x -- • y --</span><span id="mapStatusMeta">map -- • zoom 100%</span><span id="mapStatusNav">NAV2 -- • MPPI --</span></div>
                 <div class="map-placeholder" id="mapPlaceholder">Menunggu /map...</div>
               </div>
@@ -176,20 +156,6 @@
                 <div class="nav-kv"><span>planner</span><b id="navPlannerRate">--</b></div>
                 <div class="nav-kv"><span>controller</span><b id="navControllerRate">--</b></div>
               </section>
-              <section class="nav-rail-section nav-path-section">
-                <div class="nav-rail-head"><span>PATH INSPECTOR</span><b id="pathInspectorState">WAIT</b></div>
-                <div class="nav-kv"><span>Points</span><b id="pathInspectorPoints">--</b></div>
-                <div class="nav-kv"><span>Length</span><b id="pathInspectorLength">--</b></div>
-                <div class="nav-kv"><span>Heading Δ</span><b id="pathInspectorHeading">--</b></div>
-                <div class="nav-kv"><span>Clearance</span><b id="pathInspectorClearance">--</b></div>
-              </section>
-              <section class="nav-rail-section nav-maptools-section">
-                <div class="nav-rail-head"><span>MAP TOOLS</span><b id="mapMeasureState">READY</b></div>
-                <div class="nav-kv"><span>Measure</span><b id="mapMeasureDistance">--</b></div>
-                <div class="nav-kv"><span>Bearing</span><b id="mapMeasureBearing">--</b></div>
-                <div class="nav-kv"><span>Trail</span><b id="mapTrailCount">0 pts</b></div>
-                <div class="nav-rail-actions"><button class="soft-btn" id="mapClearMeasureBtn">Clear Measure</button><button class="soft-btn" id="mapClearTrailBtn">Clear Trail</button></div>
-              </section>
               <section class="nav-rail-section nav-tools-section">
                 <button class="soft-btn" id="resetLocalizationBtn">Reset Localization Samples</button>
               </section>
@@ -203,23 +169,14 @@
             <div><span>PATH</span><b id="navPathStrip">--</b></div>
             <div><span>MAP</span><b id="navMapStrip">--</b></div>
           </div>
-          <details class="mission-draft-dock" id="missionDraftDock">
-            <summary><span>Mission Draft / Goal List</span><b id="missionDraftSummary">0 points • local draft</b><i>▾</i></summary>
-            <div class="mission-draft-toolbar"><button class="soft-btn" id="missionAddGoalBtn">+ Add Current Goal</button><button class="soft-btn" id="missionClearBtn">Clear</button><button class="soft-btn" id="missionExportBtn">Export JSON</button><span>Draft only • Send Goal remains explicit.</span></div>
-            <div class="mission-table-wrap"><table class="engineering-table mission-table"><thead><tr><th>#</th><th>X</th><th>Y</th><th>Yaw</th><th>Status</th><th>Action</th></tr></thead><tbody id="missionDraftRows"><tr><td colspan="6" class="empty-state">No mission draft points.</td></tr></tbody></table></div>
-          </details>
           <details class="nav-inspector" id="navInspector">
-            <summary><span>Navigation Inspector</span><b id="navInspectorSummary">Dynamics • Ackermann • EKF Local/Global • Planner • MPPI • Safety • Command</b><i>▾</i></summary>
+            <summary><span>Navigation Inspector</span><b id="navInspectorSummary">Dynamics • Ackermann • EKF • Planner • Costmap</b><i>▾</i></summary>
             <div class="nav-inspector-tabs" role="tablist">
               <button class="active" data-nav-inspector="dynamics">Dynamics</button>
               <button data-nav-inspector="ackermann">Ackermann</button>
-              <button data-nav-inspector="ekf-local">EKF Local</button>
-              <button data-nav-inspector="ekf-global">EKF Global</button>
+              <button data-nav-inspector="ekf">EKF</button>
               <button data-nav-inspector="planner">Planner</button>
-              <button data-nav-inspector="mppi">MPPI</button>
               <button data-nav-inspector="costmap">Costmap</button>
-              <button data-nav-inspector="safety">Safety</button>
-              <button data-nav-inspector="command">Command Chain</button>
             </div>
             <div class="nav-inspector-body">
               <section class="nav-inspector-pane active" data-nav-pane="dynamics">
@@ -237,13 +194,9 @@
                 </div>
               </section>
               <section class="nav-inspector-pane" data-nav-pane="ackermann"><pre class="json-pretty" id="navInspectorAckermann">Waiting...</pre></section>
-              <section class="nav-inspector-pane" data-nav-pane="ekf-local"><pre class="json-pretty" id="navInspectorEkfLocal">Waiting...</pre></section>
-              <section class="nav-inspector-pane" data-nav-pane="ekf-global"><pre class="json-pretty" id="navInspectorEkfGlobal">Waiting...</pre></section>
+              <section class="nav-inspector-pane" data-nav-pane="ekf"><pre class="json-pretty" id="navInspectorEkf">Waiting...</pre></section>
               <section class="nav-inspector-pane" data-nav-pane="planner"><pre class="json-pretty" id="navInspectorPlanner">Waiting...</pre></section>
-              <section class="nav-inspector-pane" data-nav-pane="mppi"><pre class="json-pretty" id="navInspectorMppi">Waiting...</pre></section>
               <section class="nav-inspector-pane" data-nav-pane="costmap"><pre class="json-pretty" id="navInspectorCostmap">Waiting...</pre></section>
-              <section class="nav-inspector-pane" data-nav-pane="safety"><pre class="json-pretty" id="navInspectorSafety">Waiting...</pre></section>
-              <section class="nav-inspector-pane" data-nav-pane="command"><pre class="json-pretty" id="navInspectorCommand">Waiting...</pre></section>
             </div>
           </details>
         </section>
@@ -251,32 +204,27 @@
         <!-- PERCEPTION -->
         <section class="page" id="page-perception">
           <div class="camera-layout">
-            <article class="panel camera-panel" id="perceptionCameraSection"><div class="panel-head"><div><span class="eyebrow">ASTRA PRO / YOLOPv2</span><h2>Live Perception</h2></div><span class="status-chip waiting" id="cameraChip">WAIT</span></div><div class="camera-stage"><img id="cameraImage" alt="Live camera frame"><div id="cameraPlaceholder" class="camera-placeholder">Menunggu frame kamera...</div><div class="camera-meta"><span id="cameraSource">--</span><span id="cameraResolution">--</span></div></div><div class="yolop-toggle-panel"><div><span>YOLOPv2 DETECTION</span><b id="yoloToggleState">OFF • CAMERA ONLY</b><small>OFF menjaga kamera tetap hidup tanpa inference. ON menampilkan bounding box, drivable area, dan lane overlay.</small></div><button class="soft-btn yolop-toggle" id="yoloToggleBtn" type="button" aria-pressed="false">Aktifkan YOLOPv2</button></div><div class="yolop-toggle-panel"><div><span>PERCEPTION SAFETY GATE</span><b id="perceptionSafetyBypassState">ACTIVE • FAIL-CLOSED</b><small>Bypass hanya untuk commissioning indoor. E-stop global, ESC watchdog, stale Nav2, finite-command dan Ackermann feasibility tetap aktif.</small></div><button class="warning-btn yolop-toggle" id="perceptionSafetyBypassBtn" type="button" aria-pressed="false">Bypass Safety</button></div></article>
+            <article class="panel camera-panel"><div class="panel-head"><div><span class="eyebrow">ASTRA PRO / YOLOPv2</span><h2>Live Perception</h2></div><span class="status-chip waiting" id="cameraChip">WAIT</span></div><div class="camera-stage"><img id="cameraImage" alt="Live camera frame"><div id="cameraPlaceholder" class="camera-placeholder">Menunggu frame kamera...</div><div class="camera-meta"><span id="cameraSource">--</span><span id="cameraResolution">--</span></div></div><div class="yolop-toggle-panel"><div><span>YOLOPv2 DETECTION</span><b id="yoloToggleState">OFF • CAMERA ONLY</b><small>OFF menjaga kamera tetap hidup tanpa inference. ON menampilkan bounding box, drivable area, dan lane overlay.</small></div><button class="soft-btn yolop-toggle" id="yoloToggleBtn" type="button" aria-pressed="false">Aktifkan YOLOPv2</button></div><div class="yolop-toggle-panel"><div><span>PERCEPTION SAFETY GATE</span><b id="perceptionSafetyBypassState">ACTIVE • FAIL-CLOSED</b><small>Bypass hanya untuk commissioning indoor. E-stop global, ESC watchdog, stale Nav2, finite-command dan Ackermann feasibility tetap aktif.</small></div><button class="warning-btn yolop-toggle" id="perceptionSafetyBypassBtn" type="button" aria-pressed="false">Bypass Safety</button></div></article>
             <div class="stack">
-              <article class="panel compact" id="perceptionLaneSection"><div class="panel-head"><div><span class="eyebrow">LANE</span><h2>Lane Safety</h2></div></div><div class="kv-list"><div><span>State</span><b id="laneState">--</b></div><div><span>Control</span><b id="laneControl">--</b></div><div><span>Drivable</span><b id="drivableState">--</b></div><div><span>Near field</span><b id="nearFieldState">--</b></div></div></article>
-              <article class="panel compact" id="perceptionPlanningSection"><div class="panel-head"><div><span class="eyebrow">POINT CLOUD</span><h2>Planning Inputs</h2></div></div><div class="kv-list"><div><span>Objects</span><b id="cloudObjects">--</b></div><div><span>Path relevant</span><b id="cloudPath">--</b></div><div><span>Planning</span><b id="cloudPlanning">--</b></div><div><span>Boundary</span><b id="cloudBoundary">--</b></div></div></article>
+              <article class="panel compact"><div class="panel-head"><div><span class="eyebrow">LANE</span><h2>Lane Safety</h2></div></div><div class="kv-list"><div><span>State</span><b id="laneState">--</b></div><div><span>Control</span><b id="laneControl">--</b></div><div><span>Drivable</span><b id="drivableState">--</b></div><div><span>Near field</span><b id="nearFieldState">--</b></div></div></article>
+              <article class="panel compact"><div class="panel-head"><div><span class="eyebrow">POINT CLOUD</span><h2>Planning Inputs</h2></div></div><div class="kv-list"><div><span>Objects</span><b id="cloudObjects">--</b></div><div><span>Path relevant</span><b id="cloudPath">--</b></div><div><span>Planning</span><b id="cloudPlanning">--</b></div><div><span>Boundary</span><b id="cloudBoundary">--</b></div></div></article>
             </div>
           </div>
           <div class="two-col">
-            <article class="panel" id="perceptionPerformanceSection"><div class="panel-head"><div><span class="eyebrow">PERFORMANCE</span><h2>Inference & Camera Health</h2></div></div><div class="json-pretty" id="perceptionPerformance">No performance telemetry yet.</div></article>
-            <article class="panel" id="perceptionDetectionsSection"><div class="panel-head"><div><span class="eyebrow">DETECTIONS</span><h2>Obstacle / Raw Detection</h2></div></div><div class="json-pretty" id="detectionsView">No detections yet.</div></article>
+            <article class="panel"><div class="panel-head"><div><span class="eyebrow">PERFORMANCE</span><h2>Inference & Camera Health</h2></div></div><div class="json-pretty" id="perceptionPerformance">No performance telemetry yet.</div></article>
+            <article class="panel"><div class="panel-head"><div><span class="eyebrow">DETECTIONS</span><h2>Obstacle / Raw Detection</h2></div></div><div class="json-pretty" id="detectionsView">No detections yet.</div></article>
           </div>
-          <article class="panel" id="perceptionSafetySection">
-            <div class="panel-head"><div><span class="eyebrow">TRAJECTORY SAFETY</span><h2>Perception Safety & Planning Gate</h2></div><span class="status-chip waiting" id="perceptionSafetyLiveChip">WAIT</span></div>
-            <div class="metric-grid"><div><span>Camera</span><b id="perceptionSafetyCamera">--</b></div><div><span>Emergency</span><b id="perceptionSafetyEmergency">--</b></div><div><span>Candidate</span><b id="perceptionSafetyCandidates">--</b></div><div><span>Path relevant</span><b id="perceptionSafetyPath">--</b></div><div><span>Planning relevant</span><b id="perceptionSafetyPlanning">--</b></div><div><span>Near field</span><b id="perceptionSafetyNear">--</b></div></div>
-            <div class="json-pretty" id="perceptionSafetyDetail">Waiting...</div>
-          </article>
         </section>
 
         <!-- SENSORS -->
         <section class="page" id="page-sensors">
           <div class="sensor-hero neo3-sensor-grid">
-            <article class="panel" id="sensorGnssSection"><div class="panel-head"><div><span class="eyebrow">CUAV NEO-3 • u-blox NEO-M9N • F411 UART</span><h2>NEO-3 GNSS M9N</h2></div><div class="status-pair"><span class="status-chip waiting" id="gnssChip">LINK WAIT</span><span class="status-chip waiting" id="gnssFixChip">FIX WAIT</span></div></div><div class="big-coordinates"><div><span>LATITUDE</span><b id="gnssLat">--</b></div><div><span>LONGITUDE</span><b id="gnssLon">--</b></div></div><div class="metric-grid"><div><span>Satellites</span><b id="gnssSat">--</b></div><div><span>hAcc</span><b id="gnssHacc">--</b></div><div><span>DOP</span><b id="gnssDop">--</b></div><div><span>NAV-PVT rate</span><b id="gnssRate">--</b></div><div><span>Speed</span><b id="gnssSpeed">--</b></div><div><span>COG</span><b id="gnssCog">--</b></div><div><span>Fix type</span><b id="gnssFix">--</b></div><div><span>Transport</span><b id="gnssTransport">F411 UART → CDC</b></div></div><p class="hint">CONNECTED berarti M9N aktif mengirim data ke F411. FIX hanya VALID bila solusi GNSS memenuhi gate receiver; indoor dapat CONNECTED tetapi NO FIX.</p></article>
-            <article class="panel" id="sensorNeo3MagSection"><div class="panel-head"><div><span class="eyebrow">CUAV NEO-3 • IST8310 • F411 I²C PB8/PB9</span><h2>NEO-3 Magnetometer IST8310</h2></div><span class="status-chip waiting" id="neo3MagChip">I2C WAIT</span></div><div class="metric-grid"><div><span>Mag X</span><b id="neo3MagX">--</b></div><div><span>Mag Y</span><b id="neo3MagY">--</b></div><div><span>Mag Z</span><b id="neo3MagZ">--</b></div><div><span>Field norm</span><b id="neo3MagNorm">--</b></div><div><span>Map heading</span><b id="neo3MagHeading">--</b></div><div><span>Heading gate</span><b id="neo3MagValid">WAIT</b></div></div><p class="hint">IST8310 dibaca F411 via I²C, dikonversi 0.30 µT/LSB, dicek range/field norm, dikompensasi roll-pitch IMU, lalu diterbitkan sebagai yaw absolut ke EKF global.</p></article>
+            <article class="panel"><div class="panel-head"><div><span class="eyebrow">CUAV NEO-3 • u-blox NEO-M9N • F411 UART</span><h2>NEO-3 GNSS M9N</h2></div><div class="status-pair"><span class="status-chip waiting" id="gnssChip">LINK WAIT</span><span class="status-chip waiting" id="gnssFixChip">FIX WAIT</span></div></div><div class="big-coordinates"><div><span>LATITUDE</span><b id="gnssLat">--</b></div><div><span>LONGITUDE</span><b id="gnssLon">--</b></div></div><div class="metric-grid"><div><span>Satellites</span><b id="gnssSat">--</b></div><div><span>hAcc</span><b id="gnssHacc">--</b></div><div><span>DOP</span><b id="gnssDop">--</b></div><div><span>NAV-PVT rate</span><b id="gnssRate">--</b></div><div><span>Speed</span><b id="gnssSpeed">--</b></div><div><span>COG</span><b id="gnssCog">--</b></div><div><span>Fix type</span><b id="gnssFix">--</b></div><div><span>Transport</span><b id="gnssTransport">F411 UART → CDC</b></div></div><p class="hint">CONNECTED berarti M9N aktif mengirim data ke F411. FIX hanya VALID bila solusi GNSS memenuhi gate receiver; indoor dapat CONNECTED tetapi NO FIX.</p></article>
+            <article class="panel"><div class="panel-head"><div><span class="eyebrow">CUAV NEO-3 • IST8310 • F411 I²C PB8/PB9</span><h2>NEO-3 Magnetometer IST8310</h2></div><span class="status-chip waiting" id="neo3MagChip">I2C WAIT</span></div><div class="metric-grid"><div><span>Mag X</span><b id="neo3MagX">--</b></div><div><span>Mag Y</span><b id="neo3MagY">--</b></div><div><span>Mag Z</span><b id="neo3MagZ">--</b></div><div><span>Field norm</span><b id="neo3MagNorm">--</b></div><div><span>Map heading</span><b id="neo3MagHeading">--</b></div><div><span>Heading gate</span><b id="neo3MagValid">WAIT</b></div></div><p class="hint">IST8310 dibaca F411 via I²C, dikonversi 0.30 µT/LSB, dicek range/field norm, dikompensasi roll-pitch IMU, lalu diterbitkan sebagai yaw absolut ke EKF global.</p></article>
           </div>
           <div class="two-col magnetic-health-grid">
-            <article class="panel" id="sensorImuSection"><div class="panel-head"><div><span class="eyebrow">IMU CP2102</span><h2>Orientation & Motion</h2></div><span class="status-chip waiting" id="imuChip">WAIT</span></div><div class="orientation-display"><div class="compass"><div class="needle" id="imuNeedle"></div><span>N</span></div><div class="orientation-values"><div><span>Roll</span><b id="imuRoll">--</b></div><div><span>Pitch</span><b id="imuPitch">--</b></div><div><span>Yaw</span><b id="imuYaw">--</b></div></div></div><div class="metric-grid"><div><span>Gyro X</span><b id="imuGx">--</b></div><div><span>Gyro Y</span><b id="imuGy">--</b></div><div><span>Gyro Z</span><b id="imuGz">--</b></div><div><span>Accel X</span><b id="imuAx">--</b></div><div><span>Accel Y</span><b id="imuAy">--</b></div><div><span>Accel Z</span><b id="imuAz">--</b></div><div><span>IMU mag norm</span><b id="imuMagNorm">--</b></div><div><span>IMU mag gate</span><b id="imuMagValid">WAIT</b></div></div></article>
-            <article class="panel" id="sensorFusionSection"><div class="panel-head"><div><span class="eyebrow">ABSOLUTE HEADING FUSION</span><h2>F411 / Magnetometer Diagnostics</h2></div></div><div id="magFusionDetail" class="json-pretty">Waiting...</div></article>
+            <article class="panel"><div class="panel-head"><div><span class="eyebrow">IMU CP2102</span><h2>Orientation & Motion</h2></div><span class="status-chip waiting" id="imuChip">WAIT</span></div><div class="orientation-display"><div class="compass"><div class="needle" id="imuNeedle"></div><span>N</span></div><div class="orientation-values"><div><span>Roll</span><b id="imuRoll">--</b></div><div><span>Pitch</span><b id="imuPitch">--</b></div><div><span>Yaw</span><b id="imuYaw">--</b></div></div></div><div class="metric-grid"><div><span>Gyro X</span><b id="imuGx">--</b></div><div><span>Gyro Y</span><b id="imuGy">--</b></div><div><span>Gyro Z</span><b id="imuGz">--</b></div><div><span>Accel X</span><b id="imuAx">--</b></div><div><span>Accel Y</span><b id="imuAy">--</b></div><div><span>Accel Z</span><b id="imuAz">--</b></div><div><span>IMU mag norm</span><b id="imuMagNorm">--</b></div><div><span>IMU mag gate</span><b id="imuMagValid">WAIT</b></div></div></article>
+            <article class="panel"><div class="panel-head"><div><span class="eyebrow">ABSOLUTE HEADING FUSION</span><h2>F411 / Magnetometer Diagnostics</h2></div></div><div id="magFusionDetail" class="json-pretty">Waiting...</div></article>
           </div>
           <article class="panel hmi-waypoint-panel">
             <div class="panel-head"><div><span class="eyebrow">TFT GPS / NAVIGATION • SHARED ROS STATE</span><h2>Waypoint & Active Target</h2></div><span class="status-chip waiting" id="hmiWpStatus">BELUM ADA TARGET</span></div>
@@ -305,16 +253,7 @@
               <span id="vescTcpState" hidden></span>
             </div>
 
-            <section class="vesc-section" id="vescUtilitySection">
-              <div class="vesc-section-head"><div><span class="eyebrow">CONNECTION / FIRMWARE / TERMINAL</span><h3>VESC Engineering Utilities</h3></div><small>Maintenance-only commands preserve runtime authority separation.</small></div>
-              <div class="vesc-utility-grid">
-                <article class="vesc-card" id="vescConnectionCard"><div class="vesc-card-head"><b>Connection</b><span>F411 ↔ F103 / TCP 65102</span></div><div class="kv-list"><div><span>Gateway</span><b id="vescUtilityGateway">--</b></div><div><span>Authority</span><b id="vescUtilityAuthority">--</b></div><div><span>TCP Tool</span><b id="vescUtilityTcp">--</b></div><div><span>Stream</span><b id="vescUtilityRate">--</b></div></div><button class="soft-btn vesc-maint-action" id="vescAliveBoth">Alive Both</button></article>
-                <article class="vesc-card" id="vescFirmwareCard"><div class="vesc-card-head"><b>Firmware</b><span>COMM_FW_VERSION</span></div><div class="button-row"><button class="soft-btn vesc-maint-action" id="vescFwLeft">Read LEFT FW</button><button class="soft-btn vesc-maint-action" id="vescFwRight">Read RIGHT FW</button></div><div class="json-pretty vesc-reply" id="vescFirmwareDetail">Enter Web Maintenance to query firmware.</div></article>
-                <article class="vesc-card" id="vescTerminalCard"><div class="vesc-card-head"><b>Terminal</b><span>VESC terminal command</span></div><div class="vesc-terminal-row"><select id="vescTerminalMotor"><option value="1">LEFT • ID 1</option><option value="2">RIGHT • ID 2</option></select><input id="vescTerminalInput" autocomplete="off" placeholder="help / faults / encoder ..."><button class="primary-btn vesc-maint-action" id="vescTerminalSend">Send</button></div><div class="json-pretty vesc-reply" id="vescTerminalReply">No terminal reply yet.</div></article>
-              </div>
-            </section>
-
-            <section class="vesc-section" id="vescLiveSection">
+            <section class="vesc-section">
               <div class="vesc-section-head"><div><span class="eyebrow">LIVE DUAL MOTOR</span><h3>Runtime Telemetry</h3></div><small>RUNTIME memakai /esc/foc/telemetry. MAINTENANCE memakai reply VESC per motor.</small></div>
               <div class="vesc-dual-live-grid">
                 <article class="vesc-live-motor-card"><div class="vesc-card-head"><b>LEFT • STEERING</b><span class="path-tag">ID 1 • ABI/TIM4</span></div>
@@ -330,11 +269,11 @@
               </div>
             </section>
 
-            <section class="vesc-section" id="vescGraphSection">
-              <div class="vesc-section-head vesc-scope-section-head"><div><span class="eyebrow">LIVE SCOPE • VESC-STYLE</span><h3>LEFT + RIGHT Realtime Scope</h3></div><div class="vesc-scope-tools"><button class="soft-btn" id="vescScopeWindow">10 s</button><button class="soft-btn active" id="vescScopeAutoY" aria-pressed="true">Auto Y</button><button class="soft-btn" id="vescScopeFreeze" aria-pressed="false">Freeze</button><button class="soft-btn" id="vescScopeClear">Clear</button></div></div>
+            <section class="vesc-section">
+              <div class="vesc-section-head"><div><span class="eyebrow">LIVE SCOPE</span><h3>LEFT + RIGHT Graph</h3></div><small>Checkbox langsung mengubah trace yang tampil.</small></div>
               <div class="vesc-chart-grid">
-                <article class="vesc-chart-card"><div class="vesc-chart-head"><div><b>LEFT • Steering</b><span id="vescChartLeftState">WAIT</span></div><div class="vesc-chart-presets" data-vesc-presets="1"></div><div class="vesc-trace-checks" data-vesc-traces="1"></div></div><canvas id="vescChartLeft" width="1000" height="260"></canvas><div class="vesc-chart-foot" id="vescChartLeftFoot">Waiting telemetry</div></article>
-                <article class="vesc-chart-card"><div class="vesc-chart-head"><div><b>RIGHT • Velocity</b><span id="vescChartRightState">WAIT</span></div><div class="vesc-chart-presets" data-vesc-presets="2"></div><div class="vesc-trace-checks" data-vesc-traces="2"></div></div><canvas id="vescChartRight" width="1000" height="260"></canvas><div class="vesc-chart-foot" id="vescChartRightFoot">Waiting telemetry</div></article>
+                <article class="vesc-chart-card"><div class="vesc-chart-head"><div><b>LEFT • Steering</b><span id="vescChartLeftState">WAIT</span></div><div class="vesc-trace-checks" data-vesc-traces="1"></div></div><canvas id="vescChartLeft" width="1000" height="260"></canvas></article>
+                <article class="vesc-chart-card"><div class="vesc-chart-head"><div><b>RIGHT • Velocity</b><span id="vescChartRightState">WAIT</span></div><div class="vesc-trace-checks" data-vesc-traces="2"></div></div><canvas id="vescChartRight" width="1000" height="260"></canvas></article>
               </div>
             </section>
 
@@ -353,7 +292,7 @@
               <p class="hint">Baseline indoor sementara: eRPM = speed[m/s] × 8000 ÷ calibration_scale. Kalibrasi ground-speed final dilakukan di luar gedung.</p>
             </section>
 
-            <section class="vesc-section" id="vescControlSection">
+            <section class="vesc-section">
               <div class="vesc-section-head"><div><span class="eyebrow">MOTOR CONTROL</span><h3>Direct Dual Controls</h3></div><button class="danger-btn" id="vescSendZero">STOP BOTH</button></div>
               <div class="vesc-dual-control-grid">
                 <fieldset><legend>LEFT • STEERING</legend><div class="vesc-command-row"><b>Position 0–360°</b><button data-vesc-nudge="vescLeftPosInput:-5">−</button><input id="vescLeftPosInput" type="number" min="0" max="360" step="1" value="180"><button data-vesc-nudge="vescLeftPosInput:5">+</button><button class="primary-btn" id="vescLeftSetPos">SET</button></div><div class="vesc-command-row"><b>Current A</b><button data-vesc-nudge="vescLeftCurrentInput:-1">−</button><input id="vescLeftCurrentInput" type="number" min="-20" max="20" step="0.1" value="0"><button data-vesc-nudge="vescLeftCurrentInput:1">+</button><button class="primary-btn" id="vescLeftSetCurrent">SET</button></div><div class="vesc-command-row"><b>Duty</b><button data-vesc-nudge="vescLeftDutyInput:-0.05">−</button><input id="vescLeftDutyInput" type="number" min="-0.95" max="0.95" step="0.01" value="0"><button data-vesc-nudge="vescLeftDutyInput:0.05">+</button><button class="primary-btn" id="vescLeftSetDuty">SET</button></div></fieldset>
@@ -361,9 +300,9 @@
               </div>
             </section>
 
-            <details class="vesc-editor" id="vescTuningSection" open><summary>Controller Tuning • LEFT + RIGHT simultaneously visible</summary><section class="vesc-section"><div class="vesc-dual-editor-grid" id="vescDualTuning"></div></section></details>
-            <details class="vesc-editor" id="vescLimitsSection"><summary>VESC Limits / Setup • LEFT + RIGHT</summary><section class="vesc-section"><div class="vesc-dual-editor-grid" id="vescDualLimits"></div></section></details>
-            <details class="vesc-editor" id="vescConfigSection"><summary>MC / App Configuration • LEFT + RIGHT</summary><section class="vesc-section"><div class="vesc-dual-editor-grid" id="vescDualConfig"></div></section></details>
+            <details class="vesc-editor" open><summary>Controller Tuning • LEFT + RIGHT simultaneously visible</summary><section class="vesc-section"><div class="vesc-dual-editor-grid" id="vescDualTuning"></div></section></details>
+            <details class="vesc-editor"><summary>VESC Limits / Setup • LEFT + RIGHT</summary><section class="vesc-section"><div class="vesc-dual-editor-grid" id="vescDualLimits"></div></section></details>
+            <details class="vesc-editor"><summary>MC / App Configuration • LEFT + RIGHT</summary><section class="vesc-section"><div class="vesc-dual-editor-grid" id="vescDualConfig"></div></section></details>
 
             <details class="vesc-editor" open><summary>LEFT Encoder / Home / Position Limits</summary>
               <section class="vesc-section"><div class="vesc-work-grid"><article class="vesc-card"><div class="vesc-card-head"><b>LEFT Position Counter</b></div><div class="vesc-position-strip"><div><span>Current</span><b id="vescPosCurrent">--</b></div><div><span>Target</span><b id="vescPosTarget">--</b></div><div><span>Min</span><b id="vescPosMin">--</b></div><div><span>Max</span><b id="vescPosMax">--</b></div></div><div class="vesc-form-row"><label>Min count<input id="vescPosMinInput" type="number" step="1"></label><label>Max count<input id="vescPosMaxInput" type="number" step="1"></label></div><div class="button-row"><button class="soft-btn" id="vescReadPositionState">Read</button><button class="primary-btn" id="vescSetPositionLimits">Set Limits</button><button class="warning-btn" id="vescResetPosition">Reset 0</button></div></article>
@@ -457,24 +396,6 @@
             <article class="panel"><div class="panel-head"><div><span class="eyebrow">CAMERA METRIC</span><h2>Astra / Perception Calibration</h2></div><span class="status-chip waiting" id="calCameraChip">WAIT</span></div><div class="kv-list"><div><span>USB camera</span><b id="calCameraUsb">--</b></div><div><span>Frame health</span><b id="calCameraHealth">--</b></div><div><span>Metric validated</span><b id="calCameraMetric">--</b></div><div><span>Inference freshness</span><b id="calPerceptionFresh">--</b></div></div><p class="hint">Titik/homography kamera tetap mengikuti source calibration GUI lama. Web menampilkan gate aktual dan tidak menandai PASS secara sintetis.</p></article>
             <article class="panel"><div class="panel-head"><div><span class="eyebrow">IMU</span><h2>Orientation Calibration</h2></div><span class="status-chip waiting" id="calImuChip">WAIT</span></div><div class="kv-list"><div><span>Serial IMU</span><b id="calImuUsb">--</b></div><div><span>Stationary validated</span><b id="calImuStationary">--</b></div><div><span>Samples / duration</span><b id="calImuEvidence">--</b></div><div><span>Gyro-Z std</span><b id="calImuStd">--</b></div><div><span>|a|-g error</span><b id="calImuAccelErr">--</b></div><div><span>Saved at</span><b id="calImuSaved">--</b></div><div><span>Yaw</span><b id="calImuYaw">--</b></div><div><span>Gyro Z</span><b id="calImuGz">--</b></div></div></article>
           </div>
-
-          <article class="panel imu-mp-wizard" id="yahboomCalibrationWizard">
-            <div class="panel-head"><div><span class="eyebrow">YAHBOOM • MISSION-STYLE COMMISSIONING</span><h2>IMU Mounting & 8-Direction Magnetic Calibration</h2></div><span class="status-chip waiting" id="imuWizardChip">IDLE</span></div>
-            <div class="imu-wizard-grid">
-              <div class="imu-hud">
-                <div class="imu-compass-ring" id="imuCalRing"><div class="imu-cardinal north">N</div><div class="imu-cardinal east">E</div><div class="imu-cardinal south">S</div><div class="imu-cardinal west">W</div><div class="imu-target-arrow" id="imuTargetArrow"><i></i></div><div class="imu-vehicle-arrow" id="imuVehicleArrow"><i></i></div><div class="imu-hud-center"><span>POS</span><b id="imuWizardPosition">0 / 8</b><small id="imuWizardDirection">CW / CCW</small></div></div>
-                <div class="imu-hud-instruction"><b id="imuWizardInstruction">Pilih CW atau CCW lalu tahan robot diam.</b><span id="imuWizardHeading">Actual --° • Target --°</span></div>
-                <div class="imu-progress-track"><i id="imuWizardProgress"></i></div>
-              </div>
-              <div class="imu-wizard-console">
-                <div class="imu-profile-strip"><div><span>Serial Profile</span><b id="imuProfileState">WAIT</b><small id="imuProfileDetail">921600 • 50 Hz • AXIS6=1</small></div><button class="primary-btn" id="imuOptimalProfileBtn">Set Optimal 921600</button></div>
-                <div class="metric-grid imu-wizard-metrics"><div><span>Mounting</span><b id="imuMountingState">WAIT</b></div><div><span>Raw gravity</span><b id="imuMountingGravity">--</b></div><div><span>Gyro Z</span><b id="imuWizardGyro">--</b></div><div><span>Static</span><b id="imuWizardStatic">WAIT</b></div><div><span>Yahboom heading</span><b id="imuWizardYahHeading">--</b></div><div><span>IST8310 heading</span><b id="imuWizardNeoHeading">--</b></div><div><span>Fit RMS</span><b id="imuWizardRms">--</b></div><div><span>Fit max</span><b id="imuWizardMax">--</b></div></div>
-                <div class="imu-direction-row"><button class="primary-btn" id="imuCalStartCw">Start 8 Arah CW</button><button class="primary-btn" id="imuCalStartCcw">Start 8 Arah CCW</button><button class="warning-btn" id="imuCalStop">Stop</button><button class="success-btn" id="imuCalApply" disabled>Apply PASS Calibration</button></div>
-                <div class="imu-gate-box" id="imuWizardGateDetail">Fail-closed: apply hanya terbuka setelah 8/8, arah gyro benar, mounting top-up, RMS &lt;3°, max &lt;5°, dan kendaraan diam.</div>
-                <p class="hint">Jika IMU dipasang upside-down / side-mounted, wizard menolak capture. Rotasi planar depan-belakang tidak bisa ditentukan dari gravitasi saja; perubahan heading/mounting akan terlihat saat 8 arah dan tidak diterapkan diam-diam. Yahboom MAG tetap diagnostic; heading utama EKF tetap validated inertial + IST8310/GNSS sampai dynamic EMI qualification lulus.</p>
-              </div>
-            </div>
-          </article>
         </section>
 
         <!-- TUNING -->
@@ -517,9 +438,6 @@
             <button class="domain-tab" data-exp="steering"><span class="domain-icon">E</span><div><b>ESC / FOC</b><small>Calibration → Current Loop → Position → Step → Tracking → Load → Final Gate</small></div><em id="escTestCount">15</em></button>
           </div>
 
-          <nav class="test-phase-tabs" id="testPhaseTabs" aria-label="Mode pengujian"></nav>
-          <nav class="test-family-tabs" id="testFamilyTabs" aria-label="Kelompok pengujian"></nav>
-
           <div class="workbench-grid">
             <aside class="panel chapter-browser">
               <div class="chapter-tools">
@@ -544,12 +462,6 @@
                 <div id="trialGuideBody" class="trial-guide-body"></div>
               </article>
 
-              <article class="panel test-preflight-panel" id="testPreflightPanel">
-                <div class="panel-head"><div><span class="eyebrow">PREFLIGHT</span><h2>Required Data & Safety Gate</h2></div><span class="status-chip waiting" id="testPreflightState">CHECKING</span></div>
-                <div class="test-preflight-grid" id="testPreflightGrid"><div class="empty-state">Pilih subpengujian untuk mengecek source data.</div></div>
-                <div class="test-preflight-footer"><span id="testPreflightSummary">Belum dievaluasi.</span><button class="soft-btn" id="testPreflightRefresh">↻ Refresh</button></div>
-              </article>
-
               <article class="panel run-console">
                 <div class="panel-head"><div><span class="eyebrow">RUN CONTROL</span><h2>Identitas Run & Data Evidence</h2></div></div>
                 <div class="run-grid">
@@ -559,12 +471,6 @@
                   <div class="record-actions"><button class="record-toggle start" id="recordToggleBtn" data-active="false">● START</button></div>
                 </div>
                 <div class="record-footer"><span id="recordElapsed">00:00.0</span><span id="recordPath">Output: /home/otomasi/ros/data/{navigasi|presepsi|esc}</span><span id="recordMessage">START/STOP → tabel 1 Hz tersimpan • Save CSV / Excel • tiap grafik dapat Download PNG</span></div>
-              </article>
-
-              <article class="panel graph-workspace">
-                <div class="panel-head"><div><span class="eyebrow">LIVE / SUMMARY</span><h2>Grafik Pengujian</h2></div><div class="graph-controls"><button class="soft-btn active" id="graphLiveMode">LIVE</button><button class="soft-btn" id="graphClearBtn">Clear</button></div></div>
-                <div id="graphTabs" class="lab-tabs" hidden></div>
-                <div id="experimentGraphs" class="experiment-graphs"><div class="empty-state">Subbab ini tidak mendefinisikan grafik.</div></div>
               </article>
 
               <div class="lab-two-col">
@@ -640,6 +546,12 @@
                 </section>
               </article>
 
+              <article class="panel graph-workspace">
+                <div class="panel-head"><div><span class="eyebrow">LIVE / SUMMARY</span><h2>Grafik Pengujian</h2></div><div class="graph-controls"><button class="soft-btn active" id="graphLiveMode">LIVE</button><button class="soft-btn" id="graphClearBtn">Clear</button></div></div>
+                <div id="graphTabs" class="lab-tabs" hidden></div>
+                <div id="experimentGraphs" class="experiment-graphs"><div class="empty-state">Subbab ini tidak mendefinisikan grafik.</div></div>
+              </article>
+
               <article class="panel table-workspace">
                 <div class="panel-head"><div><span class="eyebrow">REPORT TABLE</span><h2>Tabel Pengujian</h2></div><div class="graph-controls"><span class="muted" id="tableLiveHint">Preview live + hasil run</span><button class="soft-btn" id="saveTableCsvBtn">Save CSV</button><button class="primary-btn" id="saveTableExcelBtn">Save Excel (.xlsx)</button></div></div>
                 <div id="tableTabs" class="lab-tabs" hidden></div>
@@ -671,26 +583,6 @@
           <div class="two-col"><article class="panel"><div class="panel-head"><div><span class="eyebrow">RUN STATUS</span><h2>System Snapshot</h2></div></div><div class="json-pretty" id="reportSnapshot">Waiting...</div></article><article class="panel"><div class="panel-head"><div><span class="eyebrow">AUDIT NOTE</span><h2>Export Contents</h2></div></div><div class="checklist"><div class="check-item ok"><i>✓</i><div><b>Telemetry</b><span>Latest ROS2 state + timestamps</span></div></div><div class="check-item ok"><i>✓</i><div><b>Configuration</b><span>YAML snapshot exposed by C++ backend</span></div></div><div class="check-item ok"><i>✓</i><div><b>Tuning</b><span>Same agv_experiment_catalog.hpp as Qt GUI</span></div></div><div class="check-item ok"><i>✓</i><div><b>Safety</b><span>Exports are read-only; no actuator command is sent</span></div></div></div></article></div>
         </section>
 
-        <!-- REPLAY / LOG ANALYSIS -->
-        <section class="page" id="page-replay">
-          <div class="replay-toolbar panel">
-            <div><span class="eyebrow">OFFLINE EVIDENCE</span><h2>Replay & Log Analysis</h2></div>
-            <label class="soft-btn replay-file-label">Open CSV<input id="replayFile" type="file" accept=".csv,text/csv" hidden></label>
-            <button class="primary-btn" id="replayEnterBtn" disabled>Enter Replay</button>
-            <button class="soft-btn" id="replayExitBtn" disabled>Exit Replay</button>
-            <span class="status-chip waiting" id="replayStateChip">NO FILE</span>
-          </div>
-          <article class="panel replay-timeline-panel">
-            <div class="replay-controls"><button class="soft-btn" id="replayPlayBtn" disabled>▶ Play</button><button class="soft-btn" id="replayStepBackBtn" disabled>◀</button><button class="soft-btn" id="replayStepForwardBtn" disabled>▶</button><select id="replaySpeed" disabled><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="5">5×</option></select><span id="replayTime">00:00.000 / 00:00.000</span></div>
-            <input id="replayTimeline" class="replay-timeline" type="range" min="0" max="0" step="1" value="0" disabled>
-            <div class="replay-meta" id="replayMeta">Select a recorder CSV generated by ROS Web.</div>
-          </article>
-          <div class="two-col replay-inspectors">
-            <article class="panel"><div class="panel-head"><div><span class="eyebrow">CURRENT ROW</span><h2>Replay Signals</h2></div><button class="soft-btn" id="replayOpenMapBtn" disabled>Open Map</button></div><div class="diagnostic-table" id="replaySignals"></div></article>
-            <article class="panel"><div class="panel-head"><div><span class="eyebrow">SAFETY</span><h2>Replay Isolation</h2></div></div><div class="info-box">Saat Replay aktif, SSE live ditutup dan seluruh HTTP POST command/write diblokir. Map, ESC, perception dan diagnostics membaca row recorded yang sama. Exit Replay melakukan reconnect + full-state resync.</div><div class="json-pretty" id="replayStatusDetail">No replay loaded.</div></article>
-          </div>
-        </section>
-
         <!-- DIAGNOSTICS -->
         <section class="page" id="page-diagnostics">
           <div class="four-metrics"><div><span>SSE connection</span><b id="diagSse">--</b></div><div><span>State channels</span><b id="diagChannels">0</b></div><div><span>Server latency</span><b id="diagLatency">--</b></div><div><span>Web mode</span><b id="diagReadOnly">--</b></div></div>
@@ -706,12 +598,12 @@
               <div class="config-tabs" id="configTabs" hidden></div>
             </aside>
             <section class="config-main">
-              <div class="config-toolbar"><b id="configFileTitle">Loading configuration...</b><button class="soft-btn config-filter-btn active" data-cfg-filter="all">ALL</button><button class="soft-btn config-filter-btn" data-cfg-filter="favorite">★ FAVORITES</button><button class="soft-btn config-filter-btn" data-cfg-filter="modified">MODIFIED</button><button class="soft-btn config-filter-btn" data-cfg-filter="staged">STAGED</button><button class="soft-btn config-filter-btn" data-cfg-filter="scalar">SCALAR</button><button class="soft-btn config-filter-btn" data-cfg-filter="editable">TUNABLE</button><span class="muted" id="configRowCount">0 params</span></div>
-              <div class="config-grid-wrap"><table class="config-grid"><thead><tr><th>★</th><th>Parameter</th><th>YAML / Staged</th><th>Baseline</th><th>Type</th><th>Status</th><th>Path</th></tr></thead><tbody id="configGridBody"><tr><td colspan="7">Loading...</td></tr></tbody></table></div>
+              <div class="config-toolbar"><b id="configFileTitle">Loading configuration...</b><button class="soft-btn config-filter-btn active" data-cfg-filter="all">ALL</button><button class="soft-btn config-filter-btn" data-cfg-filter="modified">MODIFIED</button><button class="soft-btn config-filter-btn" data-cfg-filter="scalar">SCALAR</button><button class="soft-btn config-filter-btn" data-cfg-filter="editable">TUNABLE</button><span class="muted" id="configRowCount">0 params</span></div>
+              <div class="config-grid-wrap"><table class="config-grid"><thead><tr><th>Parameter</th><th>Value</th><th>Baseline</th><th>Type</th><th>Status</th><th>Path</th></tr></thead><tbody id="configGridBody"><tr><td colspan="6">Loading...</td></tr></tbody></table></div>
               <details class="config-raw-drawer"><summary>Raw source snapshot / developer view</summary><pre class="config-view" id="configView">Loading...</pre></details>
             </section>
             <aside class="config-actions">
-              <button class="soft-btn" id="refreshConfigBtn">↻ Reload</button><button class="soft-btn" id="configCopyPathBtn">Copy Path</button><button class="soft-btn" id="configExportFileBtn">Export Snapshot</button><hr><div class="config-pending-head"><b>STAGED CHANGES</b><span class="count-badge" id="configPendingCount">0</span></div><div class="config-pending-list" id="configPendingList"><span class="muted">No staged changes.</span></div><div class="button-row config-pending-actions"><button class="primary-btn" id="configApplyAllBtn" disabled>Apply All + Verify</button><button class="soft-btn" id="configDiscardAllBtn" disabled>Discard</button></div><hr><div class="config-selection" id="configSelection"><b>No parameter selected</b>Click a parameter row to inspect its YAML path, baseline, and runtime status.</div><div class="config-param-editor" id="configParamEditor" hidden><label>VALUE<input id="configParamValue" autocomplete="off"></label><div class="config-editor-state" id="configParamState">SELECT PARAMETER</div><button class="primary-btn" id="configApplyBtn">Stage Change</button><button class="soft-btn" id="configResetBtn">Stage Baseline</button></div>
+              <button class="soft-btn" id="refreshConfigBtn">↻ Reload</button><button class="soft-btn" id="configCopyPathBtn">Copy Path</button><button class="soft-btn" id="configExportFileBtn">Export Snapshot</button><hr><div class="config-selection" id="configSelection"><b>No parameter selected</b>Click a parameter row to inspect its YAML path, baseline, and runtime status.</div><div class="config-param-editor" id="configParamEditor" hidden><label>VALUE<input id="configParamValue" autocomplete="off"></label><div class="config-editor-state" id="configParamState">SELECT PARAMETER</div><button class="primary-btn" id="configApplyBtn">Apply + Verify</button><button class="soft-btn" id="configResetBtn">Reset Baseline</button></div>
             </aside>
           </div>
           <p class="info-box">Parameter yang terdaftar pada katalog tuning dapat diedit langsung dari inspector ini. Parameter lain tetap <b>LOCKED</b>. Semua perubahan tetap memakai endpoint atomic backup, baseline, runtime apply, stationary gate, dan verification yang sama dengan Tuning & Control.</p>
@@ -723,9 +615,8 @@
   </div>
   <div class="toast-stack" id="toastStack" aria-live="polite"></div>
   <div class="modal-backdrop" id="confirmModal"><div class="modal"><span class="eyebrow">CONFIRM ACTION</span><h2 id="confirmTitle">Confirm</h2><p id="confirmText"></p><div class="button-row"><button class="soft-btn grow" id="confirmNo">Cancel</button><button class="danger-btn grow" id="confirmYes">Continue</button></div></div></div>
-  <script src="/app.js?v=20260908-mp-v4" defer></script>
-  <script src="/vesc_workbench.js?v=20260908-dual-runtime-v10" defer></script>
-  <script src="/replay.js?v=20260908-replay-v1" defer></script>
+  <script src="/app.js?v=20260908-dual-runtime-v3" defer></script>
+  <script src="/vesc_workbench.js?v=20260908-dual-runtime-v8" defer></script>
   <script src="/export_tools.js?v=20260904-bab4-report-v1" defer></script>
-</body>
+<script>window.addEventListener("load",()=>{setTimeout(()=>activatePage("navigation",false,"navigation"),80)})</script></body>
 </html>

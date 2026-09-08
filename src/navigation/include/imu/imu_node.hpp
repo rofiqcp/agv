@@ -8,6 +8,8 @@
 #include <std_msgs/msg/byte_multi_array.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
+#include <std_msgs/msg/string.hpp>
+#include <std_srvs/srv/trigger.hpp>
 #include <serial/serial.h>
 
 #include <memory>
@@ -28,6 +30,9 @@ private:
   bool publishImu();
   void publishMag();
   void publishMagRawLsb();
+  void publishRawSensorVectors();
+  void publishProfileStatus(const std::string & state, const std::string & detail);
+  bool configureOptimalProfile(std::string & detail);
   void publishRaw(const std::vector<uint8_t> & packet);
   bool parsePacket(const std::vector<uint8_t> & packet);
   bool configureSensorOutput(bool persistent = false);
@@ -157,6 +162,9 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr pub_imu_;
   rclcpp::Publisher<sensor_msgs::msg::MagneticField>::SharedPtr pub_mag_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_mag_raw_lsb_;
+  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_raw_sensor_vectors_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_profile_status_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_configure_optimal_profile_;
   rclcpp::Publisher<std_msgs::msg::ByteMultiArray>::SharedPtr pub_raw_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr pub_connected_;
   rclcpp::TimerBase::SharedPtr timer_;

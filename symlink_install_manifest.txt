@@ -53,11 +53,14 @@
 /home/otomasi/ros/install/navigation/share/navigation/config/gnss.yaml.web.baseline
 /home/otomasi/ros/install/navigation/share/navigation/config/gui_calibration.yaml
 /home/otomasi/ros/install/navigation/share/navigation/config/gui_calibration.yaml.web.baseline
+/home/otomasi/ros/install/navigation/share/navigation/config/heading_8dir_calibration.yaml
 /home/otomasi/ros/install/navigation/share/navigation/config/imu.yaml
 /home/otomasi/ros/install/navigation/share/navigation/config/imu.yaml.bak.baud921600_20260908
 /home/otomasi/ros/install/navigation/share/navigation/config/imu.yaml.bak.erpm_heading_20260908_032353
+/home/otomasi/ros/install/navigation/share/navigation/config/imu.yaml.bak.framefix_cw_20260908
 /home/otomasi/ros/install/navigation/share/navigation/config/imu.yaml.bak.localization_audit_20260908
 /home/otomasi/ros/install/navigation/share/navigation/config/imu.yaml.bak.mount180_20260908_1744
+/home/otomasi/ros/install/navigation/share/navigation/config/imu.yaml.bak.rate10_20260908
 /home/otomasi/ros/install/navigation/share/navigation/config/imu.yaml.web.baseline
 /home/otomasi/ros/install/navigation/share/navigation/config/imu.yaml.web.baseline.bak.baud921600_20260908
 /home/otomasi/ros/install/navigation/share/navigation/config/imu_calibration.yaml
@@ -67,6 +70,7 @@
 /home/otomasi/ros/install/navigation/share/navigation/config/localization_cpp.yaml.bak.localization_audit_20260908
 /home/otomasi/ros/install/navigation/share/navigation/config/localization_cpp.yaml.web.baseline
 /home/otomasi/ros/install/navigation/share/navigation/config/mag_heading.yaml
+/home/otomasi/ros/install/navigation/share/navigation/config/mag_heading.yaml.bak.8dir_20260908
 /home/otomasi/ros/install/navigation/share/navigation/config/mag_heading.yaml.bak.erpm_heading_20260908_032353
 /home/otomasi/ros/install/navigation/share/navigation/config/mag_heading.yaml.bak.preconsensus_20260908
 /home/otomasi/ros/install/navigation/share/navigation/config/mppi_closed_loop.yaml
@@ -89,6 +93,7 @@
 /home/otomasi/ros/install/navigation/share/navigation/config/vehicle.yaml
 /home/otomasi/ros/install/navigation/share/navigation/config/vehicle.yaml.bak.ui_consistency_20260908_174728
 /home/otomasi/ros/install/navigation/share/navigation/config/vehicle.yaml.web.baseline
+/home/otomasi/ros/install/navigation/share/navigation/config/yahboom_mag_calibration.yaml
 /home/otomasi/ros/install/navigation/share/navigation/rviz/autonomous.rviz
 /home/otomasi/ros/install/navigation/share/navigation/rviz/global_field_test.rviz
 /home/otomasi/ros/install/navigation/share/navigation/rviz/urdf.rviz
