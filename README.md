@@ -1,5 +1,25 @@
 # AGV ROS 2 Workspace
 
+## Clone ke PC Baru
+
+Clone repository AGV **beserta seluruh Git submodule** dengan satu perintah:
+
+```bash
+git clone --recurse-submodules -b v1 https://github.com/rofiqcp/agv.git ~/ros
+cd ~/ros
+git submodule status
+```
+
+Jika repository sudah terlanjur di-clone tanpa submodule:
+
+```bash
+cd ~/ros
+git submodule update --init --recursive
+```
+
+Repository firmware dapat dibuka langsung di: [rofiqcp/hoverboard-vesc](https://github.com/rofiqcp/hoverboard-vesc).
+Folder `hoverboard-vesc` yang tampil di GitHub sebagai submodule akan membuka commit SHA yang dipin oleh repository AGV; hal ini memang perilaku standar GitHub untuk menjaga versi firmware tetap reproducible.
+
 Repository ini berisi source code workspace ROS 2 untuk Autonomous Ground Vehicle (AGV) pada `/home/otomasi/ros`.
 
 ## Target Environment
