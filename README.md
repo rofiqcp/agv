@@ -23,11 +23,47 @@ agv/
 ├── models/
 │   ├── README.md
 │   └── model.sh      # Downloader model YOLOPv2
+├── hoverboard-vesc/  # Git submodule firmware STM32F103 dual FOC / VESC 6.00
+├── .gitmodules
 ├── .gitignore
 └── README.md
 ```
 
 Folder hasil build ROS 2 (`build/`, `install/`, dan `log/`) tidak disimpan ke Git.
+
+## Firmware `hoverboard-vesc` sebagai Git Submodule
+
+Firmware STM32F103 dipisahkan dari source ROS 2 dan ditautkan sebagai Git submodule:
+
+- Path lokal: `/home/otomasi/ros/hoverboard-vesc`
+- Repository: `https://github.com/rofiqcp/hoverboard-vesc`
+- Branch firmware: `v1`
+- Repository AGV menyimpan pointer commit firmware yang sudah dipilih, bukan menyalin seluruh riwayat firmware.
+
+Clone workspace beserta firmware:
+
+```bash
+git clone --recurse-submodules -b v1 https://github.com/rofiqcp/agv.git ros
+```
+
+Jika repository AGV sudah terlanjur di-clone tanpa submodule:
+
+```bash
+cd /home/otomasi/ros
+git submodule update --init --recursive
+```
+
+Untuk mengikuti commit terbaru branch `v1` firmware lalu menyimpan pointer baru di AGV:
+
+```bash
+cd /home/otomasi/ros
+git submodule update --remote --merge hoverboard-vesc
+git add .gitmodules hoverboard-vesc
+git commit -m "chore: update hoverboard-vesc submodule"
+```
+
+Perubahan source firmware harus di-commit dan di-push dari dalam folder
+`hoverboard-vesc` terlebih dahulu sebelum pointer submodule di repository AGV diperbarui.
 
 ## Persiapan Model
 
