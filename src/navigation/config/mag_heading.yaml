@@ -14,8 +14,8 @@ mag_heading_fusion:
     max_field_norm_ut: 100.0
     imu_mag_yaw_sign: -1.0
     imu_mag_yaw_offset_rad: 1.5451826276
-    neo3_mag_yaw_sign: -1.0
-    neo3_mag_yaw_offset_rad: 2.7330262973
+    neo3_mag_yaw_sign: 1.0
+    neo3_mag_yaw_offset_rad: 2.72812855663114
     imu_heading_variance_rad2: 0.08
     neo3_heading_variance_rad2: 0.02
     max_heading_rate_rps: 3.0
@@ -28,3 +28,31 @@ mag_heading_fusion:
     consensus_hold_sec: 2.0
     consensus_timeout_sec: 0.5
     validated_heading_variance_rad2: 0.01
+    neo3_planar_calibration_enabled: true
+    neo3_mag_bias_xy_ut:
+    - 7.647139035678742
+    - -1.6915396504388576
+    neo3_mag_matrix_xy:
+    - 0.947117573504921
+    - 0.33676364260092423
+    - -0.2543156496693006
+    - 0.9654089006745633
+    neo3_heading_lut_enabled: true
+    neo3_heading_lut_input_rad:
+    - -2.858432488768
+    - -1.968605501612
+    - -1.107036929096
+    - -0.393645237649
+    - 0.370508392654
+    - 1.191053026228
+    - 1.924615645924
+    - 2.546781533741
+    neo3_heading_lut_correction_rad:
+    - -0.087877183802
+    - -0.035336065943
+    - -0.057741336028
+    - -0.019301671461
+    - 0.0295379873
+    - -0.030541656373
+    - 0.021417423831
+    - 0.180671307817

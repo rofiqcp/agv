@@ -1,0 +1,46 @@
+vehicle:
+  ros__parameters:
+    # Jarak axle fisik untuk dokumentasi/URDF. Jangan diubah oleh circle-fit.
+    wheelbase_m: 0.7
+    # Geometri kinematik hasil circle-test Part 3. ESC/NavigationCore/perception memakai nilai ini.
+    effective_wheelbase_m: 0.7
+    effective_wheelbase_left_m: 0.7
+    effective_wheelbase_right_m: 0.7
+    track_width_m: 0.48
+    total_width_m: 0.55
+    vehicle_length_m: 1.0
+    wheel_radius_m: 0.145
+    # Linear odometry scale is certified by measured straight-run trials in GUI.
+    drive_odometry_calibration_valid: false
+    drive_odometry_calibration_scale: 1.0
+    drive_odometry_calibration_saved_at: ''
+    # Safe fallback until Part 1/2 physical calibration is measured.
+    measured_left_steering_limit_rad: -0.523598775598
+    measured_right_steering_limit_rad: 0.523598775598
+    max_steering_angle_rad: 0.523598775598
+    operational_steering_angle_rad: 0.523598775598
+    steering_calibration_valid: false
+    steering_calibration_source: uncalibrated_safe_fallback
+    steering_calibration_saved_at: ''
+    steering_lut_point_count: 0
+    steering_lut_max_command_hysteresis_deg: 0.0
+    steering_lut_max_feedback_hysteresis_deg: 0.0
+    # Radius planner bersertifikat. Sebelum Part 3 valid, nilai ini masih fallback teoritis.
+    minimum_turning_radius_m: 1.452435565298
+    turning_radius_left_m: 0.0
+    turning_radius_right_m: 0.0
+    turning_radius_safety_margin_pct: 10.0
+    steering_circle_calibration_valid: false
+    steering_circle_trial_count_left: 0
+    steering_circle_trial_count_right: 0
+    steering_circle_fit_rmse_m: 0.0
+    steering_circle_calibration_saved_at: ''
+    minimum_turning_radius_source: theoretical_uncalibrated_safe_fallback
+    max_forward_speed_mps: 1.0
+    max_reverse_speed_mps: 1.0
+    # Kinematic ceiling at max_forward_speed_mps / minimum_turning_radius_m.
+    max_yaw_rate_rps: 0.688498701004
+    max_accel_mps2: 0.75
+    max_decel_mps2: -1.0
+    max_yaw_accel_rps2: 2.5
+    footprint: '[[0.52,0.30],[0.52,-0.30],[-0.52,-0.30],[-0.52,0.30]]'

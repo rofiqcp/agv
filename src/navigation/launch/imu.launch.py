@@ -40,7 +40,7 @@ def generate_launch_description():
     params_file = os.path.join(_active_config_dir(nav_share), 'imu.yaml')
     args = [
         DeclareLaunchArgument('port', default_value='auto'),
-        DeclareLaunchArgument('baudrate', default_value='9600'),
+        DeclareLaunchArgument('baudrate', default_value='921600'),
         DeclareLaunchArgument('frame_id', default_value='imu_link'),
         DeclareLaunchArgument('publish_raw', default_value='false'),
         DeclareLaunchArgument('use_sim_time', default_value='false'),

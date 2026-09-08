@@ -1262,6 +1262,10 @@ class WebRosBridge {
     return true;
   }
 
+  // Host metrics dipublikasikan ke state web sebagai data aktual. Field yang
+  // tidak tersedia (mis. GPU pada host CPU-only) tidak dibuat, sehingga UI N/A.
+  void updateHostMetrics(const QJsonObject &metrics) { update("host", metrics); }
+
  private:
   rclcpp::Node::SharedPtr node_;
   std::shared_ptr<rclcpp::executors::MultiThreadedExecutor> executor_;
@@ -1556,12 +1560,17 @@ class WebRosBridge {
       const QString topic = QString::fromLatin1(entry.first);
       const bool perceptionStream = topic.startsWith(QStringLiteral("/perception/")) ||
                                     topic.startsWith(QStringLiteral("/yolop/"));
+      const bool highRateTelemetry = topic == QStringLiteral("/esc/foc/telemetry") ||
+                                     topic == QStringLiteral("/esc/vesc/tool_telemetry") ||
+                                     topic == QStringLiteral("/esc/vesc/rotor_state") ||
+                                     topic == QStringLiteral("/esc/vesc/left_rotor_state") ||
+                                     topic == QStringLiteral("/esc/vesc/right_rotor_state");
       const bool latchedStream = topic.startsWith(QStringLiteral("/hmi/")) ||
                                     topic.startsWith(QStringLiteral("/stmf4/vesc/")) ||
                                     (topic.startsWith(QStringLiteral("/esc/vesc/")) &&
                                      topic != QStringLiteral("/esc/vesc/raw_reply")) ||
                                     topic == QStringLiteral("/esc/mux/active_source");
-      const rclcpp::QoS & stringQos = perceptionStream ? sensorQos : (latchedStream ? latchedQos : stateQos);
+      const rclcpp::QoS & stringQos = (perceptionStream || highRateTelemetry) ? sensorQos : (latchedStream ? latchedQos : stateQos);
       subscribe<std_msgs::msg::String>(entry.first, stringQos, [this, channel](std_msgs::msg::String::ConstSharedPtr msg) {
         const QString raw = QString::fromStdString(msg->data);
         if (channel == "goal_state") update(channel, QJsonObject{{"state", raw.trimmed().toUpper()}, {"raw", raw}});
@@ -2039,12 +2048,16 @@ class LocalHttpServer : public QObject {
  public:
   LocalHttpServer(WebRosBridge *bridge, QObject *parent = nullptr) : QObject(parent), bridge_(bridge) {
     connect(&server_, &QTcpServer::newConnection, this, [this]() { acceptConnections(); });
-    eventTimer_.setInterval(200);
+    // Stream state deltas at the same 50 Hz class as actuator telemetry.
+    // Browser-side rendering is independently throttled, so ingestion stays lossless/current.
+    eventTimer_.setInterval(20);
     connect(&eventTimer_, &QTimer::timeout, this, [this]() { broadcastEvents(); });
     bindRetryTimer_.setInterval(1000);
     connect(&bindRetryTimer_, &QTimer::timeout, this, [this]() { retryListen(); });
     recordingTimer_.setInterval(200);
     connect(&recordingTimer_, &QTimer::timeout, this, [this]() { captureRecordingSample(); });
+    hostTimer_.setInterval(1000);
+    connect(&hostTimer_, &QTimer::timeout, this, [this]() { sampleHostMetrics(); });
   }
 
   bool start(const QString &bindAddress, int port) {
@@ -2057,6 +2070,8 @@ class LocalHttpServer : public QObject {
     bindAddress_ = address;
     bindAddressText_ = bindAddress;
     bindPort_ = static_cast<quint16>(port);
+    hostTimer_.start();
+    sampleHostMetrics();
     if (!server_.listen(bindAddress_, bindPort_)) {
       RCLCPP_WARN(rclcpp::get_logger("agv_web_gui"),
         "Port web %s:%d belum tersedia (%s); node tetap hidup dan retry internal 1 Hz",
@@ -2088,6 +2103,57 @@ class LocalHttpServer : public QObject {
     return true;
   }
 
+  void sampleHostMetrics() {
+    QJsonObject host{{"source", "local_os"}, {"at_ms", nowMs()}};
+    QFile statFile(QStringLiteral("/proc/stat"));
+    if (statFile.open(QIODevice::ReadOnly)) {
+      const QStringList p = QString::fromLocal8Bit(statFile.readLine()).simplified().split(' ');
+      if (p.size() >= 6 && p.first() == QStringLiteral("cpu")) {
+        quint64 total = 0;
+        for (int i = 1; i < p.size(); ++i) total += p[i].toULongLong();
+        const quint64 idle = p[4].toULongLong() + (p.size() > 5 ? p[5].toULongLong() : 0ULL);
+        if (hostPrevTotal_ > 0 && total > hostPrevTotal_) {
+          const quint64 dt = total - hostPrevTotal_, di = idle >= hostPrevIdle_ ? idle - hostPrevIdle_ : 0ULL;
+          host["cpu_percent"] = 100.0 * static_cast<double>(dt - std::min(dt, di)) / static_cast<double>(dt);
+        }
+        hostPrevTotal_ = total; hostPrevIdle_ = idle;
+      }
+    }
+    double memTotalKb = 0.0, memAvailKb = 0.0;
+    QFile memFile(QStringLiteral("/proc/meminfo"));
+    if (memFile.open(QIODevice::ReadOnly)) while (!memFile.atEnd()) {
+      const QStringList p = QString::fromLocal8Bit(memFile.readLine()).simplified().split(' ');
+      if (p.size() < 2) continue;
+      if (p[0] == QStringLiteral("MemTotal:")) memTotalKb = p[1].toDouble();
+      else if (p[0] == QStringLiteral("MemAvailable:")) memAvailKb = p[1].toDouble();
+    }
+    if (memTotalKb > 0.0 && memAvailKb >= 0.0) {
+      host["ram_percent"] = 100.0 * (memTotalKb - memAvailKb) / memTotalKb;
+      host["ram_used_mb"] = (memTotalKb - memAvailKb) / 1024.0;
+      host["ram_total_mb"] = memTotalKb / 1024.0;
+    }
+    double maxTemp = std::numeric_limits<double>::quiet_NaN();
+    const QDir thermal(QStringLiteral("/sys/class/thermal"));
+    for (const QString &zone : thermal.entryList({QStringLiteral("thermal_zone*")}, QDir::Dirs | QDir::NoDotAndDotDot)) {
+      QFile f(thermal.absoluteFilePath(zone + QStringLiteral("/temp")));
+      if (!f.open(QIODevice::ReadOnly)) continue;
+      bool ok = false; double t = QString::fromLocal8Bit(f.readAll()).trimmed().toDouble(&ok);
+      if (!ok) continue;
+      if (t > 1000.0) t /= 1000.0;
+      if (t > 0.0 && t < 150.0 && (!std::isfinite(maxTemp) || t > maxTemp)) maxTemp = t;
+    }
+    if (std::isfinite(maxTemp)) host["temperature_c"] = maxTemp;
+    bool gpuAvailable = false;
+    for (int card = 0; card < 4 && !gpuAvailable; ++card) {
+      QFile f(QStringLiteral("/sys/class/drm/card%1/device/gpu_busy_percent").arg(card));
+      if (!f.open(QIODevice::ReadOnly)) continue;
+      bool ok = false; const double gpu = QString::fromLocal8Bit(f.readAll()).trimmed().toDouble(&ok);
+      if (ok && gpu >= 0.0 && gpu <= 100.0) { host["gpu_percent"] = gpu; gpuAvailable = true; }
+    }
+    host["gpu_available"] = gpuAvailable;
+    bridge_->updateHostMetrics(host);
+  }
+
   void retryListen() {
     if (server_.isListening()) { bindRetryTimer_.stop(); return; }
     if (!server_.listen(bindAddress_, bindPort_)) return;
@@ -2109,6 +2175,9 @@ class LocalHttpServer : public QObject {
   QTimer eventTimer_;
   QTimer bindRetryTimer_;
   QTimer recordingTimer_;
+  QTimer hostTimer_;
+  quint64 hostPrevTotal_{0};
+  quint64 hostPrevIdle_{0};
   QHostAddress bindAddress_;
   QString bindAddressText_;
   quint16 bindPort_{0};
@@ -3001,7 +3070,7 @@ class LocalHttpServer : public QObject {
     QByteArray payload;
     if (!delta.isEmpty()) payload = "data: " + QJsonDocument(delta).toJson(QJsonDocument::Compact) + "\n\n";
     ++heartbeatTicks_;
-    const bool heartbeat = heartbeatTicks_ >= 50;
+    const bool heartbeat = heartbeatTicks_ >= 250;  // 5 s at 50 Hz event timer
     if (heartbeat) heartbeatTicks_ = 0;
     for (const auto &client : sseClients_) {
       if (client.isNull()) continue;

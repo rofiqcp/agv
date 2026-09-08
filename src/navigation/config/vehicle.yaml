@@ -26,7 +26,7 @@ vehicle:
     steering_lut_max_command_hysteresis_deg: 0.0
     steering_lut_max_feedback_hysteresis_deg: 0.0
     # Radius planner bersertifikat. Sebelum Part 3 valid, nilai ini masih fallback teoritis.
-    minimum_turning_radius_m: 1.452435565298
+    minimum_turning_radius_m: 1.597679121829
     turning_radius_left_m: 0.0
     turning_radius_right_m: 0.0
     turning_radius_safety_margin_pct: 10.0
@@ -39,7 +39,7 @@ vehicle:
     max_forward_speed_mps: 1.0
     max_reverse_speed_mps: 1.0
     # Kinematic ceiling at max_forward_speed_mps / minimum_turning_radius_m.
-    max_yaw_rate_rps: 0.688498701004
+    max_yaw_rate_rps: 0.625907910003
     max_accel_mps2: 0.75
     max_decel_mps2: -1.0
     max_yaw_accel_rps2: 2.5

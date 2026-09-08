@@ -1,0 +1,75 @@
+# IMU absolute orientation is the EKF yaw source; stale gyro does not suppress fresh yaw.
+data_imu_node:
+  ros__parameters:
+    port: auto
+    baudrate: 9600
+    auto_baud: false
+    baud_probe_sec: 0.5
+    # Primary selector: stable USB identity (CP2102 10c4:ea60).
+    auto_port_id_contains: Silicon_Labs_CP2102
+    auto_port_path_contains: ""
+    frame_id: imu_link
+    poll_interval_ms: 5
+    publish_rate_hz: 10
+    data_timeout_sec: 6.0
+    publish_raw: false
+    debug: false
+    configure_output_on_connect: true
+    persist_output_config: false
+    output_content_mask: 30
+    output_rate_code: 6
+    orientation_packet_timeout_sec: 8.0
+    orientation_publish_timeout_sec: 0.5
+    gyro_packet_timeout_sec: 0.35
+    accel_packet_timeout_sec: 0.5
+    require_fresh_gyro_for_imu_publish: false
+    sensor_config_retry_sec: 30.0
+    orientation_reopen_sec: 20.0
+    publish_orientation: true
+    invert_roll: true
+    invert_pitch: true
+    invert_yaw: false
+    yaw_sign: -1.0
+    roll_offset_rad: 0.0
+    pitch_offset_rad: 0.0
+    yaw_offset_rad: 0.3893434987
+    magnetic_declination_radians: 0.0
+    accel_bias:
+    - 0.0
+    - 0.0
+    - 0.0
+    gyro_bias:
+    - 0.0
+    - 0.0
+    - 0.0
+    stationary_calibration_valid: false
+    stationary_calibration_saved_at: ''
+    stationary_calibration_sample_count: 0
+    stationary_calibration_duration_sec: 0.0
+    stationary_calibration_gyro_z_std_rps: 0.0
+    stationary_calibration_accel_norm_error_mps2: 0.0
+    stationary_calibration_min_samples: 80
+    stationary_calibration_min_duration_sec: 8.0
+    stationary_calibration_max_gyro_z_std_rps: 0.03
+    stationary_calibration_max_accel_norm_error_mps2: 0.75
+    orientation_covariance:
+    - 0.02
+    - 0.02
+    - 0.05
+    angular_velocity_covariance:
+    - 0.01
+    - 0.01
+    - 0.02
+    linear_acceleration_covariance:
+    - 0.25
+    - 0.25
+    - 0.36
+    mag_scale_tesla_per_lsb: 1.0e-07
+    use_magnetic_yaw: true
+    mag_yaw_sign: -1.0
+    mag_yaw_offset_rad: 1.5451826276
+    mag_yaw_filter_alpha: 0.20
+    mag_yaw_max_step_rad: 0.0523598776
+    mag_yaw_packet_timeout_sec: 0.50
+    mag_yaw_min_norm_ut: 100.0
+    mag_yaw_max_norm_ut: 1000.0

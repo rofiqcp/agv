@@ -21,8 +21,9 @@ esc_ackermann:
     drive_gear_ratio: 1.0
     # Temporary commissioning baseline. 1.00 m/s == 8000 eRPM until outdoor calibration.
     drive_erpm_per_mps: 8000.0
-    # Applied live after N2.1 GNSS/RPM calibration: V_ground = V_raw_ESC * scale.
-    drive_odometry_calibration_scale: 1.0
+    # N2.1 provisional valid run 2000 eRPM: GNSS stable mean 0.381724 m/s.
+    # V_ground = V_raw_ESC * scale; rerun 4-point fit after robot mendapat lintasan bebas.
+    drive_odometry_calibration_scale: 1.5268972865
     wheelbase_m: 0.7
     track_width_m: 0.48
     min_speed_for_nav_steering_mps: 0.05

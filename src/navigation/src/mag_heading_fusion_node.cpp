@@ -6,6 +6,8 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -66,6 +68,12 @@ public:
     declare_parameter<double>("imu_mag_yaw_offset_rad", 1.5451826276);
     declare_parameter<double>("neo3_mag_yaw_sign", -1.0);
     declare_parameter<double>("neo3_mag_yaw_offset_rad", 1.5707963268);
+    declare_parameter<bool>("neo3_planar_calibration_enabled", false);
+    declare_parameter<std::vector<double>>("neo3_mag_bias_xy_ut", std::vector<double>{0.0, 0.0});
+    declare_parameter<std::vector<double>>("neo3_mag_matrix_xy", std::vector<double>{1.0, 0.0, 0.0, 1.0});
+    declare_parameter<bool>("neo3_heading_lut_enabled", false);
+    declare_parameter<std::vector<double>>("neo3_heading_lut_input_rad", std::vector<double>{});
+    declare_parameter<std::vector<double>>("neo3_heading_lut_correction_rad", std::vector<double>{});
     declare_parameter<double>("imu_heading_variance_rad2", 0.08);
     declare_parameter<double>("neo3_heading_variance_rad2", 0.06);
     declare_parameter<double>("max_heading_rate_rps", 3.0);
@@ -91,6 +99,36 @@ public:
     imu_offset_ = get_parameter("imu_mag_yaw_offset_rad").as_double();
     neo_sign_ = get_parameter("neo3_mag_yaw_sign").as_double() >= 0.0 ? 1.0 : -1.0;
     neo_offset_ = get_parameter("neo3_mag_yaw_offset_rad").as_double();
+    neo_planar_calibration_enabled_ = get_parameter("neo3_planar_calibration_enabled").as_bool();
+    const auto neo_bias = get_parameter("neo3_mag_bias_xy_ut").as_double_array();
+    const auto neo_matrix = get_parameter("neo3_mag_matrix_xy").as_double_array();
+    if (neo_bias.size() == 2) { neo_bias_x_ut_ = neo_bias[0]; neo_bias_y_ut_ = neo_bias[1]; }
+    else { RCLCPP_WARN(get_logger(), "NEO3 bias XY invalid size=%zu; calibration disabled", neo_bias.size()); neo_planar_calibration_enabled_ = false; }
+    if (neo_matrix.size() == 4) {
+      neo_m00_ = neo_matrix[0]; neo_m01_ = neo_matrix[1]; neo_m10_ = neo_matrix[2]; neo_m11_ = neo_matrix[3];
+      const double det = neo_m00_ * neo_m11_ - neo_m01_ * neo_m10_;
+      if (!std::isfinite(det) || std::abs(det) < 1.0e-6) {
+        RCLCPP_WARN(get_logger(), "NEO3 XY matrix singular; calibration disabled");
+        neo_planar_calibration_enabled_ = false;
+      }
+    } else { RCLCPP_WARN(get_logger(), "NEO3 matrix XY invalid size=%zu; calibration disabled", neo_matrix.size()); neo_planar_calibration_enabled_ = false; }
+    neo_heading_lut_enabled_ = get_parameter("neo3_heading_lut_enabled").as_bool();
+    const auto lut_in = get_parameter("neo3_heading_lut_input_rad").as_double_array();
+    const auto lut_corr = get_parameter("neo3_heading_lut_correction_rad").as_double_array();
+    if (neo_heading_lut_enabled_) {
+      if (lut_in.size() != lut_corr.size() || lut_in.size() < 4) {
+        RCLCPP_WARN(get_logger(), "NEO3 heading LUT invalid sizes %zu/%zu; LUT disabled", lut_in.size(), lut_corr.size());
+        neo_heading_lut_enabled_ = false;
+      } else {
+        for (size_t i = 0; i < lut_in.size(); ++i) {
+          if (std::isfinite(lut_in[i]) && std::isfinite(lut_corr[i]))
+            neo_heading_lut_.emplace_back(normalizeAngle(lut_in[i]), normalizeAngle(lut_corr[i]));
+        }
+        std::sort(neo_heading_lut_.begin(), neo_heading_lut_.end(),
+          [](const auto &a, const auto &b) { return a.first < b.first; });
+        if (neo_heading_lut_.size() < 4) neo_heading_lut_enabled_ = false;
+      }
+    }
     imu_variance_ = std::clamp(get_parameter("imu_heading_variance_rad2").as_double(), 1.0e-4, 10.0);
     neo_variance_ = std::clamp(get_parameter("neo3_heading_variance_rad2").as_double(), 1.0e-4, 10.0);
     max_heading_rate_rps_ = std::clamp(get_parameter("max_heading_rate_rps").as_double(), 0.2, 10.0);
@@ -208,6 +246,29 @@ private:
     return delta <= max_heading_rate_rps_ * dt + rate_gate_margin_rad_;
   }
 
+  double applyNeoHeadingLut(double yaw_enu) const {
+    if (!neo_heading_lut_enabled_ || neo_heading_lut_.size() < 2) return normalizeAngle(yaw_enu);
+    const double y = normalizeAngle(yaw_enu);
+    size_t hi = 0;
+    while (hi < neo_heading_lut_.size() && neo_heading_lut_[hi].first < y) ++hi;
+    double x0, x1, c0, c1, yy = y;
+    if (hi == 0) {
+      x0 = neo_heading_lut_.back().first; c0 = neo_heading_lut_.back().second;
+      x1 = neo_heading_lut_.front().first + 2.0 * kPi; c1 = neo_heading_lut_.front().second;
+      yy += 2.0 * kPi;
+    } else if (hi == neo_heading_lut_.size()) {
+      x0 = neo_heading_lut_.back().first; c0 = neo_heading_lut_.back().second;
+      x1 = neo_heading_lut_.front().first + 2.0 * kPi; c1 = neo_heading_lut_.front().second;
+    } else {
+      x0 = neo_heading_lut_[hi - 1].first; c0 = neo_heading_lut_[hi - 1].second;
+      x1 = neo_heading_lut_[hi].first; c1 = neo_heading_lut_[hi].second;
+    }
+    const double span = std::max(1.0e-9, x1 - x0);
+    const double f = std::clamp((yy - x0) / span, 0.0, 1.0);
+    const double dc = normalizeAngle(c1 - c0);
+    return normalizeAngle(y + c0 + f * dc);
+  }
+
   void onMag(const sensor_msgs::msg::MagneticField &msg, Source source) {
     if ((source == Source::IMU && !enable_imu_) || (source == Source::NEO3 && !enable_neo_)) return;
     HeadingState &state = source == Source::IMU ? imu_state_ : neo_state_;
@@ -233,16 +294,25 @@ private:
     state.norm_ut = norm;
     if (!std::isfinite(norm) || norm < min_norm_ut_ || norm > max_norm_ut_) { reject("field_norm_gate"); return; }
 
+    double mx_heading = mx;
+    double my_heading = my;
+    if (source == Source::NEO3 && neo_planar_calibration_enabled_) {
+      const double bx = mx - neo_bias_x_ut_;
+      const double by = my - neo_bias_y_ut_;
+      mx_heading = neo_m00_ * bx + neo_m01_ * by;
+      my_heading = neo_m10_ * bx + neo_m11_ * by;
+    }
     const double cr = std::cos(roll_rad_), sr = std::sin(roll_rad_);
     const double cp = std::cos(pitch_rad_), sp = std::sin(pitch_rad_);
-    const double xh = mx * cp + mz * sp;
-    const double yh = mx * sr * sp + my * cr - mz * sr * cp;
+    const double xh = mx_heading * cp + mz * sp;
+    const double yh = mx_heading * sr * sp + my_heading * cr - mz * sr * cp;
     if (std::hypot(xh, yh) < 1.0) { reject("horizontal_field_too_small"); return; }
 
     const double raw_north_in_body = std::atan2(yh, xh);
     const double sign = source == Source::IMU ? imu_sign_ : neo_sign_;
     const double offset = source == Source::IMU ? imu_offset_ : neo_offset_;
-    const double yaw_enu = normalizeAngle(sign * raw_north_in_body + offset - declination_rad_);
+    double yaw_enu = normalizeAngle(sign * raw_north_in_body + offset - declination_rad_);
+    if (source == Source::NEO3) yaw_enu = applyNeoHeadingLut(yaw_enu);
     const double yaw_map = normalizeAngle(yaw_enu + map_yaw_from_enu_);
     const rclcpp::Time stamp = msg.header.stamp.sec == 0 && msg.header.stamp.nanosec == 0 ? t : rclcpp::Time(msg.header.stamp);
     if (!temporalGate(state, yaw_map, stamp)) { reject("heading_rate_gate"); return; }
@@ -336,6 +406,10 @@ private:
   double tilt_timeout_sec_{0.75}, max_tilt_rad_{0.7853981634}, declination_rad_{0.0};
   double min_norm_ut_{15.0}, max_norm_ut_{100.0};
   double imu_sign_{-1.0}, imu_offset_{1.5451826276}, neo_sign_{-1.0}, neo_offset_{1.5707963268};
+  bool neo_planar_calibration_enabled_{false}, neo_heading_lut_enabled_{false};
+  double neo_bias_x_ut_{0.0}, neo_bias_y_ut_{0.0};
+  double neo_m00_{1.0}, neo_m01_{0.0}, neo_m10_{0.0}, neo_m11_{1.0};
+  std::vector<std::pair<double, double>> neo_heading_lut_;
   double imu_variance_{0.08}, neo_variance_{0.06};
   double max_heading_rate_rps_{3.0}, rate_gate_margin_rad_{0.35};
   double consensus_max_error_rad_{0.0872664626}, consensus_hold_sec_{2.0}, consensus_timeout_sec_{0.5};

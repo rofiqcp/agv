@@ -23,7 +23,7 @@ planner_server:
       max_planning_time: 2.5
       motion_model_for_search: DUBIN
       angle_quantization_bins: 48
-      minimum_turning_radius: 1.452435565298
+      minimum_turning_radius: 1.597679121829
       reverse_penalty: 3.0
       change_penalty: 0.0
       non_straight_penalty: 1.2
@@ -82,7 +82,7 @@ controller_server:
       vx_max: 1.0
       vx_min: 0.0
       vy_max: 0.0
-      wz_max: 0.688498701004
+      wz_max: 0.625907910003
       ax_max: 0.75
       ax_min: -1.0
       ay_max: 0.0
@@ -101,7 +101,7 @@ controller_server:
         trajectory_step: 20
         time_step: 4
       AckermannConstraints:
-        min_turning_r: 1.452435565298
+        min_turning_r: 1.597679121829
       critics:
       - ConstraintCritic
       - CostCritic
@@ -206,26 +206,26 @@ bt_navigator:
 velocity_smoother:
   ros__parameters:
     use_sim_time: false
-    smoothing_frequency: 20.0
+    smoothing_frequency: 30.0
     scale_velocities: true
     feedback: OPEN_LOOP
     max_velocity: [1.0, 0.0, 1.396263401595]
     min_velocity: [-1.0, 0.0, -1.396263401595]
     max_accel:
-    - 0.18
+    - 0.45
     - 0.0
-    - 0.55
+    - 0.90
     max_decel:
-    - -0.28
+    - -0.70
     - 0.0
-    - -0.75
+    - -1.10
     odom_topic: /odometry/filtered
     odom_duration: 0.15
     deadband_velocity:
-    - 0.03
+    - 0.015
     - 0.0
     - 0.015
-    velocity_timeout: 0.4
+    velocity_timeout: 0.25
 local_costmap:
   local_costmap:
     ros__parameters:

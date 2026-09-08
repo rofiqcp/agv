@@ -1749,13 +1749,13 @@ inline QVector<ExperimentSpec> buildExperimentCatalog(const QString &subsystem) 
   });
   add("perception", QStringLiteral("FINAL-4.4"), QStringLiteral("FINAL BAB IV — 4.4 Real-Time dan Integrasi"), "F4.4",
   QStringLiteral("FINAL 4.4 Real-Time — kosong / obstacle / near-field"),
-  {"Grafik pipeline FPS","Grafik mean dan P95 processFrame","Grafik resource Jetson"},
+  {"Grafik pipeline FPS","Grafik mean dan P95 processFrame","Grafik resource host"},
   {
     {"Kondisi","Candidate","Path Relevant","Planning Relevant","Keputusan","Success"},
     {"Kondisi","Pipeline FPS","Mean processFrame","P95 processFrame","Capture Drop","Median Response"},
-    {"Kondisi","GPU","RAM","Temperatur"}
+    {"Kondisi","CPU","RAM","Temperatur"}
   },
-  {{"FPS","perception_performance.fps"},{"Mean ms","perception_performance.mean_ms"},{"P95 ms","perception_performance.p95_ms"},{"GPU","host.gpu_percent"},{"Temperature","host.temperature_c"}},
+  {{"FPS","perception_performance.fps"},{"Mean ms","perception_performance.mean_ms"},{"P95 ms","perception_performance.p95_ms"},{"CPU","host.cpu_percent"},{"RAM","host.ram_percent"},{"Temperature","host.temperature_c"}},
   {
     {"variation","Variasi","string","","","1 / 2 / 3"},
     {"condition","Skenario","string","","","Jalur kosong / Obstacle di jalur / Obstacle sangat dekat"},

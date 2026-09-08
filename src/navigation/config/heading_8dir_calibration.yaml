@@ -1,0 +1,140 @@
+heading_8dir_calibration:
+  valid: true
+  saved_at: '2026-09-08T20:20:00+07:00'
+  method: 8-static-heading planar XY affine + gyro-relative deviation LUT
+  raw_csv: /home/otomasi/ros/calibration/heading_8dir_raw_20260908_202227.csv
+  segments_csv: /home/otomasi/ros/calibration/heading_8dir_segments_20260908_202227.csv
+  segments: 8
+  static_samples_total: 358
+  neo3:
+    field_norm_gate_ut:
+    - 15.0
+    - 100.0
+    yaw_sign: 1.0
+    yaw_offset_rad: 2.72812855663114
+    planar_calibration_enabled: true
+    bias_xy_ut:
+    - 7.647139035678742
+    - -1.6915396504388576
+    matrix_xy:
+    - 0.947117573504921
+    - 0.33676364260092423
+    - -0.2543156496693006
+    - 0.9654089006745633
+    heading_lut_enabled: true
+    heading_lut_input_rad:
+    - -2.858432488768
+    - -1.968605501612
+    - -1.107036929096
+    - -0.393645237649
+    - 0.370508392654
+    - 1.191053026228
+    - 1.924615645924
+    - 2.546781533741
+    heading_lut_correction_rad:
+    - -0.087877183802
+    - -0.035336065943
+    - -0.057741336028
+    - -0.019301671461
+    - 0.0295379873
+    - -0.030541656373
+    - 0.021417423831
+    - 0.180671307817
+    note: 'XY-only: z-axis hard/soft-iron is intentionally not estimated from horizontal
+      rotations.'
+  yahboom_magnetometer:
+    enabled_for_ekf: false
+    reason: field norm grossly outside Earth-field gate in all 8 static headings
+  gyro_inertial:
+    used_as_relative_rotation_reference: true
+    periodic_yaw_reset: false
+    stationary_bias_update: ZARU-like
+  per_segment:
+  - segment: 1
+    samples: 45
+    duration_sec: 0.8787535309966188
+    inertial_mean_deg: 156.27153664223263
+    inertial_std_deg: 0.0672768780494699
+    neo_mean_deg: 156.2816730628496
+    neo_std_deg: 0.2854284140996025
+    gyro_norm_mean_rps: 0.0
+    acc_norm_mean: 9.80653931363978
+    yah_mag_norm_mean_ut: 771.077776390489
+    neo_mag_norm_mean_ut: 69.98189215760104
+  - segment: 2
+    samples: 45
+    duration_sec: 0.8791538400037098
+    inertial_mean_deg: 111.49948168984801
+    inertial_std_deg: 0.0
+    neo_mean_deg: -178.82653430202973
+    neo_std_deg: 0.24303029896917455
+    gyro_norm_mean_rps: 0.0010699369751235308
+    acc_norm_mean: 9.809759241489315
+    yah_mag_norm_mean_ut: 902.8637380910243
+    neo_mag_norm_mean_ut: 70.946429268898
+  - segment: 3
+    samples: 44
+    duration_sec: 0.8730456999983289
+    inertial_mean_deg: 66.49240356966979
+    inertial_std_deg: 2.414836539451467e-06
+    neo_mean_deg: -143.61495220271522
+    neo_std_deg: 0.18468584464094998
+    gyro_norm_mean_rps: 0.0014960818621220608
+    acc_norm_mean: 9.806356282087973
+    yah_mag_norm_mean_ut: 1019.1020092309341
+    neo_mag_norm_mean_ut: 63.94826258245817
+  - segment: 4
+    samples: 44
+    duration_sec: 0.8794978389996686
+    inertial_mean_deg: 22.920969180875847
+    inertial_std_deg: 0.0
+    neo_mean_deg: -99.22763867066834
+    neo_std_deg: 0.2383978632786885
+    gyro_norm_mean_rps: 0.0030257130630908266
+    acc_norm_mean: 9.80446629209334
+    yah_mag_norm_mean_ut: 1063.5643920070472
+    neo_mag_norm_mean_ut: 59.81136784298763
+  - segment: 5
+    samples: 45
+    duration_sec: 0.8800091930024792
+    inertial_mean_deg: -23.660115055025013
+    inertial_std_deg: 0.0
+    neo_mean_deg: -48.16142428864289
+    neo_std_deg: 0.27389212263377083
+    gyro_norm_mean_rps: 0.0006073629860540645
+    acc_norm_mean: 9.80449235741264
+    yah_mag_norm_mean_ut: 965.3421671520969
+    neo_mag_norm_mean_ut: 58.62299891641453
+  - segment: 6
+    samples: 45
+    duration_sec: 0.8802742769985343
+    inertial_mean_deg: -66.73687866017788
+    inertial_std_deg: 0.02109643368334446
+    neo_mean_deg: 1.0016070602304907
+    neo_std_deg: 0.29274955255172075
+    gyro_norm_mean_rps: 0.0007257257011686972
+    acc_norm_mean: 9.809649477059088
+    yah_mag_norm_mean_ut: 792.6396891914395
+    neo_mag_norm_mean_ut: 61.37789169119673
+  - segment: 7
+    samples: 46
+    duration_sec: 0.8985450259933714
+    inertial_mean_deg: -114.81739421168805
+    inertial_std_deg: 0.00014898778230946667
+    neo_mean_deg: 53.72687797606583
+    neo_std_deg: 0.2947598100445401
+    gyro_norm_mean_rps: 0.00041684260540370677
+    acc_norm_mean: 9.806968611615257
+    yah_mag_norm_mean_ut: 572.0332681215813
+    neo_mag_norm_mean_ut: 67.73087424977149
+  - segment: 8
+    samples: 44
+    duration_sec: 0.8597006560012233
+    inertial_mean_deg: -168.81110937686205
+    inertial_std_deg: 0.0
+    neo_mean_deg: 106.80733496841904
+    neo_std_deg: 0.19340460975851428
+    gyro_norm_mean_rps: 0.00022376946406835738
+    acc_norm_mean: 9.806809651914849
+    yah_mag_norm_mean_ut: 533.5044238433579
+    neo_mag_norm_mean_ut: 72.17947174232404

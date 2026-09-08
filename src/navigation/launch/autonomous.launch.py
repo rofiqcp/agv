@@ -643,7 +643,7 @@ def generate_launch_description() -> LaunchDescription:
     imu = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(nav_share, 'launch', 'imu.launch.py')),
         condition=IfCondition(LaunchConfiguration('start_imu')),
-        launch_arguments={'port': LaunchConfiguration('imu_port'), 'baudrate': '9600',
+        launch_arguments={'port': LaunchConfiguration('imu_port'), 'baudrate': '921600',
                           'frame_id': 'imu_link',
                           'use_sim_time': LaunchConfiguration('use_sim_time')}.items(),
     )

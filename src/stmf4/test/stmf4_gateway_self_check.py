@@ -86,7 +86,7 @@ require('board_build.flash_offset = 0x8000' in pio and 'board_upload.maximum_siz
 for token in ('APP_BASE', 'MANIFEST_ADDR', 'MANIFEST_MAGIC', 'crc32_bytes', 'jump_system_dfu', 'application_valid'):
     require(token in boot, f'F411 recovery bootloader contract missing: {token}')
 require('0x08008000' in uploader and '0x08060000' in uploader and 'readback verified' in uploader and
-        '0x08000000:4:leave' in uploader, 'transactional DFU updater must preserve bootloader and verify app')
+        '0x08000000:leave' in uploader, 'transactional DFU updater must preserve bootloader and verify app')
 
 print('PASS stmf4_gateway_self_check')
 print('pins: VESC PB6/PB7 | NEO3 I2C PB8/PB9 | GNSS PA2/PA3 | one F411 USB CDC')
