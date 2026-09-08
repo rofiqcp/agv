@@ -122,6 +122,7 @@
                   <button class="soft-btn" id="mapCenterBtn">⌖ Center</button>
                   <button class="soft-btn" id="mapFollowBtn" aria-pressed="false" title="Auto-follow robot without changing zoom">↟ Follow</button>
                   <button class="soft-btn" id="mapFitBtn">Fit</button>
+                  <button class="soft-btn" id="mapSnapshotBtn" title="Export current engineering map as PNG">▣ Snapshot</button>
                   <span class="toolbar-separator"></span>
                   <button class="soft-btn" id="mapLayerToggleBtn" aria-expanded="true">☷ Layers</button>
                 </div>
@@ -266,6 +267,11 @@
             <div class="metric-grid"><div><span>Camera</span><b id="perceptionSafetyCamera">--</b></div><div><span>Emergency</span><b id="perceptionSafetyEmergency">--</b></div><div><span>Candidate</span><b id="perceptionSafetyCandidates">--</b></div><div><span>Path relevant</span><b id="perceptionSafetyPath">--</b></div><div><span>Planning relevant</span><b id="perceptionSafetyPlanning">--</b></div><div><span>Near field</span><b id="perceptionSafetyNear">--</b></div></div>
             <div class="json-pretty" id="perceptionSafetyDetail">Waiting...</div>
           </article>
+          <article class="panel" id="perceptionEvidenceSection">
+            <div class="panel-head"><div><span class="eyebrow">EVIDENCE</span><h2>Capture Perception Snapshot</h2></div><span class="status-chip waiting" id="perceptionEvidenceState">READY</span></div>
+            <div class="evidence-capture-row"><label>Label<input id="perceptionEvidenceLabel" value="commissioning" maxlength="48" autocomplete="off"></label><button class="primary-btn" id="perceptionEvidenceCapture">Capture JPEG + Metadata</button><button class="soft-btn" id="perceptionEvidenceOpenCamera">Open Live Camera</button></div>
+            <div class="json-pretty" id="perceptionEvidenceResult">Evidence menyimpan frame aktual + telemetry + fingerprint YAML + git commit.</div>
+          </article>
         </section>
 
         <!-- SENSORS -->
@@ -328,6 +334,20 @@
                   <details><summary>Decoded RIGHT telemetry</summary><div class="json-pretty vesc-all-vars" id="vescRightAllVariables">Waiting...</div></details>
                 </article>
               </div>
+            </section>
+
+            <section class="vesc-section" id="vescCompareSection">
+              <div class="vesc-section-head"><div><span class="eyebrow">MOTOR COMPARE / DATA ANALYSIS</span><h3>LEFT Steering vs RIGHT Drive Health</h3></div><small>Perbandingan health dan telemetry; fungsi motor berbeda sehingga gain/rpm tidak dinilai MATCH secara buta.</small></div>
+              <div class="vesc-compare-grid">
+                <div class="vesc-compare-head"><span>Metric</span><b>LEFT • ID 1</b><b>RIGHT • ID 2</b><em>Assessment</em></div>
+                <div id="vescCompareRows" class="vesc-compare-rows"><div class="empty-state">Waiting dual telemetry...</div></div>
+              </div>
+              <div class="vesc-analysis-stats" id="vescAnalysisStats"></div>
+            </section>
+
+            <section class="vesc-section" id="vescFaultSection">
+              <div class="vesc-section-head"><div><span class="eyebrow">FAULT HISTORY</span><h3>Motor Fault & Link Events</h3></div><div class="button-row compact"><span class="status-chip" id="vescFaultSummary">0 EVENTS</span><button class="soft-btn" id="vescFaultClear">Clear History</button></div></div>
+              <div class="vesc-fault-history" id="vescFaultHistory"><div class="empty-state">No motor fault events in this browser session.</div></div>
             </section>
 
             <section class="vesc-section" id="vescGraphSection">
@@ -553,6 +573,7 @@
               <article class="panel run-console">
                 <div class="panel-head"><div><span class="eyebrow">RUN CONTROL</span><h2>Identitas Run & Data Evidence</h2></div></div>
                 <div class="run-grid">
+                  <label>Candidate<select id="runCandidate"><option value="baseline">Baseline</option><option value="candidate-a">Candidate A</option><option value="candidate-b">Candidate B</option><option value="candidate-c">Candidate C</option><option value="final">Final</option></select></label>
                   <label>Variation / Run<input id="runVariation" value="run-01" autocomplete="off"></label>
                   <label>Condition<input id="runCondition" value="nominal" autocomplete="off"></label>
                   <label>Sample rate<input id="runSampleRate" type="number" min="1" max="20" step="1" value="5"><small>Hz</small></label>
@@ -647,8 +668,9 @@
               </article>
 
               <article class="panel trial-recap" id="trialRecapPanel">
-                <div class="panel-head"><div><span class="eyebrow">PERSISTENT TRIALS</span><h2>Rekap Pengujian & Kalibrasi</h2></div><div class="panel-actions"><button class="soft-btn" id="refreshTrialsBtn">Reload Trials</button><button class="primary-btn" id="optimalScaleBtn" hidden>Hitung + Apply Scale Optimal</button></div></div>
-                <div id="trialOptimalState" class="tuning-note">Setiap STOP menambah satu trial ke YAML. Data dapat dihapus lalu dihitung ulang.</div>
+                <div class="panel-head"><div><span class="eyebrow">PERSISTENT TRIALS</span><h2>Rekap Pengujian & Kalibrasi</h2></div><div class="panel-actions"><button class="soft-btn" id="trialCompareBtn">Compare Selected</button><button class="soft-btn" id="trialCompareClear">Clear Compare</button><button class="soft-btn" id="refreshTrialsBtn">Reload Trials</button><button class="primary-btn" id="optimalScaleBtn" hidden>Hitung + Apply Scale Optimal</button></div></div>
+                <div id="trialOptimalState" class="tuning-note">Setiap STOP menambah satu trial ke YAML. Tandai beberapa run untuk side-by-side comparison sebelum memilih konfigurasi final.</div>
+                <div id="trialComparePanel" class="trial-compare-panel" hidden></div>
                 <div class="table-scroll"><table class="data-table"><thead id="trialRecapHead"></thead><tbody id="trialRecapBody"><tr><td>Belum ada trial.</td></tr></tbody></table></div>
                 <div class="button-row" id="trialArtifactActions" hidden><a class="soft-btn" id="downloadTrialXlsx" href="/api/experiment/record/last.xlsx">Download Excel (.xlsx)</a><span id="trialGraphDownloads"></span></div>
               </article>

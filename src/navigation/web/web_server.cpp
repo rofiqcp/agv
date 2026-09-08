@@ -23,6 +23,7 @@
 #include <QBuffer>
 #include <QByteArray>
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -2224,6 +2225,7 @@ class LocalHttpServer : public QObject {
   QString recordingSectionLabel_;
   QMap<QString, QString> recordingTuningConfig_;
   QStringList recordingPaths_;
+  QString recordingCandidate_;
   QString recordingVariation_;
   QString recordingCondition_;
   QString recordingStartedIso_;
@@ -2257,7 +2259,7 @@ class LocalHttpServer : public QObject {
       }
     }
     const QString fitPath=QStringLiteral("/home/otomasi/ros/calibration/yahboom_mag_planar_latest.yaml");
-    if (QFileInfo::isFile(fitPath)) {
+    if (QFileInfo(fitPath).isFile()) {
       try { out["fit"] = yamlToJson(YAML::LoadFile(fitPath.toStdString())); }
       catch (const std::exception &e) { out["fit_error"]=QString::fromUtf8(e.what()); }
     }
@@ -2272,7 +2274,7 @@ class LocalHttpServer : public QObject {
     const QString d=direction.trimmed().toUpper();
     if (d!="CW" && d!="CCW") { if(message)*message="direction wajib CW atau CCW"; return false; }
     const QString script=navigationSharePath()+QStringLiteral("/tools/yahboom_8dir_calibration.py");
-    if (!QFileInfo::isFile(script)) { if(message)*message="Backend calibration script tidak ditemukan: "+script; return false; }
+    if (!QFileInfo(script).isFile()) { if(message)*message="Backend calibration script tidak ditemukan: "+script; return false; }
     imuCalibrationLastOutput_.clear();
     imuCalibrationProcess_.setProgram(QStringLiteral("/usr/bin/python3"));
     imuCalibrationProcess_.setArguments({script,QStringLiteral("--direction"),d});
@@ -2432,7 +2434,11 @@ class LocalHttpServer : public QObject {
     const QJsonObject json = doc.isObject() ? doc.object() : QJsonObject();
     QString message;
     bool ok = false;
-    if (request.path == "/api/config/set") {
+    if (request.path == "/api/perception/evidence") {
+      QJsonObject result;
+      ok = savePerceptionEvidence(json.value("label").toString(), &result, &message);
+      return sendJson(socket, ok ? 200 : 409, QJsonObject{{"ok", ok}, {"message", message}, {"evidence", result}, {"at_ms", nowMs()}});
+    } else if (request.path == "/api/config/set") {
       if (bridge_->readOnly()) {
         return sendJson(socket, 403, QJsonObject{{"ok", false}, {"message", "Web GUI read-only; perubahan YAML ditolak"}});
       }
@@ -2677,11 +2683,150 @@ class LocalHttpServer : public QObject {
     sendJson(socket, ok ? 200 : 409, QJsonObject{{"ok", ok}, {"message", message}, {"at_ms", nowMs()}});
   }
 
+  static QString sha256File(const QString &path) {
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) return {};
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    while (!f.atEnd()) hash.addData(f.read(1024 * 1024));
+    return QString::fromLatin1(hash.result().toHex());
+  }
+
+  static QString gitRevision() {
+    QProcess p;
+    p.setWorkingDirectory(QStringLiteral("/home/otomasi/ros"));
+    p.start(QStringLiteral("git"), {QStringLiteral("rev-parse"), QStringLiteral("--short=12"), QStringLiteral("HEAD")});
+    if (!p.waitForFinished(1200) || p.exitStatus() != QProcess::NormalExit || p.exitCode() != 0) return QStringLiteral("unknown");
+    const QString out = QString::fromUtf8(p.readAllStandardOutput()).trimmed();
+    return out.isEmpty() ? QStringLiteral("unknown") : out;
+  }
+
+  static QJsonObject configFingerprints() {
+    const QJsonObject files = loadConfigSnapshot().value(QStringLiteral("files")).toObject();
+    QJsonObject out;
+    for (auto it = files.constBegin(); it != files.constEnd(); ++it) {
+      const QString path = it.value().toObject().value(QStringLiteral("path")).toString();
+      if (path.isEmpty() || !QFileInfo::exists(path)) continue;
+      const QFileInfo fi(path);
+      out[it.key()] = QJsonObject{{QStringLiteral("path"), path},
+                                  {QStringLiteral("sha256"), sha256File(path)},
+                                  {QStringLiteral("mtime_ms"), fi.lastModified().toMSecsSinceEpoch()},
+                                  {QStringLiteral("bytes"), fi.size()}};
+    }
+    return out;
+  }
+
+  bool writeSessionManifest(const QString &csvPath, QJsonObject *result, QString *message) const {
+    if (csvPath.isEmpty()) {
+      if (message) *message = QStringLiteral("Primary CSV path kosong");
+      return false;
+    }
+    QJsonObject runtime;
+    if (bridge_) {
+      const QJsonObject snap = bridge_->snapshot();
+      for (const QString &key : {QStringLiteral("server"), QStringLiteral("connected"), QStringLiteral("system.motion_ready"),
+                                 QStringLiteral("system.nav2_ready"), QStringLiteral("system.estop"), QStringLiteral("esc_mux"),
+                                 QStringLiteral("nav_cmd_mux"), QStringLiteral("vesc_tool_status"), QStringLiteral("gnss_quality"),
+                                 QStringLiteral("imu_status"), QStringLiteral("ekf_local_status"), QStringLiteral("ekf_global_status"),
+                                 QStringLiteral("trajectory_safety_state"), QStringLiteral("collision_monitor_state")}) {
+        if (snap.contains(key)) runtime[key] = snap.value(key);
+      }
+    }
+    QJsonObject tuning;
+    for (auto it = recordingTuningConfig_.cbegin(); it != recordingTuningConfig_.cend(); ++it) tuning[it.key()] = it.value();
+    QJsonObject manifest{{QStringLiteral("schema"), QStringLiteral("adv-session-manifest-v1")},
+                         {QStringLiteral("git_commit"), gitRevision()},
+                         {QStringLiteral("generated_at"), QDateTime::currentDateTime().toString(Qt::ISODateWithMs)},
+                         {QStringLiteral("subsystem"), recordingSubsystem_},
+                         {QStringLiteral("section_id"), recordingId_},
+                         {QStringLiteral("source_experiment_id"), recordingSourceExperimentId_},
+                         {QStringLiteral("label"), recordingLabel_},
+                         {QStringLiteral("section_label"), recordingSectionLabel_},
+                         {QStringLiteral("candidate"), recordingCandidate_},
+                         {QStringLiteral("variation"), recordingVariation_},
+                         {QStringLiteral("condition"), recordingCondition_},
+                         {QStringLiteral("started_at"), recordingStartedIso_},
+                         {QStringLiteral("stopped_at"), QDateTime::currentDateTime().toString(Qt::ISODateWithMs)},
+                         {QStringLiteral("sample_rate_hz"), recordingRateHz_},
+                         {QStringLiteral("samples"), recordingRows_.size()},
+                         {QStringLiteral("primary_csv"), csvPath},
+                         {QStringLiteral("record_paths"), QJsonArray::fromStringList(recordingPaths_)},
+                         {QStringLiteral("trial_inputs"), recordingTrialInputs_},
+                         {QStringLiteral("live_series"), recordingLiveSeries_},
+                         {QStringLiteral("graphs"), recordingGraphs_},
+                         {QStringLiteral("tuning_snapshot"), tuning},
+                         {QStringLiteral("config_fingerprints"), configFingerprints()},
+                         {QStringLiteral("runtime_stop_snapshot"), runtime}};
+    const QFileInfo csvInfo(csvPath);
+    const QString manifestPath = QDir(csvInfo.absolutePath()).filePath(csvInfo.completeBaseName() + QStringLiteral(".manifest.json"));
+    QSaveFile f(manifestPath);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+      if (message) *message = QStringLiteral("Gagal membuka session manifest: ") + manifestPath;
+      return false;
+    }
+    f.write(QJsonDocument(manifest).toJson(QJsonDocument::Indented));
+    if (!f.commit()) {
+      if (message) *message = QStringLiteral("Gagal commit session manifest: ") + manifestPath;
+      return false;
+    }
+    if (result) { (*result)[QStringLiteral("manifest_path")] = manifestPath; (*result)[QStringLiteral("manifest_saved")] = true; }
+    if (message) *message = QStringLiteral("Manifest tersimpan: ") + manifestPath;
+    return true;
+  }
+
+  bool savePerceptionEvidence(const QString &label, QJsonObject *result, QString *message) const {
+    if (!bridge_) { if (message) *message = QStringLiteral("ROS bridge tidak tersedia"); return false; }
+    const QByteArray jpeg = bridge_->cameraJpeg();
+    if (jpeg.isEmpty()) { if (message) *message = QStringLiteral("Camera frame belum tersedia"); return false; }
+    const QString root = QStringLiteral("/home/otomasi/ros/data/presepsi/evidence");
+    if (!QDir().mkpath(root)) { if (message) *message = QStringLiteral("Gagal membuat folder evidence"); return false; }
+    QString safe = label.trimmed();
+    safe.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9_.-]+")), QStringLiteral("_"));
+    if (safe.isEmpty()) safe = QStringLiteral("capture");
+    const QString stem = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss_zzz")) + QStringLiteral("_") + safe;
+    const QString jpgPath = QDir(root).filePath(stem + QStringLiteral(".jpg"));
+    const QString jsonPath = QDir(root).filePath(stem + QStringLiteral(".json"));
+    QSaveFile jf(jpgPath);
+    if (!jf.open(QIODevice::WriteOnly) || jf.write(jpeg) != jpeg.size() || !jf.commit()) {
+      if (message) *message = QStringLiteral("Gagal menyimpan evidence JPEG");
+      return false;
+    }
+    const QJsonObject snap = bridge_->snapshot();
+    QJsonObject telemetry;
+    for (const QString &key : {QStringLiteral("camera_frame"), QStringLiteral("camera_health_state"), QStringLiteral("camera_healthy"),
+                               QStringLiteral("raw_detections"), QStringLiteral("obstacle_metrics"), QStringLiteral("lane_state"),
+                               QStringLiteral("drivable_state"), QStringLiteral("object_points"), QStringLiteral("path_relevant_points"),
+                               QStringLiteral("planning_relevant_points"), QStringLiteral("perception_performance"),
+                               QStringLiteral("trajectory_safety_state"), QStringLiteral("perception_emergency"),
+                               QStringLiteral("cmd_perception_advisory"), QStringLiteral("ekf_global")}) {
+      if (snap.contains(key)) telemetry[key] = snap.value(key);
+    }
+    QJsonObject meta{{QStringLiteral("schema"), QStringLiteral("adv-perception-evidence-v1")},
+                     {QStringLiteral("captured_at"), QDateTime::currentDateTime().toString(Qt::ISODateWithMs)},
+                     {QStringLiteral("label"), label}, {QStringLiteral("image"), jpgPath},
+                     {QStringLiteral("git_commit"), gitRevision()}, {QStringLiteral("telemetry"), telemetry},
+                     {QStringLiteral("config_fingerprints"), configFingerprints()}};
+    QSaveFile mf(jsonPath);
+    if (!mf.open(QIODevice::WriteOnly | QIODevice::Text)) {
+      QFile::remove(jpgPath);
+      if (message) *message = QStringLiteral("Gagal membuka evidence JSON");
+      return false;
+    }
+    mf.write(QJsonDocument(meta).toJson(QJsonDocument::Indented));
+    if (!mf.commit()) {
+      QFile::remove(jpgPath);
+      if (message) *message = QStringLiteral("Gagal commit evidence JSON");
+      return false;
+    }
+    if (result) *result = QJsonObject{{QStringLiteral("image_path"), jpgPath}, {QStringLiteral("metadata_path"), jsonPath}, {QStringLiteral("label"), label}};
+    if (message) *message = QStringLiteral("Perception evidence tersimpan: ") + jpgPath;
+    return true;
+  }
+
   QJsonObject recordingStatus() const {
     return QJsonObject{{"active", recording_}, {"subsystem", recordingSubsystem_}, {"id", recordingId_},
                        {"source_experiment_id", recordingSourceExperimentId_},
                        {"label", recordingLabel_}, {"section_label", recordingSectionLabel_},
-                       {"variation", recordingVariation_}, {"condition", recordingCondition_},
+                       {"candidate", recordingCandidate_}, {"variation", recordingVariation_}, {"condition", recordingCondition_},
                        {"started_at", recordingStartedIso_}, {"sample_rate_hz", recordingRateHz_},
                        {"elapsed_s", recording_ && recordingStartedMs_ > 0 ? (nowMs() - recordingStartedMs_) / 1000.0 : 0.0},
                        {"samples", recordingRows_.size()}, {"record_paths", QJsonArray::fromStringList(recordingPaths_)},
@@ -2735,6 +2880,8 @@ class LocalHttpServer : public QObject {
     recordingTrialInputs_ = json.value("trial_inputs").toObject();
     recordingLiveSeries_ = json.value("live_series").toObject();
     recordingGraphs_ = json.value("graphs").toArray();
+    recordingCandidate_ = json.value("candidate").toString().trimmed();
+    if (recordingCandidate_.isEmpty()) recordingCandidate_ = QStringLiteral("baseline");
     recordingVariation_ = json.value("variation").toString().trimmed();
     recordingCondition_ = json.value("condition").toString().trimmed();
     recordingRateHz_ = std::clamp(json.value("sample_rate_hz").toDouble(5.0), 1.0, 20.0);
@@ -2758,6 +2905,7 @@ class LocalHttpServer : public QObject {
     row["section_id"] = recordingId_;
     row["source_experiment_id"] = recordingSourceExperimentId_;
     row["section_label"] = recordingSectionLabel_;
+    row["candidate"] = recordingCandidate_;
     row["variation"] = recordingVariation_;
     row["condition"] = recordingCondition_;
     for (auto it = recordingTuningConfig_.cbegin(); it != recordingTuningConfig_.cend(); ++it) row[it.key()] = it.value();
@@ -2912,7 +3060,7 @@ class LocalHttpServer : public QObject {
 
   QJsonObject buildTrialSummary(int trialNo) const {
     QJsonObject o{{"trial_no",trialNo},{"trial_id",QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz")},
-      {"subsystem",recordingSubsystem_},{"experiment_id",recordingSourceExperimentId_},{"variation",recordingVariation_},
+      {"subsystem",recordingSubsystem_},{"experiment_id",recordingSourceExperimentId_},{"candidate",recordingCandidate_},{"variation",recordingVariation_},
       {"condition",recordingCondition_},{"started_at",recordingStartedIso_},{"stopped_at",QDateTime::currentDateTime().toString(Qt::ISODateWithMs)},
       {"samples",recordingRows_.size()},{"sample_rate_hz",recordingRateHz_},{"inputs",recordingTrialInputs_}};
     auto input=[&](const char*k)->std::optional<double>{const QJsonValue v=recordingTrialInputs_.value(k); if(v.isDouble())return v.toDouble(); bool ok=false;double x=v.toString().toDouble(&ok);return ok?std::optional<double>(x):std::nullopt;};
@@ -3147,19 +3295,21 @@ class LocalHttpServer : public QObject {
     QJsonObject summary; QJsonArray trials; QString trialMessage;
     const bool trialSaved = appendCurrentTrial(&summary, &trials, &trialMessage);
     bool artifactsSaved = false; QString artifactMessage;
+    bool manifestSaved = false; QString manifestMessage;
     if (csvSaved && result) {
       const QString csvPath = result->value("primary_csv").toString();
       artifactsSaved = exportTrialArtifacts(csvPath, summary, trials, result, &artifactMessage);
+      manifestSaved = writeSessionManifest(csvPath, result, &manifestMessage);
       (*result)["trial_summary"] = summary;
       (*result)["trials"] = trials;
       (*result)["trial_yaml"] = trialStorePath();
       (*result)["trial_saved"] = trialSaved;
       (*result)["artifacts_saved"] = artifactsSaved;
     }
-    if (message) *message = csvMessage + QStringLiteral(" | ") + trialMessage + QStringLiteral(" | ") + artifactMessage;
+    if (message) *message = csvMessage + QStringLiteral(" | ") + trialMessage + QStringLiteral(" | ") + artifactMessage + QStringLiteral(" | ") + manifestMessage;
     recordingRows_.clear(); recordingTuningConfig_.clear(); recordingPaths_.clear();
-    recordingTrialInputs_=QJsonObject(); recordingLiveSeries_=QJsonObject(); recordingGraphs_=QJsonArray();
-    return csvSaved && trialSaved && artifactsSaved;
+    recordingCandidate_.clear(); recordingTrialInputs_=QJsonObject(); recordingLiveSeries_=QJsonObject(); recordingGraphs_=QJsonArray();
+    return csvSaved && trialSaved && artifactsSaved && manifestSaved;
   }
 
   void openSse(QTcpSocket *socket) {
