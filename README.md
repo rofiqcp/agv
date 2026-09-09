@@ -18,7 +18,7 @@ git pull --ff-only
 git submodule update --init --recursive
 ```
 
-Firmware STM32F103 berada pada Git submodule `hoverboard-vesc` dan repository AGV menyimpan commit firmware yang dipin agar versi hardware reproducible.
+Firmware STM32F103 berada pada Git submodule `hoverboard-vesc`, sedangkan firmware STM32F411 HMI/gateway berada pada submodule `F4gateway`. Repository AGV mem-pin commit keduanya agar versi hardware reproducible.
 
 ## 2. Instalasi Otomatis
 
@@ -84,6 +84,7 @@ agv/
 ├── src/esc/          # Ackermann command mux + VESC bridge
 ├── src/stmf4/        # Bridge Mini-PC ↔ STM32F411 ↔ GNSS/VESC
 ├── hoverboard-vesc/  # Git submodule firmware STM32F103 dual FOC
+├── F4gateway/        # Git submodule firmware STM32F411 HMI/gateway
 ├── models/           # Model YOLOPv2 dan downloader
 ├── scripts/          # Environment, portability check, browser QA
 ├── install.sh
@@ -192,14 +193,27 @@ QA memeriksa:
 
 ## 9. Git dan Submodule
 
-Branch utama AGV adalah `v1`. Perubahan firmware harus di-commit/push di dalam `hoverboard-vesc` terlebih dahulu, lalu pointer submodule di repository AGV diperbarui.
+Branch utama AGV adalah `v1`. Perubahan firmware harus di-commit/push di repository firmware terlebih dahulu, lalu pointer submodule di repository AGV diperbarui.
 
 ```bash
 cd "$AGV_ROOT/hoverboard-vesc"
 git status
-# commit/push firmware bila ada perubahan
+# commit/push STM32F103 bila ada perubahan
+
+cd "$AGV_ROOT/F4gateway"
+pio run
+git status
+# commit/push STM32F411 ke branch v1
 
 cd "$AGV_ROOT"
-git add hoverboard-vesc
-git commit -m "chore: update hoverboard-vesc submodule"
+git add hoverboard-vesc F4gateway .gitmodules
+git commit -m "chore: sync firmware submodules"
+```
+
+Untuk mengambil commit firmware yang dipin oleh branch AGV saat ini:
+
+```bash
+git pull --ff-only
+git submodule sync --recursive
+git submodule update --init --recursive
 ```
