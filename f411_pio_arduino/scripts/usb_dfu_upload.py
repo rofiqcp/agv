@@ -9,7 +9,7 @@ import time
 
 DFU_VID = "0483"
 DFU_PID = "df11"
-MANUAL_DFU_WAIT_S = 60.0
+MANUAL_DFU_WAIT_S = float(os.environ.get("F411_DFU_MANUAL_WAIT_S", "60.0"))
 UPLOAD_LOCK = "/tmp/adv_f411_dfu_upload.lock"
 _upload_lock_fd = None
 
@@ -199,7 +199,7 @@ def _assert_dfu_permission(nodes, settle_s=3.0):
 
 def _wait_for_dfu(seconds, manual_hint=False):
     if manual_hint:
-        print("[USB-DFU] Firmware lama belum punya BOOT:DFU.")
+        print("[USB-DFU] Recovery otomatis belum berhasil memunculkan ROM DFU.")
         print("[USB-DFU] Masuk ROM DFU sekali ini via USB:")
         print("          1) tahan tombol BOOT0")
         print("          2) tekan-lepas NRST/RESET")
@@ -294,42 +294,191 @@ def _request_software_dfu(port):
         return False
 
 
+
+def _blind_software_dfu(port):
+    """Best-effort transition when CDC RX still works but TX/ACK path is wedged."""
+    print(f"[USB-DFU] Blind DFU handshake through {port} ...")
+    try:
+        import serial
+        with serial.Serial(port, 1000000, timeout=0.03, write_timeout=1.0) as ser:
+            time.sleep(0.12)
+            for attempt in range(4):
+                ser.write(b"\nBOOT:DFU:ARM\n")
+                ser.flush()
+                time.sleep(0.06)
+                ser.write(b"BOOT:DFU:CONFIRM\n")
+                ser.flush()
+                print(f"[USB-DFU] blind arm/confirm {attempt + 1}/4 sent")
+                time.sleep(0.18)
+        return True
+    except Exception as exc:
+        print(f"[USB-DFU] blind CDC trigger detail: {exc}")
+        return False
+
+
+def _wait_for_cdc(seconds):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        port = _find_cdc_port()
+        if port:
+            return port
+        time.sleep(0.10)
+    return None
+
+
+def _reset_runtime_usb_device():
+    """Reset only the exact BlackPill USB device; never a generic ttyACM node."""
+    nodes = _usb_nodes("0483", "5740")
+    if not nodes:
+        return False
+    USBDEVFS_RESET = (ord('U') << 8) | 20
+    for node in nodes:
+        try:
+            fd = os.open(node, os.O_WRONLY)
+            try:
+                fcntl.ioctl(fd, USBDEVFS_RESET, 0)
+            finally:
+                os.close(fd)
+            print(f"[USB-DFU] USB bus reset issued to {node}")
+            time.sleep(0.50)
+            return True
+        except PermissionError:
+            print(f"[USB-DFU] USB reset skipped: no permission for {node}")
+        except OSError as exc:
+            print(f"[USB-DFU] USB reset failed for {node}: {exc}")
+    return False
+
+
+def _openocd_paths():
+    root = os.path.join(os.path.expanduser("~"), ".platformio", "packages", "tool-openocd")
+    binary = os.path.join(root, "bin", "openocd")
+    scripts = os.path.join(root, "scripts")
+    return binary, scripts
+
+
+def _probe_stlink_dbgmcu_id():
+    binary, scripts = _openocd_paths()
+    if not os.path.isfile(binary):
+        return None
+    cmd = [
+        binary, "-s", scripts,
+        "-f", "interface/stlink.cfg",
+        "-f", "target/stm32f4x.cfg",
+        "-c", "adapter speed 500",
+        "-c", "init", "-c", "halt",
+        "-c", "echo AGV_DBGMCU_ID=[format 0x%08X [mrw 0xE0042000]]",
+        "-c", "resume", "-c", "shutdown",
+    ]
+    try:
+        cp = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, timeout=8.0, check=False)
+    except Exception as exc:
+        print(f"[USB-DFU] ST-Link probe skipped: {exc}")
+        return None
+    import re
+    m = re.search(r"AGV_DBGMCU_ID=(0x[0-9A-Fa-f]+)", cp.stdout)
+    if not m:
+        return None
+    return int(m.group(1), 16)
+
+
+def _try_stlink_force_dfu():
+    """Use ST-Link only if the attached target identifies exactly as STM32F411.
+
+    A connected F103 programmer is deliberately rejected, preventing the F103
+    actuator MCU from ever being reset or modified by the F411 recovery path.
+    """
+    chip_id = _probe_stlink_dbgmcu_id()
+    if chip_id is None:
+        print("[USB-DFU] no usable ST-Link recovery target detected")
+        return False
+    dev_id = chip_id & 0xFFF
+    if dev_id != 0x431:
+        print(f"[USB-DFU] ST-Link target rejected: DBGMCU=0x{chip_id:08X}, DEV_ID=0x{dev_id:03X} (not STM32F411)")
+        return False
+    binary, scripts = _openocd_paths()
+    # STM32F411: RCC_APB1ENR.PWREN, PWR_CR.DBP, RTC_BKP0R. The resident
+    # bootloader consumes DFUB and jumps to immutable system-memory USB DFU.
+    command = (
+        "adapter speed 500; init; halt; "
+        "set r [mrw 0x40023840]; mww 0x40023840 [expr {$r | 0x10000000}]; "
+        "set p [mrw 0x40007000]; mww 0x40007000 [expr {$p | 0x00000100}]; "
+        "mww 0x40002850 0x42465544; reset run; sleep 300; shutdown"
+    )
+    cmd = [binary, "-s", scripts, "-f", "interface/stlink.cfg",
+           "-f", "target/stm32f4x.cfg", "-c", command]
+    print("[USB-DFU] STM32F411 ST-Link recovery: requesting resident bootloader -> ROM DFU")
+    try:
+        cp = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, timeout=10.0, check=False)
+        if cp.returncode != 0:
+            print("[USB-DFU] ST-Link recovery command failed")
+            return False
+        return True
+    except Exception as exc:
+        print(f"[USB-DFU] ST-Link recovery failed: {exc}")
+        return False
+
+
+def _cdc_to_dfu_with_recovery(port):
+    _release_cdc_holders(port)
+    if _request_software_dfu(port):
+        if _wait_for_dfu(6.0, manual_hint=False):
+            return True
+    # Some failures leave CDC TX silent while RX/parser is still alive.
+    port = _find_cdc_port()
+    if port:
+        _release_cdc_holders(port)
+        if _blind_software_dfu(port) and _wait_for_dfu(4.0, manual_hint=False):
+            return True
+    # A USB bus reset can recover a wedged CDC peripheral without resetting an
+    # otherwise healthy MCU. Permission depends on installed udev rules.
+    if _reset_runtime_usb_device():
+        port = _wait_for_cdc(4.0)
+        if port:
+            _release_cdc_holders(port)
+            if _request_software_dfu(port) and _wait_for_dfu(6.0, manual_hint=False):
+                return True
+            port = _find_cdc_port()
+            if port:
+                _release_cdc_holders(port)
+                if _blind_software_dfu(port) and _wait_for_dfu(4.0, manual_hint=False):
+                    return True
+    return False
+
 def _before_upload(source, target, env):
     _acquire_upload_lock()
     _stop_ros_processes()
+
+    # State A: already in immutable STM32 ROM DFU. Program immediately.
     nodes = _usb_nodes(DFU_VID, DFU_PID)
     if nodes:
         print("[USB-DFU] STM32 ROM DFU already active:", ", ".join(nodes))
         _assert_dfu_permission(nodes)
         return
 
+    # State B/C: runtime CDC exists. Try acknowledged transition first, then
+    # blind RX-only recovery and USB peripheral reset.
     port = _find_cdc_port()
-    if not port:
-        if _wait_for_dfu(MANUAL_DFU_WAIT_S, manual_hint=True):
-            return
-        raise RuntimeError(
-            "BLACKPILL CDC tidak ditemukan dan ROM DFU tidak muncul dalam waktu tunggu."
-        )
+    if port and _cdc_to_dfu_with_recovery(port):
+        return
 
-    # The runtime bridge owns the CDC exclusively by design. Only that exact
-    # official process is allowed to be stopped; arbitrary serial monitors are
-    # never killed automatically. stmf4.launch.py respawns the bridge after DFU.
-    _release_cdc_holders(port)
-    software_supported = _request_software_dfu(port)
-    if software_supported:
-        if _wait_for_dfu(12.0, manual_hint=False):
-            return
-        raise RuntimeError(
-            "BOOT:DFU dikirim tetapi STM32 ROM DFU tidak terdeteksi. "
-            "Coba satu kali bootstrap manual BOOT0 + RESET."
-        )
+    # State D: runtime is crashed/silent. If a programmer is attached, it is
+    # used ONLY when DBGMCU proves the target is an STM32F411 (DEV_ID 0x431).
+    # A programmer connected to the F103 actuator MCU is explicitly rejected.
+    if _try_stlink_force_dfu() and _wait_for_dfu(8.0, manual_hint=False):
+        return
 
+    # State E: allow time for a hardware watchdog/power-cycle/manual BOOT0 reset
+    # to expose ROM DFU. Once 0483:df11 appears, the same transactional uploader
+    # takes over automatically; no separate service/programmer script is needed.
     if _wait_for_dfu(MANUAL_DFU_WAIT_S, manual_hint=True):
         return
 
     raise RuntimeError(
-        "Firmware di board masih versi lama. ROM DFU 0483:df11 tidak muncul. "
-        "Tahan BOOT0, tekan-lepas RESET, lepas BOOT0 saat uploader sedang menunggu."
+        "F411 tidak dapat dipindahkan ke ROM DFU. Uploader sudah mencoba: "
+        "existing DFU, CDC ACK, blind CDC, USB reset, dan F411-only ST-Link recovery. "
+        "Jika USB/power/NRST secara fisik tidak terhubung, software tidak dapat memaksa reset MCU."
     )
 
 

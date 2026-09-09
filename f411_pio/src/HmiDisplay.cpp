@@ -54,10 +54,14 @@ void HmiDisplay::data(const uint8_t *bytes, uint16_t length) {
 }
 
 void HmiDisplay::init() {
-  TftCs(true); TouchCs(true);
+  TftCs(true); TouchCs(true); TftDc(true);
+  // Mirror the known-good TFT_eSPI reset sequence exactly: put the SPI bus in
+  // a known command state, then perform the ILI9341 hardware reset and allow
+  // the full 150 ms recovery time before programming controller registers.
+  command(0x00U);
   HAL_GPIO_WritePin(GPIOB, kTftRst, GPIO_PIN_SET); HAL_Delay(5U);
   HAL_GPIO_WritePin(GPIOB, kTftRst, GPIO_PIN_RESET); HAL_Delay(20U);
-  HAL_GPIO_WritePin(GPIOB, kTftRst, GPIO_PIN_SET); HAL_Delay(120U);
+  HAL_GPIO_WritePin(GPIOB, kTftRst, GPIO_PIN_SET); HAL_Delay(150U);
   command(0xEFU); data8(0x03U); data8(0x80U); data8(0x02U);
   command(0xCFU); data8(0x00U); data8(0xC1U); data8(0x30U);
   command(0xEDU); data8(0x64U); data8(0x03U); data8(0x12U); data8(0x81U);
@@ -74,6 +78,34 @@ void HmiDisplay::init() {
   const uint8_t gn[15]={0x00U,0x0EU,0x14U,0x03U,0x11U,0x07U,0x31U,0xC1U,0x48U,0x08U,0x0FU,0x0CU,0x31U,0x36U,0x0FU};
   command(0xE0U); data(gp,sizeof(gp)); command(0xE1U); data(gn,sizeof(gn));
   command(0x11U); HAL_Delay(120U); command(0x29U); HAL_Delay(20U); setRotation(1U);
+}
+
+uint8_t HmiDisplay::readRegister8(uint8_t commandValue, uint8_t index) {
+  // Match TFT_eSPI::readcommand8() for ILI9341 SPI Interface II. Register
+  // parameters are selected through 0xD9 before each indexed read.
+  setSpiPrescaler(SPI_BAUDRATEPRESCALER_16); // 6 MHz, same as legacy read clock
+  TouchCs(true); TftCs(false);
+  TftDc(false);
+  uint8_t tx = 0xD9U;
+  if (HAL_SPI_Transmit(&hspi1, &tx, 1U, 20U) != HAL_OK) { TftCs(true); return 0U; }
+  TftDc(true);
+  tx = static_cast<uint8_t>(0x10U + (index & 0x0FU));
+  if (HAL_SPI_Transmit(&hspi1, &tx, 1U, 20U) != HAL_OK) { TftCs(true); return 0U; }
+  TftCs(true); Board_DelayUs(2U); TftCs(false);
+  TftDc(false); tx = commandValue;
+  if (HAL_SPI_Transmit(&hspi1, &tx, 1U, 20U) != HAL_OK) { TftCs(true); return 0U; }
+  TftDc(true);
+  uint8_t rx = 0U; tx = 0U;
+  (void)HAL_SPI_TransmitReceive(&hspi1, &tx, &rx, 1U, 20U);
+  TftCs(true);
+  return rx;
+}
+
+uint32_t HmiDisplay::readId() {
+  return (static_cast<uint32_t>(readRegister8(0xD3U, 0U)) << 24U) |
+         (static_cast<uint32_t>(readRegister8(0xD3U, 1U)) << 16U) |
+         (static_cast<uint32_t>(readRegister8(0xD3U, 2U)) << 8U) |
+         static_cast<uint32_t>(readRegister8(0xD3U, 3U));
 }
 
 void HmiDisplay::setRotation(uint8_t rotation) {

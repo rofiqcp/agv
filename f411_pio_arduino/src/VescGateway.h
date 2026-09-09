@@ -23,7 +23,6 @@ class VescGateway {
   static constexpr uint32_t kStatusPeriodMs = 1000;
   static constexpr uint32_t kRuntimeNoValidFrameRecoverMs = 1200;
   static constexpr uint32_t kRuntimeRecoverCooldownMs = 1200;
-  static constexpr uint8_t kRuntimeRecoverBeforeReset = 4;
   static constexpr uint8_t kCommMotorEstop = 159U;  // VESC 6.00 COMM_MOTOR_ESTOP
   static constexpr uint16_t kSafetyRefreshHoldMs = 250U;
   static constexpr uint16_t kSafetyReleaseHoldMs = 600U;

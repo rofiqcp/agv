@@ -1,6 +1,7 @@
 #include "BoardSupport.h"
 
 #include <algorithm>
+#include <cstring>
 
 SPI_HandleTypeDef hspi1{};
 I2C_HandleTypeDef hi2c1{};
@@ -266,6 +267,9 @@ bool HalUartPort::begin(uint32_t baudrate) {
   UartPinsInit(handle_);
   if (HAL_UART_Init(handle_) != HAL_OK) return false;
   rx_head_ = rx_tail_ = 0U;
+  tx_head_ = tx_tail_ = tx_pending_ = 0U;
+  tx_busy_ = false;
+  tx_dropped_ = 0U;
   overflow_count_ = 0U;
   error_count_ = 0U;
   rx_restart_required_ = false;
@@ -281,6 +285,8 @@ void HalUartPort::end() {
   }
   handle_->Instance = instance_;
   rx_head_ = rx_tail_ = 0U;
+  tx_head_ = tx_tail_ = tx_pending_ = 0U;
+  tx_busy_ = false;
   rx_restart_required_ = false;
 }
 
@@ -298,29 +304,100 @@ int HalUartPort::read() {
   return value;
 }
 
+int HalUartPort::availableForWrite() const {
+  const uint16_t head = tx_head_;
+  const uint16_t tail = tx_tail_;
+  const uint16_t used = head >= tail ? static_cast<uint16_t>(head - tail)
+                                     : static_cast<uint16_t>(kTxSize - tail + head);
+  return static_cast<int>(kTxSize - used - 1U);
+}
+
+std::size_t HalUartPort::queuedForWrite() const {
+  const uint16_t head = tx_head_;
+  const uint16_t tail = tx_tail_;
+  return head >= tail ? static_cast<std::size_t>(head - tail)
+                      : static_cast<std::size_t>(kTxSize - tail + head);
+}
+
+void HalUartPort::discardPendingTx() {
+  // Safety-critical preemption: no stale motor command may remain ahead of an
+  // E-stop. Abort only the TX side; USART RX and its ring stay alive.
+  const uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  (void)HAL_UART_AbortTransmit(handle_);
+  tx_head_ = tx_tail_ = tx_pending_ = 0U;
+  tx_busy_ = false;
+  if (primask == 0U) __enable_irq();
+}
+
 std::size_t HalUartPort::write(const uint8_t *data, std::size_t length) {
-  if (data == nullptr || length == 0U || length > 65535U) return 0U;
-  const uint32_t baud = handle_->Init.BaudRate == 0U ? 9600U : handle_->Init.BaudRate;
-  const uint32_t timeout = 10U + static_cast<uint32_t>((length * 12000ULL) / baud);
-  return HAL_UART_Transmit(handle_, const_cast<uint8_t *>(data),
-                           static_cast<uint16_t>(length), timeout) == HAL_OK ? length : 0U;
+  if (data == nullptr || length == 0U || length >= kTxSize) return 0U;
+  const uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  const uint16_t head = tx_head_;
+  const uint16_t tail = tx_tail_;
+  const uint16_t used = head >= tail ? static_cast<uint16_t>(head - tail)
+                                     : static_cast<uint16_t>(kTxSize - tail + head);
+  const uint16_t free = static_cast<uint16_t>(kTxSize - used - 1U);
+  if (free < length) {
+    ++tx_dropped_;
+    if (primask == 0U) __enable_irq();
+    return 0U;
+  }
+  for (std::size_t i = 0U; i < length; ++i) {
+    tx_buffer_[tx_head_] = data[i];
+    tx_head_ = static_cast<uint16_t>((tx_head_ + 1U) % kTxSize);
+  }
+  if (primask == 0U) __enable_irq();
+  (void)service();
+  return length;
 }
 
 void HalUartPort::flush() {
   const uint32_t start = HAL_GetTick();
-  while (__HAL_UART_GET_FLAG(handle_, UART_FLAG_TC) == RESET &&
-         static_cast<uint32_t>(HAL_GetTick() - start) < 100U) { }
+  while ((tx_head_ != tx_tail_ || tx_busy_ ||
+          __HAL_UART_GET_FLAG(handle_, UART_FLAG_TC) == RESET) &&
+         static_cast<uint32_t>(HAL_GetTick() - start) < 150U) {
+    (void)service();
+  }
 }
 
 bool HalUartPort::service() {
-  if (!rx_restart_required_) return true;
-  (void)HAL_UART_AbortReceive(handle_);
-  __HAL_UART_CLEAR_OREFLAG(handle_);
-  __HAL_UART_CLEAR_NEFLAG(handle_);
-  __HAL_UART_CLEAR_FEFLAG(handle_);
-  const bool restarted = HAL_UART_Receive_IT(handle_, &rx_byte_, 1U) == HAL_OK;
-  rx_restart_required_ = !restarted;
-  return restarted;
+  bool ok = true;
+  if (rx_restart_required_) {
+    (void)HAL_UART_AbortReceive(handle_);
+    __HAL_UART_CLEAR_OREFLAG(handle_);
+    __HAL_UART_CLEAR_NEFLAG(handle_);
+    __HAL_UART_CLEAR_FEFLAG(handle_);
+    const bool restarted = HAL_UART_Receive_IT(handle_, &rx_byte_, 1U) == HAL_OK;
+    rx_restart_required_ = !restarted;
+    ok = restarted;
+  }
+
+  if (!tx_busy_ && tx_head_ != tx_tail_) {
+    uint16_t count = 0U;
+    uint16_t tail = 0U;
+    const uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    if (!tx_busy_ && tx_head_ != tx_tail_) {
+      tail = tx_tail_;
+      count = tx_head_ > tx_tail_ ? static_cast<uint16_t>(tx_head_ - tx_tail_)
+                                  : static_cast<uint16_t>(kTxSize - tx_tail_);
+      tx_pending_ = count;
+      tx_busy_ = true;
+    }
+    if (primask == 0U) __enable_irq();
+    if (count > 0U && HAL_UART_Transmit_IT(handle_, &tx_buffer_[tail], count) != HAL_OK) {
+      const uint32_t retry_primask = __get_PRIMASK();
+      __disable_irq();
+      tx_pending_ = 0U;
+      tx_busy_ = false;
+      ++error_count_;
+      if (retry_primask == 0U) __enable_irq();
+      ok = false;
+    }
+  }
+  return ok;
 }
 
 void HalUartPort::irqRxComplete() {
@@ -334,12 +411,28 @@ void HalUartPort::irqRxComplete() {
   if (HAL_UART_Receive_IT(handle_, &rx_byte_, 1U) != HAL_OK) rx_restart_required_ = true;
 }
 
+void HalUartPort::irqTxComplete() {
+  if (!tx_busy_) return;
+  tx_tail_ = static_cast<uint16_t>((tx_tail_ + tx_pending_) % kTxSize);
+  tx_pending_ = 0U;
+  tx_busy_ = false;
+}
+
 void HalUartPort::irqError() {
   ++error_count_;
   __HAL_UART_CLEAR_OREFLAG(handle_);
   __HAL_UART_CLEAR_NEFLAG(handle_);
   __HAL_UART_CLEAR_FEFLAG(handle_);
   if (HAL_UART_Receive_IT(handle_, &rx_byte_, 1U) != HAL_OK) rx_restart_required_ = true;
+}
+
+// HAL_Init() enables the Cortex-M SysTick timebase. The STM32Cube startup file
+// weak-aliases SysTick_Handler to Default_Handler, so a native application must
+// provide this ISR explicitly. Without it the first 1 ms tick traps the MCU in
+// the default infinite loop before USB/HMI/sensor startup can complete.
+extern "C" void SysTick_Handler() {
+  HAL_IncTick();
+  HAL_SYSTICK_IRQHandler();
 }
 
 extern "C" void USART1_IRQHandler() { HAL_UART_IRQHandler(&huart1); }
@@ -349,6 +442,11 @@ extern "C" void TIM1_TRG_COM_TIM11_IRQHandler() { HAL_TIM_IRQHandler(&htim11); }
 extern "C" void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
   if (huart == &huart1) gVescUart.irqRxComplete();
   else if (huart == &huart2) gGnssUart.irqRxComplete();
+}
+
+extern "C" void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
+  if (huart == &huart1) gVescUart.irqTxComplete();
+  else if (huart == &huart2) gGnssUart.irqTxComplete();
 }
 
 extern "C" void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {

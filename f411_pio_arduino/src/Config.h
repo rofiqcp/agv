@@ -17,16 +17,15 @@ enum class UiMenuId : uint8_t {
   ESC_MODE,
   ESC_STEERING,
   ESC_STEERING_LIVE,
-  ESC_STEERING_TEST,
+  ESC_STEERING_TEST_ANGLE,
   ESC_STEERING_CAL,
   ESC_DRIVE,
   ESC_DRIVE_LIVE,
   ESC_MANUAL_SPEED,
   ESC_DRIVE_SCALE,
-  ESC_DRIVE_TEST,
   ESC_POWER,
   ESC_LINK,
-  ESC_TEST,
+  ESC_MANUAL_TEST,
   PERCEPTION_ROOT,
   PERCEPTION_OVERVIEW,
   PERCEPTION_CAMERA,
@@ -80,8 +79,13 @@ enum NavigationStatus : uint8_t {
   NAV_FAILED
 };
 
-enum class SoftKey : uint8_t { NONE = 0, LEFT, RIGHT, OK, UP, DOWN, HOME };
-enum class UiEditKey : uint8_t { NONE = 0, OPERATOR_MODE, MANUAL_SPEED_PCT, DRIVE_SCALE, PERCEPTION_INFERENCE };
+enum class SoftKey : uint8_t {
+  NONE = 0, TOP_LEFT, LEFT, RIGHT, OK, CARD_0, CARD_1, CARD_2,
+  TEST_LEFT, TEST_FORWARD, TEST_STOP, TEST_RIGHT, TEST_REVERSE
+};
+enum class UiEditKey : uint8_t {
+  NONE = 0, OPERATOR_MODE, MANUAL_SPEED_PCT, STEERING_TEST_DEG, DRIVE_SCALE, PERCEPTION_INFERENCE
+};
 
 static constexpr uint8_t HMI_WAYPOINT_COUNT = 4;
 static constexpr uint8_t HMI_WAYPOINT_NAME_LEN = 20;
@@ -109,7 +113,7 @@ static constexpr uint16_t C_SHADOW    = RGB565(5, 11, 19);
 static constexpr uint16_t C_WHITE     = 0xFFFFU;
 static constexpr uint16_t C_BLACK     = 0x0000U;
 
-// Layout global: top bar, area konten, soft-key bawah, dan rail UP/DOWN kanan.
+// Layout global 320x240. Kontrol hanya muncul saat memang diperlukan.
 static constexpr int TOP_H = 30;
 static constexpr int CONTENT_Y = 33;
 static constexpr int CONTENT_BOTTOM = 184;
@@ -118,12 +122,26 @@ static constexpr int SOFTKEY_H = 48;
 static constexpr int SOFTKEY_X0 = 4;
 static constexpr int SOFTKEY_W = 102;
 static constexpr int SOFTKEY_GAP = 4;
-static constexpr int RIGHT_RAIL_X = 270;
-static constexpr int RIGHT_RAIL_W = 44;
-static constexpr int RIGHT_UP_Y = 39;
-static constexpr int RIGHT_DOWN_Y = 111;
-static constexpr int RIGHT_KEY_H = 58;
 static constexpr int CARD_RADIUS = 7;
+
+// Tiga kartu besar untuk overview dan carousel submenu.
+static constexpr int UI_CARD_X0 = 6;
+static constexpr int UI_CARD_W = 100;
+static constexpr int UI_CARD_GAP = 4;
+static constexpr int OVERVIEW_CARD_Y = 126;
+static constexpr int OVERVIEW_CARD_H = 108;
+static constexpr int SUBMENU_CARD_Y = 42;
+static constexpr int SUBMENU_CARD_H = 132;
+static constexpr uint8_t SUBMENU_VISIBLE_CARDS = 3;
+
+// Footer carousel: tombol kiri/kanan besar dan indikator posisi di tengah.
+static constexpr int CAROUSEL_NAV_Y = 188;
+static constexpr int CAROUSEL_NAV_H = 48;
+static constexpr int CAROUSEL_NAV_W = 76;
+static constexpr int CAROUSEL_LEFT_X = 4;
+static constexpr int CAROUSEL_RIGHT_X = W - 4 - CAROUSEL_NAV_W;
+static constexpr int CAROUSEL_PAGE_X = CAROUSEL_LEFT_X + CAROUSEL_NAV_W + 6;
+static constexpr int CAROUSEL_PAGE_W = CAROUSEL_RIGHT_X - 6 - CAROUSEL_PAGE_X;
 
 // HOME visual tetap kecil, tetapi area sentuh sengaja lebih besar ke kanan/bawah.
 static constexpr int HOME_TOUCH_X = 0;
@@ -136,9 +154,10 @@ static constexpr int MANUAL_SPEED_DEFAULT = 20;
 static constexpr int MANUAL_SPEED_MIN = 10;
 static constexpr int MANUAL_SPEED_MAX = 50;
 static constexpr int MANUAL_SPEED_STEP = 5;
-static constexpr float STEER_TEST_MIN_DEG = -30.0F;
-static constexpr float STEER_TEST_MAX_DEG = 30.0F;
-static constexpr float STEER_TEST_STEP_DEG = 5.0F;
+static constexpr float STEER_TEST_ANGLE_DEFAULT_DEG = 20.0F;
+static constexpr float STEER_TEST_ANGLE_MIN_DEG = 5.0F;
+static constexpr float STEER_TEST_ANGLE_MAX_DEG = 30.0F;
+static constexpr float STEER_TEST_ANGLE_STEP_DEG = 5.0F;
 static constexpr float DRIVE_SCALE_MIN = 0.20F;
 static constexpr float DRIVE_SCALE_MAX = 5.00F;
 static constexpr float DRIVE_SCALE_STEP = 0.01F;

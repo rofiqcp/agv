@@ -104,11 +104,15 @@ void Neo3Sensors::begin() {
   publishHardwareStatus(true);
 }
 
+void Neo3Sensors::pollSafetyIo() {
+  pollSafetySwitch();
+  updateSafetyLed();
+}
+
 void Neo3Sensors::poll() {
   pollGnss();
   pollIst8310();
-  pollSafetySwitch();
-  updateSafetyLed();
+  pollSafetyIo();
 
   const uint32_t now_ms = HAL_GetTick();
   if (!gnss_uart_ok_ && static_cast<uint32_t>(now_ms - last_gnss_uart_retry_ms_) >= GNSS_UART_RETRY_MS) {

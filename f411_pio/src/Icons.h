@@ -4,6 +4,9 @@
 #pragma once
 
 #include "HmiDisplay.h"
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include "Config.h"
 #include "VisualAssets.h"
 
@@ -68,6 +71,95 @@ inline void iconArrowLeft(int cx, int cy, uint16_t c) {
 inline void iconArrowRight(int cx, int cy, uint16_t c) {
   tft.fillRoundRect(cx - 9, cy - 3, 10, 6, 2, c);
   tft.fillTriangle(cx, cy - 8, cx + 9, cy, cx, cy + 8, c);
+}
+
+
+inline void iconBack(int cx, int cy, uint16_t c) {
+  tft.fillTriangle(cx - 9, cy, cx + 1, cy - 9, cx + 1, cy + 9, c);
+  tft.fillRoundRect(cx - 1, cy - 3, 11, 6, 2, c);
+}
+
+inline void iconGrid(int cx, int cy, uint16_t c) {
+  for (int row = 0; row < 2; ++row) {
+    for (int col = 0; col < 2; ++col) {
+      tft.fillRoundRect(cx - 11 + col * 13, cy - 11 + row * 13, 9, 9, 2, c);
+    }
+  }
+}
+
+inline void iconBolt(int cx, int cy, uint16_t c) {
+  tft.fillTriangle(cx + 2, cy - 13, cx - 7, cy + 1, cx + 1, cy + 1, c);
+  tft.fillTriangle(cx - 1, cy + 13, cx + 8, cy - 2, cx, cy - 2, c);
+}
+
+inline void iconLink(int cx, int cy, uint16_t c, uint16_t bg) {
+  tft.drawRoundRect(cx - 14, cy - 6, 17, 12, 5, c);
+  tft.drawRoundRect(cx - 2, cy - 6, 17, 12, 5, c);
+  tft.fillRect(cx - 5, cy - 2, 10, 5, bg);
+  tft.drawFastHLine(cx - 5, cy, 10, c);
+}
+
+inline void iconGauge(int cx, int cy, uint16_t c, uint16_t bg) {
+  tft.drawCircle(cx, cy + 2, 12, c);
+  tft.fillRect(cx - 13, cy + 3, 27, 12, bg);
+  tft.drawLine(cx, cy + 2, cx + 7, cy - 5, c);
+  tft.fillCircle(cx, cy + 2, 2, c);
+}
+
+inline void iconGear(int cx, int cy, uint16_t c, uint16_t bg) {
+  tft.drawCircle(cx, cy, 9, c);
+  tft.drawCircle(cx, cy, 3, c);
+  for (int i = -1; i <= 1; i += 2) {
+    tft.fillRect(cx + i * 9 - 2, cy - 3, 5, 6, c);
+    tft.fillRect(cx - 3, cy + i * 9 - 2, 6, 5, c);
+  }
+  tft.fillCircle(cx, cy, 2, bg);
+}
+
+inline void iconEye(int cx, int cy, uint16_t c, uint16_t bg) {
+  tft.drawLine(cx - 14, cy, cx - 7, cy - 7, c);
+  tft.drawLine(cx - 7, cy - 7, cx + 7, cy - 7, c);
+  tft.drawLine(cx + 7, cy - 7, cx + 14, cy, c);
+  tft.drawLine(cx - 14, cy, cx - 7, cy + 7, c);
+  tft.drawLine(cx - 7, cy + 7, cx + 7, cy + 7, c);
+  tft.drawLine(cx + 7, cy + 7, cx + 14, cy, c);
+  tft.fillCircle(cx, cy, 5, c);
+  tft.fillCircle(cx, cy, 2, bg);
+}
+
+inline void iconCompass(int cx, int cy, uint16_t c, uint16_t bg) {
+  tft.drawCircle(cx, cy, 12, c);
+  tft.fillTriangle(cx, cy - 10, cx - 4, cy + 3, cx + 4, cy + 3, c);
+  tft.fillTriangle(cx, cy + 10, cx - 4, cy - 3, cx + 4, cy - 3, C_DISABLED);
+  tft.fillCircle(cx, cy, 2, bg);
+}
+
+inline void iconShield(int cx, int cy, uint16_t c, uint16_t bg) {
+  tft.fillTriangle(cx - 10, cy - 9, cx + 10, cy - 9, cx, cy + 13, c);
+  tft.fillTriangle(cx - 6, cy - 6, cx + 6, cy - 6, cx, cy + 8, bg);
+}
+
+inline void iconWrench(int cx, int cy, uint16_t c, uint16_t bg) {
+  tft.fillCircle(cx - 6, cy - 6, 7, c);
+  tft.fillCircle(cx - 6, cy - 6, 3, bg);
+  tft.fillRect(cx - 3, cy - 3, 15, 6, c);
+  tft.fillCircle(cx + 11, cy, 4, c);
+  tft.fillCircle(cx + 11, cy, 1, bg);
+}
+
+inline void iconCheck(int cx, int cy, uint16_t c) {
+  tft.drawLine(cx - 9, cy, cx - 3, cy + 7, c);
+  tft.drawLine(cx - 3, cy + 7, cx + 10, cy - 8, c);
+  tft.drawLine(cx - 8, cy, cx - 2, cy + 6, c);
+}
+
+inline void iconPlus(int cx, int cy, uint16_t c) {
+  tft.fillRoundRect(cx - 10, cy - 2, 21, 5, 2, c);
+  tft.fillRoundRect(cx - 2, cy - 10, 5, 21, 2, c);
+}
+
+inline void iconMinus(int cx, int cy, uint16_t c) {
+  tft.fillRoundRect(cx - 10, cy - 2, 21, 5, 2, c);
 }
 
 inline void drawVehicleIllustration(int x, int y) {

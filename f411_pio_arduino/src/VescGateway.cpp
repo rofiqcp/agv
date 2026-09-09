@@ -157,7 +157,10 @@ void VescGateway::publishRxFrame(const uint8_t *data, size_t len) {
   }
   // Maintenance/config replies may exceed one CDC queue. Stream them with a
   // bounded deadline: reliable while the host is present, but never an infinite block.
-  if (!writeUsbBounded(reinterpret_cast<const uint8_t *>(line), out, 400U)) ++usb_drop_frames_;
+  // Jangan tahan cooperative main-loop ratusan ms hanya karena host USB macet.
+  // 20 ms cukup untuk frame maintenance normal pada USB CDC 1 Mbps; host dapat
+  // retry jika queue penuh, sementara polling safety PB12 tetap bounded.
+  if (!writeUsbBounded(reinterpret_cast<const uint8_t *>(line), out, 20U)) ++usb_drop_frames_;
 }
 
 void VescGateway::serviceRxFrames() {
@@ -259,7 +262,10 @@ void VescGateway::recoveryTick(uint32_t now) {
   if (static_cast<uint32_t>(now - last_recovery_ms_) < kRuntimeRecoverCooldownMs) return;
   if (tx_bytes_ == recovery_tx_marker_) return;
   recoverRuntimeUart(now);
-  if (ever_valid_frame_ && recovery_streak_ >= kRuntimeRecoverBeforeReset) NVIC_SystemReset();
+  // Kegagalan UART ESC tidak boleh mereset seluruh F411 karena board yang sama
+  // juga membawa HMI, GNSS, magnetometer, dan jalur E-stop. Recovery tetap lokal
+  // pada USART1; F103 watchdog 300 ms memadamkan aktuator bila command terputus.
+  // Application watchdog tetap menjadi otoritas reset untuk hang F411 nyata.
 }
 
 void VescGateway::publishStatus(bool force) {
@@ -269,13 +275,13 @@ void VescGateway::publishStatus(bool force) {
   char line[320];
   const int n = snprintf(line, sizeof(line),
     "VESC:STAT:mode=%s,baud=%lu,rx=%lu,tx=%lu,reject=%lu,frames=%lu,frame_err=%lu,"
-    "usb_drop=%lu,valid_age_ms=%lu,recover=%lu,safety=%u,age_ms=%lu,rx_lvl=%d,tx_lvl=%d,brr=%lX,cr1=%lX,sr=%lX\n",
+    "usb_drop=%lu,valid_age_ms=%lu,recover=%lu,recover_streak=%u,ever_valid=%u,safety=%u,age_ms=%lu,rx_lvl=%d,tx_lvl=%d,brr=%lX,cr1=%lX,sr=%lX\n",
     ownerName(owner_), static_cast<unsigned long>(kBaud),
     static_cast<unsigned long>(rx_bytes_), static_cast<unsigned long>(tx_bytes_),
     static_cast<unsigned long>(rejected_bytes_), static_cast<unsigned long>(rx_frames_),
     static_cast<unsigned long>(rx_frame_errors_), static_cast<unsigned long>(usb_drop_frames_),
     static_cast<unsigned long>(now - last_valid_frame_ms_), static_cast<unsigned long>(uart_recovery_count_),
-    safety_stop_active_ ? 1U : 0U, static_cast<unsigned long>(now - last_rx_ms_), digitalRead(PB7), digitalRead(PB6),
+    static_cast<unsigned>(recovery_streak_), ever_valid_frame_ ? 1U : 0U, safety_stop_active_ ? 1U : 0U, static_cast<unsigned long>(now - last_rx_ms_), digitalRead(PB7), digitalRead(PB6),
     static_cast<unsigned long>(USART1->BRR), static_cast<unsigned long>(USART1->CR1),
     static_cast<unsigned long>(USART1->SR));
   if (n <= 0 || static_cast<size_t>(n) >= sizeof(line)) return;
@@ -287,11 +293,11 @@ void VescGateway::publishStatus(bool force) {
 
 bool VescGateway::handleHostCommand(const char *command) {
   if (strncmp(command, "VESC:", 5) != 0) return false;
-  if (strcmp(command, "VESC:STATUS") == 0) {
+    if (strcmp(command, "VESC:STATUS") == 0) {
     publishStatus(true);
     return true;
   }
-  if (strcmp(command, "VESC:LINECHECK") == 0) {
+      if (strcmp(command, "VESC:LINECHECK") == 0) {
     uart_.end();
     pinMode(PB7, INPUT_PULLDOWN);
     delay(3);

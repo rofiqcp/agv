@@ -23,6 +23,8 @@ class Neo3Sensors {
 public:
   void begin();
   void poll();
+  void pollSafetyIo();
+  bool safetyPressed() const { return switch_pressed_; }
   bool handleHostCommand(const char *command);
 
 private:

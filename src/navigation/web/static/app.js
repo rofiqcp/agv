@@ -93,11 +93,11 @@ if($('perceptionEvidenceCapture'))$('perceptionEvidenceCapture').onclick=capture
 function toast(msg,bad=false){const e=document.createElement('div');e.className='toast'+(bad?' bad':'');e.textContent=msg;$('toastStack').append(e);setTimeout(()=>e.remove(),4200)}
 let confirmAction=null;function confirmModal(title,text,fn){setText('confirmTitle',title);setText('confirmText',text);confirmAction=fn;$('confirmModal').classList.add('show')}$('confirmNo').onclick=()=>{$('confirmModal').classList.remove('show');confirmAction=null};$('confirmYes').onclick=()=>{const fn=confirmAction;$('confirmModal').classList.remove('show');confirmAction=null;if(fn)fn()};
 async function post(url,body={},silent=false){if(replayMode){if(!silent)toast('REPLAY MODE aktif: semua command/write diblokir.',true);return {ok:false,replay_locked:true,message:'Replay mode command lock'}}try{const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const j=await r.json();if(!silent||!r.ok)toast(j.message||(`${r.status} ${r.statusText}`),!r.ok);return j}catch(e){toast('Request gagal: '+e.message,true);return null}}
-function trackChannelTiming(ups){for(const [k,rawT] of Object.entries(ups||{})){const t=+rawT;if(!Number.isFinite(t))continue;let m=channelTiming.get(k);if(!m)m={last:0,dts:[],missing:0};if(m.last>0&&t>m.last){const dt=t-m.last;if(dt>0&&dt<5000){m.dts.push(dt);while(m.dts.length>80)m.dts.shift();const expected=CHANNEL_REGISTRY[k]?.expectedHz;if(expected>0){const nominal=1000/expected;if(dt>nominal*1.65)m.missing+=Math.max(0,Math.round(dt/nominal)-1)}}}if(t>m.last)m.last=t;channelTiming.set(k,m)}}
+function trackChannelTiming(ups){const now=Date.now(),windowMs=10000;for(const [k,rawT] of Object.entries(ups||{})){const t=+rawT;if(!Number.isFinite(t))continue;let m=channelTiming.get(k);if(!m)m={last:0,dts:[],missingEvents:[]};if(!Array.isArray(m.missingEvents))m.missingEvents=[];m.missingEvents=m.missingEvents.filter(x=>now-x.at<=windowMs);if(m.last>0&&t>m.last){const dt=t-m.last,expected=CHANNEL_REGISTRY[k]?.expectedHz,nominal=expected>0?1000/expected:0,resetGap=nominal>0?Math.max(1000,nominal*10):1000;if(dt>0&&dt<=resetGap){m.dts.push(dt);while(m.dts.length>80)m.dts.shift();if(nominal>0&&dt>nominal*1.65){const count=Math.max(0,Math.round(dt/nominal)-1);if(count)m.missingEvents.push({at:now,count})}}else if(dt>resetGap){m.dts=[];m.missingEvents=[]}}if(t>m.last)m.last=t;channelTiming.set(k,m)}}
 function channelDt(k){const a=channelTiming.get(k)?.dts||[];return a.length?a[a.length-1]/1000:undefined}
 function channelRate(k){const a=channelTiming.get(k)?.dts||[];if(!a.length)return undefined;const recent=a.slice(-30),mean=recent.reduce((x,y)=>x+y,0)/recent.length;return mean>0?1000/mean:undefined}
 function channelJitterMs(k){const a=(channelTiming.get(k)?.dts||[]).slice(-40);if(a.length<2)return undefined;const mean=a.reduce((x,y)=>x+y,0)/a.length;return Math.sqrt(a.reduce((n,v)=>n+(v-mean)**2,0)/a.length)}
-function channelMissing(k){return channelTiming.get(k)?.missing||0}
+function channelMissing(k){const m=channelTiming.get(k);if(!m||!Array.isArray(m.missingEvents))return 0;const now=Date.now();m.missingEvents=m.missingEvents.filter(x=>now-x.at<=10000);return m.missingEvents.reduce((sum,x)=>sum+(+x.count||0),0)}
 function channelHealth(k){const meta=CHANNEL_REGISTRY[k]||{},a=age(k)*1000,r=channelRate(k),stale=meta.staleMs||1000;if(a<=stale&&(!meta.expectedHz||!Number.isFinite(r)||r>=meta.expectedHz*.55))return'LIVE';if(a<=stale*3)return'DEGRADED';return'STALE'}
 function mergeSticky(prev,next){if(!prev||typeof prev!=='object'||Array.isArray(prev)||!next||typeof next!=='object'||Array.isArray(next))return next;const out={...prev};for(const [k,v] of Object.entries(next))out[k]=(v&&typeof v==='object'&&!Array.isArray(v)&&prev[k]&&typeof prev[k]==='object'&&!Array.isArray(prev[k]))?mergeSticky(prev[k],v):v;return out}
 function queueRender(){if(renderQueued)return;renderQueued=true;const delay=Math.max(0,28-(performance.now()-lastRenderAt)),run=()=>requestAnimationFrame(()=>{renderQueued=false;lastRenderAt=performance.now();render()});delay>1?setTimeout(run,delay):run()}
@@ -619,25 +619,30 @@ function vminmax01(g,vals){return vals.length&&Math.min(...vals)>=0&&Math.max(..
 function drawChartFrame(ctx,w,h,pad,dpr){ctx.strokeStyle='rgba(120,150,155,.28)';ctx.lineWidth=1*dpr;ctx.beginPath();ctx.moveTo(pad.l,pad.t);ctx.lineTo(pad.l,h-pad.b);ctx.lineTo(w-pad.r,h-pad.b);ctx.stroke()}
 function drawTimeGridRange(ctx,w,h,pad,dpr,start,end,ymin,ymax){ctx.strokeStyle='rgba(120,150,155,.16)';ctx.fillStyle='rgba(160,180,185,.72)';ctx.font=`${9*dpr}px ui-monospace`;for(let i=0;i<=4;i++){const y=pad.t+i/4*(h-pad.t-pad.b),v=ymax-i/4*(ymax-ymin);ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(w-pad.r,y);ctx.stroke();ctx.fillText(Number.isFinite(v)?v.toFixed(Math.abs(v)<10?3:1):'--',4*dpr,y+3*dpr)}const span=Math.max(1,end-start),step=span<=10?1:span<=20?2:span<=60?5:span<=150?10:30;for(let t=Math.ceil(start/step)*step;t<=end+1e-9;t+=step){const x=pad.l+(t-start)/span*(w-pad.l-pad.r);ctx.beginPath();ctx.moveTo(x,pad.t);ctx.lineTo(x,h-pad.b);ctx.stroke();ctx.fillText(String(Math.round(t)),x-6*dpr,h-10*dpr)}}
 function drawGrid(ctx,w,h,pad,dpr,xmin,xmax,ymin,ymax){ctx.strokeStyle='rgba(120,150,155,.16)';ctx.fillStyle='rgba(160,180,185,.7)';ctx.font=`${9*dpr}px ui-monospace`;for(let i=0;i<=4;i++){const y=pad.t+i/4*(h-pad.t-pad.b),v=ymax-i/4*(ymax-ymin);ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(w-pad.r,y);ctx.stroke();ctx.fillText(Number.isFinite(v)?v.toFixed(3):'--',4*dpr,y+3*dpr)}for(let i=0;i<=5;i++){const x=pad.l+i/5*(w-pad.l-pad.r),v=xmin+i/5*(xmax-xmin);ctx.beginPath();ctx.moveTo(x,pad.t);ctx.lineTo(x,h-pad.b);ctx.stroke();ctx.fillText(Number.isFinite(v)?v.toFixed(2):'--',x-13*dpr,h-10*dpr)}}
-function downloadExperimentGraphPng(index){
+function buildExperimentGraphExportCanvas(index){
   const src=$(`experimentChart-${index}`),status=$(`chartDataStatus-${index}`)?.textContent||'';
-  if(!src||!selectedExperiment||status.includes('WAITING'))return toast('Grafik belum memiliki data hasil recording',true);
+  if(!src||!selectedExperiment||status.includes('WAITING'))return null;
   const g=selectedExperiment.graphs?.[index]||{},caption=selectedExperiment.graphCaptions?.[index]||`Grafik ${index+1}`,
         xLabel=g.xLabel||(g.type==='scatter'?g.xSeries:'Time [s]'),yLabel=g.yLabel||(g.type==='scatter'?g.ySeries:'Value'),
         out=document.createElement('canvas');
   out.width=1600;out.height=720;
-  // Report export is always light/white like the Matplotlib backend. Re-render
-  // the live chart once with a white chart background, copy it, then restore
-  // the operator theme immediately. Series colors remain unchanged.
   const body=document.body,oldInline=body.style.getPropertyValue('--chart-bg'),savedCursor=experimentCursorTime;experimentCursorTime=null;
-  body.style.setProperty('--chart-bg','#ffffff');drawExperimentChart(index);
-  const ctx=out.getContext('2d');ctx.fillStyle='#ffffff';ctx.fillRect(0,0,out.width,out.height);
-  ctx.fillStyle='#111827';ctx.font='700 28px system-ui';ctx.fillText(`${displayExperimentId(selectedExperiment)} • ${caption}`,52,52);
-  ctx.fillStyle='#4b5563';ctx.font='18px system-ui';ctx.fillText(`Variation: ${$('runVariation').value} • Condition: ${$('runCondition').value} • ${new Date().toLocaleString('id-ID')}`,52,84);
-  ctx.drawImage(src,50,112,1500,500);
-  if(oldInline)body.style.setProperty('--chart-bg',oldInline);else body.style.removeProperty('--chart-bg');experimentCursorTime=savedCursor;drawExperimentChart(index);
-  ctx.fillStyle='#374151';ctx.font='18px system-ui';ctx.fillText(`X: ${xLabel||'Time [s]'}`,52,642);ctx.textAlign='right';ctx.fillText(`Y: ${yLabel||'Value'}`,1548,642);ctx.textAlign='left';
-  const legend=($(`chartLegend-${index}`)?.innerText||'').replace(/\s+/g,' ').trim();if(legend){ctx.fillStyle='#1f2937';ctx.font='15px system-ui';ctx.fillText(legend.slice(0,180),52,680)}
+  try{
+    body.style.setProperty('--chart-bg','#ffffff');drawExperimentChart(index);
+    const ctx=out.getContext('2d');ctx.fillStyle='#ffffff';ctx.fillRect(0,0,out.width,out.height);
+    ctx.fillStyle='#111827';ctx.font='700 28px system-ui';ctx.fillText(`${displayExperimentId(selectedExperiment)} • ${caption}`,52,52);
+    ctx.fillStyle='#4b5563';ctx.font='18px system-ui';ctx.fillText(`Variation: ${$('runVariation').value} • Condition: ${$('runCondition').value} • ${new Date().toLocaleString('id-ID')}`,52,84);
+    ctx.drawImage(src,50,112,1500,500);
+    ctx.fillStyle='#374151';ctx.font='18px system-ui';ctx.fillText(`X: ${xLabel||'Time [s]'}`,52,642);ctx.textAlign='right';ctx.fillText(`Y: ${yLabel||'Value'}`,1548,642);ctx.textAlign='left';
+    const legend=($(`chartLegend-${index}`)?.innerText||'').replace(/\s+/g,' ').trim();if(legend){ctx.fillStyle='#1f2937';ctx.font='15px system-ui';ctx.fillText(legend.slice(0,180),52,680)}
+  }finally{
+    if(oldInline)body.style.setProperty('--chart-bg',oldInline);else body.style.removeProperty('--chart-bg');experimentCursorTime=savedCursor;drawExperimentChart(index)
+  }
+  return out
+}
+function collectExperimentGraphPngPayload(){const out=[];if(!selectedExperiment)return out;for(let i=0;i<(selectedExperiment.graphCaptions||[]).length;i++){const c=buildExperimentGraphExportCanvas(i);if(!c)continue;out.push({index:i+1,title:selectedExperiment.graphCaptions?.[i]||`Grafik ${i+1}`,data_url:c.toDataURL('image/png')})}return out}
+function downloadExperimentGraphPng(index){
+  const out=buildExperimentGraphExportCanvas(index);if(!out)return toast('Grafik belum memiliki data hasil recording',true);
   out.toBlob(blob=>{if(!blob)return toast('Gagal membuat PNG grafik',true);const safe=String(selectedExperiment.id).replace(/[^a-z0-9._-]+/gi,'_'),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`${safe}_graph_${index+1}_${stamp()}.png`;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);toast(`Grafik ${index+1} PNG didownload`)},'image/png')
 }
 function metricStats(path){const a=metricHistory.get(path)||[];if(!a.length)return null;const v=a.map(p=>p.v).filter(Number.isFinite);if(!v.length)return null;const mean=v.reduce((x,y)=>x+y,0)/v.length,sorted=[...v].sort((a,b)=>a-b),variance=v.reduce((q,x)=>q+(x-mean)*(x-mean),0)/v.length,p95=sorted[Math.min(sorted.length-1,Math.floor((sorted.length-1)*.95))];return{last:v.at(-1),mean,min:sorted[0],max:sorted.at(-1),std:Math.sqrt(variance),p95,n:v.length}}
@@ -836,15 +841,17 @@ function drawExperimentMap(){const c=$('expMapCanvas'),m=obj('map_meta');if(!c||
 function updateLabCamera(){if(currentExp!=='perception'||!$('expCameraImage'))return;if(!bool(raw('connected.camera'))){$('expCameraEmpty').style.display='grid';return}const im=new Image(),src='/api/camera.jpg?lab='+Date.now();im.onload=()=>{$('expCameraImage').src=src;$('expCameraImage').style.display='block';$('expCameraEmpty').style.display='none'};im.onerror=()=>{$('expCameraEmpty').style.display='grid'};im.src=src}
 function drawExperimentEsc(){const c=$('expEscCanvas');if(!c)return;const {ctx,w,h,dpr}=canvasFit(c,310),cx=w/2;ctx.clearRect(0,0,w,h);ctx.fillStyle='#071113';ctx.fillRect(0,0,w,h);ctx.strokeStyle='rgba(130,160,165,.25)';ctx.lineWidth=2*dpr;ctx.beginPath();ctx.moveTo(60*dpr,110*dpr);ctx.lineTo(w-60*dpr,110*dpr);ctx.stroke();const stm=currentExp==='steering',target=deg(raw(stm?'esc_steer_protocol_cmd':'esc_steer_target'))||0,actual=deg(raw(stm?'esc_steer_feedback_raw':'esc_steer_actual'))||0,limit=stm?90:45,mapAngle=a=>cx+(Math.max(-limit,Math.min(limit,a))/limit)*(w*.36);[[stm?'STM TARGET':'TARGET',target,'#ffc86b',85],[stm?'STM FEEDBACK':'ACTUAL',actual,'#48e0a4',135]].forEach(([label,v,color,y])=>{ctx.fillStyle=color;ctx.fillRect(mapAngle(v)-3*dpr,y*dpr,6*dpr,48*dpr);ctx.font=`${11*dpr}px ui-monospace`;ctx.fillText(`${label} ${v.toFixed(2)}°`,18*dpr,(y+24)*dpr)});const foc=obj('foc_telemetry'),left=foc.left||obj('vesc_left_values'),right=foc.right||obj('vesc_right_values'),lines=[`Drive target ${fmt(raw('esc_drive_target'),3)} m/s`,`Drive actual ${fmt(raw('esc_drive_actual'),3)} m/s`,`LEFT Iq ${fmt(left.iq_a,3)} A / Id ${fmt(left.id_a,3)} A`,`RIGHT Iq ${fmt(right.iq_a,3)} A / Id ${fmt(right.id_a,3)} A`,`Vbus L/R ${fmt(left.vbus_v,2)} / ${fmt(right.vbus_v,2)} V`];ctx.fillStyle='rgba(210,230,230,.82)';ctx.font=`${12*dpr}px ui-monospace`;lines.forEach((t,i)=>ctx.fillText(t,18*dpr,(210+i*22)*dpr))}
 function renderContextMetrics(){let metrics=[];if(currentExp==='navigation')metrics=[['Pose X',fmt(currentPose()?.x,3)+' m'],['Pose Y',fmt(currentPose()?.y,3)+' m'],['CTE',fmt(derivedCte(),3)+' m'],['Endpoint',fmt(derivedEndpoint(),3)+' m'],['Path',fmt(obj('nav_path').length_m,2)+' m'],['Goal',obj('goal_state').state||'--']];else if(currentExp==='perception')metrics=[['Camera',bool(raw('connected.camera'))?'ONLINE':'OFF'],['Health',bool(raw('camera_healthy'))?'HEALTHY':'WAIT'],['FPS',fmt(resolveMetricPath('perception_performance.fps'),2)],['Objects',obj('object_points').count??'--'],['Lane',obj('lane_state').state||obj('lane_state').raw||'--'],['Near field',obj('near_field_state').state||obj('near_field_state').raw||'--']];else{const foc=obj('foc_telemetry'),left=foc.left||obj('vesc_left_values'),right=foc.right||obj('vesc_right_values');metrics=[['ESC',bool(raw('connected.esc_feedback'))?'ACK':'WAIT'],['Drive',fmt(raw('esc_drive_actual'),3)+' m/s'],['Steer',fmt(deg(raw('esc_steer_actual')),2)+'°'],['LEFT Iq',fmt(left.iq_a,2)+' A'],['RIGHT Iq',fmt(right.iq_a,2)+' A'],['Mux',obj('esc_mux').raw||'--']]}$('contextMetrics').innerHTML=metrics.map(([k,v])=>`<div><span>${escapeHtml(k)}</span><b>${escapeHtml(v)}</b></div>`).join('')}
-function renderSourceAudit(){if(!selectedExperiment)return;const src=[...Object.values(selectedExperiment.liveSeries||{})];for(const g of (selectedExperiment.graphs||[])){if(g?.type==='scatter'){if(g.xSeries)src.push(g.xSeries);if(g.ySeries)src.push(g.ySeries)}}const paths=[...new Set(src)],pills=paths.map(p=>{const v=resolveMetricPath(p),ok=v!==undefined&&v!==null;return `<span class="${ok?'ok':'wait'}"><i></i>${escapeHtml(p)}</span>`});$('sourceAvailability').innerHTML=pills.join('')||'<span class="wait"><i></i>No direct live-series binding; gunakan tabel/config evidence.</span>';const method=currentExp==='navigation'?'Nav2/localization telemetry + map/path + parameter YAML':currentExp==='perception'?'Camera/YOLOPv2 metrics + safety telemetry + parameter YAML':'ESC feedback + FOC telemetry + calibration/tuning YAML';setText('sourceMethod',method);setText('experimentSourceBadge',paths.some(p=>resolveMetricPath(p)!=null)?'LIVE SOURCE':'WAITING SOURCE')}
+function normalizedExperimentGraphs(x=selectedExperiment){return (x?.graphCaptions||[]).map((_,i)=>{const g={...(x?.graphs?.[i]||{})};if(!g.type)g.type='time_series';if(g.type==='time_series'&&!(g.series||[]).length)g.series=autoGraphLabels(x,i);return g})}
+function graphSourcePaths(x=selectedExperiment){const src=[...Object.values(x?.liveSeries||{})];for(const g of normalizedExperimentGraphs(x)){if(g?.xSeries)src.push(g.xSeries);if(g?.ySeries)src.push(g.ySeries);if(g?.pathKey)src.push(g.pathKey);for(const pair of (g?.pairs||[])){src.push(x?.liveSeries?.[pair?.[0]]||pair?.[0]);src.push(x?.liveSeries?.[pair?.[1]]||pair?.[1])}}return [...new Set(src.filter(Boolean))]}
+function renderSourceAudit(){if(!selectedExperiment)return;const paths=graphSourcePaths(),pills=paths.map(p=>{const v=resolveMetricPath(p),ok=v!==undefined&&v!==null;return `<span class="${ok?'ok':'wait'}"><i></i>${escapeHtml(p)}</span>`});$('sourceAvailability').innerHTML=pills.join('')||'<span class="wait"><i></i>No direct live-series binding; gunakan tabel/config evidence.</span>';const method=currentExp==='navigation'?'Nav2/localization telemetry + map/path + parameter YAML':currentExp==='perception'?'Camera/YOLOPv2 metrics + safety telemetry + parameter YAML':'ESC feedback + FOC telemetry + calibration/tuning YAML';setText('sourceMethod',method);setText('experimentSourceBadge',paths.some(p=>resolveMetricPath(p)!=null)?'LIVE SOURCE':'WAITING SOURCE')}
 // Recorder contract remains template-only report compatible; report recap only changes the selected schema/source mapping.
 function recordPathsForSelected(){
   if(!selectedExperiment)return ['__meta_only__'];
   const out=new Set(),add=p=>{p=String(p||'').trim();if(p&&!p.startsWith('derived.'))out.add(p)};
   const live=Object.values(selectedExperiment.liveSeries||{});
   live.forEach(add);
-  for(const g of (selectedExperiment.graphs||[])){
-    if(g?.xSeries)add(g.xSeries);if(g?.ySeries)add(g.ySeries);
+  for(const g of normalizedExperimentGraphs(selectedExperiment)){
+    if(g?.xSeries)add(g.xSeries);if(g?.ySeries)add(g.ySeries);if(g?.pathKey)add(g.pathKey);
     for(const pair of (g?.pairs||[])){add(selectedExperiment.liveSeries?.[pair?.[0]]||pair?.[0]);add(selectedExperiment.liveSeries?.[pair?.[1]]||pair?.[1])}
   }
   const derived=live.filter(p=>String(p).startsWith('derived.'));
@@ -873,7 +880,7 @@ function recordPathsForSelected(){
 function testRequiredRoots(x=selectedExperiment){
   if(!x)return [];
   const roots=new Set();
-  for(const path of Object.values(x.liveSeries||{})){
+  for(const path of graphSourcePaths(x)){
     const text=String(path||'');if(!text||text.startsWith('derived.'))continue;
     roots.add(text.split('.')[0]);
   }
@@ -925,7 +932,7 @@ async function startWebRecording(){
   try{
     if(automaticTrialId())await validateTrialMotion(trialMotionSpec());
     const runId=reportRunId(),tuning_config=Object.fromEntries(parameterSnapshotEntries().map(x=>[`${x.file}:${tuningFieldsFor(selectedExperiment).find(p=>(p.label||p.key||p.yamlPath)===x.label)?.yamlPath||x.key}`,x.value]));
-    const payload={subsystem:currentExp,id:runId,source_experiment_id:selectedExperiment.id,label:runId,section_label:selectedExperiment.section||selectedExperiment.id,candidate:$('runCandidate')?.value||'baseline',variation:$('runVariation').value,condition:$('runCondition').value,sample_rate_hz:+$('runSampleRate').value,tuning_config,trial_inputs:trialInputsForSelected(),live_series:selectedExperiment.liveSeries||{},graphs:(selectedExperiment.graphs||[]).map((g,i)=>({...g,title:selectedExperiment.graphCaptions?.[i]||`Grafik ${i+1}`})),record_paths:recordPathsForSelected()};
+    const payload={subsystem:currentExp,id:runId,source_experiment_id:selectedExperiment.id,label:runId,section_label:selectedExperiment.section||selectedExperiment.id,candidate:$('runCandidate')?.value||'baseline',variation:$('runVariation').value,condition:$('runCondition').value,sample_rate_hz:+$('runSampleRate').value,tuning_config,trial_inputs:trialInputsForSelected(),live_series:selectedExperiment.liveSeries||{},graphs:normalizedExperimentGraphs(selectedExperiment).map((g,i)=>({...g,title:selectedExperiment.graphCaptions?.[i]||`Grafik ${i+1}`})),record_paths:recordPathsForSelected()};
     const r=await fetch('/api/experiment/record/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),j=await r.json();
     toast(j.message||'Recorder response',!r.ok);if(!r.ok)return;
     recordStartedMs=Date.now();recordingLeafId=selectedExperiment.id;recordingDomain=currentExp;recordingRunToken=new Date(recordStartedMs).toISOString().replace(/[:.]/g,'-');chartEpochMs=recordStartedMs;metricHistory.clear();scatterHistory.clear();scatterOrigins.clear();tableRunRows.clear();ekfGrowthState.clear();reportDerivedCache.clear();reportCostmapMetricCache={key:'',minClearance:NaN,valid:NaN};lastLabSecond=-1;lastTrialArtifacts=null;setRecordingUi(true,j.recording);captureLabTelemetry();renderExperimentTable();
@@ -937,9 +944,11 @@ async function stopWebRecording(){
   try{
     if(!recordStartedMs)return toast('Tidak ada recording aktif',true);
     if(selectedExperiment?.id!==recordingLeafId||currentExp!==recordingDomain)return toast(`Konteks recording berubah dari ${recordingLeafId}; data tidak disimpan agar template tidak tertukar`,true);
-    await stopAutomaticTrialMotion();captureLabTelemetry();const savedTables=await saveAllTemplateTablesServer();
-    const r=await fetch('/api/experiment/record/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}),j=await r.json();if(!r.ok)throw new Error(j.message||`HTTP ${r.status}`);
-    const paths=savedTables.map(x=>x.path).filter(Boolean);renderTrialArtifacts(j);await loadTrials();
+    await stopAutomaticTrialMotion();captureLabTelemetry();drawAllExperimentCharts();const savedTables=await saveAllTemplateTablesServer();
+    const paths=savedTables.map(x=>x.path).filter(Boolean),browserGraphPngs=collectExperimentGraphPngPayload();
+    const stopPayload={table_csv_paths:paths,browser_graph_pngs:browserGraphPngs};
+    const r=await fetch('/api/experiment/record/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(stopPayload)}),j=await r.json();if(!r.ok)throw new Error(j.message||`HTTP ${r.status}`);
+    renderTrialArtifacts(j);await loadTrials();
     setText('recordPath',`RAW: ${j.primary_csv||j.raw_csv||'saved'}${j.xlsx_path?' • XLSX: '+j.xlsx_path:''}${j.manifest_path?' • MANIFEST: '+j.manifest_path:''}`);
     setText('recordMessage',`STOP selesai • ${recordingLeafId} • trial YAML appended • ${paths.length} tabel CSV • ${j.graph_png_paths?.length||0} PNG Matplotlib • Excel siap`);
     toast(`${recordingLeafId}: CSV + YAML trial + XLSX + PNG tersimpan`,false);setRecordingUi(false,j);recordingLeafId='';recordingDomain='';recordingRunToken='';renderExperimentTable();renderTrialRecap()

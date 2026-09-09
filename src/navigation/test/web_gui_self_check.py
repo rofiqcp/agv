@@ -43,8 +43,11 @@ for bad in ("https://", "http://cdn", "unpkg.com", "cdnjs", "jsdelivr"):
     if bad in html or bad in js or bad in css: fail(f"web GUI must remain offline/self-contained: {bad}")
 if "EventSource('/api/events')" not in js:
     fail("frontend realtime SSE connection missing")
-# Main domain ↔ physical HMI pages must stay aligned after the old sensors page was removed.
-for token in ("GPS:'navigation'", "navigation:'GPS'", "CAMERA:'perception'", "ACTUATOR:'esc'"):
+# Main domain ↔ physical HMI roots must stay aligned. Subpages are intentionally
+# collapsed by prefix so the 320x240 HMI can evolve without duplicating Web routes.
+for token in ("overview:'OVERVIEW'", "navigation:'NAVIGATION'", "perception:'PERCEPTION'",
+              "sensors:'NAVIGATION'", "esc:'ESC'", "page.startsWith('ESC')",
+              "page.startsWith('PERCEPTION')", "page.startsWith('NAV')"):
     if token not in js: fail(f"HMI/Web domain mapping missing {token}")
 # Browser quick PNG must use the same white report convention as the Matplotlib backend.
 for token in ("body.style.setProperty('--chart-bg','#ffffff')", "ctx.fillStyle='#ffffff'", "drawExperimentChart(index)"):
@@ -52,6 +55,11 @@ for token in ("body.style.setProperty('--chart-bg','#ffffff')", "ctx.fillStyle='
 exporter = (ROOT / "tools/export_trial_artifacts.py").read_text(encoding="utf-8")
 for token in ('facecolor="white"', "fig.savefig(path, dpi=180, facecolor=\"white\""):
     if token not in exporter: fail(f"Matplotlib white report export missing {token}")
+for token in ("collectExperimentGraphPngPayload", "browser_graph_pngs", "table_csv_paths", "graphSourcePaths", "normalizedExperimentGraphs", "if(g?.pathKey)add(g.pathKey)"):
+    hay = js if token in ("collectExperimentGraphPngPayload", "graphSourcePaths", "normalizedExperimentGraphs", "if(g?.pathKey)add(g.pathKey)") else cpp + js
+    if token not in hay: fail(f"complete graph/table artifact contract missing {token}")
+for token in ("GUI Table", "multi_scatter", "pathKey", "--table-csv"):
+    if token not in exporter: fail(f"exporter complete graph/table fallback missing {token}")
 if '<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">' not in html:
     fail("responsive viewport meta missing")
 if '<link rel="icon" href="data:,">' not in html:

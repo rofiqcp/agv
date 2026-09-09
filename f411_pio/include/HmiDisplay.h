@@ -35,6 +35,8 @@ enum TextDatum : uint8_t {
 class HmiDisplay {
  public:
   void init();
+  uint8_t readRegister8(uint8_t command, uint8_t index = 0U);
+  uint32_t readId();
   void setRotation(uint8_t rotation);
   void setSwapBytes(bool swap) { swap_bytes_ = swap; }
   void fillScreen(uint16_t color);

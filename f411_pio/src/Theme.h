@@ -4,10 +4,13 @@
 #pragma once
 
 #include "HmiDisplay.h"
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
 // IMPORTANT: Do not include individual GFXFF font headers here.
-// With -DLOAD_GFXFF, HmiDisplay.h -> gfxfont.h already includes the full
+// With -DLOAD_GFXFF, TFT_eSPI.h -> gfxfont.h already includes the full
 // FreeFont set (including FreeSans/FreeSansBold). Including them again
-// causes redefinition errors on PlatformIO/HmiDisplay 2.5.x.
+// causes redefinition errors on PlatformIO/TFT_eSPI 2.5.x.
 #include "Config.h"
 
 extern HmiDisplay tft;
@@ -109,7 +112,7 @@ inline void drawHeroText(const char* text, int x, int y, uint16_t color, uint16_
   tft.drawString(text, x, y);
 }
 
-// Dynamic-value helpers: HmiDisplay clears only the text padding as part of the
+// Dynamic-value helpers: TFT_eSPI clears only the text padding as part of the
 // same drawString operation. This removes the visible blank frame produced by
 // a separate fillRect() followed by text rendering.
 inline void drawMicroTextPadded(const char* text, int x, int y, uint16_t color, uint16_t bg,

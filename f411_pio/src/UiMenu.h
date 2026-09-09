@@ -3,7 +3,10 @@
 // ============================================================================
 #pragma once
 
-#include <Arduino.h>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include "Config.h"
 
 struct UiState {

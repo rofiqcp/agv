@@ -57,6 +57,22 @@ if abs(float(ack.get("drive_gear_ratio", 0.0)) - 1.0) > 1e-9:
     fail("native VESC drive gear ratio must be direct 1.0")
 if abs(float(ack.get("drive_erpm_per_mps", 0.0)) - 8000.0) > 1e-9:
     fail("commissioning drive baseline must be 8000 eRPM per m/s")
+# STM32 runtime transport is one 50-Hz batch per tick, not four ROS/USB callbacks.
+for token in ("appendVescFrame", "appendVescSetPos", "appendVescSetRpm",
+              "appendVescValuesRequest", "appendSteeringCalibrationRequest",
+              "batch.reserve(64U)", "publishStm32Bytes(batch)"):
+    if token not in source:
+        fail(f"STM32 VESC batch transport missing: {token}")
+tick = source[source.find("void stm32TransportTick"):source.find("void sendStm32SafeStop")]
+if tick.count("publishStm32Bytes(batch)") != 1:
+    fail("STM32 runtime tick must publish exactly one wire batch")
+if "sendVescSetPos(steering_deg)" in tick or "requestVescValues(false)" in tick:
+    fail("STM32 runtime tick reintroduced per-frame ROS publishing")
+for token in ("values_pair_mask_ = 0x01U", "values_pair_mask_ |= 0x02U",
+              "pair_skew_s <= 0.040", "if (pair_complete) publishFocTelemetry()"):
+    if token not in source:
+        fail(f"dual-motor coherent telemetry pair contract missing: {token}")
+
 for token in ("nativeDriveErpmPerMps", "rightCommandUnitsPerMps", "rightCommandLimit",
               "return drive_erpm_per_mps_",
               "raw_commissioning_enabled", "rawCommissioningSnapshot",

@@ -1,111 +1,106 @@
 #!/usr/bin/env python3
-"""Static contract for the F411 single-USB hardware gateway."""
+"""Production contract for native STM32Cube F411 <-> ROS <-> F103 gateway."""
 from pathlib import Path
-import yaml
+import re, yaml
+ROOT=Path(__file__).resolve().parents[1]
+WS=ROOT.parents[1]
+F411=WS/'f411_pio'
+bridge=(ROOT/'src/stmf4_hmi_bridge.cpp').read_text()
+hmi=(yaml.safe_load((ROOT/'config/hmi.yaml').read_text()) or {})['stmf4_hmi_bridge']['ros__parameters']
+main=(F411/'src/main.cpp').read_text(); vesc_h=(F411/'src/VescGateway.h').read_text(); vesc_cpp=(F411/'src/VescGateway.cpp').read_text()
+neo_h=(F411/'src/Neo3Sensors.h').read_text(); neo_cpp=(F411/'src/Neo3Sensors.cpp').read_text(); board=(F411/'src/BoardSupport.cpp').read_text()
+ui_cfg=(F411/'src/Config.h').read_text(); ui_menu=(F411/'src/UiMenu.h').read_text(); ui_shell=(F411/'src/UiShell.h').read_text(); ui_touch=(F411/'src/TouchButtons.h').read_text()
+pio=(F411/'platformio.ini').read_text(); linker=(F411/'linker/STM32F411CEUX_APP.ld').read_text(); boot=(F411/'bootloader/src/main.c').read_text()
+dfu=(F411/'scripts/dfu_upload_blackpill.sh').read_text(); pre=(F411/'scripts/usb_dfu_upload.py').read_text(); stlink=(F411/'scripts/provision_recovery_stlink.sh').read_text()
+auto=(WS/'src/navigation/launch/autonomous.launch.py').read_text(); esc_launch=(WS/'src/esc/launch/esc.launch.py').read_text(); stmf4_launch=(ROOT/'launch/stmf4.launch.py').read_text()
+def req(v,m):
+    if not v: raise AssertionError(m)
+# Physical/native HAL ownership.
+for token in ('GPIO_PIN_6 | GPIO_PIN_7','GPIO_AF7_USART1','USART1_IRQn'):
+    req(token in board, 'F411 USART1 PB6/PB7 VESC mapping missing: '+token)
+for token in ('GPIO_PIN_2 | GPIO_PIN_3','GPIO_AF7_USART2','USART2_IRQn'):
+    req(token in board, 'F411 USART2 PA2/PA3 GNSS mapping missing: '+token)
+req('GPIO_PIN_8 | GPIO_PIN_9' in board and 'GPIO_AF4_I2C1' in board, 'F411 I2C1 PB8/PB9 mapping missing')
+req('gUsb' in main and 'Serial.' not in main, 'native application must use one Cube USB CDC owner, not Arduino Serial')
+# HMI parity.
+for token in ('UiMenuId::OVERVIEW','UiMenuId::ESC_ROOT','UiMenuId::PERCEPTION_ROOT','UiMenuId::NAVIGATION_ROOT','SUBMENU_VISIBLE_CARDS = 3'):
+    req(token in ui_cfg+ui_menu+ui_shell, 'native HMI contract missing: '+token)
+for token in ('drawOverviewDomainCard(0, UiMenuId::ESC_ROOT','drawOverviewDomainCard(1, UiMenuId::PERCEPTION_ROOT','drawOverviewDomainCard(2, UiMenuId::NAVIGATION_ROOT','drawCarouselFooter'):
+    req(token in ui_shell, 'native HMI renderer missing: '+token)
+req('SoftKey::UP' not in ui_cfg+ui_touch+ui_shell and 'SoftKey::DOWN' not in ui_cfg+ui_touch+ui_shell, 'obsolete UP/DOWN softkeys returned')
+req('HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET)' in ui_touch, 'native touch CS initialization missing')
+req('uint32_t HmiDisplay::readId()' in (F411/'src/HmiDisplay.cpp').read_text() and '0xD3U' in (F411/'src/HmiDisplay.cpp').read_text(),
+    'native TFT controller read-ID diagnostic missing')
+# Safety and recovery.
+for token in ('pollSafetyIo()','setSafetyStop(gNeo3.safetyPressed())'):
+    req(token in main, 'direct safety path missing: '+token)
+for token in ('kCommMotorEstop','sendSafetyStop','safety_stop_active_','if (safety_stop_active_)'):
+    req(token in vesc_h+vesc_cpp, 'F411->F103 local E-stop missing: '+token)
+body=vesc_cpp[vesc_cpp.find('void VescGateway::recoveryTick'):vesc_cpp.find('void VescGateway::publishStatus')]
+req('recoverRuntimeUart' in body and 'NVIC_SystemReset' not in body, 'UART recovery must not reboot complete F411 stack')
+for token in ('Board_SetWatchdogCallback','Board_WatchdogStart','Board_WatchdogStop','APP_WATCHDOG_TIMEOUT_MS'):
+    req(token in main, 'stoppable application watchdog missing: '+token)
+req('TIM11' in board, 'TIM11 watchdog hardware missing')
+req('extern "C" void SysTick_Handler()' in board and 'HAL_IncTick();' in board,
+    'native F411 must provide a strong SysTick_Handler; weak startup alias deadlocks HAL_Delay')
+req('IWDG->' not in main, 'IWDG must not interrupt ROM-DFU transactions')
+# Baud contract.
+f411_b=re.search(r'kBaud\s*=\s*(115200|1000000)',vesc_h); f103_b=re.search(r'F103_VESC_UART_BAUD\s+(115200|1000000)u',(WS/'hoverboard-vesc/Src/vesc/f103_boot_layout.h').read_text())
+req(f411_b and f103_b and f411_b.group(1)==f103_b.group(1),'F411/F103 UART baud mismatch')
+req(int(hmi['serial_baud'])==1000000,'NUC<->F411 CDC must remain 1 Mbaud')
+req(int(hmi['vesc_uart_baud_expected'])==int(f411_b.group(1)),'ROS internal VESC baud expectation mismatch')
+# ROS ownership / TCP routing.
+for token in ('/stmf4/vesc/runtime_tx','/stmf4/vesc/maintenance_tx','/stmf4/vesc/rx','/stmf4/vesc/mode','/stmf4/vesc/diagnostic_command','VESC:STATUS','VESC:LINE:'):
+    req(token in bridge,'ROS F411 bridge missing '+token)
+req('vesc_uart_baud_active_' in bridge and 'payload.find("baud=")' in bridge,'ROS bridge F411 UART baud observability missing')
+req('rx_count > 0UL' in bridge,'connected state must require actual F103 RX')
+req(str(hmi.get('serial_device','')).lower()=='auto','F411 serial selector must use identity auto-discovery')
+req('STMICROELECTRONICS' in bridge and 'F411' in bridge and 'CDC' in bridge,'F411 USB identity guard missing')
+# GNSS measurement-time and ownership.
+req('stampFromMcuMillis(v[1])' in bridge and 'publishGnssMeasurement(now(),' not in bridge,'GNSS MCU timestamp mapping invalid')
+req('const bool pvt_stream_fresh' in neo_cpp and 'if (!pvt_stream_fresh)' in neo_cpp,'GNSS config recovery must follow stream freshness')
+req('DeclareLaunchArgument("publish_stm32_gnss"' in stmf4_launch and '"publish_stm32_gnss": LaunchConfiguration("publish_stm32_gnss")' in esc_launch and "'publish_stm32_gnss': PythonExpression" in auto,'GNSS source ownership launch propagation missing')
+# Flash layout and transactional update.
+req('board_build.ldscript = linker/STM32F411CEUX_APP.ld' in pio,'native app linker not selected')
+req('ORIGIN = 0x08008000' in linker and 'LENGTH = 0x58000' in linker,'native app flash region invalid')
+for token in ('APP_BASE','MANIFEST_ADDR','MANIFEST_MAGIC','crc32_bytes','jump_system_dfu','application_valid'):
+    req(token in boot,'resident recovery bootloader missing '+token)
+for token in ('0x08008000','0x08060000','readback verified','0x08000000:leave','verify_runtime_app','ACK:PONG'):
+    req(token in dfu,'transactional ROM-DFU uploader missing '+token)
+for token in ('_blind_software_dfu','_reset_runtime_usb_device','_try_stlink_force_dfu','dev_id != 0x431','_cdc_to_dfu_with_recovery'):
+    req(token in pre,'multi-state DFU recovery missing '+token)
+req('upload_command = $PROJECT_DIR/scripts/provision_recovery_stlink.sh' in pio,'ST-Link app-only upload still possible through production env')
+for token in ('DEV_ID=0x%03X','flash write_image $BOOT 0x08000000','flash write_image erase $APP 0x08008000','flash write_image erase $MANIFEST 0x08060000','ACK:PONG'):
+    req(token in stlink,'full ST-Link provision contract missing '+token)
 
-ROOT = Path(__file__).resolve().parents[1]
-WS = ROOT.parents[1]
-bridge = (ROOT / 'src/stmf4_hmi_bridge.cpp').read_text(encoding='utf-8')
-hmi = (yaml.safe_load((ROOT / 'config/hmi.yaml').read_text()) or {})['stmf4_hmi_bridge']['ros__parameters']
-vesc_h = (WS / 'f411_pio_arduino/src/VescGateway.h').read_text(encoding='utf-8')
-vesc_cpp = (WS / 'f411_pio_arduino/src/VescGateway.cpp').read_text(encoding='utf-8')
-neo_h = (WS / 'f411_pio_arduino/src/Neo3Sensors.h').read_text(encoding='utf-8')
-neo_cpp = (WS / 'f411_pio_arduino/src/Neo3Sensors.cpp').read_text(encoding='utf-8')
-main = (WS / 'f411_pio_arduino/src/main.cpp').read_text(encoding='utf-8')
-stmf4_launch = (ROOT / 'launch/stmf4.launch.py').read_text(encoding='utf-8')
-esc_launch = (WS / 'src/esc/launch/esc.launch.py').read_text(encoding='utf-8')
-autonomous_launch = (WS / 'src/navigation/launch/autonomous.launch.py').read_text(encoding='utf-8')
+# Realtime transport must not block ROS RX callbacks or the F411 main loop.
+req(('active_baud_{kBaud}' in vesc_h or 'active_baud_{kBaud};' in vesc_h) and
+        'VESC:BAUD:' in vesc_cpp and 'requested == 115200U' in vesc_cpp and
+        'requested == 1000000U' in vesc_cpp and 'requested == 2000000U' in vesc_cpp and
+        'VESC:ERR:BAUD_UNSUPPORTED' in vesc_cpp,
+        'F411 bounded diagnostic baud whitelist missing')
+board_h = (WS / 'f411_pio/include/BoardSupport.h').read_text(encoding='utf-8')
+board_cpp = (WS / 'f411_pio/src/BoardSupport.cpp').read_text(encoding='utf-8')
+req('HAL_UART_Transmit(handle_' not in board_cpp,
+        'F411 UART TX must not use blocking HAL_UART_Transmit')
+for token in ('kTxSize = 4096U', 'availableForWrite() const', 'irqTxComplete()', 'tx_dropped_'):
+    req(token in board_h, f'F411 interrupt-driven UART TX ring missing: {token}')
+for token in ('HAL_UART_Transmit_IT', 'HAL_UART_TxCpltCallback', 'gVescUart.irqTxComplete()'):
+    req(token in board_cpp, f'F411 asynchronous UART TX implementation missing: {token}')
+for token in ('queuedForWrite() const', 'discardPendingTx()'):
+    req(token in board_h, f'F411 bounded/latest runtime queue control missing: {token}')
+for token in ('HAL_UART_AbortTransmit', 'tx_head_ = tx_tail_ = tx_pending_ = 0U'):
+    req(token in board_cpp, f'F411 safety TX preemption missing: {token}')
+for token in ('kRuntimeMaxQueuedBytes = 128U', 'runtime_queue_drop_',
+              'gVescUart.queuedForWrite() > kRuntimeMaxQueuedBytes', 'gVescUart.discardPendingTx()'):
+    req(token in vesc_h + vesc_cpp, f'F411 stale runtime queue / E-stop contract missing: {token}')
+bridge_send = bridge[bridge.find('bool sendVescBytes'):bridge.find('void publishVescConnected')]
+req('sleep_until' not in bridge_send and 'wire_sec' not in bridge_send,
+        'ROS->F411 VESC callback must not emulate UART pacing with sleeps')
+req('Backpressure belongs at the F411 ring' in bridge_send,
+        'ROS bridge must document F411-owned UART backpressure')
+req("sendLine(line, source == 'R' ? 0 : 1)" in bridge_send,
+        'runtime ROS->F411 VESC write must use zero EAGAIN sleep budget')
 
-def require(ok, msg):
-    if not ok:
-        raise AssertionError(msg)
-
-# Physical pin contract: no collision between VESC, NEO3 UART and NEO3 I2C.
-require('Uart uart_{PB7, PB6}' in vesc_h, 'VESC must use F411 USART1 RX=PB7 TX=PB6')
-require('Uart gnss_serial_{PA3, PA2}' in neo_h, 'NEO3 GNSS must use USART2 RX=PA3 TX=PA2')
-require('Wire.setSDA(PB9)' in neo_cpp and 'Wire.setSCL(PB8)' in neo_cpp,
-        'NEO3 IST8310 I2C must use SDA=PB9 SCL=PB8')
-require('istWriteAt(addr, IST8310_CTRL2, 0x01)' in neo_cpp and
-        'IST8310_ADDR_MIN = 0x0C' in neo_h and 'IST8310_ADDR_MAX = 0x0F' in neo_h,
-        'IST8310 must reset/probe the PX4-observed 0x0C..0x0F hot-plug address range')
-require('IST8310J_WHOAMI = 0xA3' in neo_h and
-        'who == IST8310_WHOAMI || who == IST8310J_WHOAMI' in neo_cpp,
-        'IST8310 probe must accept both IST8310 and IST8310J device IDs')
-for token in ('IST8310_MAX_RAW_XY', 'IST8310_MAX_RAW_Z', 'const int16_t z = static_cast<int16_t>(-z_sensor)',
-              'avg != 0x24', 'pd != 0xC0'):
-    require(token in neo_cpp, f'IST8310 robustness contract missing: {token}')
-import re
-f411_m = re.search(r'kBaud\s*=\s*(115200|1000000)', vesc_h)
-f103_m = re.search(r'F103_VESC_UART_BAUD\s+(115200|1000000)u', (WS / 'hoverboard-vesc/Src/vesc/f103_boot_layout.h').read_text(encoding='utf-8'))
-require(f411_m is not None and f103_m is not None, 'F411/F103 VESC baud must be explicit 115200 or 1000000')
-require(f411_m.group(1) == f103_m.group(1), 'F411 and F103 internal VESC UART baud must match')
-require('gVesc.begin()' in main and 'gVesc.poll()' in main, 'F411 VESC gateway lifecycle missing')
-require('VESC:MODE:RUNTIME' in vesc_cpp and 'VESC:MODE:MAINTENANCE' in vesc_cpp,
-        'F411 VESC runtime/maintenance ownership missing')
-
-# ROS must be the single USB CDC owner and safely multiplex raw VESC bytes.
-for token in ('/stmf4/vesc/runtime_tx', '/stmf4/vesc/maintenance_tx', '/stmf4/vesc/rx',
-              '/stmf4/vesc/mode', '/stmf4/vesc/status', '/stmf4/vesc/connected',
-              '/stmf4/vesc/mode', 'VESC:STATUS'):
-    require(token in bridge, f'ROS F411 VESC bridge contract missing: {token}')
-require('mode != "RUNTIME" && mode != "NORMAL" && mode != "MAINTENANCE"' in bridge and
-        'sendLine(std::string("VESC:MODE:") + route)' in bridge,
-        'ROS F411 bridge must validate and forward RUNTIME/MAINTENANCE ownership dynamically')
-require('VESC:MODE:RUNTIME' in vesc_cpp and 'VESC:MODE:MAINTENANCE' in vesc_cpp,
-        'F411 firmware must explicitly implement both VESC ownership modes')
-for token in ('pollSafetyIo()', 'setSafetyStop(gNeo3.safetyPressed())'):
-    require(token in main, f'F411 maintenance/runtime safety polling missing: {token}')
-for token in ('kCommMotorEstop', 'sendSafetyStop', 'safety_stop_active_',
-              'if (safety_stop_active_)'):
-    require(token in vesc_h + vesc_cpp, f'F411 direct safety-stop contract missing: {token}')
-require('/safety/estop' in bridge and 'publishNeo3SafetyState' in bridge,
-        'NEO3 safety switch must feed the ROS estop gate as well as F411 local stop')
-require('Serial.availableForWrite()' in vesc_cpp and 'usb_drop_frames_' in vesc_cpp,
-        'F411 USB CDC telemetry must be bounded/nonblocking')
-for token in ('kRuntimeNoValidFrameRecoverMs', 'recoverRuntimeUart', 'recovery_streak_', 'ever_valid_frame_', 'NVIC_SystemReset'):
-    require(token in vesc_h + vesc_cpp, f'F411 VESC recovery contract missing: {token}')
-for token in ('HardwareTimer *gAppWatchdogTimer', 'TIM11', 'APP_WATCHDOG_TIMEOUT_MS',
-              'gMainLoopHeartbeatMs = HAL_GetTick()', 'stopAppWatchdog()', 'NVIC_SystemReset'):
-    require(token in main, f'F411 application watchdog contract missing: {token}')
-require(str(hmi.get('serial_device', '')).lower() == 'auto', 'F411 serial_device must default to fail-safe auto discovery')
-require('STMICROELECTRONICS' in bridge and 'F411' in bridge and 'CDC' in bridge,
-        'F411 auto-discovery identity guard missing')
-require(float(hmi.get('vesc_transport_timeout_sec', 0.0)) > 0.0, 'VESC transport watchdog missing')
-require(int(hmi.get('serial_baud', 0)) == 1000000, 'Mini-PC<->F411 USB CDC host setting must stay 1 Mbaud')
-require(int(hmi.get('vesc_uart_baud_expected', 0)) == int(f411_m.group(1)), 'ROS expected internal VESC baud must match firmware source')
-require('vesc_uart_baud_active_' in bridge and 'payload.find("baud=")' in bridge,
-        'ROS bridge must adapt internal VESC pacing to F411-reported baud without changing host USB')
-require('rx_count > 0UL' in bridge, 'VESC connected state must require real F103 RX traffic')
-require('const bool qualified_fix = receiver_valid && coordinates_valid' in bridge,
-        'M9N no-fix telemetry must separate receiver link from fusion-valid LLH')
-require('quality.data[44] = qualified_fix ? 1.0 : 0.0' in bridge,
-        'M9N quality fix-valid flag must use qualified_fix')
-require('qualified_fix && velocity_valid' in bridge,
-        'M9N velocity must never publish into ROS without qualified position fix')
-require('stampFromMcuMillis(v[1])' in bridge and 'quality.data[24] = 1.0' in bridge and
-        'quality.data[23] = std::max(0.0, (now() - stamp).seconds())' in bridge,
-        'F411 sensor measurement timestamp/age mapping is missing')
-require('publishGnssMeasurement(now(),' not in bridge and 'mag.header.stamp = now()' not in bridge,
-        'STM32 GNSS/MAG must not use host parse-arrival time')
-require('DeclareLaunchArgument("publish_stm32_gnss"' in stmf4_launch and
-        '"publish_stm32_gnss": LaunchConfiguration("publish_stm32_gnss")' in esc_launch and
-        "'publish_stm32_gnss': PythonExpression" in autonomous_launch,
-        'GNSS source ownership must propagate stm32-vs-usb selection through launch stack')
-require('pvt_.received_ms != 0U' in neo_cpp and 'gnssReady(uint32_t now_ms)' in neo_cpp,
-        'F411 must distinguish M9N streaming/connected from GNSS ready/fix')
-require('const bool pvt_stream_fresh' in neo_cpp and 'if (!pvt_stream_fresh)' in neo_cpp,
-        'M9N UBX configuration retry must follow stream freshness, not GNSS fix')
-
-# F411 first-stage recovery bootloader contract.
-pio = (WS / 'f411_pio_arduino/platformio.ini').read_text(encoding='utf-8')
-boot = (WS / 'f411_pio_arduino/bootloader/src/main.c').read_text(encoding='utf-8')
-uploader = (WS / 'f411_pio_arduino/scripts/dfu_upload_blackpill.sh').read_text(encoding='utf-8')
-require('board_build.flash_offset = 0x8000' in pio and 'board_upload.maximum_size = 393216' in pio,
-        'F411 application must stay relocated behind 32-KiB first-stage bootloader')
-for token in ('APP_BASE', 'MANIFEST_ADDR', 'MANIFEST_MAGIC', 'crc32_bytes', 'jump_system_dfu', 'application_valid'):
-    require(token in boot, f'F411 recovery bootloader contract missing: {token}')
-require('0x08008000' in uploader and '0x08060000' in uploader and 'readback verified' in uploader and
-        '0x08000000:leave' in uploader, 'transactional DFU updater must preserve bootloader and verify app')
-
-print('PASS stmf4_gateway_self_check')
-print('pins: VESC PB6/PB7 | NEO3 I2C PB8/PB9 | GNSS PA2/PA3 | one F411 USB CDC')
+print('PASS stmf4_gateway_self_check native production')
+print('pins: VESC USART1 PB6/PB7 | GNSS USART2 PA2/PA3 | IST8310 I2C1 PB8/PB9 | USB CDC single owner')

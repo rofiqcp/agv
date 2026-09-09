@@ -2371,7 +2371,7 @@ class LocalHttpServer : public QObject {
     bool ok = false;
     const int contentLength = request.headers.value("content-length", "0").toInt(&ok);
     const int bodyStart = headerEnd + 4;
-    if (!ok || contentLength < 0 || contentLength > 256 * 1024) {
+    if (!ok || contentLength < 0 || contentLength > 8 * 1024 * 1024) {
       return sendJson(socket, 413, QJsonObject{{"ok", false}, {"message", "Request body too large or invalid"}});
     }
     if (contentLength > 0 && buffer.size() < bodyStart + contentLength) {
@@ -2590,7 +2590,7 @@ class LocalHttpServer : public QObject {
                        {"recording", recordingStatus()}, {"at_ms", nowMs()}});
     } else if (request.path == "/api/experiment/record/stop") {
       QJsonObject result;
-      ok = stopRecording(&message, &result);
+      ok = stopRecording(json, &message, &result);
       result["ok"] = ok; result["message"] = message; result["at_ms"] = nowMs();
       return sendJson(socket, ok ? 200 : 409, result);
     } else if (request.path == "/api/experiment/table/save") {
@@ -3188,7 +3188,7 @@ class LocalHttpServer : public QObject {
     return !apply || runtimeOk;
   }
 
-  bool exportTrialArtifacts(const QString &csvPath,const QJsonObject &summary,const QJsonArray &trials,QJsonObject *result,QString *message) {
+  bool exportTrialArtifacts(const QString &csvPath,const QJsonObject &summary,const QJsonArray &trials,const QJsonObject &clientArtifacts,QJsonObject *result,QString *message) {
     const QString token=QString::number(QCoreApplication::applicationPid())+"_"+QString::number(QDateTime::currentMSecsSinceEpoch());
     const QString tmpSummary="/tmp/agv_trial_summary_"+token+".json",tmpTrials="/tmp/agv_trial_trials_"+token+".json",tmpSpec="/tmp/agv_trial_spec_"+token+".json";
     auto writeJson=[](const QString&path,const QJsonDocument&doc){QSaveFile f(path);if(!f.open(QIODevice::WriteOnly))return false;f.write(doc.toJson(QJsonDocument::Compact));return f.commit();};
@@ -3196,15 +3196,40 @@ class LocalHttpServer : public QObject {
     if(!writeJson(tmpSummary,QJsonDocument(summary))||!writeJson(tmpTrials,QJsonDocument(trials))||!writeJson(tmpSpec,QJsonDocument(spec))){if(message)*message="Gagal menulis temporary export spec";return false;}
     QString base=csvPath;if(base.endsWith(".csv"))base.chop(4);const QString xlsx=base+".xlsx";
     QProcess proc;proc.setProgram(agvPythonPath());
-    proc.setArguments({agvPath(QStringLiteral("src/navigation/tools/export_trial_artifacts.py")),"--csv",csvPath,"--summary",tmpSummary,"--trials",tmpTrials,"--spec",tmpSpec,"--xlsx",xlsx,"--png-prefix",base});
+    QStringList exportArgs{agvPath(QStringLiteral("src/navigation/tools/export_trial_artifacts.py")),"--csv",csvPath,"--summary",tmpSummary,"--trials",tmpTrials,"--spec",tmpSpec,"--xlsx",xlsx,"--png-prefix",base};
+    const QString dataCanonical = QFileInfo(agvPath(QStringLiteral("data"))).canonicalFilePath();
+    int tableSheetCount = 0;
+    for (const auto &v : clientArtifacts.value("table_csv_paths").toArray()) {
+      const QString requested = QDir::cleanPath(v.toString());
+      const QFileInfo info(requested); const QString canonical = info.canonicalFilePath();
+      if (canonical.isEmpty() || dataCanonical.isEmpty() || !canonical.startsWith(dataCanonical + QDir::separator()) ||
+          info.suffix().compare(QStringLiteral("csv"), Qt::CaseInsensitive) != 0 || !info.isFile()) continue;
+      exportArgs << "--table-csv" << canonical; ++tableSheetCount;
+    }
+    proc.setArguments(exportArgs);
     proc.start();const bool started=proc.waitForStarted(3000);const bool done=started&&proc.waitForFinished(60000);
     const QByteArray out=proc.readAllStandardOutput(),err=proc.readAllStandardError();QFile::remove(tmpSummary);QFile::remove(tmpTrials);QFile::remove(tmpSpec);
     if(!done||proc.exitStatus()!=QProcess::NormalExit||proc.exitCode()!=0){if(message)*message=QStringLiteral("Exporter gagal: ")+QString::fromUtf8(err).left(600);return false;}
     QJsonParseError pe{};const auto doc=QJsonDocument::fromJson(out.trimmed(),&pe);if(pe.error!=QJsonParseError::NoError||!doc.isObject()){if(message)*message="Output exporter tidak valid";return false;}
     const auto artifacts=doc.object();lastXlsxPath_=artifacts.value("xlsx").toString();lastXlsxName_=QFileInfo(lastXlsxPath_).fileName();lastGraphPaths_.clear();
     for(const auto&v:artifacts.value("pngs").toArray())if(QFileInfo::exists(v.toString()))lastGraphPaths_<<v.toString();
-    if(result){(*result)["xlsx_path"]=lastXlsxPath_;(*result)["xlsx_download_url"]="/api/experiment/record/last.xlsx";QJsonArray urls,paths;for(int i=0;i<lastGraphPaths_.size();++i){urls.append(QString("/api/experiment/record/last-graph-%1.png").arg(i+1));paths.append(lastGraphPaths_[i]);}(*result)["graph_download_urls"]=urls;(*result)["graph_png_paths"]=paths;}
-    if (message) *message = "XLSX dan PNG Matplotlib berhasil dibuat";
+    int browserPngCount = 0;
+    const auto browserPngs = clientArtifacts.value("browser_graph_pngs").toArray();
+    for (const auto &v : browserPngs) {
+      const QJsonObject one = v.toObject(); const int idx = one.value("index").toInt();
+      if (idx < 1 || idx > recordingGraphs_.size() || idx > 32) continue;
+      QString dataUrl = one.value("data_url").toString();
+      const QString prefix = QStringLiteral("data:image/png;base64,");
+      if (!dataUrl.startsWith(prefix) || dataUrl.size() > 6 * 1024 * 1024) continue;
+      const QByteArray bytes = QByteArray::fromBase64(dataUrl.mid(prefix.size()).toLatin1());
+      if (bytes.size() < 8 || bytes.size() > 4 * 1024 * 1024 || !bytes.startsWith(QByteArray::fromHex("89504e470d0a1a0a"))) continue;
+      const QString path = QStringLiteral("%1_G%2.png").arg(base).arg(idx, 2, 10, QChar('0'));
+      QSaveFile f(path); if (!f.open(QIODevice::WriteOnly) || f.write(bytes) != bytes.size() || !f.commit()) continue;
+      const int pos = idx - 1; if (pos < lastGraphPaths_.size()) lastGraphPaths_[pos] = path; else if (QFileInfo::exists(path)) lastGraphPaths_ << path;
+      ++browserPngCount;
+    }
+    if(result){(*result)["xlsx_path"]=lastXlsxPath_;(*result)["xlsx_download_url"]="/api/experiment/record/last.xlsx";(*result)["table_sheet_count"]=tableSheetCount;(*result)["browser_graph_png_count"]=browserPngCount;QJsonArray urls,paths;for(int i=0;i<lastGraphPaths_.size();++i){urls.append(QString("/api/experiment/record/last-graph-%1.png").arg(i+1));paths.append(lastGraphPaths_[i]);}(*result)["graph_download_urls"]=urls;(*result)["graph_png_paths"]=paths;}
+    if (message) *message = QStringLiteral("XLSX + %1 sheet tabel + %2 PNG browser (%3 fallback PNG) berhasil dibuat").arg(tableSheetCount).arg(browserPngCount).arg(lastGraphPaths_.size()-browserPngCount);
     return true;
   }
 
@@ -3293,7 +3318,7 @@ class LocalHttpServer : public QObject {
     return true;
   }
 
-  bool stopRecording(QString *message, QJsonObject *result) {
+  bool stopRecording(const QJsonObject &clientArtifacts, QString *message, QJsonObject *result) {
     if (!recording_) {
       if (message) *message = QStringLiteral("Tidak ada recording aktif");
       return false;
@@ -3309,7 +3334,7 @@ class LocalHttpServer : public QObject {
     bool manifestSaved = false; QString manifestMessage;
     if (csvSaved && result) {
       const QString csvPath = result->value("primary_csv").toString();
-      artifactsSaved = exportTrialArtifacts(csvPath, summary, trials, result, &artifactMessage);
+      artifactsSaved = exportTrialArtifacts(csvPath, summary, trials, clientArtifacts, result, &artifactMessage);
       manifestSaved = writeSessionManifest(csvPath, result, &manifestMessage);
       (*result)["trial_summary"] = summary;
       (*result)["trials"] = trials;

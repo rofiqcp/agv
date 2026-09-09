@@ -8,7 +8,7 @@ IMAGE="${1:-}"
 TMP="$(mktemp -d)"
 cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT INT TERM
-MANIFEST="$TMP/manifest.bin"; ZERO="$TMP/manifest_invalid.bin"; READBACK="$TMP/readback.bin"; RAW="$TMP/app_raw.bin"
+MANIFEST="$TMP/manifest.bin"; ZERO="$TMP/manifest_invalid.bin"; READBACK="$TMP/readback.bin"; READBACK_MANIFEST="$TMP/manifest_readback.bin"; RAW="$TMP/app_raw.bin"
 python3 - <<PY2
 from pathlib import Path
 d=Path("$IMAGE").read_bytes()
@@ -24,6 +24,15 @@ Path("$ZERO").write_bytes(bytes(32))
 PY
 SIZE=$(stat -c %s "$RAW")
 
+wait_dfu_ready() {
+  local ticks="${1:-80}" i
+  for i in $(seq 1 "$ticks"); do
+    if lsusb -d 0483:df11 >/dev/null 2>&1; then return 0; fi
+    sleep 0.10
+  done
+  return 1
+}
+
 run_dfu() {
   local label="$1"; shift
   local attempt rc=1
@@ -31,6 +40,7 @@ run_dfu() {
     echo "[USB-DFU] ${label} attempt=${attempt}/3"
     if "$DFU" "$@"; then return 0; else rc=$?; fi
     if (( attempt < 3 )); then
+      wait_dfu_ready 100 || true
       sleep "0.$((attempt * 3))"
     fi
   done
@@ -47,6 +57,9 @@ echo "[USB-DFU] app readback verified (${SIZE} bytes)"
 # Commit validity metadata LAST, but do not use its address as the DfuSe :leave
 # address. STM32 ROM DFU uses the current DfuSe address as the jump target.
 run_dfu commit-manifest -a 0 -d 0483:df11 -s 0x08060000 -D "$MANIFEST"
+run_dfu readback-manifest -a 0 -d 0483:df11 -s "0x08060000:32" -U "$READBACK_MANIFEST"
+cmp "$MANIFEST" "$READBACK_MANIFEST"
+echo "[USB-DFU] committed manifest readback verified"
 
 CDC="/dev/serial/by-id/usb-STMicroelectronics_BLACKPILL_F411CE_CDC_in_FS_Mode_338133833134-if00"
 leave_bootloader() {
@@ -79,14 +92,75 @@ leave_bootloader() {
 }
 leave_bootloader
 
-CDC_OK=0
-for _ in $(seq 1 150); do
-  if [[ -e "$CDC" ]]; then CDC_OK=1; break; fi
-  sleep 0.10
-done
-if (( CDC_OK == 0 )); then
-  echo "[USB-DFU] ERROR: flash verified but F411 CDC did not return after DFU leave/reset" >&2
-  echo "[USB-DFU] Recovery: press NRST once (do not hold BOOT0); future uploads use DNLOAD+leave." >&2
-  exit 12
+wait_runtime_cdc() {
+  local ticks="${1:-150}" i
+  for i in $(seq 1 "$ticks"); do
+    if [[ -e "$CDC" ]]; then return 0; fi
+    sleep 0.10
+  done
+  return 1
+}
+
+verify_runtime_app() {
+  python3 - "$CDC" <<'PYAPP'
+import os, sys, time
+port=sys.argv[1]
+if not os.path.exists(port):
+    raise SystemExit(2)
+try:
+    import serial
+    with serial.Serial(port, 1000000, timeout=0.05, write_timeout=1.0) as ser:
+        time.sleep(0.15)
+        ser.reset_input_buffer()
+        for _ in range(4):
+            ser.write(b"PING\n")
+            ser.flush()
+            deadline=time.monotonic()+0.65
+            data=b""
+            while time.monotonic()<deadline:
+                n=ser.in_waiting
+                if n:
+                    data += ser.read(min(n, 2048))
+                    if b"ACK:PONG" in data or b"ADV HMI realtime menu firmware - boot" in data:
+                        print("[USB-DFU] runtime application heartbeat verified")
+                        raise SystemExit(0)
+                time.sleep(0.01)
+        print("[USB-DFU] runtime CDC present but application heartbeat missing")
+        raise SystemExit(3)
+except Exception as exc:
+    print(f"[USB-DFU] runtime verification error: {exc}")
+    raise SystemExit(4)
+PYAPP
+}
+
+if ! wait_runtime_cdc 150; then
+  # Some ROM revisions report leave success before the USB reset has propagated.
+  # If DFU is still visible, issue one explicit USB reset request and wait again.
+  if lsusb -d 0483:df11 >/dev/null 2>&1; then
+    echo "[USB-DFU] runtime CDC absent; ROM DFU still visible, requesting USB reset"
+    set +e
+    "$DFU" -a 0 -d 0483:df11 -R
+    set -e
+  fi
+  if ! wait_runtime_cdc 100; then
+    echo "[USB-DFU] ERROR: flash/readback/manifest succeeded but runtime CDC did not return" >&2
+    exit 12
+  fi
 fi
-echo "[USB-DFU] manifest committed last; DFU reset complete; CDC returned"
+
+# Do not equate USB enumeration with firmware health. The freshly programmed
+# application has an independent watchdog, so allow one watchdog recovery cycle
+# before declaring the upload bad.
+APP_OK=0
+for pass in 1 2 3; do
+  if verify_runtime_app; then APP_OK=1; break; fi
+  echo "[USB-DFU] runtime verify retry ${pass}/3"
+  sleep 4
+  wait_runtime_cdc 40 || true
+done
+if (( APP_OK == 0 )); then
+  echo "[USB-DFU] ERROR: CDC returned but final application did not answer PING" >&2
+  exit 13
+fi
+
+echo "[USB-DFU] manifest committed last; DFU reset complete; final application healthy"

@@ -24,6 +24,7 @@ struct VehicleTelemetry {
   float steeringActualDeg{0.0F};
   float steeringErrorDeg{0.0F};
   char steeringTestState[12]{"IDLE"};
+  float steeringTestAngleDeg{STEER_TEST_ANGLE_DEFAULT_DEG};
   bool escReady{false};
   bool encoderReady{false};
   uint8_t manualSpeedPct{MANUAL_SPEED_DEFAULT};

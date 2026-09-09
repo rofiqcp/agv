@@ -161,6 +161,10 @@ public:
       std::chrono::duration<double>(1.0 / telemetry_rate_hz_), std::bind(&StmF4HmiBridge::telemetryTick, this));
     heartbeat_timer_ = create_wall_timer(500ms, [this]() {
       if (fd_ >= 0 && !vesc_maintenance_mode_) (void)sendLine("ROS:1");
+      if (fd_ >= 0 && last_rx_.time_since_epoch().count() != 0 &&
+          std::chrono::steady_clock::now() - last_rx_ > std::chrono::duration<double>(hmi_transport_timeout_sec_)) {
+        closeSerial("transport heartbeat timeout");
+      }
       sensorWatchdogTick();
     });
     command_timer_ = create_wall_timer(
@@ -203,10 +207,12 @@ private:
     declare_parameter<double>("serial_poll_hz", 1000.0);
     declare_parameter<double>("command_rate_hz", 30.0);
     declare_parameter<double>("heartbeat_sec", 5.0);
+    declare_parameter<double>("hmi_transport_timeout_sec", 2.0);
     declare_parameter<double>("manual_speed_max_mps", 1.0);
     declare_parameter<int>("manual_speed_min_pct", 10);
     declare_parameter<int>("manual_speed_max_pct", 50);
     declare_parameter<int>("manual_speed_default_pct", 20);
+    declare_parameter<double>("steering_test_angle_deg", 20.0);
     declare_parameter<double>("hmi_steer_full_scale_deg", 90.0);
     declare_parameter<double>("teleop_yaw_max_deg_s", 80.0);
     declare_parameter<bool>("invert_hmi_steering", true);
@@ -230,10 +236,12 @@ private:
     serial_poll_hz_ = std::clamp(get_parameter("serial_poll_hz").as_double(), 100.0, 2000.0);
     command_rate_hz_ = std::clamp(get_parameter("command_rate_hz").as_double(), 10.0, 50.0);
     heartbeat_sec_ = std::clamp(get_parameter("heartbeat_sec").as_double(), 0.25, 5.0);
+    hmi_transport_timeout_sec_ = std::clamp(get_parameter("hmi_transport_timeout_sec").as_double(), 0.5, 10.0);
     manual_speed_max_mps_ = std::clamp(get_parameter("manual_speed_max_mps").as_double(), 0.05, 3.0);
     speed_min_pct_ = std::clamp(static_cast<int>(get_parameter("manual_speed_min_pct").as_int()), 1, 100);
     speed_max_pct_ = std::clamp(static_cast<int>(get_parameter("manual_speed_max_pct").as_int()), speed_min_pct_, 100);
     manual_speed_pct_ = std::clamp(static_cast<int>(get_parameter("manual_speed_default_pct").as_int()), speed_min_pct_, speed_max_pct_);
+    steering_test_angle_deg_ = std::clamp(get_parameter("steering_test_angle_deg").as_double(), 5.0, 30.0);
     hmi_steer_full_scale_deg_ = std::clamp(get_parameter("hmi_steer_full_scale_deg").as_double(), 1.0, 90.0);
     teleop_yaw_max_rps_ = std::clamp(get_parameter("teleop_yaw_max_deg_s").as_double(), 1.0, 180.0) * kPi / 180.0;
     invert_hmi_steering_ = get_parameter("invert_hmi_steering").as_bool();
@@ -366,6 +374,16 @@ private:
       [this](std_msgs::msg::UInt8MultiArray::ConstSharedPtr msg) { (void)sendVescBytes(msg->data, 'R'); });
     vesc_maintenance_tx_sub_ = create_subscription<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/maintenance_tx", rclcpp::QoS(100).reliable(),
       [this](std_msgs::msg::UInt8MultiArray::ConstSharedPtr msg) { (void)sendVescBytes(msg->data, 'M'); });
+    vesc_diagnostic_command_sub_ = create_subscription<std_msgs::msg::String>("/stmf4/vesc/diagnostic_command", 10,
+      [this](std_msgs::msg::String::ConstSharedPtr msg) {
+        const std::string command = upper(trim(msg->data));
+        if (command == "STATUS" || command == "LINECHECK" ||
+            command == "BAUD:115200" || command == "BAUD:1000000" || command == "BAUD:2000000") {
+          (void)sendLine("VESC:" + command);
+        } else {
+          RCLCPP_WARN(get_logger(), "Rejected /stmf4/vesc/diagnostic_command: %s", msg->data.c_str());
+        }
+      });
     vesc_mode_sub_ = create_subscription<std_msgs::msg::String>("/stmf4/vesc/mode", stateQos(),
       [this](std_msgs::msg::String::ConstSharedPtr msg) {
         const std::string mode = upper(trim(msg->data));
@@ -722,8 +740,9 @@ private:
     (void)::tcdrain(fd_);
     std::this_thread::sleep_for(std::chrono::milliseconds(30));
     ::tcflush(fd_, TCIFLUSH);
-    publishConnected(true);
-    RCLCPP_INFO(get_logger(), "HMI USB connected: %s (selector=%s)", active_serial_device_.c_str(), serial_device_.c_str());
+    last_rx_ = {};
+    publishConnected(false);
+    RCLCPP_INFO(get_logger(), "HMI USB opened: %s (selector=%s)", active_serial_device_.c_str(), serial_device_.c_str());
     sendLine("ROS:1");
     sendLine("PING");
     sendLine("GET:STATE");
@@ -765,7 +784,7 @@ private:
     (void)openSerial();
   }
 
-  bool sendLine(const std::string &line) {
+  bool sendLine(const std::string &line, int eagain_retry_budget = 3) {
     std::lock_guard<std::mutex> tx_lock(tx_mutex_);
     if (fd_ < 0) return false;
     const std::string packet = line + "\n";
@@ -780,8 +799,8 @@ private:
       }
       if (n < 0 && errno == EINTR) continue;
       if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-        if (++would_block_retries <= 3) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        if (++would_block_retries <= eagain_retry_budget) {
+          if (eagain_retry_budget > 0) std::this_thread::sleep_for(std::chrono::milliseconds(1));
           continue;
         }
         // If no byte was emitted it is safe to drop this refresh and retry on
@@ -1165,63 +1184,39 @@ private:
       else ++vesc_maintenance_tx_rejected_;
       return false;
     }
-    // Mini-PC<->F411 USB CDC is fixed at 1 Mbaud. F411<->F103 is an independent
-    // UART validated and fixed at 115200 baud. Pace raw VESC packets against
-    // the baud reported by F411 VESC:STAT, so a future field fallback of ONLY the
-    // internal F411<->F103 link to 115200 remains safe without slowing or changing
-    // the Mini-PC<->F411 USB link. Runtime and maintenance are mutually exclusive.
-    std::unique_lock<std::mutex> wire_lock(vesc_wire_tx_mutex_);
-    /* /stmf4/vesc/mode is the ONLY ownership authority. Data packets must never
-     * switch the F411 route themselves: the runtime controller keeps publishing
-     * zero/telemetry traffic while maintenance owns the actuator, and allowing
-     * those packets to toggle the route creates a 100+ Hz ownership race.
-     * The arbiter intentionally changes mode before opening the maintenance data
-     * gate and inserts a safe-stop transition, so source mismatch means stale or
-     * lower-priority traffic and is dropped rather than replayed later. */
+
+    std::lock_guard<std::mutex> wire_lock(vesc_wire_tx_mutex_);
+    /* /stmf4/vesc/mode is the ONLY ownership authority. Runtime batches are
+     * latest-value traffic and are dropped on route mismatch; maintenance is
+     * never interleaved with runtime bytes. */
     const bool maintenance = source == 'M';
     if (maintenance != vesc_maintenance_mode_) {
       if (maintenance) ++vesc_maintenance_tx_rejected_;
       else ++vesc_runtime_tx_rejected_;
       return false;
     }
-    // F411 line parser accepts 640 bytes. 240 raw VESC bytes become 480 hex
-    // chars plus the namespace, reducing USB/ROS scheduling overhead by 5x while
-    // preserving the original native VESC byte stream on USART1.
-    constexpr size_t kChunk = 240U;
+
+    // USB CDC is much faster than USART1 and the F411 now owns a non-blocking
+    // interrupt-driven UART TX ring. Do NOT sleep here to emulate USART timing:
+    // blocking this ROS callback also delays serialTick(), which is the receive
+    // path for F103 replies, GNSS and HMI. Backpressure belongs at the F411 ring.
+    constexpr size_t kChunk = 240U;  // fits the F411 640-byte line parser as hex
     for (size_t offset = 0; offset < bytes.size(); offset += kChunk) {
       const size_t count = std::min(kChunk, bytes.size() - offset);
-      const std::string line = std::string("VESC:TX:") + source + ":" + bytesToHex(bytes.data() + offset, count);
+      const std::string line = std::string("VESC:TX:") + source + ":" +
+        bytesToHex(bytes.data() + offset, count);
+      const int max_attempts = source == 'R' ? 1 : 8;
       bool sent = false;
-      // Runtime is a 20-ms latest-value stream: stale frames are worse than a
-      // dropped refresh, so never block one callback for hundreds of ms.
-      // Maintenance/config transactions are non-periodic and get a longer
-      // bounded retry window for reliability. sendLine() already retries EAGAIN.
-      const int max_attempts = source == 'R' ? 2 : 20;
       for (int attempt = 0; attempt < max_attempts && fd_ >= 0; ++attempt) {
-        if (sendLine(line)) { sent = true; break; }
-        if (attempt + 1 < max_attempts) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        if (sendLine(line, source == 'R' ? 0 : 1)) { sent = true; break; }
+        if (attempt + 1 < max_attempts) std::this_thread::yield();
       }
       if (!sent) {
         if (source == 'R') ++vesc_runtime_tx_rejected_;
         else ++vesc_maintenance_tx_rejected_;
         RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
-          "VESC USB refresh dropped while F411 CDC is unavailable; waiting for hot-plug reconnect");
+          "VESC USB batch dropped while F411 CDC is unavailable/backpressured");
         return false;
-      }
-      // 8N1 = 10 wire bits per byte. Limit effective utilization to 80% so
-      // replies, F411 scheduling jitter and long VESC config frames have margin.
-      // This is flow control, not an arbitrary command delay: at runtime a
-      // typical 10-byte setpoint consumes only about 1.1 ms of wire budget.
-      const double wire_baud = static_cast<double>(std::max<std::uint32_t>(9600U, vesc_uart_baud_active_.load()));
-      const double wire_sec = (static_cast<double>(count) * 10.0) / (wire_baud * 0.80);
-      const auto hold = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-        std::chrono::duration<double>(wire_sec));
-      const auto now = std::chrono::steady_clock::now();
-      if (vesc_next_uart_tx_time_ < now) vesc_next_uart_tx_time_ = now;
-      vesc_next_uart_tx_time_ += hold;
-      if (offset + count < bytes.size() || bytes.size() <= kChunk) {
-        const auto sleep_now = std::chrono::steady_clock::now();
-        if (vesc_next_uart_tx_time_ > sleep_now) std::this_thread::sleep_until(vesc_next_uart_tx_time_);
       }
     }
     return true;
@@ -1286,6 +1281,9 @@ private:
         }
       }
       return;
+    }
+    if (line.rfind("VESC:LINE:", 0) == 0 || line.rfind("VESC:BAUD:", 0) == 0) {
+      std_msgs::msg::String msg; msg.data = line.substr(5); vesc_status_pub_->publish(msg); return;
     }
     if (line.rfind("VESC:MODE:", 0) == 0) {
       std_msgs::msg::String msg; msg.data = line.substr(5); vesc_status_pub_->publish(msg); return;
@@ -1489,6 +1487,23 @@ private:
       sendConfigReply(true, txn, key, std::to_string(manual_speed_pct_));
       return;
     }
+    if (key == "STEERTEST") {
+      double value = 0.0;
+      if (!parseFiniteDouble(raw, &value) || value < 5.0 || value > 30.0) {
+        sendConfigReply(false, txn, key, "OUT_OF_RANGE");
+        return;
+      }
+      const auto result = set_parameter(rclcpp::Parameter("steering_test_angle_deg", value));
+      if (!result.successful) {
+        sendConfigReply(false, txn, key, result.reason.empty() ? "SET_REJECTED" : result.reason);
+        return;
+      }
+      steering_test_angle_deg_ = std::clamp(get_parameter("steering_test_angle_deg").as_double(), 5.0, 30.0);
+      config_epoch_.fetch_add(1U);
+      sendState("CFGSTEERTEST", fixed(steering_test_angle_deg_, 1), true);
+      sendConfigReply(true, txn, key, fixed(steering_test_angle_deg_, 1));
+      return;
+    }
     if (key == "DRVSCALE") {
       double value = 0.0;
       if (!parseFiniteDouble(raw, &value)) { sendConfigReply(false, txn, key, "INVALID_NUMBER"); return; }
@@ -1636,6 +1651,7 @@ private:
 
   void handleHmiLine(const std::string &line) {
     last_rx_ = std::chrono::steady_clock::now();
+    if (!connected_) publishConnected(true);
     if (line.rfind("VESC:", 0) == 0) { handleVescLine(line); return; }
     if (line.rfind("SENS:GNSS:", 0) == 0) { handleNeo3Gnss(line.substr(10)); return; }
     if (line.rfind("SENS:GNSSF:", 0) == 0) { handleNeo3GnssFallback(line.substr(11)); return; }
@@ -1683,8 +1699,10 @@ private:
       return;
     }
     if (line.rfind("CMD:STEER:", 0) == 0) {
+      const std::string request = upper(trim(line.substr(10)));
+      if (request == "STOP") { disableSteeringTest(); return; }
       double target = 0.0;
-      if (parseFiniteDouble(trim(line.substr(10)), &target)) startSteeringTest(target);
+      if (parseFiniteDouble(request, &target)) startSteeringTest(target);
       else sendState("STEERTEST", "LOCKED", true);
       return;
     }
@@ -1862,6 +1880,7 @@ private:
     sendState("LANE", lane_compact.substr(0, 19), force);
 
     sendState("MANUAL_SPEED", std::to_string(manual_speed_pct_), force);
+    sendState("CFGSTEERTEST", fixed(steering_test_angle_deg_, 1), force);
     sendState("CFGDRVSCALE", fixed(drive_scale_runtime_, 4), force);
     sendState("CFGPERINF", perception_inference_runtime_ ? "1" : "0", force);
     mirrorWaypointState(force);
@@ -1881,6 +1900,7 @@ private:
          << ",\"page\":\"" << page_ << "\",\"mode\":\"" << mode_
          << "\",\"drive\":\"" << drive_ << "\",\"steer\":\"" << steer_
          << "\",\"speed_pct\":" << manual_speed_pct_
+         << ",\"steering_test_angle_deg\":" << steering_test_angle_deg_
          << ",\"origin\":\"" << control_origin_
          << "\",\"nav_state\":\"" << navigation_state_ << "\",\"target\":\"" << active_target_
          << "\",\"rejection\":\"" << last_rejection_ << "\"}";
@@ -1900,6 +1920,7 @@ private:
   std::string waypoint_file_;
   int serial_baud_{1000000};
   double reconnect_sec_{0.5}, telemetry_rate_hz_{20.0}, serial_poll_hz_{1000.0}, command_rate_hz_{30.0}, heartbeat_sec_{5.0};
+  double hmi_transport_timeout_sec_{2.0};
   double waypoint_pose_timeout_sec_{2.5};
   double neo3_sensor_timeout_sec_{2.0}, neo3_mag_sigma_ut_{3.0};
   double vesc_transport_timeout_sec_{2.0};
@@ -1907,7 +1928,8 @@ private:
   std::atomic<std::uint32_t> vesc_uart_baud_active_{115200U};
   bool publish_stm32_gnss_{true};
   std::string neo3_gnss_frame_id_{"gnss_link"}, neo3_mag_frame_id_{"gnss_link"};
-  double manual_speed_max_mps_{1.0}, hmi_steer_full_scale_deg_{90.0}, teleop_yaw_max_rps_{80.0 * kPi / 180.0};
+  double manual_speed_max_mps_{1.0}, steering_test_angle_deg_{20.0},
+         hmi_steer_full_scale_deg_{90.0}, teleop_yaw_max_rps_{80.0 * kPi / 180.0};
   int speed_min_pct_{10}, speed_max_pct_{50}, manual_speed_pct_{20};
   bool invert_hmi_steering_{true};
   int fd_{-1};
@@ -1979,8 +2001,7 @@ private:
   bool vesc_maintenance_mode_{false};
   std::uint64_t vesc_runtime_tx_rejected_{0}, vesc_maintenance_tx_rejected_{0};
   std::mutex vesc_wire_tx_mutex_;
-  std::chrono::steady_clock::time_point vesc_next_uart_tx_time_{};
-  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr vesc_mode_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr vesc_mode_sub_, vesc_diagnostic_command_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr performance_sub_, nav_goal_state_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr map_pose_sub_;
   rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr fix_sub_;

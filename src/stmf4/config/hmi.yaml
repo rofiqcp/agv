@@ -7,10 +7,12 @@ stmf4_hmi_bridge:
     serial_poll_hz: 1000.0
     command_rate_hz: 30.0
     heartbeat_sec: 5.0
+    hmi_transport_timeout_sec: 2.0
     manual_speed_max_mps: 1.0
     manual_speed_min_pct: 10
     manual_speed_max_pct: 50
     manual_speed_default_pct: 20
+    steering_test_angle_deg: 20.0
     hmi_steer_full_scale_deg: 90.0
     teleop_yaw_max_deg_s: 80.0
     invert_hmi_steering: false

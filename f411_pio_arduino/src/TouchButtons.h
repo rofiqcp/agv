@@ -1,11 +1,12 @@
 // ============================================================================
-// TouchButtons.h — satu input layer untuk HOME, LEFT/RIGHT/OK, UP/DOWN.
+// TouchButtons.h — input layer page-aware untuk kartu besar, editor, dan test.
 // ============================================================================
 #pragma once
 
 #include <Arduino.h>
 #include <TFT_eSPI.h>
 #include "Config.h"
+#include "UiMenu.h"
 
 extern TFT_eSPI tft;
 
@@ -45,18 +46,57 @@ inline bool hit(int px, int py, int x, int y, int w, int h) {
   return px >= x && px < (x + w) && py >= y && py < (y + h);
 }
 
-inline SoftKey touchKeyAt(int x, int y) {
-  // HOME hitbox 52x44: visual icon tetap kecil tetapi sentuhan jauh lebih toleran.
-  if (hit(x, y, HOME_TOUCH_X, HOME_TOUCH_Y, HOME_TOUCH_W, HOME_TOUCH_H)) return SoftKey::HOME;
-  if (hit(x, y, SOFTKEY_X0, SOFTKEY_Y, SOFTKEY_W, SOFTKEY_H)) return SoftKey::LEFT;
-  if (hit(x, y, SOFTKEY_X0 + SOFTKEY_W + SOFTKEY_GAP, SOFTKEY_Y, SOFTKEY_W, SOFTKEY_H)) return SoftKey::RIGHT;
-  if (hit(x, y, SOFTKEY_X0 + 2 * (SOFTKEY_W + SOFTKEY_GAP), SOFTKEY_Y, SOFTKEY_W, SOFTKEY_H)) return SoftKey::OK;
-  if (hit(x, y, RIGHT_RAIL_X, RIGHT_UP_Y, RIGHT_RAIL_W, RIGHT_KEY_H)) return SoftKey::UP;
-  if (hit(x, y, RIGHT_RAIL_X, RIGHT_DOWN_Y, RIGHT_RAIL_W, RIGHT_KEY_H)) return SoftKey::DOWN;
+inline SoftKey cardKeyAt(int x, int y, int top, int height) {
+  if (y < top || y >= top + height) return SoftKey::NONE;
+  for (uint8_t i = 0; i < 3; ++i) {
+    const int cardX = UI_CARD_X0 + i * (UI_CARD_W + UI_CARD_GAP);
+    if (hit(x, y, cardX, top, UI_CARD_W, height)) {
+      return i == 0 ? SoftKey::CARD_0 : (i == 1 ? SoftKey::CARD_1 : SoftKey::CARD_2);
+    }
+  }
   return SoftKey::NONE;
 }
 
-inline TouchEvent pollTouch(bool railEnabled) {
+inline bool uiUsesEditFooter(const UiState& ui) {
+  return menuEditKey(ui.menu) != UiEditKey::NONE || ui.menu == UiMenuId::NAV_MISSION_GO ||
+         ui.menu == UiMenuId::NAV_MISSION_SAVE || ui.menu == UiMenuId::NAV_MISSION_STOP;
+}
+
+inline SoftKey touchKeyAt(const UiState& ui, int x, int y) {
+  if (ui.menu != UiMenuId::OVERVIEW && hit(x, y, HOME_TOUCH_X, HOME_TOUCH_Y, HOME_TOUCH_W, HOME_TOUCH_H)) {
+    return SoftKey::TOP_LEFT;
+  }
+
+  if (ui.menu == UiMenuId::OVERVIEW) {
+    return cardKeyAt(x, y, OVERVIEW_CARD_Y, OVERVIEW_CARD_H);
+  }
+
+  if (menuHasChildren(ui.menu)) {
+    const SoftKey card = cardKeyAt(x, y, SUBMENU_CARD_Y, SUBMENU_CARD_H);
+    if (card != SoftKey::NONE) return card;
+    if (hit(x, y, CAROUSEL_LEFT_X, CAROUSEL_NAV_Y, CAROUSEL_NAV_W, CAROUSEL_NAV_H)) return SoftKey::LEFT;
+    if (hit(x, y, CAROUSEL_RIGHT_X, CAROUSEL_NAV_Y, CAROUSEL_NAV_W, CAROUSEL_NAV_H)) return SoftKey::RIGHT;
+    return SoftKey::NONE;
+  }
+
+  if (ui.menu == UiMenuId::ESC_MANUAL_TEST) {
+    if (hit(x, y, 108, 40, 104, 50)) return SoftKey::TEST_FORWARD;
+    if (hit(x, y, 6, 96, 94, 70)) return SoftKey::TEST_LEFT;
+    if (hit(x, y, 108, 96, 104, 70)) return SoftKey::TEST_STOP;
+    if (hit(x, y, 220, 96, 94, 70)) return SoftKey::TEST_RIGHT;
+    if (hit(x, y, 108, 172, 104, 52)) return SoftKey::TEST_REVERSE;
+    return SoftKey::NONE;
+  }
+
+  if (uiUsesEditFooter(ui)) {
+    if (hit(x, y, SOFTKEY_X0, SOFTKEY_Y, SOFTKEY_W, SOFTKEY_H)) return SoftKey::LEFT;
+    if (hit(x, y, SOFTKEY_X0 + SOFTKEY_W + SOFTKEY_GAP, SOFTKEY_Y, SOFTKEY_W, SOFTKEY_H)) return SoftKey::OK;
+    if (hit(x, y, SOFTKEY_X0 + 2 * (SOFTKEY_W + SOFTKEY_GAP), SOFTKEY_Y, SOFTKEY_W, SOFTKEY_H)) return SoftKey::RIGHT;
+  }
+  return SoftKey::NONE;
+}
+
+inline TouchEvent pollTouch(const UiState& ui) {
   TouchEvent ev{};
   uint16_t sx = 0, sy = 0;
   const bool down = tft.getTouch(&sx, &sy, TOUCH_THRESHOLD);
@@ -73,8 +113,7 @@ inline TouchEvent pollTouch(bool railEnabled) {
 
   uint16_t tx = 0, ty = 0;
   correctTouchXY(sx, sy, tx, ty);
-  SoftKey key = touchKeyAt(tx, ty);
-  if (!railEnabled && (key == SoftKey::UP || key == SoftKey::DOWN)) key = SoftKey::NONE;
+  const SoftKey key = touchKeyAt(ui, tx, ty);
 
   if (!touchWasDown) {
     touchWasDown = true;
@@ -87,7 +126,7 @@ inline TouchEvent pollTouch(bool railEnabled) {
   }
 
   if (key != touchActiveKey) return ev;
-  const bool repeatable = key == SoftKey::UP || key == SoftKey::DOWN;
+  const bool repeatable = key == SoftKey::LEFT || key == SoftKey::RIGHT;
   if (repeatable && now - touchPressMs >= 450U && now - touchLastRepeatMs >= 120U) {
     touchLastRepeatMs = now;
     ev.type = TouchEvent::REPEAT;

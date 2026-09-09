@@ -79,6 +79,7 @@ assert CFG["require_camera_connected"] is True
 assert CFG["require_camera_health"] is True
 assert CFG["require_plan_when_moving"] is True
 assert CFG["require_obstacle_stream_when_moving"] is True
+assert CFG["commissioning_bypass_enabled"] is False
 
 # Lane safety is an independent opt-in. Its default must never alter obstacle-
 # only trajectory safety, and every lane-driven command branch is source-gated.

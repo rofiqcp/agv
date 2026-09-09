@@ -64,6 +64,24 @@ static bool serial1RxDiscarding = false;
 static uint32_t gDfuArmDeadlineMs = 0U;
 static constexpr uint32_t kBootRequestMagic = 0x42465544UL;  // DFUB
 
+// Independent hardware watchdog. Unlike the TIM11 software watchdog this still
+// resets the MCU when the main loop or interrupt scheduling becomes wedged.
+// LSI is intentionally treated conservatively; PR=/256 and RLR=4095 gives an
+// ~32 s nominal recovery window (LSI~32 kHz), long enough for TFT/sensor startup.
+// Runtime liveness is still supervised more tightly by TIM11 and transport watchdogs.
+static void startIndependentWatchdog() {
+  IWDG->KR = 0x5555U;  // enable PR/RLR writes
+  IWDG->PR = 0x6U;     // prescaler /256
+  IWDG->RLR = 4095U;
+  while (IWDG->SR != 0U) { }
+  IWDG->KR = 0xCCCCU;  // start
+  IWDG->KR = 0xAAAAU;  // first refresh
+}
+
+static inline void feedIndependentWatchdog() {
+  IWDG->KR = 0xAAAAU;
+}
+
 static void appWatchdogIsr() {
   if (!gAppWatchdogArmed) return;
   if (static_cast<uint32_t>(HAL_GetTick() - gMainLoopHeartbeatMs) > APP_WATCHDOG_TIMEOUT_MS) {
@@ -133,13 +151,26 @@ static void enterSystemDfu() {
 }
 
 static void stopDriveTest() {
-  if (!driveTestRunning) return;
+  // STOP dikirim walau state lokal sudah idle agar tombol STOP selalu idempotent.
   printBoth("CMD:DRIVE:STOP");
   driveTestRunning = false;
   driveTestDeadlineMs = 0U;
   gTelemetry.state = STATE_STOPPED;
   uiDirty = true;
 }
+
+static void stopSteeringTest() {
+  printBoth("CMD:STEER:STOP");
+  snprintf(gTelemetry.steeringTestState, sizeof(gTelemetry.steeringTestState), "%s", "IDLE");
+  uiDirty = true;
+}
+
+static void stopAllManualTest() {
+  stopDriveTest();
+  stopSteeringTest();
+}
+
+static float actualEditValue(UiEditKey key);
 
 static void drawUiNow(bool full = true) {
   if (!splashComplete || gUi.menu == UiMenuId::SPLASH) return;
@@ -150,16 +181,18 @@ static void drawUiNow(bool full = true) {
 
 static void setMenu(UiMenuId next) {
   if (next == UiMenuId::SPLASH) return;
-  if (gUi.menu == UiMenuId::ESC_DRIVE_TEST && next != UiMenuId::ESC_DRIVE_TEST) stopDriveTest();
+  if (gUi.menu == UiMenuId::ESC_MANUAL_TEST && next != UiMenuId::ESC_MANUAL_TEST) stopAllManualTest();
   gUi.menu = next;
   gUi.selectedChild = 0;
-  gUi.editing = false;
+  const UiEditKey editKey = menuEditKey(next);
+  gUi.editing = editKey != UiEditKey::NONE;
+  if (gUi.editing) gUi.editValue = actualEditValue(editKey);
   drawUiNow(true);
   publishPage();
 }
 
 static void goOverview() {
-  stopDriveTest();
+  if (gUi.menu == UiMenuId::ESC_MANUAL_TEST) stopAllManualTest();
   setMenu(UiMenuId::OVERVIEW);
 }
 
@@ -167,6 +200,7 @@ static float actualEditValue(UiEditKey key) {
   switch (key) {
     case UiEditKey::OPERATOR_MODE: return gTelemetry.mode == MODE_MANUAL ? 1.0F : 0.0F;
     case UiEditKey::MANUAL_SPEED_PCT: return static_cast<float>(gTelemetry.manualSpeedPct);
+    case UiEditKey::STEERING_TEST_DEG: return gTelemetry.steeringTestAngleDeg;
     case UiEditKey::DRIVE_SCALE: return gTelemetry.driveScale;
     case UiEditKey::PERCEPTION_INFERENCE: return gTelemetry.perceptionInference ? 1.0F : 0.0F;
     case UiEditKey::NONE:
@@ -181,6 +215,9 @@ static void changeDraft(UiEditKey key, int direction) {
   } else if (key == UiEditKey::MANUAL_SPEED_PCT) {
     gUi.editValue = constrain(gUi.editValue + direction * MANUAL_SPEED_STEP,
                               static_cast<float>(MANUAL_SPEED_MIN), static_cast<float>(MANUAL_SPEED_MAX));
+  } else if (key == UiEditKey::STEERING_TEST_DEG) {
+    gUi.editValue = constrain(gUi.editValue + direction * STEER_TEST_ANGLE_STEP_DEG,
+                              STEER_TEST_ANGLE_MIN_DEG, STEER_TEST_ANGLE_MAX_DEG);
   } else if (key == UiEditKey::DRIVE_SCALE) {
     gUi.editValue = constrain(gUi.editValue + direction * DRIVE_SCALE_STEP,
                               DRIVE_SCALE_MIN, DRIVE_SCALE_MAX);
@@ -192,6 +229,7 @@ static const char* editWireKey(UiEditKey key) {
   switch (key) {
     case UiEditKey::OPERATOR_MODE: return "MODE";
     case UiEditKey::MANUAL_SPEED_PCT: return "MANSPD";
+    case UiEditKey::STEERING_TEST_DEG: return "STEERTEST";
     case UiEditKey::DRIVE_SCALE: return "DRVSCALE";
     case UiEditKey::PERCEPTION_INFERENCE: return "PERINF";
     case UiEditKey::NONE:
@@ -214,10 +252,12 @@ static void requestConfig(UiEditKey key, float value) {
   const char* keyName = editWireKey(key);
   if (key == UiEditKey::DRIVE_SCALE) {
     snprintf(line, sizeof(line), "CMD:CFG:%u:%s:%.4f", txn, keyName, value);
+  } else if (key == UiEditKey::STEERING_TEST_DEG) {
+    snprintf(line, sizeof(line), "CMD:CFG:%u:%s:%.1f", txn, keyName, value);
+  } else if (key == UiEditKey::MANUAL_SPEED_PCT) {
+    snprintf(line, sizeof(line), "CMD:CFG:%u:%s:%d", txn, keyName, static_cast<int>(lroundf(value)));
   } else {
-    snprintf(line, sizeof(line), "CMD:CFG:%u:%s:%d", txn, keyName, value > 0.5F ?
-             (key == UiEditKey::MANUAL_SPEED_PCT ? static_cast<int>(lroundf(value)) : 1) :
-             (key == UiEditKey::MANUAL_SPEED_PCT ? static_cast<int>(lroundf(value)) : 0));
+    snprintf(line, sizeof(line), "CMD:CFG:%u:%s:%d", txn, keyName, value > 0.5F ? 1 : 0);
   }
   printBoth(line);
   gTelemetry.configPending = true;
@@ -243,46 +283,40 @@ static void applyEditor() {
 }
 
 static void selectRelative(int direction) {
-  if (direction == 0) return;
-  if (gUi.menu == UiMenuId::OVERVIEW) {
-    int next = static_cast<int>(gUi.selectedChild) + direction;
-    if (next < 0) next = 2;
-    if (next > 2) next = 0;
-    gUi.selectedChild = static_cast<uint8_t>(next);
-    drawUiNow(false);
-    return;
-  }
+  if (direction == 0 || !menuHasChildren(gUi.menu)) return;
   uint8_t count = 0;
   const UiMenuId* children = menuChildren(gUi.menu, count);
-  if (children != nullptr && count > 0U) {
-    int next = static_cast<int>(gUi.selectedChild) + direction;
-    if (next < 0) next = count - 1;
-    if (next >= count) next = 0;
-    gUi.selectedChild = static_cast<uint8_t>(next);
-    drawUiNow(false);
-    return;
-  }
-  const UiMenuId parent = menuParent(gUi.menu);
-  uint8_t siblingsCount = 0;
-  const UiMenuId* siblings = menuChildren(parent, siblingsCount);
-  if (siblings == nullptr || siblingsCount == 0U) return;
-  for (uint8_t i = 0; i < siblingsCount; ++i) {
-    if (siblings[i] != gUi.menu) continue;
-    int next = static_cast<int>(i) + direction;
-    if (next < 0) next = siblingsCount - 1;
-    if (next >= siblingsCount) next = 0;
-    setMenu(siblings[next]);
-    return;
-  }
+  if (children == nullptr || count == 0U) return;
+  int next = static_cast<int>(gUi.selectedChild) + direction;
+  if (next < 0) next = count - 1;
+  if (next >= count) next = 0;
+  gUi.selectedChild = static_cast<uint8_t>(next);
+  drawUiNow(false);
 }
 
 static void chooseChild() {
   uint8_t count = 0;
   const UiMenuId* children = menuChildren(gUi.menu, count);
-  if (children != nullptr && count > 0U) {
-    const uint8_t selected = gUi.selectedChild < count ? gUi.selectedChild : 0U;
-    setMenu(children[selected]);
+  if (children == nullptr || count == 0U) return;
+  const uint8_t selected = gUi.selectedChild < count ? gUi.selectedChild : 0U;
+  setMenu(children[selected]);
+}
+
+static void chooseVisibleCard(uint8_t slot) {
+  if (slot >= SUBMENU_VISIBLE_CARDS) return;
+  if (gUi.menu == UiMenuId::OVERVIEW) {
+    uint8_t count = 0;
+    const UiMenuId* children = menuChildren(UiMenuId::OVERVIEW, count);
+    if (children != nullptr && slot < count) setMenu(children[slot]);
+    return;
   }
+  uint8_t count = 0;
+  const UiMenuId* children = menuChildren(gUi.menu, count);
+  if (children == nullptr || count == 0U) return;
+  const uint8_t index = static_cast<uint8_t>(menuWindowFirst(gUi.selectedChild, count) + slot);
+  if (index >= count) return;
+  gUi.selectedChild = index;
+  setMenu(children[index]);
 }
 
 static bool steeringTestAllowed() {
@@ -290,7 +324,7 @@ static bool steeringTestAllowed() {
          gTelemetry.encoderReady && !gTelemetry.eStop && gTelemetry.state == STATE_STOPPED;
 }
 
-static void runSteeringTest() {
+static void runSteeringTest(float targetDeg) {
   if (!steeringTestAllowed()) {
     gTelemetry.configLastOk = false;
     snprintf(gTelemetry.configMessage, sizeof(gTelemetry.configMessage), "%s", "STEER TEST LOCKED");
@@ -298,7 +332,8 @@ static void runSteeringTest() {
     return;
   }
   char line[48];
-  snprintf(line, sizeof(line), "CMD:STEER:%.1f", gUi.steeringTestTargetDeg);
+  const float limited = constrain(targetDeg, -STEER_TEST_ANGLE_MAX_DEG, STEER_TEST_ANGLE_MAX_DEG);
+  snprintf(line, sizeof(line), "CMD:STEER:%.1f", limited);
   printBoth(line);
 }
 
@@ -307,8 +342,9 @@ static bool driveTestAllowed() {
          !gTelemetry.eStop && gTelemetry.state == STATE_STOPPED;
 }
 
-static void toggleDriveTest() {
+static void runDriveTest(bool forward) {
   if (driveTestRunning) {
+    // Pergantian arah wajib melewati STOP; satu sentuhan saat bergerak hanya menghentikan.
     stopDriveTest();
     return;
   }
@@ -319,7 +355,7 @@ static void toggleDriveTest() {
     return;
   }
   char line[48];
-  snprintf(line, sizeof(line), "CMD:DRIVE:FWD:%u", gTelemetry.manualSpeedPct);
+  snprintf(line, sizeof(line), "CMD:DRIVE:%s:%u", forward ? "FWD" : "REV", gTelemetry.manualSpeedPct);
   printBoth(line);
   driveTestRunning = true;
   driveTestDeadlineMs = millis() + DRIVE_TEST_MAX_MS;
@@ -370,10 +406,7 @@ static void stopNavigation() {
 
 static void handleOk() {
   if (gTelemetry.configPending) return;
-  if (menuHasChildren(gUi.menu)) { chooseChild(); return; }
   if (menuEditKey(gUi.menu) != UiEditKey::NONE) { applyEditor(); return; }
-  if (gUi.menu == UiMenuId::ESC_STEERING_TEST) { runSteeringTest(); return; }
-  if (gUi.menu == UiMenuId::ESC_DRIVE_TEST) { toggleDriveTest(); return; }
   if (gUi.menu == UiMenuId::NAV_MISSION_GO) { goSelectedWaypoint(); return; }
   if (gUi.menu == UiMenuId::NAV_MISSION_SAVE) { saveSelectedWaypoint(); return; }
   if (gUi.menu == UiMenuId::NAV_MISSION_STOP) { stopNavigation(); return; }
@@ -381,41 +414,61 @@ static void handleOk() {
 
 static void handleSoftKey(SoftKey key) {
   if (key == SoftKey::NONE) return;
-  if (key == SoftKey::HOME) { goOverview(); return; }
-  if (key == SoftKey::LEFT) {
-    if (gUi.editing) {
-      gUi.editing = false;
-      drawUiNow(true);
+
+  if (key == SoftKey::TOP_LEFT) {
+    if (gUi.menu == UiMenuId::ESC_MANUAL_TEST) stopAllManualTest();
+    if (uiIsDomainRoot(gUi.menu)) goOverview();
+    else if (gUi.menu != UiMenuId::OVERVIEW) setMenu(menuParent(gUi.menu));
+    return;
+  }
+
+  if (key == SoftKey::CARD_0 || key == SoftKey::CARD_1 || key == SoftKey::CARD_2) {
+    const uint8_t slot = key == SoftKey::CARD_0 ? 0U : (key == SoftKey::CARD_1 ? 1U : 2U);
+    chooseVisibleCard(slot);
+    return;
+  }
+
+  if (gUi.menu == UiMenuId::ESC_MANUAL_TEST) {
+    if (key == SoftKey::TEST_STOP) { stopAllManualTest(); drawUiNow(false); return; }
+    if (key == SoftKey::TEST_FORWARD) { runDriveTest(true); return; }
+    if (key == SoftKey::TEST_REVERSE) { runDriveTest(false); return; }
+    if (key == SoftKey::TEST_LEFT) { runSteeringTest(-gTelemetry.steeringTestAngleDeg); return; }
+    if (key == SoftKey::TEST_RIGHT) { runSteeringTest(gTelemetry.steeringTestAngleDeg); return; }
+    return;
+  }
+
+  if (menuHasChildren(gUi.menu)) {
+    if (key == SoftKey::LEFT) selectRelative(-1);
+    else if (key == SoftKey::RIGHT) selectRelative(+1);
+    return;
+  }
+
+  const UiEditKey editKey = menuEditKey(gUi.menu);
+  if (editKey != UiEditKey::NONE) {
+    if (gTelemetry.configPending) return;
+    if (key == SoftKey::LEFT || key == SoftKey::RIGHT) {
+      if (!gUi.editing) {
+        gUi.editValue = actualEditValue(editKey);
+        gUi.editing = true;
+      }
+      changeDraft(editKey, key == SoftKey::LEFT ? -1 : +1);
       return;
     }
-    if (gUi.menu != UiMenuId::OVERVIEW) setMenu(menuParent(gUi.menu));
+    if (key == SoftKey::OK) { handleOk(); return; }
     return;
   }
-  if (key == SoftKey::RIGHT) {
-    if (!gUi.editing) selectRelative(+1);
+
+  if (gUi.menu == UiMenuId::NAV_MISSION_GO || gUi.menu == UiMenuId::NAV_MISSION_SAVE) {
+    if (key == SoftKey::LEFT) selectWaypoint(-1);
+    else if (key == SoftKey::RIGHT) selectWaypoint(+1);
+    else if (key == SoftKey::OK) handleOk();
     return;
   }
-  if (key == SoftKey::OK) { handleOk(); return; }
-  if (key == SoftKey::UP || key == SoftKey::DOWN) {
-    const int direction = key == SoftKey::UP ? -1 : +1;
-    const UiEditKey editKey = menuEditKey(gUi.menu);
-    if (gUi.editing && editKey != UiEditKey::NONE) {
-      changeDraft(editKey, direction);
-    } else if (menuHasChildren(gUi.menu) || gUi.menu == UiMenuId::OVERVIEW) {
-      selectRelative(direction);
-    } else if (gUi.menu == UiMenuId::ESC_STEERING_TEST) {
-      gUi.steeringTestTargetDeg = constrain(
-        gUi.steeringTestTargetDeg + (direction < 0 ? STEER_TEST_STEP_DEG : -STEER_TEST_STEP_DEG),
-        STEER_TEST_MIN_DEG, STEER_TEST_MAX_DEG);
-      drawUiNow(false);
-    } else if (gUi.menu == UiMenuId::NAV_MISSION_GO || gUi.menu == UiMenuId::NAV_MISSION_SAVE) {
-      selectWaypoint(direction < 0 ? -1 : +1);
-    }
-  }
+  if (gUi.menu == UiMenuId::NAV_MISSION_STOP && key == SoftKey::OK) handleOk();
 }
 
 static void handleTouch() {
-  const TouchEvent ev = pollTouch(uiNeedsRail(gUi));
+  const TouchEvent ev = pollTouch(gUi);
   if (ev.type == TouchEvent::PRESS || ev.type == TouchEvent::REPEAT) handleSoftKey(ev.key);
 }
 
@@ -467,6 +520,8 @@ static void sanitizeTelemetry() {
   if (!isfinite(gTelemetry.confidencePct)) gTelemetry.confidencePct = 0.0F;
   gTelemetry.confidencePct = constrain(gTelemetry.confidencePct, 0.0F, 100.0F);
   if (!isfinite(gTelemetry.driveScale)) gTelemetry.driveScale = 1.0F;
+  if (!isfinite(gTelemetry.steeringTestAngleDeg)) gTelemetry.steeringTestAngleDeg = STEER_TEST_ANGLE_DEFAULT_DEG;
+  gTelemetry.steeringTestAngleDeg = constrain(gTelemetry.steeringTestAngleDeg, STEER_TEST_ANGLE_MIN_DEG, STEER_TEST_ANGLE_MAX_DEG);
 }
 
 static void configAck(bool ok, uint16_t txn, const char* key, const char* valueOrReason) {
@@ -521,7 +576,7 @@ static void markRosHeartbeat() {
 }
 
 static void forceRosOffline() {
-  stopDriveTest();
+  stopAllManualTest();
   const bool wasConnected = gTelemetry.rosConnected;
   gTelemetry.rosConnected = false;
   rosHeartbeatStableCount = 0U;
@@ -610,7 +665,7 @@ static void handleSerialCommand(char* command) {
       return;
     }
     gDfuArmDeadlineMs = 0U;
-    stopDriveTest();
+    stopAllManualTest();
     printBoth("ACK:DFU");
     delay(80);
     enterSystemDfu();
@@ -659,6 +714,8 @@ static void handleSerialCommand(char* command) {
     if (gTelemetry.eStop) stopDriveTest();
   } else if (!strncmp(command, "MANUAL_SPEED:", 13)) {
     gTelemetry.manualSpeedPct = static_cast<uint8_t>(constrain(atoi(command + 13), MANUAL_SPEED_MIN, MANUAL_SPEED_MAX));
+  } else if (!strncmp(command, "CFGSTEERTEST:", 13)) {
+    gTelemetry.steeringTestAngleDeg = static_cast<float>(atof(command + 13));
   } else if (!strncmp(command, "CFGDRVSCALE:", 13)) {
     gTelemetry.driveScale = static_cast<float>(atof(command + 13));
   } else if (!strncmp(command, "CFGPERINF:", 10)) {
@@ -854,20 +911,28 @@ static bool updateProgressBar() {
 void setup() {
   pinMode(PC13, OUTPUT);
   digitalWrite(PC13, HIGH);
+  startIndependentWatchdog();
   Serial.begin(1000000);
+  feedIndependentWatchdog();
 #if HMI_LEGACY_UART
   Serial1.begin(115200);
 #endif
   delay(50);
   printBoth("ADV HMI realtime menu firmware - boot");
+  feedIndependentWatchdog();
   gNeo3.begin();
+  feedIndependentWatchdog();
   gVesc.begin();
+  feedIndependentWatchdog();
   initDisplay();
+  feedIndependentWatchdog();
   restartSplash();
   startAppWatchdog();
+  feedIndependentWatchdog();
 }
 
 void loop() {
+  feedIndependentWatchdog();
   // Safety lokal selalu paling depan: E-stop tidak boleh menunggu parser USB/TFT.
   gNeo3.pollSafetyIo();
   gVesc.setSafetyStop(gNeo3.safetyPressed());
@@ -882,6 +947,7 @@ void loop() {
       gVesc.poll();
     }
     gMainLoopHeartbeatMs = HAL_GetTick();
+    feedIndependentWatchdog();
     return;
   }
 
@@ -915,4 +981,5 @@ void loop() {
     digitalWrite(PC13, !digitalRead(PC13));
   }
   gMainLoopHeartbeatMs = HAL_GetTick();
+  feedIndependentWatchdog();
 }

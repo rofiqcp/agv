@@ -2137,9 +2137,44 @@ private:
     stm32_tx_pub_->publish(msg);
   }
 
+  static void appendVescFrame(std::vector<std::uint8_t> &batch, const std::vector<std::uint8_t> &payload)
+  {
+    const auto frame = makeVescFrame(payload);
+    batch.insert(batch.end(), frame.begin(), frame.end());
+  }
+
   void sendVescPayload(const std::vector<std::uint8_t> &payload)
   {
     publishStm32Bytes(makeVescFrame(payload));
+  }
+
+  void appendVescSetPos(std::vector<std::uint8_t> &batch, double physical_deg)
+  {
+    const double vesc_pos_deg = vescPositionDegFromPhysicalSteering(physical_deg);
+    std::vector<std::uint8_t> payload{kVescSetPos};
+    appendI32Be(payload, static_cast<std::int32_t>(std::lround(vesc_pos_deg * 1000000.0)));
+    appendVescFrame(batch, payload);
+  }
+
+  void appendVescSetRpm(std::vector<std::uint8_t> &batch, double rpm)
+  {
+    std::vector<std::uint8_t> inner{kVescSetRpm};
+    appendI32Be(inner, static_cast<std::int32_t>(std::lround(rpm)));
+    appendVescFrame(batch, wrapRightMotor(inner));
+  }
+
+  void appendVescValuesRequest(std::vector<std::uint8_t> &batch, bool second)
+  {
+    std::vector<std::uint8_t> payload{kVescGetValuesSelective};
+    appendI32Be(payload, static_cast<std::int32_t>(kRuntimeValuesMask));
+    if (second) payload = wrapRightMotor(payload);
+    appendVescFrame(batch, payload);
+  }
+
+  void appendSteeringCalibrationRequest(std::vector<std::uint8_t> &batch)
+  {
+    appendVescFrame(batch, std::vector<std::uint8_t>{
+      kVescCustomAppData, kHbMagic0, kHbMagic1, kHbVersion, kHbGetSteeringCal});
   }
 
   SerialCommand currentSafeCommand(const std::chrono::steady_clock::time_point &now_steady)
@@ -2254,6 +2289,7 @@ private:
       return;
     }
     const auto t = std::chrono::steady_clock::now();
+    bool pair_complete = false;
 
     {
       std::lock_guard<std::mutex> lock(feedback_mutex_);
@@ -2270,6 +2306,9 @@ private:
         left_duty_ = duty;
         left_rpm_ = rpm;
         left_vbus_v_ = vbus_v;
+        // LEFT starts a new ordered runtime pair. Any orphan RIGHT sample from a
+        // damaged/old transaction is intentionally discarded here.
+        values_pair_mask_ = 0x01U;
       } else if (vesc_id == kVescRightMotorId) {
         measured_rpm_ = rpm;
         right_fault_code_ = fault;
@@ -2282,17 +2321,25 @@ private:
         right_iq_a_ = iq_a;
         right_duty_ = duty;
         right_vbus_v_ = vbus_v;
+        values_pair_mask_ |= 0x02U;
       } else {
         return;
       }
-      ack_seen_ = left_values_seen_ && right_values_seen_;
-      if (ack_seen_) last_ack_time_ = std::min(left_values_time_, right_values_time_);
-      feedback_updated_ = true;
+      const double pair_skew_s = (left_values_seen_ && right_values_seen_)
+        ? std::abs(std::chrono::duration<double>(right_values_time_ - left_values_time_).count())
+        : std::numeric_limits<double>::infinity();
+      pair_complete = values_pair_mask_ == 0x03U && pair_skew_s <= 0.040;
+      if (pair_complete) {
+        values_pair_mask_ = 0U;
+        ack_seen_ = true;
+        last_ack_time_ = t;
+        feedback_updated_ = true;
+      }
       feedback_status_ = 0U;
       if (left_fault_code_ == 0U) feedback_status_ |= 0x01U | 0x04U;
       if (right_fault_code_ == 0U) feedback_status_ |= 0x02U | 0x08U;
     }
-    publishFocTelemetry();
+    if (pair_complete) publishFocTelemetry();
   }
 
   void handleVescPayload(const std::vector<std::uint8_t> &payload)
@@ -2428,18 +2475,22 @@ private:
     const SerialCommand cmd = currentSafeCommand(now_steady);
     const double steering_deg = static_cast<double>(cmd.left_cdeg) * 0.01;
     const double right_rpm = cmd.stm32_right_erpm;
-    sendVescSetPos(steering_deg);
-    sendVescSetRpm(right_rpm);
-
-    // RT data contract: each motor gets one standard COMM_GET_VALUES_SELECTIVE
-    // request on every 50-Hz transport tick. The compact mask keeps dual-motor
-    // feedback inside the 115200 VESC UART budget while preserving 50-Hz Nav2 data.
-    requestVescValues(false);
-    requestVescValues(true);
-    // Project-specific steering calibration state is lower-rate application data.
-    // 50 Hz / 2.5 is represented by a steady-clock deadline elsewhere; keep this
-    // lightweight state request at 10 Hz and HMI/application telemetry at 20 Hz.
-    if (++steering_cal_tick_ >= 5U) { steering_cal_tick_ = 0U; requestSteeringCalibration(); }
+    // One ROS message contains the complete 50-Hz wire transaction. F411 and F103
+    // parse the concatenated standard VESC frames independently, so batching removes
+    // four ROS callbacks / four USB lines per cycle without changing VESC semantics.
+    // Latest-command-wins still applies because the whole batch belongs to one tick.
+    std::vector<std::uint8_t> batch;
+    batch.reserve(64U);
+    appendVescSetPos(batch, steering_deg);
+    appendVescSetRpm(batch, right_rpm);
+    appendVescValuesRequest(batch, false);
+    appendVescValuesRequest(batch, true);
+    // Project-specific steering calibration state stays at 10 Hz.
+    if (++steering_cal_tick_ >= 5U) {
+      steering_cal_tick_ = 0U;
+      appendSteeringCalibrationRequest(batch);
+    }
+    publishStm32Bytes(batch);
 
     bool timed_out = true;
     {
@@ -2468,10 +2519,13 @@ private:
         std::lround(stmSteeringCommandDeg(0.0) * 100.0));
     }
     const double steering_deg = static_cast<double>(safe_cmd.left_cdeg) * 0.01;
+    std::vector<std::uint8_t> batch;
+    batch.reserve(72U);
     for (int i = 0; i < 3; ++i) {
-      sendVescSetRpm(0.0);
-      sendVescSetPos(steering_deg);
+      appendVescSetRpm(batch, 0.0);
+      appendVescSetPos(batch, steering_deg);
     }
+    publishStm32Bytes(batch);
   }
 
   void startSerialThread()
@@ -3097,6 +3151,7 @@ private:
   double measured_rpm_{0.0};
   std::uint8_t feedback_status_{0U};
   bool left_values_seen_{false}, right_values_seen_{false};
+  std::uint8_t values_pair_mask_{0U};
   std::chrono::steady_clock::time_point left_values_time_{}, right_values_time_{};
   std::uint8_t left_fault_code_{0U}, right_fault_code_{0U};
   double left_temp_mos_c_{0.0}, right_temp_mos_c_{0.0};

@@ -3,15 +3,17 @@
 // ============================================================================
 #pragma once
 
-#include <Arduino.h>
-#include <TFT_eSPI.h>
+#include "HmiDisplay.h"
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include "Config.h"
 #include "Telemetry.h"
 #include "Theme.h"
 #include "Icons.h"
 #include "UiMenu.h"
 
-extern TFT_eSPI tft;
+extern HmiDisplay tft;
 
 inline void drawDomainDot(int x, const char* label, bool ok) {
   drawStatusDot(x, 14, healthColor(ok), 3);

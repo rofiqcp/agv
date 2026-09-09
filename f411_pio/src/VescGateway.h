@@ -12,6 +12,8 @@ class VescGateway {
   void poll();
   bool handleHostCommand(const char *command);
   bool maintenanceMode() const { return owner_ == Owner::MAINTENANCE; }
+  void setSafetyStop(bool active);
+  bool safetyStopActive() const { return safety_stop_active_; }
 
  private:
   enum class Owner : uint8_t { RUNTIME = 0, MAINTENANCE = 1 };
@@ -22,8 +24,12 @@ class VescGateway {
   static constexpr uint32_t kRxFrameTimeoutMs = 150;
   static constexpr uint32_t kStatusPeriodMs = 1000;
   static constexpr uint32_t kRuntimeNoValidFrameRecoverMs = 1200;
+  static constexpr size_t kRuntimeMaxQueuedBytes = 128U; // <12 ms at 115200 8N1
   static constexpr uint32_t kRuntimeRecoverCooldownMs = 1200;
-  static constexpr uint8_t kRuntimeRecoverBeforeReset = 4;
+  static constexpr uint8_t kCommMotorEstop = 159U;
+  static constexpr uint16_t kSafetyRefreshHoldMs = 250U;
+  static constexpr uint16_t kSafetyReleaseHoldMs = 600U;
+  static constexpr uint32_t kSafetyRefreshPeriodMs = 50U;
   static constexpr uint32_t kMaintenanceLeaseMs = 5000U;
   static constexpr uint32_t kUartRetryMs = 1000U;
 
@@ -38,6 +44,7 @@ class VescGateway {
   uint32_t rx_frames_{0};
   uint32_t rx_frame_errors_{0};
   uint32_t usb_drop_frames_{0};
+  uint32_t runtime_queue_drop_{0};
   uint32_t last_valid_frame_ms_{0};
   uint32_t last_runtime_tx_ms_{0};
   uint32_t last_recovery_ms_{0};
@@ -45,7 +52,10 @@ class VescGateway {
   uint32_t uart_recovery_count_{0};
   uint8_t recovery_streak_{0};
   bool ever_valid_frame_{false};
+  bool safety_stop_active_{false};
+  uint32_t last_safety_stop_ms_{0U};
   bool uart_ok_{false};
+  uint32_t active_baud_{kBaud};
   uint32_t maintenance_activity_ms_{0U};
   uint32_t last_uart_retry_ms_{0U};
 
@@ -59,5 +69,6 @@ class VescGateway {
   void publishStatus(bool force = false);
   void recoverRuntimeUart(uint32_t now);
   void recoveryTick(uint32_t now);
+  bool sendSafetyStop(uint16_t hold_ms);
   void switchToRuntime(uint32_t now, bool announce);
 };
