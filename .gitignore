@@ -34,8 +34,7 @@ embedded/hoverboard-firmware-hack-FOC/.pio
 data/
 .gpt_backups/
 .gpt_web_review/
-vesc/
-vesc_tool/
+esc/
 px4/
 autoware/
 ardupilot/

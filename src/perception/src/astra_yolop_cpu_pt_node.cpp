@@ -353,6 +353,10 @@ private:
     declare_parameter<std::string>("camera_health_state_topic", "/perception/camera_health_state");
     declare_parameter<std::string>("emergency_stop_topic", "/perception/emergency_stop");
     declare_parameter<std::string>("object_points_topic", "/perception/object_points");
+    declare_parameter<bool>("nav2_obstacle_roi_enabled", true);
+    declare_parameter<std::vector<double>>("nav2_obstacle_roi_points",
+      std::vector<double>{0.38,0.32, 0.62,0.32, 0.94,0.98, 0.06,0.98});
+    declare_parameter<std::string>("nav2_obstacle_roi_reference", "bottom_center");
     declare_parameter<std::string>("object_clearing_points_topic", "/perception/object_clearing_points");
     declare_parameter<std::string>("drivable_boundary_points_topic", "/perception/drivable_boundary_points");
     declare_parameter<std::string>("lane_state_topic", "/perception/lane_safety_state");
@@ -370,8 +374,13 @@ private:
     // Offset pixel disediakan hanya untuk fine-calibration pemasangan kamera nyata.
     declare_parameter<bool>("lane_corridor_overlay_enabled", true);
     declare_parameter<bool>("lane_corridor_control_enabled", true);
+    declare_parameter<bool>("lane_corridor_manual_lines_enabled", true);
     declare_parameter<double>("lane_corridor_top_y_ratio", 0.02);
     declare_parameter<double>("lane_corridor_bottom_y_ratio", 0.98);
+    declare_parameter<double>("lane_corridor_left_top_x_ratio", 0.42);
+    declare_parameter<double>("lane_corridor_left_bottom_x_ratio", 0.20);
+    declare_parameter<double>("lane_corridor_right_top_x_ratio", 0.58);
+    declare_parameter<double>("lane_corridor_right_bottom_x_ratio", 0.80);
     declare_parameter<double>("lane_corridor_camera_height_m", 0.736);
     declare_parameter<double>("lane_corridor_camera_pitch_deg", 0.0);
     declare_parameter<double>("lane_corridor_safety_margin_m", 0.30);
@@ -533,6 +542,9 @@ private:
     camera_health_state_topic_ = get_parameter("camera_health_state_topic").as_string();
     emergency_topic_ = get_parameter("emergency_stop_topic").as_string();
     object_points_topic_ = get_parameter("object_points_topic").as_string();
+    nav2_obstacle_roi_enabled_ = get_parameter("nav2_obstacle_roi_enabled").as_bool();
+    nav2_obstacle_roi_points_ = get_parameter("nav2_obstacle_roi_points").as_double_array();
+    nav2_obstacle_roi_reference_ = get_parameter("nav2_obstacle_roi_reference").as_string();
     clearing_points_topic_ = get_parameter("object_clearing_points_topic").as_string();
     drivable_boundary_topic_ = get_parameter("drivable_boundary_points_topic").as_string();
     lane_state_topic_ = get_parameter("lane_state_topic").as_string();
@@ -548,8 +560,13 @@ private:
     lane_safety_enabled_ = get_parameter("lane_safety_enabled").as_bool();
     lane_corridor_overlay_enabled_ = get_parameter("lane_corridor_overlay_enabled").as_bool();
     lane_corridor_control_enabled_ = get_parameter("lane_corridor_control_enabled").as_bool();
+    lane_corridor_manual_lines_enabled_ = get_parameter("lane_corridor_manual_lines_enabled").as_bool();
     lane_corridor_top_y_ratio_ = get_parameter("lane_corridor_top_y_ratio").as_double();
     lane_corridor_bottom_y_ratio_ = get_parameter("lane_corridor_bottom_y_ratio").as_double();
+    lane_corridor_left_top_x_ratio_ = get_parameter("lane_corridor_left_top_x_ratio").as_double();
+    lane_corridor_left_bottom_x_ratio_ = get_parameter("lane_corridor_left_bottom_x_ratio").as_double();
+    lane_corridor_right_top_x_ratio_ = get_parameter("lane_corridor_right_top_x_ratio").as_double();
+    lane_corridor_right_bottom_x_ratio_ = get_parameter("lane_corridor_right_bottom_x_ratio").as_double();
     lane_corridor_camera_height_m_ = get_parameter("lane_corridor_camera_height_m").as_double();
     lane_corridor_camera_pitch_deg_ = get_parameter("lane_corridor_camera_pitch_deg").as_double();
     lane_corridor_safety_margin_m_ = get_parameter("lane_corridor_safety_margin_m").as_double();
@@ -720,6 +737,14 @@ private:
     lane_corridor_top_y_ratio_ = std::clamp(lane_corridor_top_y_ratio_, 0.0, 0.95);
     lane_corridor_bottom_y_ratio_ = std::clamp(
       lane_corridor_bottom_y_ratio_, lane_corridor_top_y_ratio_ + 0.05, 0.99);
+    lane_corridor_left_top_x_ratio_ = std::clamp(lane_corridor_left_top_x_ratio_, 0.0, 1.0);
+    lane_corridor_left_bottom_x_ratio_ = std::clamp(lane_corridor_left_bottom_x_ratio_, 0.0, 1.0);
+    lane_corridor_right_top_x_ratio_ = std::clamp(lane_corridor_right_top_x_ratio_, 0.0, 1.0);
+    lane_corridor_right_bottom_x_ratio_ = std::clamp(lane_corridor_right_bottom_x_ratio_, 0.0, 1.0);
+    if (nav2_obstacle_roi_points_.size() != 8U) throw std::runtime_error("nav2_obstacle_roi_points must contain 4 normalized x/y points");
+    for (double &v : nav2_obstacle_roi_points_) v = std::clamp(v, 0.0, 1.0);
+    if (nav2_obstacle_roi_reference_ != "bottom_center" && nav2_obstacle_roi_reference_ != "center")
+      throw std::runtime_error("nav2_obstacle_roi_reference must be bottom_center or center");
     lane_corridor_camera_height_m_ = std::clamp(lane_corridor_camera_height_m_, 0.20, 2.50);
     lane_corridor_camera_pitch_deg_ = std::clamp(lane_corridor_camera_pitch_deg_, -25.0, 45.0);
     lane_corridor_safety_margin_m_ = std::clamp(lane_corridor_safety_margin_m_, 0.0, 1.50);
@@ -1331,6 +1356,24 @@ private:
     return message;
   }
 
+  bool detectionInsideNav2Roi(const Detection &d, int image_width, int image_height) const
+  {
+    if (!nav2_obstacle_roi_enabled_) return true;
+    if (nav2_obstacle_roi_points_.size() != 8U || image_width <= 1 || image_height <= 1) return false;
+    const double px = 0.5 * static_cast<double>(d.x1 + d.x2) / static_cast<double>(image_width - 1);
+    const double ref_y = nav2_obstacle_roi_reference_ == "center" ?
+      0.5 * static_cast<double>(d.y1 + d.y2) : static_cast<double>(d.y2);
+    const double py = ref_y / static_cast<double>(image_height - 1);
+    bool inside = false;
+    for (size_t i = 0, j = 3; i < 4; j = i++) {
+      const double xi = nav2_obstacle_roi_points_[2U * i], yi = nav2_obstacle_roi_points_[2U * i + 1U];
+      const double xj = nav2_obstacle_roi_points_[2U * j], yj = nav2_obstacle_roi_points_[2U * j + 1U];
+      if (((yi > py) != (yj > py)) &&
+          (px < (xj - xi) * (py - yi) / ((yj - yi) + 1.0e-12) + xi)) inside = !inside;
+    }
+    return inside;
+  }
+
   std::vector<std::array<float, 4>> projectObstacles(
     const std::vector<Detection> & detections, const cv::Mat & drivable,
     bool & emergency, std::vector<std::pair<float, float>> & centers,
@@ -1346,6 +1389,7 @@ private:
       {
         continue;
       }
+      if (!detectionInsideNav2Roi(d, drivable.cols, drivable.rows)) continue;
       const float center_x = 0.5F * (d.x1 + d.x2);
       float forward = 0.0F;
       float left = 0.0F;
@@ -1921,6 +1965,20 @@ private:
 
   LaneSafetyLineAtRow laneSafetyLineAtRow(int y, int image_width, int image_height) const
   {
+    if (lane_corridor_manual_lines_enabled_) {
+      const int top_y = std::clamp(static_cast<int>(std::lround(image_height * lane_corridor_top_y_ratio_)), 0, image_height - 2);
+      const int bottom_y = std::clamp(static_cast<int>(std::lround(image_height * lane_corridor_bottom_y_ratio_)), top_y + 1, image_height - 1);
+      const double t = std::clamp(
+        static_cast<double>(y - top_y) / static_cast<double>(std::max(1, bottom_y - top_y)), 0.0, 1.0);
+      LaneSafetyLineAtRow line;
+      line.left_x = (lane_corridor_left_top_x_ratio_ + t *
+        (lane_corridor_left_bottom_x_ratio_ - lane_corridor_left_top_x_ratio_)) * (image_width - 1);
+      line.right_x = (lane_corridor_right_top_x_ratio_ + t *
+        (lane_corridor_right_bottom_x_ratio_ - lane_corridor_right_top_x_ratio_)) * (image_width - 1);
+      if (line.left_x > line.right_x) std::swap(line.left_x, line.right_x);
+      line.center_x = 0.5 * (line.left_x + line.right_x);
+      return line;
+    }
     const double sx = static_cast<double>(image_width) / static_cast<double>(std::max(1, requested_width_));
     const double sy = static_cast<double>(image_height) / static_cast<double>(std::max(1, requested_height_));
     const double fx = camera_fx_ * sx;
@@ -2761,6 +2819,9 @@ private:
   std::string drivable_topic_, lane_topic_, performance_topic_;
   std::string camera_connected_topic_, camera_health_topic_, camera_health_state_topic_;
   std::string emergency_topic_, object_points_topic_, clearing_points_topic_;
+  bool nav2_obstacle_roi_enabled_{true};
+  std::vector<double> nav2_obstacle_roi_points_{0.38,0.32, 0.62,0.32, 0.94,0.98, 0.06,0.98};
+  std::string nav2_obstacle_roi_reference_{"bottom_center"};
   std::string drivable_boundary_topic_, lane_state_topic_, lane_control_state_topic_;
   std::string lane_metrics_topic_, drivable_space_topic_, obstacle_metrics_topic_, near_field_state_topic_;
   std::string raw_detection_topic_, nav_cmd_topic_, safe_cmd_topic_;
@@ -2771,8 +2832,13 @@ private:
   bool lane_safety_enabled_{false};
   bool lane_corridor_overlay_enabled_{true};
   bool lane_corridor_control_enabled_{true};
+  bool lane_corridor_manual_lines_enabled_{true};
   double lane_corridor_top_y_ratio_{0.02};
   double lane_corridor_bottom_y_ratio_{0.98};
+  double lane_corridor_left_top_x_ratio_{0.42};
+  double lane_corridor_left_bottom_x_ratio_{0.20};
+  double lane_corridor_right_top_x_ratio_{0.58};
+  double lane_corridor_right_bottom_x_ratio_{0.80};
   double lane_corridor_camera_height_m_{0.736};
   double lane_corridor_camera_pitch_deg_{0.0};
   double lane_corridor_safety_margin_m_{0.30};

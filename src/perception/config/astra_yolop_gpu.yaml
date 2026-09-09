@@ -142,8 +142,14 @@ perception:
     # camera pitch URDF = 0 deg. fx/fy/cx/cy di bawah merepresentasikan FOV kamera.
     lane_corridor_overlay_enabled: true
     lane_corridor_control_enabled: true
-    lane_corridor_top_y_ratio: 0.02
-    lane_corridor_bottom_y_ratio: 0.98
+    # Drag/drop ROS Web menyimpan empat endpoint safety line secara normalized.
+    lane_corridor_manual_lines_enabled: true
+    lane_corridor_top_y_ratio: 0.18
+    lane_corridor_bottom_y_ratio: 0.96
+    lane_corridor_left_top_x_ratio: 0.42
+    lane_corridor_left_bottom_x_ratio: 0.20
+    lane_corridor_right_top_x_ratio: 0.58
+    lane_corridor_right_bottom_x_ratio: 0.80
     lane_corridor_camera_height_m: 0.736
     lane_corridor_camera_pitch_deg: 0.0
     lane_corridor_safety_margin_m: 0.30
@@ -173,6 +179,11 @@ perception:
     release_confirm_frames: 5
     lost_confirm_frames: 2
     object_points_topic: /perception/object_points
+    # Bottom-center bbox harus berada di trapezoid ini sebelum menjadi obstacle Nav2.
+    # Urutan titik: top-left, top-right, bottom-right, bottom-left (x,y normalized).
+    nav2_obstacle_roi_enabled: true
+    nav2_obstacle_roi_points: [0.38, 0.32, 0.62, 0.32, 0.94, 0.98, 0.06, 0.98]
+    nav2_obstacle_roi_reference: bottom_center
     object_clearing_points_topic: /perception/object_clearing_points
     obstacle_markers_topic: /perception/obstacle_markers
     perception_obstacle_metrics_topic: /perception/obstacle_metrics

@@ -2401,9 +2401,10 @@ private:
           continue;
         }
       }
-      // This F103 firmware uses PACKET_MAX_PL_LEN=512. Reject impossible frames
+      // F103 application protocol accepts up to 700-byte payloads. Reject only
+      // frames beyond that application contract (bootloader uses its own 512-byte limit).
       // early rather than allowing a corrupted length to hold or flush the stream.
-      if (payload_len == 0U || payload_len > 512U) {
+      if (payload_len == 0U || payload_len > 700U) {
         vesc_rx_stream_.erase(vesc_rx_stream_.begin());
         ++vesc_rx_format_error_count_;
         continue;

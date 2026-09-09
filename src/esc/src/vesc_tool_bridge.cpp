@@ -64,7 +64,7 @@ constexpr std::uint8_t HB_STEERING_HOME = 13;
 constexpr std::uint8_t HB_ENCODER_DEBUG = 14;
 constexpr std::uint8_t HB_STEERING_SET_CENTER = 15;
 constexpr std::uint8_t HB_GET_ROTOR_SNAPSHOT = 16;
-constexpr std::size_t kMaxF103VescPayload = 512U;
+constexpr std::size_t kMaxF103VescPayload = 700U;
 constexpr std::uint32_t kMaintenanceValuesMask =
   (1U << 0U) | (1U << 1U) | (1U << 2U) | (1U << 3U) | (1U << 4U) |
   (1U << 5U) | (1U << 6U) | (1U << 7U) | (1U << 8U) |
@@ -827,10 +827,13 @@ class VescToolBridge final : public rclcpp::Node {
     sendPayload(1, fast);
     sendPayload(2, fast);
     // Stock COMM_ROTOR_POSITION can expose only one DISP_POS_MODE at a time.
-    // This compact custom snapshot carries every standard-equivalent rotor
-    // diagnostic in parallel at the same maintenance rate (50 Hz per motor).
-    sendCustom(1, HB_GET_ROTOR_SNAPSHOT);
-    sendCustom(2, HB_GET_ROTOR_SNAPSHOT);
+    // Essential GET_VALUES remains 50 Hz per motor. The larger diagnostic rotor
+    // snapshot is deliberately 25 Hz so the 115200 F103->F411 wire keeps enough
+    // headroom for config replies, TCP bursts and recovery traffic.
+    if ((fast_diag_divider_++ & 1U) == 0U) {
+      sendCustom(1, HB_GET_ROTOR_SNAPSHOT);
+      sendCustom(2, HB_GET_ROTOR_SNAPSHOT);
+    }
     // Raw TIM4 is part of the steering-calibration snapshot, not stock rotor
     // position. Refresh it at 10 Hz: fast enough for Web diagnostics while
     // keeping the 1 Mbaud F411<->F103 link well below unnecessary packet load.
@@ -1181,7 +1184,7 @@ class VescToolBridge final : public rclcpp::Node {
   std::chrono::steady_clock::time_point tcp_probe_deadline_{}, tcp_probe_next_{};
   std::chrono::steady_clock::time_point python_probe_deadline_{}, python_probe_next_{};
   int poll_motor_{1}, last_request_motor_{1};
-  std::uint8_t slow_poll_divider_{0U};
+  std::uint8_t slow_poll_divider_{0U}, fast_diag_divider_{0U};
   int slow_poll_motor_{1};
   double slow_amp_hours_[2]{0.0,0.0}, slow_amp_hours_charged_[2]{0.0,0.0};
   double slow_watt_hours_[2]{0.0,0.0}, slow_watt_hours_charged_[2]{0.0,0.0};
