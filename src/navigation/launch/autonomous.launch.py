@@ -663,6 +663,10 @@ def generate_launch_description() -> LaunchDescription:
             'start_gateway': PythonExpression([
                 "'", LaunchConfiguration('start_hmi'), "' == 'true' or '", LaunchConfiguration('start_esc_ackermann'), "' == 'true' or '", LaunchConfiguration('start_vesc_tool_bridge'), "' == 'true' or ('", LaunchConfiguration('start_gnss'), "' == 'true' and '", LaunchConfiguration('gnss_source'), "'.lower() == 'stm32')"]),
             'hmi_port': LaunchConfiguration('hmi_port'),
+            # Exactly one GNSS owner: direct USB OR F411-published NEO3, never both.
+            'publish_stm32_gnss': PythonExpression([
+                "'", LaunchConfiguration('start_gnss'), "' == 'true' and '",
+                LaunchConfiguration('gnss_source'), "'.lower() == 'stm32'"]),
             'start_teleop': PythonExpression([
                 "'", LaunchConfiguration('enable_keyboard'), "' == 'true' or '",
                 LaunchConfiguration('enable_joystick'), "' == 'true'"]),

@@ -1565,7 +1565,7 @@ class WebRosBridge {
         {"/navigation/trajectory_safety_state", "trajectory_safety_state"},
         {"/collision_monitor/state", "collision_monitor_state"}, {"/esc/status", "esc_status"},
         {"/hmi/page", "hmi_page"}, {"/hmi/operator_mode", "hmi_mode"},
-        {"/hmi/camera_tab", "hmi_camera_tab"}, {"/hmi/waypoints", "hmi_waypoints"},
+        {"/hmi/waypoints", "hmi_waypoints"},
         {"/hmi/navigation_state", "hmi_navigation"},
         {"/hmi/manual_state", "hmi_manual"}, {"/hmi/status", "hmi_status"},
         {"/teleop/joystick_status", "joystick_status"},
@@ -1596,7 +1596,7 @@ class WebRosBridge {
       subscribe<std_msgs::msg::String>(entry.first, stringQos, [this, channel](std_msgs::msg::String::ConstSharedPtr msg) {
         const QString raw = QString::fromStdString(msg->data);
         if (channel == "goal_state") update(channel, QJsonObject{{"state", raw.trimmed().toUpper()}, {"raw", raw}});
-        else if (channel == "hmi_page" || channel == "hmi_mode" || channel == "hmi_camera_tab") update(channel, raw.trimmed().toUpper());
+        else if (channel == "hmi_page" || channel == "hmi_mode") update(channel, raw.trimmed().toUpper());
         else if (channel == "raw_detections") update(channel, parseRawDetectionSummary(raw));
         else if (channel == "perception_performance") update(channel, normalizePerceptionPerformance(parseJsonOrKv(raw)));
         else if (channel == "obstacle_metrics") update(channel, enrichObstacleMetrics(parseJsonOrKv(raw)));
@@ -2645,14 +2645,9 @@ class LocalHttpServer : public QObject {
                                        &message);
     } else if (request.path == "/api/hmi/page") {
       const QString page = json.value("page").toString().trimmed().toUpper();
-      static const QSet<QString> allowed{QStringLiteral("HOME"), QStringLiteral("CAMERA"), QStringLiteral("GPS"), QStringLiteral("ACTUATOR")};
+      static const QSet<QString> allowed{QStringLiteral("OVERVIEW"), QStringLiteral("ESC"), QStringLiteral("PERCEPTION"), QStringLiteral("NAVIGATION")};
       if (!allowed.contains(page)) return sendJson(socket, 400, QJsonObject{{"ok", false}, {"message", "Page HMI tidak valid"}});
       ok = bridge_->publishHmiRequest("PAGE:" + page, &message);
-    } else if (request.path == "/api/hmi/camera-tab") {
-      const QString tab = json.value("tab").toString().trimmed().toUpper();
-      static const QSet<QString> allowedTabs{QStringLiteral("VIEW"), QStringLiteral("DETECT"), QStringLiteral("DRIVE"), QStringLiteral("STATUS")};
-      if (!allowedTabs.contains(tab)) return sendJson(socket, 400, QJsonObject{{"ok", false}, {"message", "Camera tab HMI tidak valid"}});
-      ok = bridge_->publishHmiRequest("CAMERA_TAB:" + tab, &message);
     } else if (request.path == "/api/hmi/waypoint/select") {
       const int index = json.value("index").toInt(-1);
       if (index < 0 || index > 3) return sendJson(socket, 400, QJsonObject{{"ok", false}, {"message", "Waypoint index wajib 0..3"}});

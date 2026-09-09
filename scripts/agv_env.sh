@@ -4,6 +4,13 @@
 
 export AGV_ROOT="${AGV_ROOT:-$HOME/agv}"
 export AGV_PYTHON="${AGV_PYTHON:-/usr/bin/python3}"
+
+# Samakan ROS CLI dengan domain/local-only yang dipakai autonomous.launch.py.
+# Environment existing tetap dihormati; default project adalah domain 42 lokal-host.
+export AGV_ROS_DOMAIN_ID="${AGV_ROS_DOMAIN_ID:-${ROS_DOMAIN_ID:-42}}"
+export AGV_ROS_LOCALHOST_ONLY="${AGV_ROS_LOCALHOST_ONLY:-${ROS_LOCALHOST_ONLY:-1}}"
+export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-$AGV_ROS_DOMAIN_ID}"
+export ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY:-$AGV_ROS_LOCALHOST_ONLY}"
 export PATH="$HOME/.local/bin:$PATH"
 
 export AGV_CONFIG_DIR="${AGV_CONFIG_DIR:-$AGV_ROOT/src/navigation/config}"

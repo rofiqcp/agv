@@ -13,6 +13,7 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rcl_interfaces REQUIRED)
 find_package(action_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -27,7 +28,7 @@ if(BUILD_TESTING)
 endif()
 
 add_executable(stmf4_hmi_bridge src/stmf4_hmi_bridge.cpp)
-ament_target_dependencies(stmf4_hmi_bridge rclcpp action_msgs geometry_msgs nav_msgs sensor_msgs std_msgs)
+ament_target_dependencies(stmf4_hmi_bridge rclcpp rcl_interfaces action_msgs geometry_msgs nav_msgs sensor_msgs std_msgs)
 
 install(TARGETS stmf4_hmi_bridge DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})

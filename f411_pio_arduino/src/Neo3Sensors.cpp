@@ -86,11 +86,15 @@ void Neo3Sensors::begin() {
   publishHardwareStatus(true);
 }
 
+void Neo3Sensors::pollSafetyIo() {
+  pollSafetySwitch();
+  updateSafetyLed();
+}
+
 void Neo3Sensors::poll() {
   pollGnss();
   pollIst8310();
-  pollSafetySwitch();
-  updateSafetyLed();
+  pollSafetyIo();
 
   const uint32_t now_ms = millis();
   // Configuration recovery follows transport freshness, not GNSS fix validity.

@@ -21,6 +21,10 @@ class Neo3Sensors {
 public:
   void begin();
   void poll();
+  // Jalur safety dipisahkan dari polling sensor penuh agar tetap aktif saat
+  // gateway VESC sedang dalam mode maintenance berprioritas tinggi.
+  void pollSafetyIo();
+  bool safetyPressed() const { return switch_pressed_; }
   bool handleHostCommand(const char *command);
 
 private:

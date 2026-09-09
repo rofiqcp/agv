@@ -1,192 +1,97 @@
 // ============================================================================
-// TouchButtons.h — XPT2046 direct navigation + one-tap controls
-// Preserves the existing TFT_eSPI calibration and coordinate correction.
+// TouchButtons.h — satu input layer untuk HOME, LEFT/RIGHT/OK, UP/DOWN.
 // ============================================================================
 #pragma once
 
 #include <Arduino.h>
 #include <TFT_eSPI.h>
 #include "Config.h"
-#include "BottomMenu.h"
 
 extern TFT_eSPI tft;
 
 struct TouchEvent {
-  enum Type : uint8_t { NONE = 0, PRESS, RELEASE } type;
-  ControlAction control;
-  PageId navPage;
-  bool home;
-  bool modeToggle;
-  CameraSubPage cameraTab;
-  WaypointAction waypointAction;
+  enum Type : uint8_t { NONE = 0, PRESS, REPEAT, RELEASE } type{NONE};
+  SoftKey key{SoftKey::NONE};
 };
 
 static bool touchWasDown = false;
-static ControlAction touchActiveControl = CTRL_NONE;
-static PageId touchActiveNav = PAGE_SPLASH;
-static bool touchActiveHome = false;
-static bool touchActiveModeToggle = false;
-static CameraSubPage touchActiveCameraTab = CAM_NONE;
-static WaypointAction touchActiveWaypoint = WP_ACTION_NONE;
+static SoftKey touchActiveKey = SoftKey::NONE;
+static uint32_t touchPressMs = 0;
+static uint32_t touchLastRepeatMs = 0;
 
 inline void resetTouchState() {
   touchWasDown = false;
-  touchActiveControl = CTRL_NONE;
-  touchActiveNav = PAGE_SPLASH;
-  touchActiveHome = false;
-  touchActiveModeToggle = false;
-  touchActiveCameraTab = CAM_NONE;
-  touchActiveWaypoint = WP_ACTION_NONE;
+  touchActiveKey = SoftKey::NONE;
+  touchPressMs = 0;
+  touchLastRepeatMs = 0;
 }
 
 inline void beginTouch() {
   pinMode(PIN_TOUCH_CS, OUTPUT);
   digitalWrite(PIN_TOUCH_CS, HIGH);
-  // Exact calibration path from the original HMI revision that was touchable.
-  uint16_t calData[5] = { 300, 3600, 300, 3600, 1 };
+  uint16_t calData[5] = {300, 3600, 300, 3600, 1};
   tft.setTouch(calData);
   resetTouchState();
 }
 
-// Exact coordinate correction from the original working HMI.
 inline void correctTouchXY(uint16_t sx, uint16_t sy, uint16_t& tx, uint16_t& ty) {
-  tx = map((int)sy, 0, H - 1, 0, W - 1);
-  ty = map((int)sx, 0, W - 1, H - 1, 0);
-  tx = (uint16_t)constrain((int)tx, 0, W - 1);
-  ty = (uint16_t)constrain((int)ty, 0, H - 1);
+  tx = map(static_cast<int>(sy), 0, H - 1, 0, W - 1);
+  ty = map(static_cast<int>(sx), 0, W - 1, H - 1, 0);
+  tx = static_cast<uint16_t>(constrain(static_cast<int>(tx), 0, W - 1));
+  ty = static_cast<uint16_t>(constrain(static_cast<int>(ty), 0, H - 1));
 }
 
 inline bool hit(int px, int py, int x, int y, int w, int h) {
   return px >= x && px < (x + w) && py >= y && py < (y + h);
 }
 
-inline PageId navHitPage(int x, int y) {
-  if (!hit(x, y, 0, NAV_Y - 2, W, H - (NAV_Y - 2))) return PAGE_SPLASH;
-  if (hit(x, y, navTileX(0), NAV_Y, NAV_W, NAV_H)) return PAGE_CAMERA;
-  if (hit(x, y, navTileX(1), NAV_Y, NAV_W, NAV_H)) return PAGE_GPS;
-  if (hit(x, y, navTileX(2), NAV_Y, NAV_W, NAV_H)) return PAGE_ACTUATOR;
-  return PAGE_SPLASH;
+inline SoftKey touchKeyAt(int x, int y) {
+  // HOME hitbox 52x44: visual icon tetap kecil tetapi sentuhan jauh lebih toleran.
+  if (hit(x, y, HOME_TOUCH_X, HOME_TOUCH_Y, HOME_TOUCH_W, HOME_TOUCH_H)) return SoftKey::HOME;
+  if (hit(x, y, SOFTKEY_X0, SOFTKEY_Y, SOFTKEY_W, SOFTKEY_H)) return SoftKey::LEFT;
+  if (hit(x, y, SOFTKEY_X0 + SOFTKEY_W + SOFTKEY_GAP, SOFTKEY_Y, SOFTKEY_W, SOFTKEY_H)) return SoftKey::RIGHT;
+  if (hit(x, y, SOFTKEY_X0 + 2 * (SOFTKEY_W + SOFTKEY_GAP), SOFTKEY_Y, SOFTKEY_W, SOFTKEY_H)) return SoftKey::OK;
+  if (hit(x, y, RIGHT_RAIL_X, RIGHT_UP_Y, RIGHT_RAIL_W, RIGHT_KEY_H)) return SoftKey::UP;
+  if (hit(x, y, RIGHT_RAIL_X, RIGHT_DOWN_Y, RIGHT_RAIL_W, RIGHT_KEY_H)) return SoftKey::DOWN;
+  return SoftKey::NONE;
 }
 
-inline ControlAction actuatorHitControl(int x, int y) {
-  if (hit(x, y, ACT_FWD_X, ACT_FWD_Y, ACT_BTN_W, ACT_BTN_H)) return CTRL_FORWARD;
-  if (hit(x, y, ACT_LEFT_X, ACT_LEFT_Y, ACT_BTN_W, ACT_BTN_H)) return CTRL_LEFT;
-  if (hit(x, y, ACT_CENTER_X, ACT_CENTER_Y, ACT_BTN_W, ACT_BTN_H)) return CTRL_CENTER;
-  if (hit(x, y, ACT_RIGHT_X, ACT_RIGHT_Y, ACT_BTN_W, ACT_BTN_H)) return CTRL_RIGHT;
-  if (hit(x, y, ACT_REV_X, ACT_REV_Y, ACT_BTN_W, ACT_BTN_H)) return CTRL_REVERSE;
-  if (hit(x, y, ACT_STOP_X, ACT_STOP_Y, ACT_BTN_W, ACT_BTN_H)) return CTRL_STOP;
-  return CTRL_NONE;
-}
-
-inline CameraSubPage cameraHitTab(int x, int y) {
-  if (!hit(x, y, CAM_TAB_X0, CAM_TAB_Y, W - CAM_TAB_X0, CAM_TAB_H)) return CAM_NONE;
-  for (uint8_t i = 0; i < 4; ++i) {
-    const int bx = CAM_TAB_X0 + i * (CAM_TAB_W + CAM_TAB_GAP);
-    if (hit(x, y, bx, CAM_TAB_Y, CAM_TAB_W, CAM_TAB_H)) {
-      return static_cast<CameraSubPage>(i);
-    }
-  }
-  return CAM_NONE;
-}
-
-inline WaypointAction gpsHitWaypointAction(int x, int y) {
-  if (!hit(x, y, 0, GPS_WP_Y, W, GPS_WP_H)) return WP_ACTION_NONE;
-  if (hit(x, y, GPS_WP_PREV_X, GPS_WP_Y, GPS_WP_PREV_W, GPS_WP_H)) return WP_PREV;
-  if (hit(x, y, GPS_WP_NAME_X, GPS_WP_Y, GPS_WP_NAME_W, GPS_WP_H)) return WP_ACTION_NONE;
-  if (hit(x, y, GPS_WP_NEXT_X, GPS_WP_Y, GPS_WP_NEXT_W, GPS_WP_H)) return WP_NEXT;
-  if (hit(x, y, GPS_WP_SAVE_X, GPS_WP_Y, GPS_WP_SAVE_W, GPS_WP_H)) return WP_SAVE;
-  if (hit(x, y, GPS_WP_GO_X, GPS_WP_Y, GPS_WP_GO_W, GPS_WP_H)) return WP_GO;
-  if (hit(x, y, GPS_WP_STOP_X, GPS_WP_Y, GPS_WP_STOP_W, GPS_WP_H)) return WP_STOP;
-  return WP_ACTION_NONE;
-}
-
-inline TouchEvent pollTouch(PageId currentPage) {
-  TouchEvent ev{TouchEvent::NONE, CTRL_NONE, PAGE_SPLASH, false, false, CAM_NONE, WP_ACTION_NONE};
-
-  // Original working path: TFT_eSPI validates pressure/debounce and applies
-  // the calibration loaded by beginTouch(). Keep this foundation untouched.
+inline TouchEvent pollTouch(bool railEnabled) {
+  TouchEvent ev{};
   uint16_t sx = 0, sy = 0;
   const bool down = tft.getTouch(&sx, &sy, TOUCH_THRESHOLD);
+  const uint32_t now = millis();
 
   if (!down) {
     if (touchWasDown) {
-      touchWasDown = false;
       ev.type = TouchEvent::RELEASE;
-      ev.control = touchActiveControl;
-      ev.navPage = touchActiveNav;
-      ev.home = touchActiveHome;
-      ev.modeToggle = touchActiveModeToggle;
-      ev.cameraTab = touchActiveCameraTab;
-      ev.waypointAction = touchActiveWaypoint;
-      touchActiveControl = CTRL_NONE;
-      touchActiveNav = PAGE_SPLASH;
-      touchActiveHome = false;
-      touchActiveModeToggle = false;
-      touchActiveCameraTab = CAM_NONE;
-      touchActiveWaypoint = WP_ACTION_NONE;
-      return ev;
+      ev.key = touchActiveKey;
+      resetTouchState();
     }
     return ev;
   }
 
   uint16_t tx = 0, ty = 0;
   correctTouchXY(sx, sy, tx, ty);
+  SoftKey key = touchKeyAt(tx, ty);
+  if (!railEnabled && (key == SoftKey::UP || key == SoftKey::DOWN)) key = SoftKey::NONE;
 
   if (!touchWasDown) {
     touchWasDown = true;
+    touchActiveKey = key;
+    touchPressMs = now;
+    touchLastRepeatMs = now;
     ev.type = TouchEvent::PRESS;
-
-    // Edge-only diagnostics; no extra XPT2046 reads are performed here.
-    Serial.print(F("[TOUCH] PRESS CAL X="));
-    Serial.print(sx);
-    Serial.print(F(" Y="));
-    Serial.println(sy);
-    Serial.print(F("[TOUCH] SCREEN X="));
-    Serial.print(tx);
-    Serial.print(F(" Y="));
-    Serial.println(ty);
-
-    // HOME mode card is a large finger-friendly AUTO/MANUAL toggle.
-    if (currentPage == PAGE_HOME && hit(tx, ty, HOME_SIDE_X, HOME_MODE_Y, HOME_SIDE_W, HOME_SIDE_H)) {
-      touchActiveModeToggle = true;
-      ev.modeToggle = true;
-      return ev;
-    }
-
-    // Home icon touch area on non-splash pages.
-    if (currentPage != PAGE_SPLASH && hit(tx, ty, 0, 0, 28, TOP_H)) {
-      touchActiveHome = true;
-      ev.home = true;
-      return ev;
-    }
-
-    PageId np = navHitPage(tx, ty);
-    if (np != PAGE_SPLASH) {
-      touchActiveNav = np;
-      ev.navPage = np;
-      return ev;
-    }
-
-    if (currentPage == PAGE_CAMERA) {
-      touchActiveCameraTab = cameraHitTab(tx, ty);
-      ev.cameraTab = touchActiveCameraTab;
-      return ev;
-    }
-
-    if (currentPage == PAGE_GPS) {
-      touchActiveWaypoint = gpsHitWaypointAction(tx, ty);
-      ev.waypointAction = touchActiveWaypoint;
-      return ev;
-    }
-
-    if (currentPage == PAGE_ACTUATOR) {
-      touchActiveControl = actuatorHitControl(tx, ty);
-      ev.control = touchActiveControl;
-      return ev;
-    }
+    ev.key = key;
     return ev;
   }
 
-  // No HOLD repeat: the first tap latches or triggers the selected command.
+  if (key != touchActiveKey) return ev;
+  const bool repeatable = key == SoftKey::UP || key == SoftKey::DOWN;
+  if (repeatable && now - touchPressMs >= 450U && now - touchLastRepeatMs >= 120U) {
+    touchLastRepeatMs = now;
+    ev.type = TouchEvent::REPEAT;
+    ev.key = key;
+  }
   return ev;
 }

@@ -26,6 +26,39 @@ const char *VescGateway::ownerName(Owner owner) {
   return owner == Owner::MAINTENANCE ? "MAINTENANCE" : "RUNTIME";
 }
 
+bool VescGateway::sendSafetyStop(uint16_t hold_ms) {
+  // VESC 6.00 COMM_MOTOR_ESTOP = 159, payload uint16 big-endian.
+  // Jalur ini dibentuk lokal di F411 sehingga tidak bergantung pada ROS/USB.
+  uint8_t payload[3] = {kCommMotorEstop, static_cast<uint8_t>(hold_ms >> 8U), static_cast<uint8_t>(hold_ms)};
+  uint8_t frame[8] = {2U, 3U, payload[0], payload[1], payload[2], 0U, 0U, 3U};
+  const uint16_t crc = crc16(payload, sizeof(payload));
+  frame[5] = static_cast<uint8_t>(crc >> 8U);
+  frame[6] = static_cast<uint8_t>(crc);
+  const size_t written = uart_.write(frame, sizeof(frame));
+  tx_bytes_ += static_cast<uint32_t>(written);
+  return written == sizeof(frame);
+}
+
+void VescGateway::setSafetyStop(bool active) {
+  const uint32_t now = millis();
+  if (active) {
+    safety_stop_active_ = true;
+    if (last_safety_stop_ms_ == 0U ||
+        static_cast<uint32_t>(now - last_safety_stop_ms_) >= kSafetyRefreshPeriodMs) {
+      (void)sendSafetyStop(kSafetyRefreshHoldMs);
+      last_safety_stop_ms_ = now;
+    }
+    return;
+  }
+  if (safety_stop_active_) {
+    // Hold terakhir lebih panjang dari hard watchdog F103 (maks 500 ms), sehingga
+    // command stale yang sempat masuk saat safety aktif sudah pasti kedaluwarsa.
+    (void)sendSafetyStop(kSafetyReleaseHoldMs);
+  }
+  safety_stop_active_ = false;
+  last_safety_stop_ms_ = 0U;
+}
+
 void VescGateway::begin() {
   uart_.begin(kBaud);
   // STM32 Arduino defaults UART and USB CDC to the same NVIC priority (1).
@@ -61,6 +94,13 @@ bool VescGateway::writeUsbBounded(const uint8_t *data, size_t len, uint32_t time
 }
 
 bool VescGateway::forwardHex(const char *hex, Owner source) {
+  if (safety_stop_active_) {
+    // Saat safety aktif hanya paket E-stop lokal yang boleh mencapai F103.
+    // Buang seluruh host stream agar command lama tidak menumpuk untuk diputar
+    // kembali setelah tombol dilepas.
+    rejected_bytes_ += static_cast<uint32_t>(strlen(hex) / 2U);
+    return false;
+  }
   if (source != owner_) {
     size_t rejected = strlen(hex) / 2U;
     rejected_bytes_ += static_cast<uint32_t>(rejected);
@@ -229,13 +269,13 @@ void VescGateway::publishStatus(bool force) {
   char line[320];
   const int n = snprintf(line, sizeof(line),
     "VESC:STAT:mode=%s,baud=%lu,rx=%lu,tx=%lu,reject=%lu,frames=%lu,frame_err=%lu,"
-    "usb_drop=%lu,valid_age_ms=%lu,recover=%lu,age_ms=%lu,rx_lvl=%d,tx_lvl=%d,brr=%lX,cr1=%lX,sr=%lX\n",
+    "usb_drop=%lu,valid_age_ms=%lu,recover=%lu,safety=%u,age_ms=%lu,rx_lvl=%d,tx_lvl=%d,brr=%lX,cr1=%lX,sr=%lX\n",
     ownerName(owner_), static_cast<unsigned long>(kBaud),
     static_cast<unsigned long>(rx_bytes_), static_cast<unsigned long>(tx_bytes_),
     static_cast<unsigned long>(rejected_bytes_), static_cast<unsigned long>(rx_frames_),
     static_cast<unsigned long>(rx_frame_errors_), static_cast<unsigned long>(usb_drop_frames_),
     static_cast<unsigned long>(now - last_valid_frame_ms_), static_cast<unsigned long>(uart_recovery_count_),
-    static_cast<unsigned long>(now - last_rx_ms_), digitalRead(PB7), digitalRead(PB6),
+    safety_stop_active_ ? 1U : 0U, static_cast<unsigned long>(now - last_rx_ms_), digitalRead(PB7), digitalRead(PB6),
     static_cast<unsigned long>(USART1->BRR), static_cast<unsigned long>(USART1->CR1),
     static_cast<unsigned long>(USART1->SR));
   if (n <= 0 || static_cast<size_t>(n) >= sizeof(line)) return;

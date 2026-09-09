@@ -40,3 +40,5 @@ px4/
 autoware/
 ardupilot/
 hoverboard-firmware-hack-FOC/
+# Local browser QA dependencies
+/.playwright/

@@ -12,6 +12,9 @@ vesc_cpp = (WS / 'f411_pio_arduino/src/VescGateway.cpp').read_text(encoding='utf
 neo_h = (WS / 'f411_pio_arduino/src/Neo3Sensors.h').read_text(encoding='utf-8')
 neo_cpp = (WS / 'f411_pio_arduino/src/Neo3Sensors.cpp').read_text(encoding='utf-8')
 main = (WS / 'f411_pio_arduino/src/main.cpp').read_text(encoding='utf-8')
+stmf4_launch = (ROOT / 'launch/stmf4.launch.py').read_text(encoding='utf-8')
+esc_launch = (WS / 'src/esc/launch/esc.launch.py').read_text(encoding='utf-8')
+autonomous_launch = (WS / 'src/navigation/launch/autonomous.launch.py').read_text(encoding='utf-8')
 
 def require(ok, msg):
     if not ok:
@@ -50,6 +53,13 @@ require('mode != "RUNTIME" && mode != "NORMAL" && mode != "MAINTENANCE"' in brid
         'ROS F411 bridge must validate and forward RUNTIME/MAINTENANCE ownership dynamically')
 require('VESC:MODE:RUNTIME' in vesc_cpp and 'VESC:MODE:MAINTENANCE' in vesc_cpp,
         'F411 firmware must explicitly implement both VESC ownership modes')
+for token in ('pollSafetyIo()', 'setSafetyStop(gNeo3.safetyPressed())'):
+    require(token in main, f'F411 maintenance/runtime safety polling missing: {token}')
+for token in ('kCommMotorEstop', 'sendSafetyStop', 'safety_stop_active_',
+              'if (safety_stop_active_)'):
+    require(token in vesc_h + vesc_cpp, f'F411 direct safety-stop contract missing: {token}')
+require('/safety/estop' in bridge and 'publishNeo3SafetyState' in bridge,
+        'NEO3 safety switch must feed the ROS estop gate as well as F411 local stop')
 require('Serial.availableForWrite()' in vesc_cpp and 'usb_drop_frames_' in vesc_cpp,
         'F411 USB CDC telemetry must be bounded/nonblocking')
 for token in ('kRuntimeNoValidFrameRecoverMs', 'recoverRuntimeUart', 'recovery_streak_', 'ever_valid_frame_', 'NVIC_SystemReset'):
@@ -72,6 +82,15 @@ require('quality.data[44] = qualified_fix ? 1.0 : 0.0' in bridge,
         'M9N quality fix-valid flag must use qualified_fix')
 require('qualified_fix && velocity_valid' in bridge,
         'M9N velocity must never publish into ROS without qualified position fix')
+require('stampFromMcuMillis(v[1])' in bridge and 'quality.data[24] = 1.0' in bridge and
+        'quality.data[23] = std::max(0.0, (now() - stamp).seconds())' in bridge,
+        'F411 sensor measurement timestamp/age mapping is missing')
+require('publishGnssMeasurement(now(),' not in bridge and 'mag.header.stamp = now()' not in bridge,
+        'STM32 GNSS/MAG must not use host parse-arrival time')
+require('DeclareLaunchArgument("publish_stm32_gnss"' in stmf4_launch and
+        '"publish_stm32_gnss": LaunchConfiguration("publish_stm32_gnss")' in esc_launch and
+        "'publish_stm32_gnss': PythonExpression" in autonomous_launch,
+        'GNSS source ownership must propagate stm32-vs-usb selection through launch stack')
 require('pvt_.received_ms != 0U' in neo_cpp and 'gnssReady(uint32_t now_ms)' in neo_cpp,
         'F411 must distinguish M9N streaming/connected from GNSS ready/fix')
 require('const bool pvt_stream_fresh' in neo_cpp and 'if (!pvt_stream_fresh)' in neo_cpp,

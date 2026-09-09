@@ -12,6 +12,7 @@ def generate_launch_description():
     cfg = str(Path(get_package_share_directory("stmf4")) / "config" / "hmi.yaml")
     args = [
         DeclareLaunchArgument("serial_device", default_value="auto"),
+        DeclareLaunchArgument("publish_stm32_gnss", default_value="true"),
         DeclareLaunchArgument("use_sim_time", default_value="false"),
     ]
     node = Node(
@@ -19,6 +20,8 @@ def generate_launch_description():
         respawn=True, respawn_delay=5.0,
         parameters=[cfg, {
             "serial_device": LaunchConfiguration("serial_device"),
+            "publish_stm32_gnss": ParameterValue(
+                LaunchConfiguration("publish_stm32_gnss"), value_type=bool),
             "use_sim_time": ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool),
         }],
     )

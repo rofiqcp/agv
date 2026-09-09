@@ -32,6 +32,7 @@
 #include "geometry_msgs/msg/twist.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "rclcpp/parameter_client.hpp"
 #include "sensor_msgs/msg/imu.hpp"
 #include "sensor_msgs/msg/magnetic_field.hpp"
 #include "sensor_msgs/msg/nav_sat_fix.hpp"
@@ -93,6 +94,25 @@ std::optional<bool> jsonBool(const std::string &s, const std::string &key) {
   return std::nullopt;
 }
 
+std::optional<std::string> jsonString(const std::string &s, const std::string &key) {
+  const std::string needle = "\"" + key + "\":\"";
+  const auto pos = s.find(needle);
+  if (pos == std::string::npos) return std::nullopt;
+  const auto start = pos + needle.size();
+  const auto end = s.find('"', start);
+  if (end == std::string::npos) return std::nullopt;
+  return s.substr(start, end - start);
+}
+
+std::optional<std::string> kvString(const std::string &s, const std::string &key) {
+  const std::string needle = key + "=";
+  const auto pos = s.find(needle);
+  if (pos == std::string::npos) return std::nullopt;
+  const auto start = pos + needle.size();
+  const auto end = s.find(';', start);
+  return trim(s.substr(start, end == std::string::npos ? std::string::npos : end - start));
+}
+
 std::string className(int id) {
   if (id == 0) return "PERSON";
   if (id == 2) return "CAR";
@@ -132,6 +152,8 @@ public:
     initializeWaypoints();
     loadWaypoints();
     createRosInterfaces();
+    perception_params_ = std::make_shared<rclcpp::AsyncParametersClient>(this, "perception");
+    esc_params_ = std::make_shared<rclcpp::AsyncParametersClient>(this, "esc_ackermann");
     reconnect_timer_ = create_wall_timer(250ms, std::bind(&StmF4HmiBridge::reconnectTick, this));
     serial_timer_ = create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::duration<double>(1.0 / serial_poll_hz_)), std::bind(&StmF4HmiBridge::serialTick, this));
@@ -143,6 +165,7 @@ public:
     });
     command_timer_ = create_wall_timer(
       std::chrono::duration<double>(1.0 / command_rate_hz_), std::bind(&StmF4HmiBridge::commandTick, this));
+    config_sync_timer_ = create_wall_timer(1s, std::bind(&StmF4HmiBridge::syncRuntimeConfig, this));
     publishConnected(false);
     publishState();
     RCLCPP_INFO(get_logger(), "STM32F411 HMI SCADA bridge ready | serial=%s @ %d | mode=%s",
@@ -300,13 +323,13 @@ private:
     connected_pub_ = create_publisher<std_msgs::msg::Bool>("/hmi/connected", stateQos());
     page_pub_ = create_publisher<std_msgs::msg::String>("/hmi/page", stateQos());
     mode_pub_ = create_publisher<std_msgs::msg::String>("/hmi/operator_mode", stateQos());
-    camera_tab_pub_ = create_publisher<std_msgs::msg::String>("/hmi/camera_tab", stateQos());
     waypoints_pub_ = create_publisher<std_msgs::msg::String>("/hmi/waypoints", stateQos());
     navigation_state_pub_ = create_publisher<std_msgs::msg::String>("/hmi/navigation_state", stateQos());
     manual_state_pub_ = create_publisher<std_msgs::msg::String>("/hmi/manual_state", stateQos());
     status_pub_ = create_publisher<std_msgs::msg::String>("/hmi/status", stateQos());
     cmd_pub_ = create_publisher<geometry_msgs::msg::Twist>("/hmi/cmd_vel", 10);
     source_pub_ = create_publisher<std_msgs::msg::String>("/hmi/active_source", stateQos());
+    commissioning_pub_ = create_publisher<std_msgs::msg::Float64MultiArray>("/esc/commissioning/raw_actuator", 10);
     neo3_fix_raw_pub_ = create_publisher<sensor_msgs::msg::NavSatFix>("/gnss/fix_raw", rclcpp::SensorDataQoS().keep_last(5));
     neo3_fix_pub_ = create_publisher<sensor_msgs::msg::NavSatFix>("/gnss/fix", rclcpp::SensorDataQoS().keep_last(5));
     neo3_vel_pub_ = create_publisher<geometry_msgs::msg::TwistWithCovarianceStamped>("/gnss/vel", rclcpp::SensorDataQoS().keep_last(5));
@@ -316,6 +339,9 @@ private:
     neo3_mag_pub_ = create_publisher<sensor_msgs::msg::MagneticField>("/neo3/mag", rclcpp::SensorDataQoS().keep_last(10));
     neo3_ist_connected_pub_ = create_publisher<std_msgs::msg::Bool>("/neo3/ist8310_connected", stateQos());
     neo3_safety_switch_pub_ = create_publisher<std_msgs::msg::Bool>("/neo3/safety_switch", stateQos());
+    // Satu publisher E-stop sistem: safety switch NEO3 dipetakan langsung ke
+    // gate ROS, sementara F411 juga menghentikan F103 secara hardware-link lokal.
+    neo3_estop_pub_ = create_publisher<std_msgs::msg::Bool>("/safety/estop", stateQos());
     neo3_status_pub_ = create_publisher<std_msgs::msg::String>("/neo3/status", stateQos());
     vesc_rx_pub_ = create_publisher<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/rx", rclcpp::QoS(rclcpp::KeepLast(16)).reliable());
     vesc_status_pub_ = create_publisher<std_msgs::msg::String>("/stmf4/vesc/status", stateQos());
@@ -365,6 +391,12 @@ private:
     boolSub("/system/motion_ready", motion_ready_);
     boolSub("/system/nav2_ready", nav2_ready_);
     boolSub("/safety/estop", estop_);
+    stringSub("/system/localization_state", localization_state_text_, stateQos());
+    stringSub("/system/gnss_status", gnss_status_text_, stateQos());
+    stringSub("/system/imu_status", imu_status_text_, stateQos());
+    stringSub("/system/ekf_local_status", ekf_local_status_text_, stateQos());
+    stringSub("/system/ekf_global_status", ekf_global_status_text_, stateQos());
+    stringSub("/perception/lane_safety_state", lane_state_text_, rclcpp::QoS(rclcpp::KeepLast(1)).best_effort());
 
     fix_sub_ = create_subscription<sensor_msgs::msg::NavSatFix>("/gnss/fix_raw", rclcpp::SensorDataQoS(),
       [this](sensor_msgs::msg::NavSatFix::ConstSharedPtr msg) { latitude_ = msg->latitude; longitude_ = msg->longitude; });
@@ -374,6 +406,8 @@ private:
         if (msg->data.size() > 3 && std::isfinite(msg->data[3])) fix_type_ = std::clamp(static_cast<int>(std::lround(msg->data[3])), 0, 4);
         if (msg->data.size() > 15 && std::isfinite(msg->data[15])) hdop_ = msg->data[15];
         else if (msg->data.size() > 1 && std::isfinite(msg->data[1])) hdop_ = msg->data[1];
+        if (msg->data.size() > 2 && std::isfinite(msg->data[2])) hacc_m_ = std::max(0.0, msg->data[2]);
+        if (msg->data.size() > 23 && std::isfinite(msg->data[23])) gnss_age_sec_ = std::max(0.0, msg->data[23]);
         if (msg->data.size() > 7 && std::isfinite(msg->data[7])) {
           heading_deg_ = msg->data[7] * 180.0 / kPi;
           if (heading_deg_ < 0.0) heading_deg_ += 360.0;
@@ -381,11 +415,13 @@ private:
       });
     imu_sub_ = create_subscription<sensor_msgs::msg::Imu>("/imu/data", rclcpp::SensorDataQoS(),
       [this](sensor_msgs::msg::Imu::ConstSharedPtr msg) {
+        if (std::isfinite(msg->angular_velocity.z)) gyro_z_rps_ = msg->angular_velocity.z;
         if (!gnss_ready_) {
           heading_deg_ = yawFromQuat(msg->orientation) * 180.0 / kPi;
           if (heading_deg_ < 0.0) heading_deg_ += 360.0;
         }
       });
+    floatSub("/esc/drive_target_mps", drive_target_mps_);
     floatSub("/esc/drive_actual_mps", drive_actual_mps_);
     floatSub("/esc/steering_target_rad", steering_target_rad_);
     floatSub("/esc/steering_actual_rad", steering_actual_rad_);
@@ -395,7 +431,10 @@ private:
         if (p != std::string::npos) {
           char *end = nullptr;
           const double v = std::strtod(msg->data.c_str() + p + 7, &end);
-          if (end != msg->data.c_str() + p + 7 && std::isfinite(v)) motor_rpm_ = v;
+          if (end != msg->data.c_str() + p + 7 && std::isfinite(v)) {
+            motor_erpm_ = v;
+            motor_mech_rpm_ = drive_motor_pole_pairs_ > 0 ? v / static_cast<double>(drive_motor_pole_pairs_) : 0.0;
+          }
         }
       });
     obstacle_sub_ = create_subscription<std_msgs::msg::String>("/perception/obstacle_metrics", rclcpp::SensorDataQoS(),
@@ -429,6 +468,12 @@ private:
     double *const target = &field;
     float_subs_.push_back(create_subscription<std_msgs::msg::Float64>(topic, 10,
       [target](std_msgs::msg::Float64::ConstSharedPtr msg) { if (std::isfinite(msg->data)) *target = msg->data; }));
+  }
+
+  void stringSub(const std::string &topic, std::string &field, const rclcpp::QoS &qos) {
+    std::string *const target = &field;
+    string_subs_.push_back(create_subscription<std_msgs::msg::String>(topic, qos,
+      [target](std_msgs::msg::String::ConstSharedPtr msg) { *target = trim(msg->data); }));
   }
 
   bool validWaypointIndex(int index) const {
@@ -809,6 +854,56 @@ private:
     neo3_gnss_connected_pub_->publish(b);
   }
 
+  void publishNeo3SafetyState(bool active, bool force = false) {
+    if (!force && neo3_switch_initialized_ && neo3_switch_state_ == active) return;
+    neo3_switch_state_ = active;
+    neo3_switch_initialized_ = true;
+    estop_ = active;
+    std_msgs::msg::Bool b;
+    b.data = active;
+    neo3_safety_switch_pub_->publish(b);
+    neo3_estop_pub_->publish(b);
+  }
+
+  rclcpp::Time stampFromMcuMillis(double raw_ms_value) {
+    const auto host_now = now();
+    if (!std::isfinite(raw_ms_value) || raw_ms_value < 0.0 ||
+        raw_ms_value > static_cast<double>(UINT32_MAX)) return host_now;
+    const auto raw_ms = static_cast<std::uint32_t>(std::llround(raw_ms_value));
+    const std::int64_t host_ns = host_now.nanoseconds();
+    std::uint64_t mapped_ms = raw_ms;
+
+    if (!mcu_clock_initialized_) {
+      mcu_clock_initialized_ = true;
+      mcu_last_raw_ms_ = raw_ms;
+      mcu_unwrapped_ms_ = raw_ms;
+      mcu_clock_offset_ns_ = host_ns - static_cast<std::int64_t>(mcu_unwrapped_ms_) * 1000000LL;
+    } else {
+      const auto delta_ms = static_cast<std::int32_t>(raw_ms - mcu_last_raw_ms_);
+      if (delta_ms >= 0 && delta_ms <= 3600000) {
+        mcu_unwrapped_ms_ += static_cast<std::uint32_t>(delta_ms);
+        mcu_last_raw_ms_ = raw_ms;
+        mapped_ms = mcu_unwrapped_ms_;
+        const std::int64_t candidate = host_ns - static_cast<std::int64_t>(mapped_ms) * 1000000LL;
+        if (candidate < mcu_clock_offset_ns_) mcu_clock_offset_ns_ = candidate;
+      } else if (delta_ms < 0 && delta_ms >= -5000) {
+        mapped_ms = mcu_unwrapped_ms_ - static_cast<std::uint32_t>(-delta_ms);
+      } else {
+        // F411 reboot atau gap sangat panjang: bentuk epoch baru dari paket ini.
+        mcu_last_raw_ms_ = raw_ms;
+        mcu_unwrapped_ms_ = raw_ms;
+        mapped_ms = raw_ms;
+        mcu_clock_offset_ns_ = host_ns - static_cast<std::int64_t>(mapped_ms) * 1000000LL;
+      }
+    }
+
+    std::int64_t stamp_ns = mcu_clock_offset_ns_ + static_cast<std::int64_t>(mapped_ms) * 1000000LL;
+    stamp_ns = std::min(stamp_ns, host_ns);
+    if (last_mcu_stamp_ns_ > 0) stamp_ns = std::max(stamp_ns, last_mcu_stamp_ns_);
+    last_mcu_stamp_ns_ = stamp_ns;
+    return rclcpp::Time(stamp_ns, get_clock()->get_clock_type());
+  }
+
   void publishGnssState(const char *source, bool receiver_valid, int fix_type, int satellites,
                         double hacc_m, double pdop) {
     std_msgs::msg::String state;
@@ -899,8 +994,8 @@ private:
     // uncertainty source even when NAV-COV is not forwarded by the MCU.
     quality.data[21] = velocity_valid ? 1.0 : 0.0;
     quality.data[22] = pvt_rate_hz;
-    quality.data[23] = 0.0;  // host receive age; bounded by USB frame watchdog
-    quality.data[24] = 0.0;  // arrival timestamp source
+    quality.data[23] = std::max(0.0, (now() - stamp).seconds());
+    quality.data[24] = 1.0;  // timestamp source: F411 MCU millis mapped to ROS epoch
     quality.data[25] = flags2;
     quality.data[26] = flags3;
     quality.data[44] = qualified_fix ? 1.0 : 0.0;
@@ -924,7 +1019,8 @@ private:
     const bool fix_ok = v[4] > 0.5;
     const bool invalid_llh = v[5] > 0.5;
     const bool receiver_valid = fix_ok && !invalid_llh && (fix_type == 3 || fix_type == 4);
-    publishGnssMeasurement(now(), 1, fix_type, receiver_valid,
+    const auto measurement_stamp = stampFromMcuMillis(v[1]);
+    publishGnssMeasurement(measurement_stamp, 1, fix_type, receiver_valid,
       static_cast<int>(std::lround(v[6])), v[7], v[8], v[9], v[10], v[11],
       v[12], v[13], v[14], v[15], v[16], v[17], v[18], v[19], v[2], v[20],
       v[21], v[22], receiver_valid);
@@ -950,7 +1046,8 @@ private:
     const double hacc = std::clamp(hdop * 2.5 / 1.1774, 0.5, 100.0);
     // source=3 deliberately prevents fallback NMEA velocity/COG from entering the
     // strict Doppler fusion gate; it remains useful for position and HMI display.
-    publishGnssMeasurement(now(), 3, nmea_fix, receiver_valid, sats, v[4], v[5], v[6],
+    const auto measurement_stamp = stampFromMcuMillis(v[1]);
+    publishGnssMeasurement(measurement_stamp, 3, nmea_fix, receiver_valid, sats, v[4], v[5], v[6],
       hacc, hacc * 1.5, vel_n, vel_e, 0.0, speed, course_deg, 5.0, 90.0,
       hdop, 0.0, 1.0, 0.0, 0.0, velocity_valid);
   }
@@ -963,7 +1060,7 @@ private:
     }
     if (v[6] <= 0.5) return;
     sensor_msgs::msg::MagneticField mag;
-    mag.header.stamp = now();
+    mag.header.stamp = stampFromMcuMillis(v[1]);
     mag.header.frame_id = neo3_mag_frame_id_;
     mag.magnetic_field.x = v[2] * 1.0e-6;
     mag.magnetic_field.y = v[3] * 1.0e-6;
@@ -1000,11 +1097,7 @@ private:
       neo3_ist_connected_state_ = ist_ok;
       std_msgs::msg::Bool b; b.data = ist_ok; neo3_ist_connected_pub_->publish(b);
     }
-    if (neo3_switch_state_ != sw || !neo3_switch_initialized_) {
-      neo3_switch_state_ = sw;
-      neo3_switch_initialized_ = true;
-      std_msgs::msg::Bool b; b.data = sw; neo3_safety_switch_pub_->publish(b);
-    }
+    publishNeo3SafetyState(sw);
     std_msgs::msg::String status;
     std::ostringstream out;
     out << "{\"gnss_alive\":" << (gnss_alive ? "true" : "false")
@@ -1030,10 +1123,7 @@ private:
   void handleNeo3Switch(const std::string &payload) {
     std::vector<double> v;
     if (!parseCsvNumbers(payload, 3, v)) return;
-    neo3_switch_state_ = v[2] > 0.5;
-    neo3_switch_initialized_ = true;
-    std_msgs::msg::Bool b; b.data = neo3_switch_state_;
-    neo3_safety_switch_pub_->publish(b);
+    publishNeo3SafetyState(v[2] > 0.5);
   }
 
   static int vescHexNibble(char c) {
@@ -1222,6 +1312,328 @@ private:
     }
   }
 
+  void sendConfigReply(bool ok, std::uint16_t txn, const std::string &key, const std::string &value) {
+    std::string safe = value;
+    std::replace(safe.begin(), safe.end(), ':', '_');
+    (void)sendLine(std::string(ok ? "ACK:CFG:" : "ERR:CFG:") + std::to_string(txn) + ":" + key + ":" + safe);
+  }
+
+  static bool parseFiniteDouble(const std::string &text, double *value) {
+    if (value == nullptr || text.empty()) return false;
+    char *end = nullptr;
+    errno = 0;
+    const double parsed = std::strtod(text.c_str(), &end);
+    if (errno != 0 || end == text.c_str() || *end != '\0' || !std::isfinite(parsed)) return false;
+    *value = parsed;
+    return true;
+  }
+
+  static bool parseBool01(const std::string &text, bool *value) {
+    if (value == nullptr) return false;
+    const std::string normalized = upper(trim(text));
+    if (normalized == "1" || normalized == "TRUE" || normalized == "ON") { *value = true; return true; }
+    if (normalized == "0" || normalized == "FALSE" || normalized == "OFF") { *value = false; return true; }
+    return false;
+  }
+
+  void requestDoubleConfig(const std::shared_ptr<rclcpp::AsyncParametersClient> &client,
+                           const std::string &parameter, std::uint16_t txn,
+                           const std::string &key, double requested,
+                           double minimum, double maximum) {
+    if (!std::isfinite(requested) || requested < minimum || requested > maximum) {
+      sendConfigReply(false, txn, key, "OUT_OF_RANGE");
+      return;
+    }
+    if (!client || !client->service_is_ready()) {
+      sendConfigReply(false, txn, key, "PARAM_SERVICE_OFFLINE");
+      return;
+    }
+    bool expected_false = false;
+    if (!config_request_in_flight_.compare_exchange_strong(expected_false, true)) {
+      sendConfigReply(false, txn, key, "BUSY");
+      return;
+    }
+    const std::uint32_t epoch = config_epoch_.fetch_add(1U) + 1U;
+    client->set_parameters_atomically({rclcpp::Parameter(parameter, requested)},
+      [this, client, parameter, txn, key, requested, epoch](auto future) {
+        try {
+          const auto result = future.get();
+          if (!result.successful) {
+            config_request_in_flight_.store(false);
+            sendConfigReply(false, txn, key, result.reason.empty() ? "SET_REJECTED" : result.reason);
+            return;
+          }
+          client->get_parameters({parameter},
+            [this, txn, key, requested, epoch](auto read_future) {
+              try {
+                const auto values = read_future.get();
+                if (epoch != config_epoch_.load() || values.size() != 1U ||
+                    values.front().get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE) {
+                  config_request_in_flight_.store(false);
+                  sendConfigReply(false, txn, key, "READBACK_INVALID");
+                  return;
+                }
+                const double actual = values.front().as_double();
+                const double tolerance = 1.0e-7 * std::max(1.0, std::abs(requested));
+                if (!std::isfinite(actual) || std::abs(actual - requested) > tolerance) {
+                  config_request_in_flight_.store(false);
+                  sendConfigReply(false, txn, key, "READBACK_MISMATCH");
+                  return;
+                }
+                if (key == "DRVSCALE") drive_scale_runtime_ = actual;
+                config_request_in_flight_.store(false);
+                sendConfigReply(true, txn, key, fixed(actual, 4));
+              } catch (const std::exception &e) {
+                config_request_in_flight_.store(false);
+                RCLCPP_ERROR(get_logger(), "HMI config readback %s failed: %s", key.c_str(), e.what());
+                sendConfigReply(false, txn, key, "READBACK_EXCEPTION");
+              }
+            });
+        } catch (const std::exception &e) {
+          config_request_in_flight_.store(false);
+          RCLCPP_ERROR(get_logger(), "HMI config set %s failed: %s", key.c_str(), e.what());
+          sendConfigReply(false, txn, key, "SET_EXCEPTION");
+        }
+      });
+  }
+
+  void requestBoolConfig(const std::shared_ptr<rclcpp::AsyncParametersClient> &client,
+                         const std::string &parameter, std::uint16_t txn,
+                         const std::string &key, bool requested) {
+    if (!client || !client->service_is_ready()) {
+      sendConfigReply(false, txn, key, "PARAM_SERVICE_OFFLINE");
+      return;
+    }
+    bool expected_false = false;
+    if (!config_request_in_flight_.compare_exchange_strong(expected_false, true)) {
+      sendConfigReply(false, txn, key, "BUSY");
+      return;
+    }
+    const std::uint32_t epoch = config_epoch_.fetch_add(1U) + 1U;
+    client->set_parameters_atomically({rclcpp::Parameter(parameter, requested)},
+      [this, client, parameter, txn, key, requested, epoch](auto future) {
+        try {
+          const auto result = future.get();
+          if (!result.successful) {
+            config_request_in_flight_.store(false);
+            sendConfigReply(false, txn, key, result.reason.empty() ? "SET_REJECTED" : result.reason);
+            return;
+          }
+          client->get_parameters({parameter},
+            [this, txn, key, requested, epoch](auto read_future) {
+              try {
+                const auto values = read_future.get();
+                if (epoch != config_epoch_.load() || values.size() != 1U ||
+                    values.front().get_type() != rclcpp::ParameterType::PARAMETER_BOOL) {
+                  config_request_in_flight_.store(false);
+                  sendConfigReply(false, txn, key, "READBACK_INVALID");
+                  return;
+                }
+                const bool actual = values.front().as_bool();
+                if (actual != requested) {
+                  config_request_in_flight_.store(false);
+                  sendConfigReply(false, txn, key, "READBACK_MISMATCH");
+                  return;
+                }
+                if (key == "PERINF") perception_inference_runtime_ = actual;
+                config_request_in_flight_.store(false);
+                sendConfigReply(true, txn, key, actual ? "1" : "0");
+              } catch (const std::exception &e) {
+                config_request_in_flight_.store(false);
+                RCLCPP_ERROR(get_logger(), "HMI bool config readback %s failed: %s", key.c_str(), e.what());
+                sendConfigReply(false, txn, key, "READBACK_EXCEPTION");
+              }
+            });
+        } catch (const std::exception &e) {
+          config_request_in_flight_.store(false);
+          RCLCPP_ERROR(get_logger(), "HMI bool config set %s failed: %s", key.c_str(), e.what());
+          sendConfigReply(false, txn, key, "SET_EXCEPTION");
+        }
+      });
+  }
+
+  void handleConfigCommand(const std::string &line) {
+    constexpr char prefix[] = "CMD:CFG:";
+    const std::string body = line.substr(sizeof(prefix) - 1U);
+    const auto first = body.find(':');
+    const auto second = first == std::string::npos ? std::string::npos : body.find(':', first + 1U);
+    if (first == std::string::npos || second == std::string::npos) return;
+    const std::string txn_text = body.substr(0, first);
+    char *txn_end = nullptr;
+    const unsigned long txn_raw = std::strtoul(txn_text.c_str(), &txn_end, 10);
+    if (txn_end == txn_text.c_str() || *txn_end != '\0' || txn_raw == 0UL || txn_raw > 65535UL) return;
+    const auto txn = static_cast<std::uint16_t>(txn_raw);
+    const std::string key = upper(trim(body.substr(first + 1U, second - first - 1U)));
+    const std::string raw = trim(body.substr(second + 1U));
+
+    if (key == "MODE") {
+      bool manual = false;
+      if (!parseBool01(raw, &manual)) { sendConfigReply(false, txn, key, "INVALID_BOOL"); return; }
+      config_epoch_.fetch_add(1U);
+      setMode(manual ? "MANUAL" : "AUTO", "TFT_CFG", false);
+      sendConfigReply(true, txn, key, mode_ == "MANUAL" ? "1" : "0");
+      return;
+    }
+    if (key == "MANSPD") {
+      double value = 0.0;
+      if (!parseFiniteDouble(raw, &value)) { sendConfigReply(false, txn, key, "INVALID_NUMBER"); return; }
+      const int rounded = static_cast<int>(std::lround(value));
+      if (std::abs(value - rounded) > 1.0e-6 || rounded < speed_min_pct_ || rounded > speed_max_pct_) {
+        sendConfigReply(false, txn, key, "OUT_OF_RANGE");
+        return;
+      }
+      config_epoch_.fetch_add(1U);
+      manual_speed_pct_ = rounded;
+      control_origin_ = "TFT_CFG";
+      publishState();
+      sendConfigReply(true, txn, key, std::to_string(manual_speed_pct_));
+      return;
+    }
+    if (key == "DRVSCALE") {
+      double value = 0.0;
+      if (!parseFiniteDouble(raw, &value)) { sendConfigReply(false, txn, key, "INVALID_NUMBER"); return; }
+      requestDoubleConfig(esc_params_, "drive_odometry_calibration_scale", txn, key, value, 0.20, 5.00);
+      return;
+    }
+    if (key == "PERINF") {
+      bool enabled = false;
+      if (!parseBool01(raw, &enabled)) { sendConfigReply(false, txn, key, "INVALID_BOOL"); return; }
+      requestBoolConfig(perception_params_, "inference_enabled", txn, key, enabled);
+      return;
+    }
+    sendConfigReply(false, txn, key.empty() ? "UNKNOWN" : key, "UNKNOWN_KEY");
+  }
+
+  void syncRuntimeConfig() {
+    if (fd_ < 0 || vesc_maintenance_mode_ || config_request_in_flight_.load()) return;
+    const std::uint32_t generation = config_sync_generation_.fetch_add(1U) + 1U;
+    const std::uint32_t epoch = config_epoch_.load();
+    if (esc_params_ && esc_params_->service_is_ready()) {
+      esc_params_->get_parameters({"drive_odometry_calibration_scale", "drive_motor_pole_pairs"},
+        [this, generation, epoch](auto future) {
+          try {
+            const auto values = future.get();
+            if (generation != config_sync_generation_.load() || epoch != config_epoch_.load() ||
+                config_request_in_flight_.load() || values.size() != 2U) return;
+            if (values[0].get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
+              const double value = values[0].as_double();
+              if (std::isfinite(value)) drive_scale_runtime_ = value;
+            }
+            if (values[1].get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
+              drive_motor_pole_pairs_ = std::clamp(static_cast<int>(values[1].as_int()), 1, 100);
+              motor_mech_rpm_ = motor_erpm_ / static_cast<double>(drive_motor_pole_pairs_);
+            }
+            sendState("CFGDRVSCALE", fixed(drive_scale_runtime_, 4), false);
+          } catch (const std::exception &e) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "ESC config sync failed: %s", e.what());
+          }
+        });
+    }
+    if (perception_params_ && perception_params_->service_is_ready()) {
+      perception_params_->get_parameters({"inference_enabled"},
+        [this, generation, epoch](auto future) {
+          try {
+            const auto values = future.get();
+            if (generation != config_sync_generation_.load() || epoch != config_epoch_.load() ||
+                config_request_in_flight_.load() || values.size() != 1U) return;
+            if (values[0].get_type() == rclcpp::ParameterType::PARAMETER_BOOL) {
+              perception_inference_runtime_ = values[0].as_bool();
+              sendState("CFGPERINF", perception_inference_runtime_ ? "1" : "0", false);
+            }
+          } catch (const std::exception &e) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "Perception config sync failed: %s", e.what());
+          }
+        });
+    }
+  }
+
+  void disableSteeringTest() {
+    steering_test_active_ = false;
+    steering_test_target_deg_ = 0.0;
+    sendState("STEERTEST", "IDLE", true);
+    if (!esc_params_ || !esc_params_->service_is_ready() || steering_test_disable_in_flight_) return;
+    steering_test_disable_in_flight_ = true;
+    esc_params_->set_parameters_atomically({rclcpp::Parameter("raw_commissioning_enabled", false)},
+      [this](auto future) {
+        try {
+          const auto result = future.get();
+          if (!result.successful) {
+            RCLCPP_WARN(get_logger(), "Failed disabling HMI steering commissioning: %s", result.reason.c_str());
+          }
+        } catch (const std::exception &e) {
+          RCLCPP_WARN(get_logger(), "Exception disabling HMI steering commissioning: %s", e.what());
+        }
+        steering_test_disable_in_flight_ = false;
+      });
+  }
+
+  void startSteeringTest(double target_deg) {
+    if (!std::isfinite(target_deg) || std::abs(target_deg) > 30.0 ||
+        !manualMotionAllowed(true) || std::abs(drive_actual_mps_) > 0.02 ||
+        !esc_params_ || !esc_params_->service_is_ready() ||
+        steering_test_enable_in_flight_ || steering_test_disable_in_flight_) {
+      sendState("STEERTEST", "LOCKED", true);
+      return;
+    }
+    drive_ = "STOP";
+    steer_ = "NONE";
+    steering_hmi_target_deg_ = 0.0;
+    steering_test_enable_in_flight_ = true;
+    esc_params_->set_parameters_atomically({rclcpp::Parameter("raw_commissioning_enabled", true)},
+      [this, target_deg](auto future) {
+        try {
+          const auto result = future.get();
+          if (!result.successful) {
+            steering_test_enable_in_flight_ = false;
+            sendState("STEERTEST", "LOCKED", true);
+            RCLCPP_WARN(get_logger(), "HMI steering test enable rejected: %s", result.reason.c_str());
+            return;
+          }
+          esc_params_->get_parameters({"raw_commissioning_enabled"},
+            [this, target_deg](auto read_future) {
+              try {
+                const auto values = read_future.get();
+                const bool enabled = values.size() == 1U &&
+                  values.front().get_type() == rclcpp::ParameterType::PARAMETER_BOOL &&
+                  values.front().as_bool();
+                steering_test_enable_in_flight_ = false;
+                if (!enabled || !manualMotionAllowed(true) || std::abs(drive_actual_mps_) > 0.02) {
+                  sendState("STEERTEST", "LOCKED", true);
+                  disableSteeringTest();
+                  return;
+                }
+                steering_test_target_deg_ = target_deg;
+                steering_test_deadline_ = std::chrono::steady_clock::now() + 2s;
+                steering_test_active_ = true;
+                sendState("STEERTEST", "ACTIVE", true);
+              } catch (const std::exception &e) {
+                steering_test_enable_in_flight_ = false;
+                sendState("STEERTEST", "LOCKED", true);
+                RCLCPP_WARN(get_logger(), "HMI steering test readback failed: %s", e.what());
+                disableSteeringTest();
+              }
+            });
+        } catch (const std::exception &e) {
+          steering_test_enable_in_flight_ = false;
+          sendState("STEERTEST", "LOCKED", true);
+          RCLCPP_WARN(get_logger(), "HMI steering test enable exception: %s", e.what());
+        }
+      });
+    publishState();
+  }
+
+  void publishSteeringTestTick() {
+    if (!steering_test_active_) return;
+    if (!manualMotionAllowed(true) || estop_ || std::abs(drive_actual_mps_) > 0.02 ||
+        std::chrono::steady_clock::now() >= steering_test_deadline_) {
+      disableSteeringTest();
+      return;
+    }
+    std_msgs::msg::Float64MultiArray command;
+    command.data = {0.0, steering_test_target_deg_};
+    commissioning_pub_->publish(command);
+  }
+
   void handleHmiLine(const std::string &line) {
     last_rx_ = std::chrono::steady_clock::now();
     if (line.rfind("VESC:", 0) == 0) { handleVescLine(line); return; }
@@ -1238,15 +1650,14 @@ private:
       RCLCPP_INFO(get_logger(), "HMI %s", line.c_str());
       return;
     }
+    if (line.rfind("CMD:CFG:", 0) == 0) { handleConfigCommand(line); return; }
     if (line.rfind("PAGE:", 0) == 0) {
       const std::string p = upper(trim(line.substr(5)));
-      if (p == "HOME" || p == "CAMERA" || p == "GPS" || p == "ACTUATOR" || p == "SPLASH") page_ = p;
-      publishState();
-      return;
-    }
-    if (line.rfind("CAMTAB:", 0) == 0) {
-      const std::string tab = upper(trim(line.substr(7)));
-      if (tab == "VIEW" || tab == "DETECT" || tab == "DRIVE" || tab == "STATUS") camera_tab_ = tab;
+      const bool token_ok = !p.empty() && p.size() <= 27U &&
+        std::all_of(p.begin(), p.end(), [](unsigned char c) {
+          return (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+        });
+      if (token_ok) page_ = p;
       publishState();
       return;
     }
@@ -1263,16 +1674,6 @@ private:
       return;
     }
     if (line == "CMD:NAV:STOP") { stopNavigation("TFT"); return; }
-    if (line.rfind("CMD:MODE:", 0) == 0) {
-      setMode(upper(trim(line.substr(9))), "TFT", false);
-      return;
-    }
-    if (line.rfind("MODE:", 0) == 0) {
-      const std::string m = upper(trim(line.substr(5)));
-      if (m == "AUTO" || m == "MANUAL") mode_ = m;
-      publishState();
-      return;
-    }
     if (line.rfind("CMD:DRIVE:", 0) == 0) {
       const std::string rest = line.substr(10);
       const auto colon = rest.find(':');
@@ -1282,22 +1683,11 @@ private:
       return;
     }
     if (line.rfind("CMD:STEER:", 0) == 0) {
-      const double value = std::strtod(line.c_str() + 10, nullptr);
-      steering_hmi_target_deg_ = std::clamp(value, -hmi_steer_full_scale_deg_, hmi_steer_full_scale_deg_);
-      steer_ = std::abs(value) < 0.5 ? "CENTER" : (value < 0.0 ? "LEFT" : "RIGHT");
-      control_origin_ = "TFT";
-      publishState();
+      double target = 0.0;
+      if (parseFiniteDouble(trim(line.substr(10)), &target)) startSteeringTest(target);
+      else sendState("STEERTEST", "LOCKED", true);
       return;
     }
-    if (line.rfind("CMD:SPEED:", 0) == 0) {
-      manual_speed_pct_ = std::clamp(std::atoi(line.c_str() + 10), speed_min_pct_, speed_max_pct_);
-      control_origin_ = "TFT";
-      publishState();
-      return;
-    }
-    if (line.rfind("CTRL:DRIVE:", 0) == 0) { drive_ = upper(trim(line.substr(11))); publishState(); return; }
-    if (line.rfind("CTRL:STEER:", 0) == 0) { steer_ = upper(trim(line.substr(11))); publishState(); return; }
-    if (line.rfind("CTRL:SPEED:", 0) == 0) { manual_speed_pct_ = std::clamp(std::atoi(line.c_str() + 11), speed_min_pct_, speed_max_pct_); publishState(); return; }
   }
 
   void handleRequest(const std::string &raw) {
@@ -1305,15 +1695,8 @@ private:
     const std::string req = upper(cleaned);
     if (req.rfind("PAGE:", 0) == 0) {
       const std::string p = req.substr(5);
-      if (p == "HOME" || p == "CAMERA" || p == "GPS" || p == "ACTUATOR") sendLine("GOTO:" + p);
-      return;
-    }
-    if (req.rfind("CAMERA_TAB:", 0) == 0) {
-      const std::string tab = req.substr(11);
-      if (tab == "VIEW" || tab == "DETECT" || tab == "DRIVE" || tab == "STATUS") {
-        camera_tab_ = tab;
-        sendLine("REMOTE:CAMTAB:" + camera_tab_);
-        publishState();
+      if (p == "OVERVIEW" || p == "ESC" || p == "PERCEPTION" || p == "NAVIGATION") {
+        sendLine("GOTO:" + p);
       }
       return;
     }
@@ -1338,7 +1721,6 @@ private:
       const int pct = std::clamp(std::atoi(req.c_str() + 6), speed_min_pct_, speed_max_pct_);
       manual_speed_pct_ = pct;
       control_origin_ = "WEB";
-      sendLine("REMOTE:SPEED:" + std::to_string(pct));
       publishState();
       return;
     }
@@ -1349,7 +1731,10 @@ private:
     const std::string next = requested == "MANUAL" ? "MANUAL" : "AUTO";
     mode_ = next;
     control_origin_ = origin;
-    if (mode_ == "AUTO") { drive_ = "STOP"; steer_ = "NONE"; steering_hmi_target_deg_ = 0.0; }
+    if (mode_ == "AUTO") {
+      drive_ = "STOP"; steer_ = "NONE"; steering_hmi_target_deg_ = 0.0;
+      if (steering_test_active_ || steering_test_enable_in_flight_) disableSteeringTest();
+    }
     if (mirror) sendLine("MODE:" + mode_);
     publishState();
   }
@@ -1369,13 +1754,13 @@ private:
     action = upper(trim(action));
     if (action == "STOP") {
       drive_ = "STOP"; control_origin_ = origin;
-      if (mirror) sendLine("REMOTE:DRIVE:STOP");
+      (void)mirror;
       publishState(); return;
     }
     if (action != "FWD" && action != "REV") return;
     if (!manualMotionAllowed(false)) { reject("drive requires MANUAL + HMI + ESC ACK + E-STOP clear"); return; }
     drive_ = action; control_origin_ = origin; last_rejection_.clear();
-    if (mirror) sendLine("REMOTE:DRIVE:" + action);
+    (void)mirror;
     publishState();
   }
 
@@ -1385,11 +1770,12 @@ private:
     if (!manualMotionAllowed(true)) { reject("steering requires MANUAL + HMI + ESC/encoder ready"); return; }
     steer_ = action; control_origin_ = origin; last_rejection_.clear();
     steering_hmi_target_deg_ = action == "LEFT" ? -hmi_steer_full_scale_deg_ : (action == "RIGHT" ? hmi_steer_full_scale_deg_ : 0.0);
-    if (mirror) sendLine("REMOTE:STEER:" + action);
+    (void)mirror;
     publishState();
   }
 
   void commandTick() {
+    publishSteeringTestTick();
     geometry_msgs::msg::Twist cmd;
     std_msgs::msg::String source;
     const bool allowed = manualMotionAllowed(false);
@@ -1415,36 +1801,69 @@ private:
     const auto now_steady = std::chrono::steady_clock::now();
     const bool force = now_steady - last_forced_tx_ >= std::chrono::duration<double>(heartbeat_sec_);
     if (force) last_forced_tx_ = now_steady;
+
     const bool manual_ready = esc_ready_ && esc_feedback_ && !estop_;
     const bool auto_ready = motion_ready_ && nav2_ready_ && esc_ready_ && !estop_;
     const bool ready = mode_ == "MANUAL" ? manual_ready : auto_ready;
+    const double sign = invert_hmi_steering_ ? -1.0 : 1.0;
+    const std::string lane_compact = jsonString(lane_state_text_, "state").value_or(
+      lane_state_text_.empty() ? "UNKNOWN" : lane_state_text_.substr(0, 19));
+    const std::string localization_compact = kvString(localization_state_text_, "mode").value_or(
+      localization_state_text_.empty() ? "UNKNOWN" : localization_state_text_.substr(0, 23));
+    const bool ekf_local_fresh = kvString(ekf_local_status_text_, "fresh").value_or("false") == "true";
+    const bool ekf_global_fresh = kvString(ekf_global_status_text_, "fresh").value_or("false") == "true";
+    const std::string gnss_source = kvString(gnss_status_text_, "src").value_or(gnss_ready_ ? "GNSS" : "OFFLINE");
+
     sendState("SYS", estop_ ? "FAULT" : (ready ? "READY" : "NOT READY"), force);
     sendState("MODE", mode_, force);
     sendState("STATE", estop_ ? "FAULT" : (std::abs(drive_actual_mps_) > 0.02 ? "RUNNING" : "STOPPED"), force);
+    sendState("ESTOP", estop_ ? "1" : "0", force);
+    sendState("VESC_LINK", vesc_connected_state_ ? "1" : "0", force);
+    sendState("ESC", (esc_ready_ && esc_feedback_) ? "1" : "0", force);
+    sendState("ENC", (steer_connected_ && esc_feedback_) ? "1" : "0", force);
+    sendState("MOTION", motion_ready_ ? "1" : "0", force);
+    sendState("NAV2", nav2_ready_ ? "1" : "0", force);
+
     sendState("SPD", fixed(std::abs(drive_actual_mps_) * 3.6, 2), force);
-    sendState("HEAD", fixed(heading_deg_, 1), force);
+    sendState("DRIVE_TGT", fixed(drive_target_mps_, 3), force);
+    sendState("DRIVE_ACT", fixed(drive_actual_mps_, 3), force);
+    sendState("ERPM", fixed(motor_erpm_, 1), force);
+    sendState("RPM", fixed(motor_mech_rpm_, 1), force);
+    sendState("STEER_TARGET", fixed(sign * steering_target_rad_ * 180.0 / kPi, 2), force);
+    sendState("STEER_ACTUAL", fixed(sign * steering_actual_rad_ * 180.0 / kPi, 2), force);
+    sendState("STEER_ERR", fixed(sign * (steering_target_rad_ - steering_actual_rad_) * 180.0 / kPi, 2), force);
+
     sendState("GPS", gnss_ready_ ? "1" : "0", force);
     sendState("FIX", std::to_string(fix_type_), force);
     sendState("LAT", fixed(latitude_, 7), force);
     sendState("LON", fixed(longitude_, 7), force);
     sendState("SAT", std::to_string(satellites_), force);
     sendState("HDOP", fixed(hdop_, 2), force);
+    sendState("HACC", fixed(hacc_m_, 2), force);
+    sendState("GAGE", fixed(gnss_age_sec_, 3), force);
+    sendState("HEAD", fixed(heading_deg_, 1), force);
     sendState("IMU", imu_ready_ ? "1" : "0", force);
+    sendState("GYROZ", fixed(gyro_z_rps_, 3), force);
+    sendState("MAG", neo3_ist_connected_state_ ? "1" : "0", force);
+    sendState("GNSSSTATUS", gnss_source.substr(0, 19), force);
+    sendState("IMUSTATUS", imu_ready_ ? "READY" : "OFFLINE", force);
+    sendState("EKFLOCAL", ekf_local_fresh ? "READY" : "STALE", force);
+    sendState("EKFGLOBAL", ekf_global_fresh ? "READY" : "STALE", force);
+    sendState("LOCSTATE", localization_compact.substr(0, 23), force);
+
     sendState("CAM", camera_ready_ ? "1" : "0", force);
     sendState("PER", perception_ready_ ? "1" : "0", force);
     sendState("FPS", fixed(camera_fps_, 1), force);
-    sendState("OBJ", nearest_object_, force);
+    sendState("OBJ", nearest_object_.substr(0, 23), force);
     sendState("DIST", fixed(nearest_distance_m_, 2), force);
     sendState("CONF", fixed(nearest_conf_pct_, 0), force);
     sendState("DRV", (drivable_valid_ && !perception_emergency_) ? "1" : "0", force);
     sendState("OBS", (perception_emergency_ || obstacle_count_ > 0) ? "1" : "0", force);
-    const double sign = invert_hmi_steering_ ? -1.0 : 1.0;
-    sendState("STEER_TARGET", fixed(sign * steering_target_rad_ * 180.0 / kPi, 2), force);
-    sendState("STEER_ACTUAL", fixed(sign * steering_actual_rad_ * 180.0 / kPi, 2), force);
-    sendState("RPM", fixed(motor_rpm_, 1), force);
-    sendState("ESC", (esc_ready_ && esc_feedback_) ? "1" : "0", force);
-    sendState("ENC", (steer_connected_ && esc_feedback_) ? "1" : "0", force);
+    sendState("LANE", lane_compact.substr(0, 19), force);
+
     sendState("MANUAL_SPEED", std::to_string(manual_speed_pct_), force);
+    sendState("CFGDRVSCALE", fixed(drive_scale_runtime_, 4), force);
+    sendState("CFGPERINF", perception_inference_runtime_ ? "1" : "0", force);
     mirrorWaypointState(force);
   }
 
@@ -1457,13 +1876,12 @@ private:
     std_msgs::msg::String s;
     s.data = page_; page_pub_->publish(s);
     s.data = mode_; mode_pub_->publish(s);
-    s.data = camera_tab_; camera_tab_pub_->publish(s);
     std::ostringstream json;
     json << "{\"connected\":" << (connected_ ? "true" : "false")
          << ",\"page\":\"" << page_ << "\",\"mode\":\"" << mode_
          << "\",\"drive\":\"" << drive_ << "\",\"steer\":\"" << steer_
          << "\",\"speed_pct\":" << manual_speed_pct_
-         << ",\"origin\":\"" << control_origin_ << "\",\"camera_tab\":\"" << camera_tab_
+         << ",\"origin\":\"" << control_origin_
          << "\",\"nav_state\":\"" << navigation_state_ << "\",\"target\":\"" << active_target_
          << "\",\"rejection\":\"" << last_rejection_ << "\"}";
     s.data = json.str(); manual_state_pub_->publish(s);
@@ -1472,7 +1890,7 @@ private:
            << "\",\"device\":\"" << (active_serial_device_.empty() ? serial_device_ : active_serial_device_)
            << "\",\"selector\":\"" << serial_device_ << "\",\"baud\":" << serial_baud_
            << ",\"mode\":\"" << mode_ << "\",\"page\":\"" << page_
-           << "\",\"camera_tab\":\"" << camera_tab_ << "\",\"navigation\":\"" << navigation_state_
+           << "\",\"navigation\":\"" << navigation_state_
            << "\",\"target\":\"" << active_target_ << "\"}";
     s.data = status.str(); status_pub_->publish(s);
     publishWaypointState();
@@ -1498,7 +1916,7 @@ private:
   bool connected_{false};
   std::string rx_, page_{"SPLASH"}, mode_{"AUTO"}, drive_{"STOP"}, steer_{"NONE"}, control_origin_{"NONE"}, last_rejection_;
   std::string vesc_desired_mode_{"RUNTIME"};
-  std::string camera_tab_{"VIEW"}, navigation_state_{"IDLE"}, active_target_{"NONE"};
+  std::string navigation_state_{"IDLE"}, active_target_{"NONE"};
   std::string navigation_origin_{"NONE"}, last_goal_state_{"IDLE"};
   double steering_hmi_target_deg_{0.0};
   std::unordered_map<std::string, std::string> tx_cache_;
@@ -1510,8 +1928,14 @@ private:
 
   bool gnss_ready_{false}, imu_ready_{false}, camera_ready_{false}, perception_ready_{false}, perception_emergency_{false};
   bool esc_ready_{false}, esc_feedback_{false}, steer_connected_{false}, motion_ready_{false}, nav2_ready_{false}, estop_{false};
-  double latitude_{0.0}, longitude_{0.0}, hdop_{0.0}, heading_deg_{0.0}, drive_actual_mps_{0.0};
-  double steering_target_rad_{0.0}, steering_actual_rad_{0.0}, motor_rpm_{0.0};
+  double latitude_{0.0}, longitude_{0.0}, hdop_{0.0}, hacc_m_{999.0}, gnss_age_sec_{99.0};
+  double heading_deg_{0.0}, gyro_z_rps_{0.0}, drive_target_mps_{0.0}, drive_actual_mps_{0.0};
+  double steering_target_rad_{0.0}, steering_actual_rad_{0.0}, motor_erpm_{0.0}, motor_mech_rpm_{0.0};
+  int drive_motor_pole_pairs_{15};
+  double drive_scale_runtime_{1.0};
+  bool perception_inference_runtime_{false};
+  std::string localization_state_text_{"UNKNOWN"}, gnss_status_text_{"UNKNOWN"}, imu_status_text_{"UNKNOWN"};
+  std::string ekf_local_status_text_{"UNKNOWN"}, ekf_global_status_text_{"UNKNOWN"}, lane_state_text_{"UNKNOWN"};
   int satellites_{0}, fix_type_{0}, obstacle_count_{0};
   bool drivable_valid_{false};
   bool neo3_gnss_connected_state_{false}, neo3_gnss_connected_initialized_{false};
@@ -1521,15 +1945,23 @@ private:
   uint64_t vesc_parse_errors_{0};
   bool vesc_connected_state_{false}, vesc_connected_initialized_{false};
   std::chrono::steady_clock::time_point last_neo3_gnss_time_{}, last_neo3_mag_time_{};
+  // Konversi epoch millis F411 ke ROS time memakai offset minimum yang diamati;
+  // ini mempertahankan waktu pengukuran alih-alih waktu paket selesai diparse.
+  bool mcu_clock_initialized_{false};
+  std::uint32_t mcu_last_raw_ms_{0};
+  std::uint64_t mcu_unwrapped_ms_{0};
+  std::int64_t mcu_clock_offset_ns_{0};
+  std::int64_t last_mcu_stamp_ns_{0};
   std::chrono::steady_clock::time_point last_vesc_line_time_{}, last_vesc_rx_time_{};
   std::string nearest_object_{"NONE"};
   double nearest_distance_m_{0.0}, nearest_conf_pct_{0.0}, camera_fps_{0.0};
 
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr connected_pub_;
-  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr page_pub_, mode_pub_, camera_tab_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr page_pub_, mode_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr waypoints_pub_, navigation_state_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr manual_state_pub_, status_pub_, source_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr commissioning_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr goal_pub_;
   rclcpp::Publisher<sensor_msgs::msg::NavSatFix>::SharedPtr neo3_fix_raw_pub_, neo3_fix_pub_;
   rclcpp::Publisher<geometry_msgs::msg::TwistWithCovarianceStamped>::SharedPtr neo3_vel_pub_;
@@ -1538,7 +1970,8 @@ private:
   rclcpp::Publisher<std_msgs::msg::UInt8MultiArray>::SharedPtr vesc_rx_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr vesc_status_pub_, vesc_error_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr vesc_connected_pub_;
-  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr neo3_gnss_connected_pub_, neo3_ist_connected_pub_, neo3_safety_switch_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr neo3_gnss_connected_pub_, neo3_ist_connected_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr neo3_safety_switch_pub_, neo3_estop_pub_;
   rclcpp::Publisher<sensor_msgs::msg::MagneticField>::SharedPtr neo3_mag_pub_;
   rclcpp::Client<action_msgs::srv::CancelGoal>::SharedPtr cancel_nav_client_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr request_sub_, neo3_command_sub_, esc_status_sub_, obstacle_sub_, drivable_sub_;
@@ -1555,7 +1988,14 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   std::vector<rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr> bool_subs_;
   std::vector<rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr> float_subs_;
-  rclcpp::TimerBase::SharedPtr reconnect_timer_, serial_timer_, telemetry_timer_, heartbeat_timer_, command_timer_;
+  std::vector<rclcpp::Subscription<std_msgs::msg::String>::SharedPtr> string_subs_;
+  std::shared_ptr<rclcpp::AsyncParametersClient> perception_params_, esc_params_;
+  std::atomic_bool config_request_in_flight_{false};
+  bool steering_test_active_{false}, steering_test_enable_in_flight_{false}, steering_test_disable_in_flight_{false};
+  double steering_test_target_deg_{0.0};
+  std::chrono::steady_clock::time_point steering_test_deadline_{};
+  std::atomic<std::uint32_t> config_epoch_{0U}, config_sync_generation_{0U};
+  rclcpp::TimerBase::SharedPtr reconnect_timer_, serial_timer_, telemetry_timer_, heartbeat_timer_, command_timer_, config_sync_timer_;
 };
 
 int main(int argc, char **argv) {

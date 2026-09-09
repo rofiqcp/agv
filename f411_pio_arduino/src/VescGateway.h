@@ -8,6 +8,10 @@ class VescGateway {
   void poll();
   bool handleHostCommand(const char *command);
   bool maintenanceMode() const { return owner_ == Owner::MAINTENANCE; }
+  // Safety input NEO3 memiliki jalur langsung F411 -> F103, tidak bergantung
+  // scheduler ROS. Selama aktif, hold E-stop diperbarui periodik.
+  void setSafetyStop(bool active);
+  bool safetyStopActive() const { return safety_stop_active_; }
 
  private:
   enum class Owner : uint8_t { RUNTIME = 0, MAINTENANCE = 1 };
@@ -20,6 +24,10 @@ class VescGateway {
   static constexpr uint32_t kRuntimeNoValidFrameRecoverMs = 1200;
   static constexpr uint32_t kRuntimeRecoverCooldownMs = 1200;
   static constexpr uint8_t kRuntimeRecoverBeforeReset = 4;
+  static constexpr uint8_t kCommMotorEstop = 159U;  // VESC 6.00 COMM_MOTOR_ESTOP
+  static constexpr uint16_t kSafetyRefreshHoldMs = 250U;
+  static constexpr uint16_t kSafetyReleaseHoldMs = 600U;
+  static constexpr uint32_t kSafetyRefreshPeriodMs = 50U;
 
   Uart uart_{PB7, PB6};  // RX=PB7, TX=PB6 (USART1 AF7)
   Owner owner_{Owner::RUNTIME};
@@ -40,6 +48,8 @@ class VescGateway {
   uint32_t uart_recovery_count_{0};
   uint8_t recovery_streak_{0};
   bool ever_valid_frame_{false};
+  bool safety_stop_active_{false};
+  uint32_t last_safety_stop_ms_{0};
 
   static int hexNibble(char c);
   static uint16_t crc16(const uint8_t *data, size_t len);
@@ -51,4 +61,5 @@ class VescGateway {
   void publishStatus(bool force = false);
   void recoverRuntimeUart(uint32_t now);
   void recoveryTick(uint32_t now);
+  bool sendSafetyStop(uint16_t hold_ms);
 };

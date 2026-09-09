@@ -12,7 +12,7 @@ SKIP_SUFFIXES = (".pyc", ".o", ".so", ".a", ".png", ".jpg", ".pt", ".engine")
 SCAN_ROOTS = [
     ROOT / "src", ROOT / "tools", ROOT / "models", ROOT / "scripts",
     ROOT / "f411_pio" / "scripts", ROOT / "f411_pio_arduino" / "scripts",
-    ROOT / ".playwright", ROOT / "README.md",
+    ROOT / "README.md",
 ]
 
 

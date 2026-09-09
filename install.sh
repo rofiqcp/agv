@@ -3,7 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 export AGV_ROOT="${AGV_ROOT:-$ROOT}"
-BUILD_PERCENT=80
+BUILD_PERCENT=50
+MEMORY_PERCENT=50
 DO_BUILD=1
 WITH_MODEL=0
 WITH_BROWSER_QA=0
@@ -14,7 +15,8 @@ Usage: ./install.sh [options]
   --no-build           install dependency + environment saja
   --with-model         download/verifikasi models/yolopv2.pt resmi
   --with-browser-qa    install Playwright Chromium untuk QA ROS Web
-  --build-percent N    batas CPU build, 10..100 (default 80)
+  --build-percent N    batas CPU build, 10..100 (default 50)
+  --memory-percent N   batas RAM build, 10..90 (default 50)
   --help               tampilkan bantuan
 EOF
 }
@@ -25,6 +27,7 @@ while (($#)); do
     --with-model) WITH_MODEL=1 ;;
     --with-browser-qa) WITH_BROWSER_QA=1 ;;
     --build-percent) shift; BUILD_PERCENT="${1:-}" ;;
+    --memory-percent) shift; MEMORY_PERCENT="${1:-}" ;;
     --help|-h) usage; exit 0 ;;
     *) echo "[ERROR] opsi tidak dikenal: $1" >&2; usage; exit 2 ;;
   esac
@@ -33,6 +36,10 @@ done
 
 if ! [[ "$BUILD_PERCENT" =~ ^[0-9]+$ ]] || ((BUILD_PERCENT < 10 || BUILD_PERCENT > 100)); then
   echo "[ERROR] --build-percent wajib 10..100" >&2
+  exit 2
+fi
+if ! [[ "$MEMORY_PERCENT" =~ ^[0-9]+$ ]] || ((MEMORY_PERCENT < 10 || MEMORY_PERCENT > 90)); then
+  echo "[ERROR] --memory-percent wajib 10..90" >&2
   exit 2
 fi
 
@@ -140,7 +147,7 @@ end="# <<< AGV WORKSPACE <<<"
 text=path.read_text() if path.exists() else ""
 while start in text and end in text:
     a=text.index(start); b=text.index(end,a)+len(end)
-    text=(text[:a].rstrip()+"\n"+text[b:].lstrip()).strip()+"\n"
+    text=text[:a].rstrip()+"\n"+text[b:].lstrip()
 block='''# >>> AGV WORKSPACE >>>
 export AGV_ROOT="${AGV_ROOT:-$HOME/agv}"
 if [ -f "$AGV_ROOT/scripts/agv_env.sh" ]; then
@@ -173,16 +180,31 @@ log "Menjalankan portability/source preflight"
 
 if ((DO_BUILD)); then
   cores="$(nproc)"
-  workers=$(( cores * BUILD_PERCENT / 100 ))
-  ((workers < 1)) && workers=1
-  ((workers > cores)) && workers="$cores"
-  cpu_last=$((workers - 1))
-  log "Build ROS: $workers/$cores core (~$((workers * 100 / cores))%, limit ${BUILD_PERCENT}%)"
-  export CMAKE_BUILD_PARALLEL_LEVEL="$workers"
-  export MAKEFLAGS="-j$workers"
-  taskset -c "0-$cpu_last" colcon build --base-paths "$ROOT/src" \
-    --symlink-install --executor sequential --allow-overriding perception \
-    --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo
+  allowed_cores=$(( cores * BUILD_PERCENT / 100 ))
+  ((allowed_cores < 1)) && allowed_cores=1
+  ((allowed_cores > cores)) && allowed_cores="$cores"
+  cpu_last=$((allowed_cores - 1))
+  cpu_quota=$((allowed_cores * 100))
+  mem_kb="$(awk '/MemTotal/{print $2}' /proc/meminfo)"
+  mem_bytes=$(( mem_kb * 1024 * MEMORY_PERCENT / 100 ))
+  # Translation unit GUI/LibTorch cukup berat; j1 menjaga peak RSS stabil.
+  export CMAKE_BUILD_PARALLEL_LEVEL=1
+  export MAKEFLAGS="-j1"
+  log "Build ROS: CPU <=${BUILD_PERCENT}% (core 0-$cpu_last), RAM <=${MEMORY_PERCENT}%, Release, j1"
+  build_cmd=(taskset -c "0-$cpu_last" colcon build --base-paths "$ROOT/src"
+    --symlink-install --executor sequential --allow-overriding perception
+    --cmake-args -DCMAKE_BUILD_TYPE=Release)
+  export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
+  if command -v systemd-run >/dev/null 2>&1 && systemctl --user is-system-running >/dev/null 2>&1; then
+    systemd-run --user --scope --quiet \
+      -p "CPUQuota=${cpu_quota}%" \
+      -p "MemoryMax=$mem_bytes" \
+      -p "MemorySwapMax=1200M" \
+      "${build_cmd[@]}"
+  else
+    "${build_cmd[@]}"
+  fi
   # shellcheck disable=SC1091
   source "$ROOT/install/setup.bash"
 fi

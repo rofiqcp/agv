@@ -36,6 +36,7 @@ def generate_launch_description():
         DeclareLaunchArgument("use_sim_time", default_value="false"),
         DeclareLaunchArgument("start_gateway", default_value="true"),
         DeclareLaunchArgument("hmi_port", default_value="auto"),
+        DeclareLaunchArgument("publish_stm32_gnss", default_value="true"),
         DeclareLaunchArgument("start_teleop", default_value="true"),
         DeclareLaunchArgument("start_ackermann", default_value="true"),
         DeclareLaunchArgument("start_vesc_tool_bridge", default_value="true"),
@@ -56,6 +57,7 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("start_gateway")),
         launch_arguments={
             "serial_device": LaunchConfiguration("hmi_port"),
+            "publish_stm32_gnss": LaunchConfiguration("publish_stm32_gnss"),
             "use_sim_time": LaunchConfiguration("use_sim_time"),
         }.items(),
     )
