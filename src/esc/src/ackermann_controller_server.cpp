@@ -1150,7 +1150,7 @@ private:
 
     // F411 owns the physical USB CDC. Ackermann exchanges the exact existing
     // 14-byte actuator frames through ROS byte arrays; direct serial remains fallback.
-    stm32_tx_pub_ = create_publisher<std_msgs::msg::UInt8MultiArray>(stm32_tx_topic_, rclcpp::QoS(rclcpp::KeepLast(8)).reliable());
+    stm32_tx_pub_ = create_publisher<std_msgs::msg::UInt8MultiArray>(stm32_tx_topic_, rclcpp::QoS(rclcpp::KeepLast(1)).reliable());
     stm32_rx_sub_ = create_subscription<std_msgs::msg::UInt8MultiArray>(
       stm32_rx_topic_, rclcpp::QoS(rclcpp::KeepLast(16)).reliable(),
       [this](std_msgs::msg::UInt8MultiArray::ConstSharedPtr msg) {

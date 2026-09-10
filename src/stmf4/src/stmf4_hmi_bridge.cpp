@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cmath>
 #include <cstring>
+#include <deque>
 #include <fcntl.h>
 #include <filesystem>
 #include <fstream>
@@ -370,7 +371,7 @@ private:
           RCLCPP_WARN(get_logger(), "Rejected /neo3/command: %s", msg->data.c_str());
         }
       });
-    vesc_runtime_tx_sub_ = create_subscription<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/runtime_tx", rclcpp::QoS(rclcpp::KeepLast(8)).reliable(),
+    vesc_runtime_tx_sub_ = create_subscription<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/runtime_tx", rclcpp::QoS(rclcpp::KeepLast(1)).reliable(),
       [this](std_msgs::msg::UInt8MultiArray::ConstSharedPtr msg) { (void)sendVescBytes(msg->data, 'R'); });
     vesc_maintenance_tx_sub_ = create_subscription<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/maintenance_tx", rclcpp::QoS(100).reliable(),
       [this](std_msgs::msg::UInt8MultiArray::ConstSharedPtr msg) { (void)sendVescBytes(msg->data, 'M'); });
@@ -683,7 +684,8 @@ private:
         const std::string name = upper(entry.path().filename().string());
         if (name.find("STMICROELECTRONICS") == std::string::npos ||
             name.find("F411") == std::string::npos ||
-            name.find("CDC") == std::string::npos) continue;
+            name.find("CDC") == std::string::npos ||
+            name.find("BOOT_CDC") != std::string::npos) continue;
         candidates.push_back(entry.path().string());
       }
     }
@@ -825,21 +827,56 @@ private:
   void serialTick() {
     if (fd_ < 0) return;
     char buf[256];
-    while (true) {
-      const ssize_t n = ::read(fd_, buf, sizeof(buf));
+    // Bound one executor callback. At 1 kHz, 2 KiB/tick is far above the
+    // normal CDC stream but prevents a sensor backlog from monopolizing the
+    // single-threaded ROS executor and delaying the 50-Hz actuator callback.
+    size_t read_budget = 2048U;
+    while (read_budget > 0U) {
+      const size_t want = std::min(read_budget, sizeof(buf));
+      const ssize_t n = ::read(fd_, buf, want);
       if (n > 0) {
+        read_budget -= static_cast<size_t>(n);
         rx_.append(buf, static_cast<size_t>(n));
-        if (rx_.size() > 4096) rx_.erase(0, rx_.size() - 2048);
+        if (rx_.size() > 8192U) {
+          ++serial_rx_backlog_drops_;
+          rx_.erase(0, rx_.size() - 4096U);
+        }
       } else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
         closeSerial(std::strerror(errno));
         return;
       } else break;
     }
-    size_t pos = 0;
+
+    size_t pos = 0U;
     while ((pos = rx_.find('\n')) != std::string::npos) {
       std::string line = trim(rx_.substr(0, pos));
-      rx_.erase(0, pos + 1);
-      if (!line.empty()) handleHmiLine(line);
+      rx_.erase(0, pos + 1U);
+      if (line.empty()) continue;
+      // P1/P0 lines bypass the best-effort queue. In particular every VESC:RX
+      // packet is published before any queued GNSS/MAG/HMI text processing.
+      const bool urgent = line.rfind("VESC:", 0) == 0 ||
+                          line.rfind("SENS:SW:", 0) == 0 ||
+                          line.rfind("CMD:DRIVE:", 0) == 0 ||
+                          line.rfind("CMD:STEER:", 0) == 0 ||
+                          line == "CMD:NAV:STOP";
+      if (urgent) {
+        handleHmiLine(line);
+      } else {
+        if (best_effort_lines_.size() >= 128U) {
+          best_effort_lines_.pop_front();
+          ++serial_best_effort_drops_;
+        }
+        best_effort_lines_.push_back(std::move(line));
+      }
+    }
+
+    // P3 budget: enough for >8k lines/s at the 1-kHz poll rate, but bounded so
+    // navigation/HMI parsing can never create a long control scheduling gap.
+    size_t line_budget = 2U;
+    while (line_budget-- > 0U && !best_effort_lines_.empty()) {
+      std::string line = std::move(best_effort_lines_.front());
+      best_effort_lines_.pop_front();
+      handleHmiLine(line);
     }
   }
 
@@ -1817,8 +1854,12 @@ private:
   void telemetryTick() {
     if (fd_ < 0 || vesc_maintenance_mode_) return;
     const auto now_steady = std::chrono::steady_clock::now();
-    const bool force = now_steady - last_forced_tx_ >= std::chrono::duration<double>(heartbeat_sec_);
-    if (force) last_forced_tx_ = now_steady;
+    (void)now_steady;
+    // Changed-only state transmission. openSerial() clears tx_cache_, so a CDC
+    // reconnect already triggers a complete state resync. Periodically forcing
+    // all ~40 fields at once created a deterministic burst that could delay
+    // runtime_tx in the single-threaded executor.
+    const bool force = false;
 
     const bool manual_ready = esc_ready_ && esc_feedback_ && !estop_;
     const bool auto_ready = motion_ready_ && nav2_ready_ && esc_ready_ && !estop_;
@@ -1937,6 +1978,8 @@ private:
   std::mutex tx_mutex_;
   bool connected_{false};
   std::string rx_, page_{"SPLASH"}, mode_{"AUTO"}, drive_{"STOP"}, steer_{"NONE"}, control_origin_{"NONE"}, last_rejection_;
+  std::deque<std::string> best_effort_lines_;
+  std::uint64_t serial_rx_backlog_drops_{0}, serial_best_effort_drops_{0};
   std::string vesc_desired_mode_{"RUNTIME"};
   std::string navigation_state_{"IDLE"}, active_target_{"NONE"};
   std::string navigation_origin_{"NONE"}, last_goal_state_{"IDLE"};

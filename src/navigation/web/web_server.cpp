@@ -476,6 +476,28 @@ bool baselineYamlValue(const QString &fileKey, const QString &yamlPath, QJsonVal
   }
 }
 
+bool currentYamlValue(const QString &fileKey, const QString &yamlPath, QJsonValue *value, QString *message = nullptr) {
+  const QMap<QString, QString> candidates = configCandidates();
+  if (!candidates.contains(fileKey) || yamlPath.trimmed().isEmpty()) { if (message) *message = "file_key/path YAML tidak diizinkan"; return false; }
+  try {
+    YAML::Node root = YAML::LoadFile(candidates.value(fileKey).toStdString());
+    const QJsonValue actual = yamlPathValue(root, yamlPath.split('.', Qt::SkipEmptyParts));
+    if (actual.isUndefined() || actual.isNull()) { if (message) *message = "Path YAML tidak ditemukan: " + yamlPath; return false; }
+    if (value) *value = actual;
+    if (message) *message = "Nilai YAML ditemukan";
+    return true;
+  } catch (const std::exception &e) { if (message) *message = QString::fromUtf8(e.what()); return false; }
+}
+
+bool compatibleConfigType(const QJsonValue &current, const QJsonValue &candidate) {
+  if (current.isDouble()) return candidate.isDouble();
+  if (current.isBool()) return candidate.isBool();
+  if (current.isString()) return candidate.isString();
+  if (current.isArray()) return candidate.isArray();
+  if (current.isObject()) return candidate.isObject();
+  return !candidate.isUndefined();
+}
+
 bool setYamlValueAtomic(const QString &fileKey, const QString &yamlPath, const QJsonValue &input,
                         QString *message, QJsonValue *savedValue = nullptr) {
   const QMap<QString, QString> candidates = configCandidates();
@@ -2391,6 +2413,14 @@ class LocalHttpServer : public QObject {
     }
     if (request.method == "GET" && request.path == "/api/experiments") return sendJson(socket, 200, experimentCatalogJson());
     if (request.method == "GET" && request.path == "/api/config") return sendJson(socket, 200, loadConfigSnapshot());
+    if (request.method == "GET" && request.path == "/api/config/state") {
+      const QJsonObject snap = loadConfigSnapshot();
+      return sendJson(socket, 200, QJsonObject{{"ok", true}, {"read_only", bridge_->readOnly()}, {"model", "BASELINE/YAML/DRAFT/RUNTIME"}, {"files", snap.value("files")}, {"runtime_config_apply", bridge_->snapshot().value("runtime_config_apply")}, {"at_ms", nowMs()}});
+    }
+    if (request.method == "GET" && request.path == "/api/config/schema") {
+      const QJsonObject snap = loadConfigSnapshot();
+      return sendJson(socket, 200, QJsonObject{{"ok", true}, {"version", 1}, {"files", snap.value("files")}, {"capabilities", QJsonObject{{"validate", true}, {"atomic_batch_apply", true}, {"transaction_backup", true}, {"rollback_on_failure", true}, {"runtime_readback", true}, {"revert", true}}}, {"at_ms", nowMs()}});
+    }
     if (request.method == "GET" && request.path == "/api/imu/calibration/status") return sendJson(socket, 200, imuCalibrationStatus());
     if (request.method == "GET" && request.path == "/api/experiment/record/status") {
       return sendJson(socket, 200, recordingStatus());
@@ -2454,6 +2484,49 @@ class LocalHttpServer : public QObject {
       QJsonObject result;
       ok = savePerceptionEvidence(json.value("label").toString(), &result, &message);
       return sendJson(socket, ok ? 200 : 409, QJsonObject{{"ok", ok}, {"message", message}, {"evidence", result}, {"at_ms", nowMs()}});
+    } else if (request.path == "/api/config/validate") {
+      const QJsonArray items = json.value("items").toArray();
+      if (items.isEmpty() || items.size() > 64) return sendJson(socket, 400, QJsonObject{{"ok", false}, {"valid", false}, {"message", "items harus berisi 1..64 parameter"}});
+      QJsonArray checked; QSet<QString> seen;
+      for (const QJsonValue &v : items) {
+        if (!v.isObject()) return sendJson(socket, 400, QJsonObject{{"ok", false}, {"valid", false}, {"message", "item harus object"}});
+        const QJsonObject item=v.toObject(); const QString fk=item.value("file_key").toString(), yp=item.value("path").toString(), id=fk+":"+yp;
+        if (fk.isEmpty() || yp.isEmpty() || seen.contains(id)) {
+          return sendJson(socket, 400, QJsonObject{{"ok", false}, {"valid", false}, {"message", "file_key/path kosong atau duplikat"}});
+        }
+        seen.insert(id);
+        QJsonValue current; QString why; if(!currentYamlValue(fk,yp,&current,&why)) return sendJson(socket,409,QJsonObject{{"ok",false},{"valid",false},{"message",why},{"file_key",fk},{"path",yp}});
+        const QJsonValue candidate=item.value("value"); if(candidate.isUndefined()||!compatibleConfigType(current,candidate)) return sendJson(socket,409,QJsonObject{{"ok",false},{"valid",false},{"message","Tipe draft tidak kompatibel dengan YAML"},{"file_key",fk},{"path",yp}});
+        checked.append(QJsonObject{{"file_key",fk},{"path",yp},{"current_value",current},{"value",candidate}});
+      }
+      return sendJson(socket,200,QJsonObject{{"ok",true},{"valid",true},{"message",QStringLiteral("Validate OK; belum ada YAML yang ditulis")},{"items",checked},{"at_ms",nowMs()}});
+    } else if (request.path == "/api/config/apply" || request.path == "/api/config/revert") {
+      if (bridge_->readOnly()) return sendJson(socket,403,QJsonObject{{"ok",false},{"message","Web GUI read-only; transactional apply ditolak"}});
+      const bool useBaseline=request.path.endsWith("/revert"); const QJsonArray items=json.value("items").toArray();
+      if(items.isEmpty()||items.size()>64) return sendJson(socket,400,QJsonObject{{"ok",false},{"message","items harus berisi 1..64 parameter"}});
+      const QMap<QString,QString> candidates=configCandidates(); QSet<QString> seen; QMap<QString,QString> sourceFiles; QJsonArray resolved;
+      for(const QJsonValue &v:items){
+        if(!v.isObject()) return sendJson(socket,400,QJsonObject{{"ok",false},{"message","item harus object"}});
+        const QJsonObject item=v.toObject(); const QString fk=item.value("file_key").toString(),yp=item.value("path").toString(),id=fk+":"+yp;
+        if (!candidates.contains(fk) || yp.isEmpty() || seen.contains(id)) {
+          return sendJson(socket, 400, QJsonObject{{"ok", false}, {"message", "file_key/path tidak valid atau duplikat"}});
+        }
+        seen.insert(id);
+        QJsonValue current; QString why; if(!currentYamlValue(fk,yp,&current,&why)) return sendJson(socket,409,QJsonObject{{"ok",false},{"message",why},{"file_key",fk},{"path",yp}});
+        QJsonValue target=item.value("value"); if(useBaseline){if(!baselineYamlValue(fk,yp,&target,&why))return sendJson(socket,409,QJsonObject{{"ok",false},{"message",why},{"file_key",fk},{"path",yp}});}
+        if(target.isUndefined()||!compatibleConfigType(current,target)) return sendJson(socket,409,QJsonObject{{"ok",false},{"message","Tipe target tidak kompatibel dengan YAML"},{"file_key",fk},{"path",yp}});
+        sourceFiles[fk]=candidates.value(fk); resolved.append(QJsonObject{{"file_key",fk},{"path",yp},{"value",target},{"old_value",current}});
+      }
+      const QString stamp=QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz"); QMap<QString,QString> txBackups; QJsonObject backupJson;
+      for(auto it=sourceFiles.cbegin();it!=sourceFiles.cend();++it){const QString backup=it.value()+QStringLiteral(".web.txn.bak.")+stamp;if(!QFile::copy(it.value(),backup))return sendJson(socket,409,QJsonObject{{"ok",false},{"message",QStringLiteral("Gagal membuat transaction backup: ")+it.value()}});txBackups[it.key()]=backup;backupJson[it.key()]=backup;}
+      auto restoreFiles=[&](){bool rb=true;for(auto it=sourceFiles.cbegin();it!=sourceFiles.cend();++it){const QString b=txBackups.value(it.key());if(b.isEmpty()||!QFileInfo::exists(b)){rb=false;continue;}QFile::remove(it.value());if(!QFile::copy(b,it.value()))rb=false;}return rb;};
+      QJsonArray saved; QString saveError; bool allSaved=true;
+      for(const QJsonValue &v:resolved){const QJsonObject item=v.toObject();QJsonValue actual;QString one;if(!setYamlValueAtomic(item.value("file_key").toString(),item.value("path").toString(),item.value("value"),&one,&actual)){allSaved=false;saveError=one;break;}saved.append(QJsonObject{{"file_key",item.value("file_key")},{"path",item.value("path")},{"saved_value",actual}});}
+      if(!allSaved){const bool rb=restoreFiles();return sendJson(socket,409,QJsonObject{{"ok",false},{"message",saveError},{"rolled_back",rb},{"batch_backups",backupJson},{"saved_before_failure",saved}});}
+      QJsonArray runtimeChanges; for(const QJsonValue &v:resolved){const QJsonObject i=v.toObject();runtimeChanges.append(QJsonObject{{"file_key",i.value("file_key")},{"path",i.value("path")}});}
+      const QJsonObject runtimeApply=bridge_->applyConfigChanges(runtimeChanges); const QString status=runtimeApply.value("status").toString(); const bool match=runtimeApply.value("runtime_match").toBool(false);
+      if(status=="RUNTIME_MISMATCH"){const bool rb=restoreFiles();QJsonArray rollbackChanges;for(const QJsonValue &v:resolved){const QJsonObject i=v.toObject();rollbackChanges.append(QJsonObject{{"file_key",i.value("file_key")},{"path",i.value("path")}});}const QJsonObject rollbackRuntime=bridge_->applyConfigChanges(rollbackChanges);return sendJson(socket,409,QJsonObject{{"ok",false},{"message","Runtime verification mismatch; YAML transaction di-rollback"},{"rolled_back",rb},{"runtime_apply",runtimeApply},{"rollback_runtime",rollbackRuntime},{"batch_backups",backupJson},{"config",loadConfigSnapshot()},{"at_ms",nowMs()}});}
+      return sendJson(socket,200,QJsonObject{{"ok",true},{"message",useBaseline?"Transactional baseline revert selesai":"Transactional apply selesai"},{"items",saved},{"batch_backups",backupJson},{"runtime_apply",runtimeApply},{"runtime_match",match},{"config",loadConfigSnapshot()},{"at_ms",nowMs()}});
     } else if (request.path == "/api/config/set") {
       if (bridge_->readOnly()) {
         return sendJson(socket, 403, QJsonObject{{"ok", false}, {"message", "Web GUI read-only; perubahan YAML ditolak"}});

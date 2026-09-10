@@ -6,8 +6,7 @@
   <meta name="theme-color" content="#07100f">
   <link rel="icon" href="data:,">
   <title>ADV Operator Console</title>
-  <link rel="stylesheet" href="/styles.css?v=20260904-bab4-report-v1">
-  <link rel="stylesheet" href="/vesc_mp_theme.css?v=20260908-final-v5">
+  <link rel="stylesheet" href="/styles.css?v=20260910-ux-redesign-v1">
 </head>
 <body>
   <div class="app-shell">
@@ -252,7 +251,7 @@
         <!-- PERCEPTION -->
         <section class="page" id="page-perception">
           <div class="camera-layout" id="perceptionCameraLayout">
-            <article class="panel camera-panel" id="perceptionCameraSection"><div class="panel-head"><div><span class="eyebrow">ASTRA PRO / YOLOPv2</span><h2>Live Perception</h2></div><span class="status-chip waiting" id="cameraChip">WAIT</span></div><div class="camera-stage" id="perceptionCameraStage"><img id="cameraImage" alt="Live camera frame"><canvas id="perceptionCalOverlay" class="perception-cal-overlay" aria-label="Lane dan obstacle calibration overlay"></canvas><div id="cameraPlaceholder" class="camera-placeholder">Menunggu frame kamera...</div><div class="camera-meta"><span id="cameraSource">--</span><span id="cameraResolution">--</span></div></div><div class="yolop-toggle-panel"><div><span>YOLOPv2 DETECTION</span><b id="yoloToggleState">OFF • CAMERA ONLY</b><small>OFF menjaga kamera tetap hidup tanpa inference. ON menampilkan bounding box, drivable area, dan lane overlay.</small></div><button class="soft-btn yolop-toggle" id="yoloToggleBtn" type="button" aria-pressed="false">Aktifkan YOLOPv2</button></div><div class="yolop-toggle-panel"><div><span>PERCEPTION SAFETY GATE</span><b id="perceptionSafetyBypassState">ACTIVE • FAIL-CLOSED</b><small>Bypass hanya untuk commissioning indoor. E-stop global, ESC watchdog, stale Nav2, finite-command dan Ackermann feasibility tetap aktif.</small></div><button class="warning-btn yolop-toggle" id="perceptionSafetyBypassBtn" type="button" aria-pressed="false">Bypass Safety</button></div></article>
+            <article class="panel camera-panel" id="perceptionCameraSection"><div class="panel-head"><div><span class="eyebrow">ASTRA PRO / YOLOPv2</span><h2>Live Perception</h2></div><span class="status-chip waiting" id="cameraChip">WAIT</span></div><div class="camera-stage" id="perceptionCameraStage"><img id="cameraImage" alt="Live camera frame"><canvas id="perceptionCalOverlay" class="perception-cal-overlay" aria-label="Lane dan obstacle calibration overlay"></canvas><div id="cameraPlaceholder" class="camera-placeholder">Menunggu frame kamera...</div><div class="camera-meta"><span id="cameraSource">--</span><span id="cameraResolution">--</span></div></div><div class="yolop-toggle-panel"><div><span>YOLOPv2 DETECTION</span><b id="yoloToggleState">OFF • CAMERA ONLY</b><small>OFF menjaga kamera tetap hidup tanpa inference. ON menampilkan bounding box, drivable area, dan lane overlay.</small></div><button class="soft-btn yolop-toggle" id="yoloToggleBtn" type="button" aria-pressed="false">Aktifkan YOLOPv2</button></div></article>
             <div class="stack" id="perceptionRealtimeStack">
               <article class="panel compact" id="perceptionLaneSection"><div class="panel-head"><div><span class="eyebrow">LANE</span><h2>Lane Safety</h2></div></div><div class="kv-list"><div><span>State</span><b id="laneState">--</b></div><div><span>Control</span><b id="laneControl">--</b></div><div><span>Drivable</span><b id="drivableState">--</b></div><div><span>Near field</span><b id="nearFieldState">--</b></div></div></article>
               <article class="panel compact" id="perceptionPlanningSection"><div class="panel-head"><div><span class="eyebrow">POINT CLOUD</span><h2>Planning Inputs</h2></div></div><div class="kv-list"><div><span>Objects</span><b id="cloudObjects">--</b></div><div><span>Path relevant</span><b id="cloudPath">--</b></div><div><span>Planning</span><b id="cloudPlanning">--</b></div><div><span>Boundary</span><b id="cloudBoundary">--</b></div></div></article>
@@ -274,6 +273,7 @@
             <article class="panel" id="perceptionDetectionsSection"><div class="panel-head"><div><span class="eyebrow">DETECTIONS</span><h2>Obstacle / Raw Detection</h2></div></div><div class="json-pretty" id="detectionsView">No detections yet.</div></article>
           </div>
           <article class="panel" id="perceptionSafetySection">
+            <div class="yolop-toggle-panel"><div><span>PERCEPTION SAFETY GATE</span><b id="perceptionSafetyBypassState">ACTIVE • FAIL-CLOSED</b><small>Bypass hanya untuk commissioning indoor. E-stop global, ESC watchdog, stale Nav2, finite-command dan Ackermann feasibility tetap aktif.</small></div><button class="warning-btn yolop-toggle" id="perceptionSafetyBypassBtn" type="button" aria-pressed="false">Bypass Safety</button></div>
             <div class="panel-head"><div><span class="eyebrow">TRAJECTORY SAFETY</span><h2>Perception Safety & Planning Gate</h2></div><span class="status-chip waiting" id="perceptionSafetyLiveChip">WAIT</span></div>
             <div class="metric-grid"><div><span>Camera</span><b id="perceptionSafetyCamera">--</b></div><div><span>Emergency</span><b id="perceptionSafetyEmergency">--</b></div><div><span>Candidate</span><b id="perceptionSafetyCandidates">--</b></div><div><span>Path relevant</span><b id="perceptionSafetyPath">--</b></div><div><span>Planning relevant</span><b id="perceptionSafetyPlanning">--</b></div><div><span>Near field</span><b id="perceptionSafetyNear">--</b></div></div>
             <div class="json-pretty" id="perceptionSafetyDetail">Waiting...</div>
@@ -396,7 +396,7 @@
             <details class="vesc-editor" id="vescLimitsSection"><summary>VESC Limits / Setup • LEFT + RIGHT</summary><section class="vesc-section"><div class="vesc-dual-editor-grid" id="vescDualLimits"></div></section></details>
             <details class="vesc-editor" id="vescConfigSection"><summary>MC / App Configuration • LEFT + RIGHT</summary><section class="vesc-section"><div class="vesc-dual-editor-grid" id="vescDualConfig"></div></section></details>
 
-            <details class="vesc-editor" open><summary>LEFT Encoder / Home / Position Limits</summary>
+            <details class="vesc-editor" id="vescEncoderSection"><summary>LEFT Encoder / Home / Position Limits</summary>
               <section class="vesc-section"><div class="vesc-work-grid"><article class="vesc-card"><div class="vesc-card-head"><b>LEFT Position Counter</b></div><div class="vesc-position-strip"><div><span>Current</span><b id="vescPosCurrent">--</b></div><div><span>Target</span><b id="vescPosTarget">--</b></div><div><span>Min</span><b id="vescPosMin">--</b></div><div><span>Max</span><b id="vescPosMax">--</b></div></div><div class="vesc-form-row"><label>Min count<input id="vescPosMinInput" type="number" step="1"></label><label>Max count<input id="vescPosMaxInput" type="number" step="1"></label></div><div class="button-row"><button class="soft-btn" id="vescReadPositionState">Read</button><button class="primary-btn" id="vescSetPositionLimits">Set Limits</button><button class="warning-btn" id="vescResetPosition">Reset 0</button></div></article>
                 <article class="vesc-card" id="vescSteeringCard"><div class="vesc-card-head"><b>LEFT Steering Encoder / Safe Span</b><span class="path-tag">ABI TIM4 • PB6/PB7</span></div><div class="vesc-position-strip"><div><span>Cal</span><b id="vescSteerCal">--</b></div><div><span>Home</span><b id="vescSteerHome">--</b></div><div><span>Sync</span><b id="vescSteerSync">--</b></div><div><span>Raw TIM4</span><b id="vescSteerRaw">--</b></div><div><span>Measured span</span><b id="vescSteerSpan">--</b></div><div><span>Safe span</span><b id="vescSteerSafeSpan">--</b></div><div><span>Logical POS</span><b id="vescSteerPos360">--</b></div><div><span>Fault</span><b id="vescSteerFault">--</b></div></div><div class="button-row"><button class="soft-btn" id="vescReadSteeringCal">Refresh</button><button class="soft-btn" id="vescEncoderDebug">Encoder Debug</button><button class="warning-btn" id="vescSetSteeringCenter">Set Current as 180</button><button class="soft-btn" id="vescToggleSteeringInvert">Toggle Direction</button></div><div class="json-pretty vesc-reply" id="vescSteeringDetail">Not read.</div></article></div>
                 <div class="vesc-form-row"><label>Detect current A<input id="vescDetectCurrent" type="number" min="0.1" max="5" step="0.1" value="1.0"></label><div class="button-row compact"><button class="warning-btn" id="vescDetectEncoder">Detect LEFT Encoder</button><button class="warning-btn" id="vescDetectHall">Detect RIGHT Hall</button></div></div>
@@ -533,6 +533,12 @@
             </div>
           </div>
 
+          <div class="tuning-modebar panel" id="tuningModebar" aria-label="Tuning workspace mode">
+            <div class="tuning-mode-group"><span>WORKFLOW</span><button class="tuning-mode-btn active" data-tuning-mode="task">TASK</button><button class="tuning-mode-btn" data-tuning-mode="tune">TUNE</button><button class="tuning-mode-btn" data-tuning-mode="analyze">ANALYZE</button></div>
+            <div class="tuning-mode-group"><span>COMPLEXITY</span><button class="tuning-level-btn active" data-tuning-level="basic">BASIC</button><button class="tuning-level-btn" data-tuning-level="advanced">ADVANCED</button><button class="tuning-level-btn" data-tuning-level="expert">EXPERT</button></div>
+            <div class="tuning-mode-state"><b id="tuningDraftCount">0 DRAFT</b><small>Input hanya stage; write terjadi setelah Validate + Apply.</small></div>
+          </div>
+
           <article class="panel commissioning-roadmap" id="commissioningRoadmap">
             <div class="commissioning-step" data-phase="esc"><i>1</i><div><span>FIRST</span><b>ESC / FOC Total</b><small>Sensor motor → FOC current → outer loop → step → repeatability → load → final gate</small></div><em id="phaseEscState">REQUIRED</em></div>
             <div class="commissioning-arrow">→</div>
@@ -541,14 +547,7 @@
             <div class="commissioning-step" data-phase="perception"><i>3</i><div><span>LAST</span><b>Persepsi</b><small>Camera → detection → metric calibration → drivable/lane → near-field → trajectory safety → end-to-end</small></div><em id="phasePerState">LOCKED</em></div>
           </article>
 
-          <div class="domain-switch legacy-domain-switch" role="tablist" aria-label="Domain tuning" hidden>
-            <button class="domain-tab active" data-exp="navigation"><span class="domain-icon">N</span><div><b>Navigasi</b><small>Sensor → EKF → Localization → Costmap → Smac → MPPI → Goal</small></div><em id="navTestCount">50</em></button>
-            <button class="domain-tab" data-exp="perception"><span class="domain-icon">P</span><div><b>Persepsi</b><small>Camera → Detection → Metric → Drivable → Lane → Safety → Performance</small></div><em id="perTestCount">35</em></button>
-            <button class="domain-tab" data-exp="steering"><span class="domain-icon">E</span><div><b>ESC / FOC</b><small>Calibration → Current Loop → Position → Step → Tracking → Load → Final Gate</small></div><em id="escTestCount">15</em></button>
-          </div>
 
-          <nav class="test-phase-tabs" id="testPhaseTabs" aria-label="Mode pengujian"></nav>
-          <nav class="test-family-tabs" id="testFamilyTabs" aria-label="Kelompok pengujian"></nav>
 
           <div class="workbench-grid">
             <aside class="panel chapter-browser">
@@ -600,8 +599,8 @@
 
               <div class="lab-two-col">
                 <article class="panel tuning-editor">
-                  <div class="panel-head"><div><span class="eyebrow">PARAMETER TUNING</span><h2>YAML Aktual</h2></div><div class="panel-actions"><button class="warning-btn" id="resetExperimentYaml" hidden>↶ Reset Tahap ke Baseline</button><button class="soft-btn" id="refreshExperimentConfig">Reload YAML</button></div></div>
-                  <div class="tuning-note" id="tuningNote">AUTO YAML aktif: perubahan field editable langsung ditulis atomik ke source YAML (+ backup). Baseline awal disimpan terpisah pada <code>*.web.baseline</code>; tombol Reset mengembalikan hanya parameter tahap Navigasi yang aktif ke baseline tersebut, dan kondisi sebelum reset tetap diamankan lagi sebagai <code>.web.bak.*</code>. Parameter runtime Nav2/EKF yang tidak dinamis tetap memerlukan lifecycle reload/restart agar nilai baru berlaku.</div>
+                  <div class="panel-head"><div><span class="eyebrow">PARAMETER TUNING</span><h2>YAML Aktual</h2></div><div class="panel-actions"><button class="soft-btn" id="tuningValidateDraft" data-help-key="action.tuning.validate">Validate Draft</button><button class="primary-btn" id="tuningApplyDraft" data-help-key="action.tuning.apply" disabled>Apply + Save</button><button class="soft-btn" id="tuningRevertDraft" data-help-key="action.tuning.revert" disabled>Revert Draft</button><button class="warning-btn" id="resetExperimentYaml" hidden data-help-key="action.tuning.baseline">Stage Baseline</button><button class="soft-btn" id="refreshExperimentConfig">Reload Runtime/YAML</button></div></div>
+                  <div class="tuning-note" id="tuningNote">STAGED by default: perubahan input masuk DRAFT browser terlebih dahulu. Validate memeriksa tipe/range/dependency; Apply + Save baru menulis YAML atomik, menerapkan runtime sesuai capability, lalu melakukan read-back verification.</div>
                   <div id="tuningFields" class="tuning-fields"><div class="empty-state">Pilih subpengujian.</div></div>
                 </article>
 
@@ -753,9 +752,19 @@
       <footer class="footer"><span>ADV Operator Console</span><span id="footerStatus">Connecting to ROS2 bridge…</span><span>localhost:5000</span></footer>
     </div>
   </div>
+  <button class="help-backdrop" id="helpBackdrop" aria-label="Tutup bantuan" hidden></button>
+  <aside class="help-drawer" id="helpDrawer" aria-hidden="true" hidden>
+    <div class="help-drawer-head"><div><span class="eyebrow">CONTEXT HELP</span><h2 id="helpTitle">Bantuan</h2></div><button class="icon-button" id="helpCloseBtn" aria-label="Tutup bantuan" title="Tutup">×</button></div>
+    <div class="help-drawer-body">
+      <p id="helpSummary">Pilih ikon ? pada parameter atau panel.</p>
+      <dl class="help-grid"><div><dt>Unit</dt><dd id="helpUnit">—</dd></div><div><dt>Safe range</dt><dd id="helpRange">—</dd></div><div><dt>Baseline</dt><dd id="helpBaseline">—</dd></div><div><dt>YAML</dt><dd id="helpYaml">—</dd></div><div><dt>Draft</dt><dd id="helpDraft">—</dd></div><div><dt>Runtime</dt><dd id="helpRuntime">—</dd></div></dl>
+      <section><h3>Jika dinaikkan</h3><p id="helpEffectUp">—</p></section><section><h3>Jika diturunkan</h3><p id="helpEffectDown">—</p></section><section><h3>Apply model</h3><p id="helpApplyMode">—</p></section><section><h3>Risk / guard</h3><p id="helpRisk">—</p></section><section><h3>Related</h3><p id="helpRelated">—</p></section>
+      <details class="help-expert"><summary>Expert source</summary><code id="helpSource">—</code></details>
+    </div>
+  </aside>
   <div class="toast-stack" id="toastStack" aria-live="polite"></div>
   <div class="modal-backdrop" id="confirmModal"><div class="modal"><span class="eyebrow">CONFIRM ACTION</span><h2 id="confirmTitle">Confirm</h2><p id="confirmText"></p><div class="button-row"><button class="soft-btn grow" id="confirmNo">Cancel</button><button class="danger-btn grow" id="confirmYes">Continue</button></div></div></div>
-  <script src="/app.js?v=20260908-final-v5" defer></script>
+  <script src="/app.js?v=20260910-ux-redesign-v1" defer></script>
   <script src="/vesc_workbench.js?v=20260908-dual-runtime-v10" defer></script>
   <script src="/replay.js?v=20260908-final-v5" defer></script>
   <script src="/export_tools.js?v=20260904-bab4-report-v1" defer></script>
