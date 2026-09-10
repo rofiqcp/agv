@@ -258,7 +258,8 @@ for token in (
     "msg.angular_velocity_covariance[0] = -1.0",
     "std::clamp<int64_t>",
     "IMU covariance diagonal must be finite and strictly positive",
-    "EKF yaw now comes from the absolute IMU orientation quaternion",
+    "msg.header.stamp = measurement_stamp",
+    "packetStampNow",
 ):
     if token not in imu_source:
         fail(f"IMU freshness/parameter guard missing: {token}")

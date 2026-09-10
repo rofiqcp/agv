@@ -366,6 +366,136 @@ def _yaml_ros_param(path: str, node_name: str, key: str, default):
         return default
 
 
+def _vehicle_params(path: str) -> dict:
+    """Load the certified vehicle parameter map used as the runtime SSOT."""
+    try:
+        with open(path, 'r', encoding='utf-8') as handle:
+            data = yaml.safe_load(handle) or {}
+        params = data.get('vehicle', {}).get('ros__parameters', {})
+        return params if isinstance(params, dict) else {}
+    except (OSError, TypeError, yaml.YAMLError) as exc:
+        raise RuntimeError(f'Cannot load vehicle SSOT {path}: {exc}') from exc
+
+
+def _materialize_nav2_vehicle_ssot(base_path: str, vehicle_path: str, precision: bool = False) -> str:
+    """Generate Nav2 runtime YAML from vehicle.yaml so geometry/limits cannot drift."""
+    with open(base_path, 'r', encoding='utf-8') as handle:
+        data = yaml.safe_load(handle) or {}
+    vehicle = _vehicle_params(vehicle_path)
+    required = (
+        'effective_wheelbase_m', 'track_width_m', 'max_forward_speed_mps',
+        'max_reverse_speed_mps', 'max_yaw_rate_rps', 'max_accel_mps2',
+        'max_decel_mps2', 'max_yaw_accel_rps2', 'minimum_turning_radius_m')
+    missing = [key for key in required if key not in vehicle]
+    if missing:
+        raise RuntimeError('vehicle.yaml SSOT missing: ' + ', '.join(missing))
+    try:
+        controller = data['controller_server']['ros__parameters']
+        follow = controller['FollowPath']
+        smoother = data['velocity_smoother']['ros__parameters']
+    except (KeyError, TypeError) as exc:
+        raise RuntimeError('Nav2 YAML missing controller/smoother structure required by vehicle SSOT') from exc
+    vmax = float(vehicle['max_forward_speed_mps'])
+    vrev = float(vehicle['max_reverse_speed_mps'])
+    wz = float(vehicle['max_yaw_rate_rps'])
+    accel = float(vehicle['max_accel_mps2'])
+    decel = float(vehicle['max_decel_mps2'])
+    yaw_accel = float(vehicle['max_yaw_accel_rps2'])
+    radius = float(vehicle['minimum_turning_radius_m'])
+    follow['vx_max'] = vmax
+    follow['wz_max'] = wz
+    follow['ax_max'] = accel
+    follow['ax_min'] = decel
+    follow['az_max'] = yaw_accel
+    follow.setdefault('AckermannConstraints', {})['min_turning_r'] = radius
+    smoother['max_velocity'] = [vmax, 0.0, wz]
+    smoother['min_velocity'] = [-vrev, 0.0, -wz]
+    smoother['max_accel'] = [accel, 0.0, yaw_accel]
+    smoother['max_decel'] = [decel, 0.0, -yaw_accel]
+    goal = controller.get('goal_checker', {})
+    if precision:
+        controller_hz = float(vehicle.get('precision_controller_frequency_hz', 15.0))
+        if controller_hz < 10.0 or controller_hz > 30.0:
+            raise RuntimeError('precision_controller_frequency_hz must be within 10..30 Hz')
+        model_dt = 1.0 / controller_hz
+        controller['controller_frequency'] = controller_hz
+        follow['model_dt'] = model_dt
+        # Keep a ~3 s horizon while increasing update rate; avoids a 60-step CPU spike.
+        follow['time_steps'] = max(30, int(round(3.0 / model_dt)))
+        goal['xy_goal_tolerance'] = float(vehicle.get('precision_xy_goal_tolerance_m', 0.08))
+        smoother['smoothing_frequency'] = max(30.0, 2.0 * controller_hz)
+        resolution = float(vehicle.get('precision_costmap_resolution_m', 0.05))
+        for key in ('local_costmap', 'global_costmap'):
+            params = data.get(key, {}).get('ros__parameters', {})
+            if params:
+                params['resolution'] = resolution
+        local_params = data.get('local_costmap', {}).get('ros__parameters', {})
+        if local_params:
+            local_params['update_frequency'] = max(float(local_params.get('update_frequency', 8.0)), controller_hz)
+        data.get('bt_navigator', {}).get('ros__parameters', {})['bt_loop_duration'] = max(30, int(round(1000.0 / controller_hz)))
+    else:
+        goal['xy_goal_tolerance'] = float(vehicle.get('standard_xy_goal_tolerance_m', 0.35))
+    output = Path(f'/tmp/agv_nav2_vehicle_ssot_{"precision" if precision else "standard"}_{os.getuid()}.yaml')
+    with output.open('w', encoding='utf-8') as handle:
+        yaml.safe_dump(data, handle, sort_keys=False)
+    return str(output)
+
+
+def _validate_vehicle_runtime_contract(context, vehicle_path: str):
+    """Fail launch if an overridden Nav2 file disagrees with vehicle.yaml limits."""
+    nav2_path = LaunchConfiguration('nav2_params').perform(context)
+    vehicle = _vehicle_params(vehicle_path)
+    try:
+        with open(nav2_path, 'r', encoding='utf-8') as handle:
+            nav = yaml.safe_load(handle) or {}
+        follow = nav['controller_server']['ros__parameters']['FollowPath']
+        smoother = nav['velocity_smoother']['ros__parameters']
+    except (OSError, KeyError, TypeError, yaml.YAMLError) as exc:
+        raise RuntimeError(f'Cannot validate Nav2/vehicle SSOT: {exc}') from exc
+    expected = {
+        'vx_max': float(vehicle['max_forward_speed_mps']),
+        'wz_max': float(vehicle['max_yaw_rate_rps']),
+        'min_turning_r': float(vehicle['minimum_turning_radius_m']),
+    }
+    actual = {
+        'vx_max': float(follow['vx_max']),
+        'wz_max': float(follow['wz_max']),
+        'min_turning_r': float(follow['AckermannConstraints']['min_turning_r']),
+    }
+    smoother_max = smoother.get('max_velocity', [])
+    smoother_min = smoother.get('min_velocity', [])
+    if len(smoother_max) != 3 or len(smoother_min) != 3:
+        raise RuntimeError('velocity_smoother max/min_velocity must have 3 entries')
+    errors = []
+    for key, expected_value in expected.items():
+        if abs(actual[key] - expected_value) > 1.0e-9:
+            errors.append(f'{key}: nav2={actual[key]} vehicle={expected_value}')
+    if abs(float(smoother_max[0]) - expected['vx_max']) > 1.0e-9 or        abs(float(smoother_max[2]) - expected['wz_max']) > 1.0e-9 or        abs(float(smoother_min[0]) + float(vehicle['max_reverse_speed_mps'])) > 1.0e-9 or        abs(float(smoother_min[2]) + expected['wz_max']) > 1.0e-9:
+        errors.append('velocity_smoother limits disagree with vehicle SSOT')
+    precision_mode = LaunchConfiguration('precision_mode').perform(context).strip().lower() in {'1','true','yes'}
+    controller_hz = float(nav['controller_server']['ros__parameters'].get('controller_frequency', 0.0))
+    model_dt = float(follow.get('model_dt', 0.0))
+    goal_tol = float(nav['controller_server']['ros__parameters'].get('goal_checker', {}).get('xy_goal_tolerance', 999.0))
+    if precision_mode:
+        expected_hz = float(vehicle.get('precision_controller_frequency_hz', 15.0))
+        expected_tol = float(vehicle.get('precision_xy_goal_tolerance_m', 0.08))
+        expected_res = float(vehicle.get('precision_costmap_resolution_m', 0.05))
+        if abs(controller_hz - expected_hz) > 1.0e-9 or abs(model_dt - 1.0/expected_hz) > 1.0e-6:
+            errors.append('precision controller_frequency/model_dt mismatch')
+        if abs(goal_tol - expected_tol) > 1.0e-9:
+            errors.append('precision goal tolerance mismatch')
+        for key in ('local_costmap','global_costmap'):
+            r=float(nav.get(key,{}).get('ros__parameters',{}).get('resolution',999.0))
+            if abs(r-expected_res)>1.0e-9: errors.append(f'{key} precision resolution mismatch')
+    else:
+        expected_tol = float(vehicle.get('standard_xy_goal_tolerance_m', 0.35))
+        if abs(goal_tol - expected_tol) > 1.0e-9:
+            errors.append('standard goal tolerance mismatch')
+    if errors:
+        raise RuntimeError('Vehicle SSOT contract mismatch: ' + '; '.join(errors))
+    return []
+
+
 def _agv_root() -> Path:
     configured = os.environ.get('AGV_ROOT', '').strip()
     return Path(configured).expanduser().resolve() if configured else (Path.home() / 'agv').resolve()
@@ -494,20 +624,36 @@ def generate_launch_description() -> LaunchDescription:
     keyboard_hw_available = _keyboard_evdev_readable()
 
     map_file = os.path.join(nav_share, 'maps', 'undip', 'undip_nav2.yaml')
-    nav2_params = os.path.join(nav_config_dir, 'nav2_ackermann.yaml')
+    vehicle_params = os.path.join(nav_config_dir, 'vehicle.yaml')
+    nav2_base_params = os.path.join(nav_config_dir, 'nav2_ackermann.yaml')
+    nav2_standard_params = _materialize_nav2_vehicle_ssot(nav2_base_params, vehicle_params, False)
+    nav2_precision_params = _materialize_nav2_vehicle_ssot(nav2_base_params, vehicle_params, True)
     ekf_params = os.path.join(nav_config_dir, 'ekf.yaml')
     _validate_ekf_params(ekf_params)
     localization_params = os.path.join(nav_config_dir, 'localization_cpp.yaml')
     navigation_core_params = os.path.join(nav_config_dir, 'navigation_core.yaml')
-    vehicle_params = os.path.join(nav_config_dir, 'vehicle.yaml')
     imu_params = os.path.join(nav_config_dir, 'imu.yaml')
     imu_speed_params = os.path.join(nav_config_dir, 'imu_speed.yaml')
     mag_heading_params = os.path.join(nav_config_dir, 'mag_heading.yaml')
     mppi_closed_loop_params = os.path.join(nav_config_dir, 'mppi_closed_loop.yaml')
     precision_params = os.path.join(nav_config_dir, 'precision.yaml')
+    absolute_localization_params = os.path.join(nav_config_dir, 'absolute_localization.yaml')
     trajectory_safety_params = os.path.join(nav_config_dir, 'trajectory_safety.yaml')
     stage3_params = os.path.join(nav_config_dir, 'stage3_navigation.yaml')
     collision_params = os.path.join(nav_config_dir, 'collision_monitor_production.yaml')
+    vehicle_ssot = _vehicle_params(vehicle_params)
+    effective_wheelbase = float(vehicle_ssot.get('effective_wheelbase_m', vehicle_ssot.get('wheelbase_m', 0.70)))
+    track_width = float(vehicle_ssot.get('track_width_m', 0.48))
+    wheel_radius = float(vehicle_ssot.get('wheel_radius_m', 0.145))
+    drive_erpm_per_mps = float(vehicle_ssot.get('drive_erpm_per_mps', 8000.0))
+    drive_odom_scale = float(vehicle_ssot.get('drive_odometry_calibration_scale', 1.0))
+    drive_pole_pairs = int(vehicle_ssot.get('drive_motor_pole_pairs', 15))
+    drive_gear_ratio = float(vehicle_ssot.get('drive_gear_ratio', 1.0))
+    max_forward_speed = float(vehicle_ssot.get('max_forward_speed_mps', 1.0))
+    max_reverse_speed = float(vehicle_ssot.get('max_reverse_speed_mps', 1.0))
+    max_yaw_rate = float(vehicle_ssot.get('max_yaw_rate_rps', 0.625907910003))
+    max_steering = float(vehicle_ssot.get('max_steering_angle_rad', 0.523598775598))
+    minimum_turning_radius = float(vehicle_ssot.get('minimum_turning_radius_m', 1.597679121829))
     bt_xml = os.path.join(nav_share, 'behavior_trees', 'ackermann_navigate_to_pose.xml')
     rviz_file = os.path.join(nav_share, 'rviz', 'autonomous.rviz')
     xacro_file = os.path.join(nav_share, 'urdf', 'agv.urdf.xacro')
@@ -557,7 +703,11 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('ros_localhost_only', default_value=os.environ.get('AGV_ROS_LOCALHOST_ONLY', os.environ.get('ROS_LOCALHOST_ONLY', '1'))),
         DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument('map', default_value=map_file),
-        DeclareLaunchArgument('nav2_params', default_value=nav2_params),
+        DeclareLaunchArgument('precision_mode', default_value='false', description='Requires certified high-accuracy absolute pose; never bypasses calibration gates'),
+        DeclareLaunchArgument('nav2_params', default_value=PythonExpression([
+            "'", nav2_precision_params, "' if '", LaunchConfiguration('precision_mode'),
+            "'.lower() in ['1','true','yes'] else '", nav2_standard_params, "'"
+        ])),
         DeclareLaunchArgument('rviz_config', default_value=rviz_file),
         DeclareLaunchArgument('enable_rviz', default_value='false'),
         # Exactly one operator-facing switch: off, cpu, or gpu. OFF means
@@ -632,7 +782,7 @@ def generate_launch_description() -> LaunchDescription:
         name='joint_state_visualizer', output='screen',
         respawn=True, respawn_delay=2.0,
         parameters=[{
-            'wheelbase_m': float(_yaml_ros_param(vehicle_params, 'vehicle', 'wheelbase_m', 0.70)),
+            'wheelbase_m': effective_wheelbase,
             'track_width_m': float(_yaml_ros_param(vehicle_params, 'vehicle', 'track_width_m', 0.48)),
             'wheel_radius_m': float(_yaml_ros_param(vehicle_params, 'vehicle', 'wheel_radius_m', 0.145)),
             'max_visual_steering_rad': float(_yaml_ros_param(vehicle_params, 'vehicle', 'max_steering_angle_rad', 0.523598775598)),
@@ -679,11 +829,19 @@ def generate_launch_description() -> LaunchDescription:
             # motor_teleop -> cmd_vel_router -> velocity_smoother -> /cmd_vel -> Ackermann.
             # Direct Ackermann teleop subscription is intentionally pointed at an unused
             # topic here, while router source metadata preserves TELEOP steering semantics.
-            'require_autonomy_gate': 'false',
+            'require_autonomy_gate': 'true',
             'teleop_topic': '/cmd_vel/ackermann_direct_teleop_disabled',
             'teleop_source_topic': '/navigation/cmd_mux/source',
             'active_source_topic': '/esc/mux/active_source',
             'nav2_topic': '/cmd_vel',
+            'vehicle_speed_max_mps': str(max_forward_speed),
+            'vehicle_wheelbase_m': str(effective_wheelbase),
+            'vehicle_track_width_m': str(track_width),
+            'vehicle_wheel_radius_m': str(wheel_radius),
+            'vehicle_drive_erpm_per_mps': str(drive_erpm_per_mps),
+            'vehicle_drive_odometry_scale': str(drive_odom_scale),
+            'vehicle_drive_motor_pole_pairs': str(drive_pole_pairs),
+            'vehicle_drive_gear_ratio': str(drive_gear_ratio),
         }.items(),
     )
 
@@ -709,6 +867,16 @@ def generate_launch_description() -> LaunchDescription:
             'allow_manual_pose_for_motion': ParameterValue(LaunchConfiguration('stage3_commissioning_mode'), value_type=bool),
             'use_sim_time': LaunchConfiguration('use_sim_time'),
         }],
+    )
+    sensor_contract_monitor = Node(
+        package='navigation', executable='sensor_contract_monitor', name='sensor_contract_monitor',
+        output='screen', respawn=True, respawn_delay=2.0,
+        parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],
+    )
+    precision_localization_monitor = Node(
+        package='navigation', executable='precision_localization_monitor', name='precision_localization_monitor',
+        output='screen', respawn=True, respawn_delay=2.0,
+        parameters=[absolute_localization_params, {'use_sim_time': LaunchConfiguration('use_sim_time')}],
     )
     mag_heading_fusion = Node(
         package='navigation', executable='mag_heading_fusion', name='mag_heading_fusion',
@@ -999,7 +1167,15 @@ def generate_launch_description() -> LaunchDescription:
             # Stage-2 IMU calibration state is persistent in imu.yaml. Local EKF
             # uses gyro-Z, so autonomous motion remains fail-closed until this PASS.
             'imu_calibration_validated': imu_calibration_default,
+            'max_forward_speed_mps': max_forward_speed,
+            'max_reverse_speed_mps': max_reverse_speed,
+            'max_yaw_rate_rps': max_yaw_rate,
+            'wheelbase_m': effective_wheelbase,
+            'track_width_m': track_width,
+            'max_steering_angle_rad': max_steering,
+            'minimum_turning_radius_m': minimum_turning_radius,
             'stage3_production_certified': stage3_production_default,
+            'precision_mode': ParameterValue(LaunchConfiguration('precision_mode'), value_type=bool),
             'stage3_commissioning_mode': ParameterValue(LaunchConfiguration('stage3_commissioning_mode'), value_type=bool),
             'stage3_commissioning_speed_cap_mps': stage3_commissioning_speed,
             'keyboard_available': keyboard_hw_available,
@@ -1072,13 +1248,14 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription(args + environment + [
         OpaqueFunction(function=_validate_operator_mode),
         OpaqueFunction(function=_validate_gnss_source),
+        OpaqueFunction(function=lambda context: _validate_vehicle_runtime_contract(context, vehicle_params)),
         OpaqueFunction(
             function=_validate_perception_request,
             args=[perception_package_available, perception_camera_executable_available,
                   perception_cpu_executable_available, perception_gpu_executable_available]),
         LogInfo(msg=['[AGV] autonomous stack | mode=', LaunchConfiguration('mode'),
                      ' | velocity smoother + measured steering calibration + safety gates enabled']),
-        LogInfo(msg=['[AGV] GNSS source=', LaunchConfiguration('gnss_source'), ' | stm32=NEO3 via HMI USB CDC; usb=legacy direct receiver']),
+        LogInfo(msg=['[AGV] GNSS source=', LaunchConfiguration('gnss_source'), ' | precision_mode=', LaunchConfiguration('precision_mode'), ' | stm32=NEO3 via HMI USB CDC; usb=legacy direct receiver']),
         LogInfo(
             condition=IfCondition(perception_requested_but_unavailable),
             msg='[AGV] ERROR: package perception/camera backend tidak tersedia.'),
@@ -1106,7 +1283,7 @@ def generate_launch_description() -> LaunchDescription:
             condition=IfCondition(camera_only_enabled),
             msg='[AGV] PERCEPTION OFF: camera-only aktif; raw/preview kamera jalan, model/inference OFF.'),
         robot_state, joint_state_visualizer, gnss, imu, esc_runtime,
-        delayed_ekf, localization_core, mag_heading_fusion, imu_speed_diagnostic,
+        delayed_ekf, localization_core, sensor_contract_monitor, precision_localization_monitor, mag_heading_fusion, imu_speed_diagnostic,
         camera_only, perception_cpu, perception_gpu, semantic_obstacle,
         map_server, lifecycle_map, controller, planner, behavior, cmd_vel_router, smoother, collision, navigator,
         lifecycle_smoother, lifecycle_with_collision, lifecycle_without_collision,

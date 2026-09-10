@@ -65,11 +65,16 @@ checks = [
 for name, actual, ceiling in checks:
     if float(actual) > float(ceiling) + 1e-9: fail(f'{name}: {actual} exceeds {ceiling}')
 
+# Teleop may use a normalized +/-80 deg/s encoding, but every post-router command
+# must be bounded by the certified physical yaw-rate authority from vehicle.yaml.
 teleop_yaw_encoding = math.radians(float(teleop['yaw_max_deg_s']))
-if abs(float(sm['max_velocity'][2])) + 1e-9 < teleop_yaw_encoding:
-    fail(f'Smoother yaw {sm["max_velocity"][2]} truncates teleop encoding {teleop_yaw_encoding}')
-if abs(float(sm['min_velocity'][2])) + 1e-9 < teleop_yaw_encoding:
-    fail(f'Smoother negative yaw {sm["min_velocity"][2]} truncates teleop encoding {teleop_yaw_encoding}')
+physical_yaw_limit = float(v['max_yaw_rate_rps'])
+if teleop_yaw_encoding + 1e-9 < physical_yaw_limit:
+    fail('Teleop encoding span is smaller than the certified physical yaw authority')
+if not near(abs(float(sm['max_velocity'][2])), physical_yaw_limit, 1e-9):
+    fail('Smoother positive yaw must equal vehicle physical SSOT')
+if not near(abs(float(sm['min_velocity'][2])), physical_yaw_limit, 1e-9):
+    fail('Smoother negative yaw must equal vehicle physical SSOT')
 if float(ctrl['ax_min']) < float(v['max_decel_mps2']) - 1e-9:
     fail('MPPI decel exceeds certified magnitude')
 if float(sm['max_decel'][0]) < float(v['max_decel_mps2']) - 1e-9:
@@ -77,14 +82,17 @@ if float(sm['max_decel'][0]) < float(v['max_decel_mps2']) - 1e-9:
 if float(sm['max_decel'][2]) < -float(v['max_yaw_accel_rps2']) - 1e-9:
     fail('Smoother yaw decel exceeds certified magnitude')
 
-# IMU absolute-yaw contract: a fresh orientation may publish even if gyro is stale.
-# GNSS now owns vyaw, so suppressing valid orientation on stale gyro would deadlock EKF startup.
-if imu.get('require_fresh_gyro_for_imu_publish', True): fail('fresh gyro gate must be false when IMU owns yaw only')
+# IMU measurement epoch contract: /imu/data is emitted on a fresh gyro packet and
+# stamped with that packet epoch. Angle/accel are included only when time-aligned.
+# This prevents stale gyro data from receiving a new host publication timestamp.
+if not imu.get('require_fresh_gyro_for_imu_publish', False): fail('fresh gyro gate must remain fail-closed')
 if not 0.05 <= float(imu.get('gyro_packet_timeout_sec', 0)) <= 2.0: fail('gyro timeout invalid')
+if not 0.005 <= float(imu.get('component_sync_max_gap_sec', 0)) <= 0.10: fail('IMU component sync gap invalid')
 imu_cpp=(root/'src/imu_node.cpp').read_text()
 imu_hpp=(root/'include/imu/imu_node.hpp').read_text()
-for token in ['last_gyro_packet_time_', 'gyro_packet_timeout_sec_', 'require_fresh_gyro_for_imu_publish_', 'if (publishImu())', 'EKF yaw now comes from the absolute IMU orientation quaternion']:
-    if token not in imu_cpp + imu_hpp: fail(f'IMU freshness source missing {token}')
+for token in ['last_gyro_measurement_stamp_', 'packetStampNow', 'component_sync_max_gap_sec_',
+              'msg.header.stamp = measurement_stamp', 'if (require_fresh_gyro_for_imu_publish_ && !gyro_fresh)']:
+    if token not in imu_cpp + imu_hpp: fail(f'IMU measurement-time contract missing {token}')
 
 # No dead GUI goal checker path remains.
 gui=read_gui_source(root) + (root/'gui/agv_gui_specs.hpp').read_text()

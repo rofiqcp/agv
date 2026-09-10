@@ -436,6 +436,9 @@ private:
     // steering model is operating near its mechanical extremes.
     declare_parameter<double>("odom_v_variance_base", 0.03);
     declare_parameter<double>("odom_v_variance_rpm_error_gain", 0.20);
+    declare_parameter<std::string>("wheel_slip_topic", "/localization/wheel_slip");
+    declare_parameter<double>("wheel_slip_timeout_sec", 0.75);
+    declare_parameter<double>("wheel_slip_covariance_multiplier", 25.0);
     declare_parameter<double>("odom_yaw_variance_base", 0.08);
     declare_parameter<double>("odom_yaw_variance_steer_gain", 0.30);
     declare_parameter<double>("odom_yaw_rate_variance_base", 0.05);
@@ -673,6 +676,10 @@ private:
     base_frame_ = get_parameter("base_frame").as_string();
     odom_v_variance_base_ = std::max(1.0e-6, get_parameter("odom_v_variance_base").as_double());
     odom_v_variance_rpm_error_gain_ = std::max(0.0, get_parameter("odom_v_variance_rpm_error_gain").as_double());
+    wheel_slip_topic_ = get_parameter("wheel_slip_topic").as_string();
+    wheel_slip_timeout_sec_ = std::clamp(get_parameter("wheel_slip_timeout_sec").as_double(), 0.1, 5.0);
+    wheel_slip_covariance_multiplier_ = std::clamp(
+      get_parameter("wheel_slip_covariance_multiplier").as_double(), 1.0, 1000.0);
     odom_yaw_variance_base_ = std::max(1.0e-6, get_parameter("odom_yaw_variance_base").as_double());
     odom_yaw_variance_steer_gain_ = std::max(0.0, get_parameter("odom_yaw_variance_steer_gain").as_double());
     odom_yaw_rate_variance_base_ = std::max(1.0e-6, get_parameter("odom_yaw_rate_variance_base").as_double());
@@ -1147,6 +1154,12 @@ private:
     yaw_rate_feedback_status_pub_ =
       create_publisher<std_msgs::msg::String>("/esc/yaw_rate_feedback/status", stateQos());
     odom_pub_ = create_publisher<nav_msgs::msg::Odometry>(odom_topic_, 10);
+    wheel_slip_sub_ = create_subscription<std_msgs::msg::Bool>(
+      wheel_slip_topic_, rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local(),
+      [this](std_msgs::msg::Bool::SharedPtr msg) {
+        wheel_slip_active_ = msg->data;
+        wheel_slip_received_ = now();
+      });
 
     // F411 owns the physical USB CDC. Ackermann exchanges the exact existing
     // 14-byte actuator frames through ROS byte arrays; direct serial remains fallback.
@@ -1213,6 +1226,12 @@ private:
       t.nanoseconds() >= 0 && t <= teleop_takeover_until_;
     const bool estop = global_estop_ || teleop_estop_ || (source_fresh && teleop_source_ == "E_STOP");
     const bool gate_ok = !require_autonomy_gate_ || (autonomy_gate_seen_ && autonomy_gate_);
+    // /cmd_vel is unified after the router/smoother. Routed TELEOP must remain usable
+    // even when the autonomy gate is closed, while routed AUTONOMY is checked again
+    // here as a second independent interlock at the actuator boundary.
+    const bool routed_teleop = source_fresh &&
+      (teleop_source_ == "TELEOP" || teleop_source_ == "TELEOP_RELEASE_HOLD");
+    const bool unified_cmd_gate_ok = routed_teleop || gate_ok;
 
     if (estop) {
       selected.estop = true;
@@ -1239,14 +1258,12 @@ private:
       return selected;
     }
 
-    if (nav2_fresh && gate_ok) {
+    if (nav2_fresh && unified_cmd_gate_ok) {
       selected.twist = clampTwist(nav2_.cmd);
       // In the main stack /cmd_vel is the unified, smoothed command. The router
       // source tells us whether angular.z still represents manual normalized
       // steering or an autonomous yaw-rate request. This preserves steering
       // semantics while guaranteeing joystick commands pass the velocity smoother.
-      const bool routed_teleop = source_fresh &&
-        (teleop_source_ == "TELEOP" || teleop_source_ == "TELEOP_RELEASE_HOLD");
       if (routed_teleop) {
         selected.teleop = true;
         selected.source = teleop_source_;
@@ -1258,7 +1275,7 @@ private:
       return selected;
     }
 
-    selected.source = gate_ok ? "IDLE" : "NAV2_GATE_CLOSED";
+    selected.source = unified_cmd_gate_ok ? "IDLE" : "NAV2_GATE_CLOSED";
     return selected;
   }
 
@@ -2932,8 +2949,12 @@ private:
     const double steer_norm = std::clamp(
       std::abs(steering_rad) /
       std::max(1.0e-6, operationalPhysicalLimitDeg() * kPi / 180.0), 0.0, 1.0);
-    const double v_var = odom_v_variance_base_ +
+    const bool slip_fresh = wheel_slip_active_ && wheel_slip_received_.nanoseconds() > 0 &&
+      (stamp - wheel_slip_received_).seconds() >= 0.0 &&
+      (stamp - wheel_slip_received_).seconds() <= wheel_slip_timeout_sec_;
+    double v_var = odom_v_variance_base_ +
       odom_v_variance_rpm_error_gain_ * rpm_error_norm * rpm_error_norm;
+    if (slip_fresh) v_var *= wheel_slip_covariance_multiplier_;
     const double yaw_var = odom_yaw_variance_base_ +
       odom_yaw_variance_steer_gain_ * steer_norm * steer_norm;
     odom.pose.covariance[0] = std::max(0.05, v_var);
@@ -3089,6 +3110,11 @@ private:
   std::string base_frame_{"base_footprint"};
   double odom_v_variance_base_{0.03};
   double odom_v_variance_rpm_error_gain_{0.20};
+  std::string wheel_slip_topic_{"/localization/wheel_slip"};
+  double wheel_slip_timeout_sec_{0.75};
+  double wheel_slip_covariance_multiplier_{25.0};
+  bool wheel_slip_active_{false};
+  rclcpp::Time wheel_slip_received_{0, 0, RCL_ROS_TIME};
   double odom_yaw_variance_base_{0.08};
   double odom_yaw_variance_steer_gain_{0.30};
   double odom_yaw_rate_variance_base_{0.05};
@@ -3218,6 +3244,7 @@ private:
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr yaw_rate_feedback_active_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr yaw_rate_feedback_status_pub_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr wheel_slip_sub_;
   rclcpp::TimerBase::SharedPtr control_timer_, stm32_transport_timer_;
 };
 

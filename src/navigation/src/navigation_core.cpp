@@ -147,6 +147,9 @@ private:
     declare_parameter<double>("min_speed_for_yaw_mps", 0.08);
     declare_parameter<bool>("require_perception_for_autonomy_motion", false);
     declare_parameter<double>("perception_timeout_sec", 1.5);
+    declare_parameter<bool>("require_sensor_publisher_contract", true);
+    declare_parameter<std::string>("sensor_publisher_contract_topic", "/system/sensor_publishers_ok");
+    declare_parameter<double>("sensor_publisher_contract_timeout_sec", 0.75);
     declare_parameter<bool>("require_camera_metric_calibration", false);
     declare_parameter<bool>("camera_metric_calibration_validated", false);
     // Stage-1 commissioning interlocks. Autonomous motion must stay fail-closed
@@ -167,6 +170,7 @@ private:
     // opt-in and applies a low speed cap; production remains fail-closed until
     // MPPI/safety/fault-injection evidence has been signed off.
     declare_parameter<bool>("require_stage3_production_certification", true);
+    declare_parameter<bool>("precision_mode", false);
     declare_parameter<bool>("require_collision_monitor_for_production", true);
     declare_parameter<bool>("require_perception_for_production", true);
     declare_parameter<bool>("stage3_production_certified", false);
@@ -208,6 +212,10 @@ private:
     min_speed_for_yaw_mps_ = std::max(0.0, get_parameter("min_speed_for_yaw_mps").as_double());
     require_perception_for_motion_ = get_parameter("require_perception_for_autonomy_motion").as_bool();
     perception_timeout_sec_ = std::clamp(get_parameter("perception_timeout_sec").as_double(), 0.2, 10.0);
+    require_sensor_publisher_contract_ = get_parameter("require_sensor_publisher_contract").as_bool();
+    sensor_publisher_contract_topic_ = get_parameter("sensor_publisher_contract_topic").as_string();
+    sensor_publisher_contract_timeout_sec_ = std::clamp(
+      get_parameter("sensor_publisher_contract_timeout_sec").as_double(), 0.1, 5.0);
     require_camera_calibration_ = get_parameter("require_camera_metric_calibration").as_bool();
     camera_calibration_validated_ = get_parameter("camera_metric_calibration_validated").as_bool();
     require_steering_calibration_ =
@@ -226,6 +234,7 @@ private:
     imu_calibration_validated_ = get_parameter("imu_calibration_validated").as_bool();
     require_stage3_production_certification_ =
       get_parameter("require_stage3_production_certification").as_bool();
+    precision_mode_ = get_parameter("precision_mode").as_bool();
     require_collision_monitor_for_production_ =
       get_parameter("require_collision_monitor_for_production").as_bool();
     require_perception_for_production_ =
@@ -312,6 +321,19 @@ private:
       [this](std_msgs::msg::Bool::SharedPtr msg) {
         std::lock_guard<std::mutex> lock(mutex_);
         motion_localization_ready_ = msg->data;
+      });
+    sensor_contract_sub_ = create_subscription<std_msgs::msg::Bool>(
+      sensor_publisher_contract_topic_, stateQos(),
+      [this](std_msgs::msg::Bool::SharedPtr msg) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        sensor_publisher_contract_ok_ = msg->data;
+        last_sensor_publisher_contract_time_ = now();
+      });
+    precision_localization_sub_ = create_subscription<std_msgs::msg::Bool>(
+      "/system/precision_localization_ready", stateQos(),
+      [this](std_msgs::msg::Bool::SharedPtr msg) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        precision_localization_ready_ = msg->data;
       });
     localization_state_sub_ = create_subscription<std_msgs::msg::String>(
       "/system/localization_state", stateQos(),
@@ -574,6 +596,12 @@ private:
     const bool commissioning = stage3_commissioning_mode_ && !stage3_production_certified_;
     if (estop_ || !esc_ready_ || !map_ready_ || !velocity_smoother_active_ ||
         !planning_localization_ready_) return false;
+    if (require_sensor_publisher_contract_) {
+      if (!sensor_publisher_contract_ok_ || last_sensor_publisher_contract_time_.nanoseconds() == 0) return false;
+      const double publisher_contract_age = (t - last_sensor_publisher_contract_time_).seconds();
+      if (publisher_contract_age < 0.0 || publisher_contract_age > sensor_publisher_contract_timeout_sec_) return false;
+    }
+    if (precision_mode_ && !precision_localization_ready_) return false;
     if (!commissioning && !motion_localization_ready_) return false;
     if (!commissioning) {
       if (require_camera_calibration_ && !camera_calibration_validated_) return false;
@@ -939,6 +967,7 @@ private:
     bool esc_steer_connected = false;
     bool esc_armed = false;
     bool esc_feedback_valid = false;
+    bool precision_localization_ready = false;
     std::string localization;
     std::string gnss;
     std::string imu;
@@ -992,6 +1021,7 @@ private:
       esc_steer_connected = esc_steer_connected_;
       esc_armed = esc_armed_;
       esc_feedback_valid = esc_feedback_valid_;
+      precision_localization_ready = precision_localization_ready_;
       localization = localization_state_;
       gnss = gnss_status_;
       imu = imu_status_;
@@ -1063,6 +1093,7 @@ private:
        << ";motion_localization=" << motion_loc
        << ";nav2_action=" << nav2_action
        << ";velocity_smoother_active=" << smoother_active
+       << ";sensor_publishers=" << sensor_publisher_contract_ok_
        << ";autonomy_motion_allowed=" << motion_allowed
        << ";perception=" << perception_fresh
        << ";camera_usb=" << camera_connected
@@ -1074,6 +1105,8 @@ private:
        << ";circle_cal=" << steering_circle_calibration_validated_
        << ";drive_odom_cal=" << drive_odometry_calibration_validated_
        << ";imu_cal=" << imu_calibration_validated_
+       << ";precision_mode=" << precision_mode_
+       << ";precision_localization=" << precision_localization_ready
        << ";stage3_cert=" << stage3_production_certified_
        << ";stage3_commissioning=" << stage3_commissioning_mode_
        << ";estop=" << estop
@@ -1305,6 +1338,9 @@ private:
   double linear_deadband_mps_{0.08}, angular_deadband_rps_{0.02}, min_speed_for_yaw_mps_{0.08};
   bool require_perception_for_motion_{true};
   double perception_timeout_sec_{1.5};
+  bool require_sensor_publisher_contract_{true};
+  std::string sensor_publisher_contract_topic_{"/system/sensor_publishers_ok"};
+  double sensor_publisher_contract_timeout_sec_{0.75};
   bool require_camera_calibration_{true}, camera_calibration_validated_{false};
   bool require_steering_calibration_{true};
   bool steering_calibration_validated_{false};
@@ -1318,6 +1354,8 @@ private:
   bool require_collision_monitor_for_production_{true};
   bool require_perception_for_production_{true};
   bool stage3_production_certified_{false};
+  bool precision_mode_{false};
+  bool precision_localization_ready_{false};
   bool stage3_commissioning_mode_{false};
   double stage3_commissioning_speed_cap_mps_{1.0};
   double overlay_text_size_px_{9.0}, log_heartbeat_sec_{10.0};
@@ -1332,6 +1370,8 @@ private:
   uint32_t map_width_{0}, map_height_{0};
   float map_resolution_{0.0F};
   bool planning_localization_ready_{false}, motion_localization_ready_{false};
+  bool sensor_publisher_contract_ok_{false};
+  rclcpp::Time last_sensor_publisher_contract_time_{0, 0, RCL_ROS_TIME};
   bool nav2_action_ready_{false}, nav2_lifecycle_started_{false}, nav2_startup_requested_{false};
   bool velocity_smoother_active_{false};
   bool smoother_state_request_in_flight_{false}, smoother_transition_request_in_flight_{false};
@@ -1369,7 +1409,7 @@ private:
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr gnss_map_sub_, esc_odom_sub_;
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr esc_steering_actual_sub_, esc_drive_target_sub_, esc_drive_actual_sub_, esc_steering_target_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
-  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr planning_loc_sub_, motion_loc_sub_, esc_ready_sub_, estop_sub_, esc_feedback_valid_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr planning_loc_sub_, motion_loc_sub_, sensor_contract_sub_, precision_localization_sub_, esc_ready_sub_, estop_sub_, esc_feedback_valid_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr gnss_connected_sub_, imu_connected_sub_, camera_connected_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr esc_drive_connected_sub_, esc_steer_connected_sub_, esc_armed_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr localization_state_sub_, gnss_status_sub_, imu_status_sub_;

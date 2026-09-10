@@ -147,6 +147,7 @@ private:
     double vx_mps{0.0};
     double vy_mps{0.0};
     double yaw_rate_rps{0.0};
+    double vx_variance{1.0};
   };
 
   struct MapCalibrationPair
@@ -223,6 +224,9 @@ private:
     declare_parameter<double>("gnss_cog_fit_course_max_rad", 0.3490658504);
     declare_parameter<double>("gnss_lateral_velocity_warn_mps", 0.15);
     declare_parameter<double>("wheel_gnss_slip_residual_mps", 0.25);
+    declare_parameter<double>("wheel_gnss_nis_gate", 6.634896601);
+    declare_parameter<double>("cog_nis_gate", 6.634896601);
+    declare_parameter<double>("innovation_min_variance", 1.0e-6);
     declare_parameter<double>("cog_valid_hold_sec", 1.5);
     declare_parameter<double>("cog_invalid_hold_sec", 0.5);
 
@@ -450,6 +454,9 @@ private:
     gnss_cog_fit_course_max_rad_ = std::clamp(get_parameter("gnss_cog_fit_course_max_rad").as_double(), 0.01, M_PI);
     gnss_lateral_velocity_warn_mps_ = std::max(0.01, get_parameter("gnss_lateral_velocity_warn_mps").as_double());
     wheel_gnss_slip_residual_mps_ = std::max(0.01, get_parameter("wheel_gnss_slip_residual_mps").as_double());
+    wheel_gnss_nis_gate_ = std::max(0.1, get_parameter("wheel_gnss_nis_gate").as_double());
+    cog_nis_gate_ = std::max(0.1, get_parameter("cog_nis_gate").as_double());
+    innovation_min_variance_ = std::max(1.0e-12, get_parameter("innovation_min_variance").as_double());
     cog_valid_hold_sec_ = std::max(0.0, get_parameter("cog_valid_hold_sec").as_double());
     cog_invalid_hold_sec_ = std::max(0.0, get_parameter("cog_invalid_hold_sec").as_double());
     gnss_yaw_rate_min_speed_mps_ = std::max(0.05,
@@ -1008,6 +1015,7 @@ private:
       out.vx_mps = a.vx_mps + u * (b.vx_mps - a.vx_mps);
       out.vy_mps = a.vy_mps + u * (b.vy_mps - a.vy_mps);
       out.yaw_rate_rps = a.yaw_rate_rps + u * (b.yaw_rate_rps - a.yaw_rate_rps);
+      out.vx_variance = std::max(1.0e-9, a.vx_variance + u * (b.vx_variance - a.vx_variance));
       return true;
     }
     return false;
@@ -1240,6 +1248,20 @@ private:
 
     const bool lateral_ok = std::abs(gnss_base_vy_mps_) <= gnss_lateral_velocity_warn_mps_;
     const double wheel_residual = local_forward_at_gnss_mps_ - gnss_base_vx_mps_;
+    const double wheel_innovation_variance = std::max(
+      innovation_min_variance_, local_forward_variance_at_gnss_ + gnss_base_vx_variance_);
+    const double wheel_nis = have_local_motion_at_gnss_ ?
+      (wheel_residual * wheel_residual / wheel_innovation_variance) :
+      std::numeric_limits<double>::quiet_NaN();
+    const double cog_variance = std::max(
+      innovation_min_variance_,
+      std::isfinite(quality_.course_accuracy_rad) && quality_.course_accuracy_rad > 0.0 ?
+        quality_.course_accuracy_rad * quality_.course_accuracy_rad : 1.0e6);
+    const double cog_nis = std::isfinite(cog_vel_residual) ?
+      (cog_vel_residual * cog_vel_residual / cog_variance) :
+      std::numeric_limits<double>::quiet_NaN();
+    const bool wheel_nis_gate_pass = !std::isfinite(wheel_nis) || wheel_nis <= wheel_gnss_nis_gate_;
+    const bool cog_nis_gate_pass = !std::isfinite(cog_nis) || cog_nis <= cog_nis_gate_;
     wheel_gnss_residual_mps_ = wheel_residual;
     wheel_slip_motion_detected_ = have_local_motion_at_gnss_ && vel_fresh && quality_ok &&
       std::abs(wheel_residual) >= wheel_gnss_slip_residual_mps_ &&
@@ -1247,7 +1269,7 @@ private:
         slip_min_wheel_speed_mps_;
 
     gnss_velocity_qualified_ = vel_fresh && quality_ok && gnss_last_velocity_covariance_valid_ &&
-      vector_speed_ok && cog_vel_ok && lateral_ok;
+      vector_speed_ok && cog_vel_ok && cog_nis_gate_pass && wheel_nis_gate_pass && lateral_ok;
     if (fit_fresh) gnss_velocity_qualified_ = gnss_velocity_qualified_ && fit_speed_ok;
 
     // COG heading qualification must NOT depend on the current map/body yaw projection.
@@ -1265,7 +1287,7 @@ private:
       std::isfinite(quality_.course_accuracy_rad) &&
       quality_.course_accuracy_rad <= cog_max_heading_accuracy_rad_ &&
       std::abs(local_yaw_rate_at_gnss_rps_) <= cog_max_local_yaw_rate_rps_ &&
-      cog_vel_ok && fit_course_ok;
+      cog_vel_ok && cog_nis_gate_pass && fit_course_ok;
 
     const auto t = now();
     if (raw_cog_candidate) {
@@ -1284,6 +1306,25 @@ private:
     std_msgs::msg::Float64 sr; sr.data = wheel_residual; gnss_speed_residual_pub_->publish(sr);
     std_msgs::msg::Float64 cr; cr.data = std::isfinite(cog_vel_residual) ? cog_vel_residual : 0.0;
     gnss_course_residual_pub_->publish(cr);
+    std_msgs::msg::Bool slip_msg;
+    slip_msg.data = wheel_slip_motion_detected_;
+    wheel_slip_pub_->publish(slip_msg);
+
+    std::ostringstream innovation;
+    innovation << std::fixed << std::setprecision(6)
+      << "{\"wheel_gnss_residual_mps\":" << wheel_residual
+      << ",\"wheel_innovation_variance\":" << wheel_innovation_variance
+      << ",\"wheel_nis\":" << (std::isfinite(wheel_nis) ? wheel_nis : -1.0)
+      << ",\"wheel_nis_gate\":" << wheel_gnss_nis_gate_
+      << ",\"wheel_gate_pass\":" << (wheel_nis_gate_pass ? "true" : "false")
+      << ",\"cog_residual_rad\":" << (std::isfinite(cog_vel_residual) ? cog_vel_residual : 0.0)
+      << ",\"cog_variance_rad2\":" << cog_variance
+      << ",\"cog_nis\":" << (std::isfinite(cog_nis) ? cog_nis : -1.0)
+      << ",\"cog_nis_gate\":" << cog_nis_gate_
+      << ",\"cog_gate_pass\":" << (cog_nis_gate_pass ? "true" : "false")
+      << ",\"stamp_sec\":" << stamp.seconds() << "}";
+    std_msgs::msg::String innovation_msg; innovation_msg.data = innovation.str();
+    innovation_status_pub_->publish(innovation_msg);
 
     const char * confidence = gnss_velocity_qualified_ ? (cog_motion_qualified_ ? "HIGH" : "MEDIUM") : "LOW";
     std::ostringstream ss;
@@ -1312,6 +1353,10 @@ private:
        << ",\"antenna_speed_mps\":" << antenna_speed
        << ",\"base_speed_mps\":" << base_speed
        << ",\"wheel_minus_gnss_mps\":" << wheel_residual
+       << ",\"wheel_nis\":" << (std::isfinite(wheel_nis) ? wheel_nis : -1.0)
+       << ",\"wheel_nis_gate_pass\":" << (wheel_nis_gate_pass ? "true" : "false")
+       << ",\"cog_nis\":" << (std::isfinite(cog_nis) ? cog_nis : -1.0)
+       << ",\"cog_nis_gate_pass\":" << (cog_nis_gate_pass ? "true" : "false")
        << ",\"cog_minus_vel_course_rad\":" << (std::isfinite(cog_vel_residual) ? -cog_vel_residual : 999.0)
        << ",\"fit_minus_gnss_speed_mps\":" << (std::isfinite(fit_speed_residual) ? fit_speed_residual : 999.0)
        << ",\"fit_minus_cog_rad\":" << (std::isfinite(cog_fit_residual) ? cog_fit_residual : 999.0)
@@ -1373,12 +1418,14 @@ private:
       gnss_last_sync_gap_sec_ = std::abs((stamp - local.stamp).seconds());
       local_forward_at_gnss_mps_ = local.vx_mps;
       local_yaw_rate_at_gnss_rps_ = local.yaw_rate_rps;
+      local_forward_variance_at_gnss_ = std::max(innovation_min_variance_, local.vx_variance);
     } else {
       // No rejection: this is the expected state when ESC is disabled/offline
       // before the local EKF has started publishing.
       gnss_last_sync_gap_sec_ = 999.0;
       local_forward_at_gnss_mps_ = 0.0;
       local_yaw_rate_at_gnss_rps_ = 0.0;
+      local_forward_variance_at_gnss_ = 1.0e6;
     }
 
     gnss_enu_ve_mps_ = ve;
@@ -1476,6 +1523,7 @@ private:
     rotCov(c, sn, a, b, d, map_xx, map_xy, map_yy);
     double body_xx=0.0,body_xy=0.0,body_yy=0.0;
     rotCov(cy, -sy, map_xx, map_xy, map_yy, body_xx, body_xy, body_yy);
+    gnss_base_vx_variance_ = std::max(innovation_min_variance_, body_xx);
 
     geometry_msgs::msg::TwistWithCovarianceStamped map_msg = *msg;
     map_msg.header.frame_id = map_frame_;
@@ -1602,6 +1650,10 @@ private:
       "/gnss/speed_residual", stateQos());
     gnss_course_residual_pub_ = create_publisher<std_msgs::msg::Float64>(
       "/gnss/course_residual", stateQos());
+    innovation_status_pub_ = create_publisher<std_msgs::msg::String>(
+      "/localization/innovation_status", stateQos());
+    wheel_slip_pub_ = create_publisher<std_msgs::msg::Bool>(
+      "/localization/wheel_slip", stateQos());
     pose_estimator_pub_ =
       create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
       "/localization/pose_estimator_map", stateQos());
@@ -1811,7 +1863,7 @@ private:
     const rclcpp::Time measurement_stamp = stampOrNow(msg->header.stamp);
     local_motion_history_.push_back(LocalMotionSample{
       measurement_stamp, pose, msg->twist.twist.linear.x, msg->twist.twist.linear.y,
-      msg->twist.twist.angular.z});
+      msg->twist.twist.angular.z, std::max(innovation_min_variance_, msg->twist.covariance[0])});
     while (!local_motion_history_.empty() &&
       (measurement_stamp - local_motion_history_.front().stamp).seconds() > gnss_motion_history_sec_) {
       local_motion_history_.pop_front();
@@ -3027,6 +3079,9 @@ private:
   double gnss_cog_fit_course_max_rad_{0.3490658504};
   double gnss_lateral_velocity_warn_mps_{0.15};
   double wheel_gnss_slip_residual_mps_{0.25};
+  double wheel_gnss_nis_gate_{6.634896601};
+  double cog_nis_gate_{6.634896601};
+  double innovation_min_variance_{1.0e-6};
   double cog_valid_hold_sec_{1.5};
   double cog_invalid_hold_sec_{0.5};
   double gnss_yaw_rate_min_speed_mps_{0.20};
@@ -3172,6 +3227,8 @@ private:
   double gnss_fit_speed_mps_{0.0};
   double gnss_fit_course_enu_rad_{0.0};
   double local_forward_at_gnss_mps_{0.0};
+  double local_forward_variance_at_gnss_{1.0e6};
+  double gnss_base_vx_variance_{1.0e6};
   double local_yaw_rate_at_gnss_rps_{0.0};
   double gnss_map_yaw_at_measurement_rad_{0.0};
   double gnss_yaw_rate_rps_{0.0};
@@ -3273,6 +3330,8 @@ private:
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr gnss_cog_qualified_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr gnss_speed_residual_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr gnss_course_residual_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr innovation_status_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr wheel_slip_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr
     pose_estimator_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pose_estimator_status_pub_;

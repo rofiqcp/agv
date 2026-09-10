@@ -22,7 +22,11 @@ data_imu_node:
     orientation_publish_timeout_sec: 0.5
     gyro_packet_timeout_sec: 0.35
     accel_packet_timeout_sec: 0.5
-    require_fresh_gyro_for_imu_publish: false
+    require_fresh_gyro_for_imu_publish: true
+    component_sync_max_gap_sec: 0.05
+    timestamp_max_future_sec: 0.02
+    timestamp_max_regression_sec: 0.002
+    timing_status_rate_hz: 2.0
     sensor_config_retry_sec: 30.0
     orientation_reopen_sec: 20.0
     publish_orientation: true

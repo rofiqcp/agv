@@ -20,14 +20,15 @@ if str(planner['motion_model_for_search']).upper()!='DUBIN': fail('production ba
 if float(m['vx_min']) < -1e-9: fail('MPPI reverse enabled while Smac baseline is DUBIN')
 if abs(float(m['model_dt'])-1.0/float(ctrl['controller_frequency']))>1e-9: fail('MPPI model_dt != controller period')
 if float(m['wz_max']) > float(m['vx_max'])/r+1e-7: fail('MPPI yaw cap violates v/R')
-# velocity_smoother is shared by autonomy and manual teleop. For routed teleop,
-# angular.z is a normalized steering encoding, not a physical yaw-rate. Therefore
-# v/R must be enforced before/after the smoother on the autonomous path, while the
-# shared smoother must preserve the full manual steering encoding.
+# velocity_smoother is the final kinematic command limiter before Ackermann conversion.
+# Teleop may encode a wider normalized steering request, but the smoother must clamp
+# angular.z to the certified physical vehicle yaw authority in both directions.
 teleop = yaml.safe_load((ROOT.parent/'esc/config/teleop.yaml').read_text())['/**']['ros__parameters']
 teleop_yaw_encoding = math.radians(float(teleop['yaw_max_deg_s']))
-if abs(float(sm['max_velocity'][2])) + 1e-7 < teleop_yaw_encoding: fail('smoother truncates manual steering encoding')
-if abs(float(sm['min_velocity'][2])) + 1e-7 < teleop_yaw_encoding: fail('smoother truncates negative manual steering encoding')
+physical_yaw_limit = float(veh['max_yaw_rate_rps'])
+if teleop_yaw_encoding + 1e-7 < physical_yaw_limit: fail('teleop encoding smaller than physical yaw authority')
+if not math.isclose(abs(float(sm['max_velocity'][2])),physical_yaw_limit,rel_tol=0,abs_tol=1e-7): fail('smoother positive yaw != vehicle SSOT')
+if not math.isclose(abs(float(sm['min_velocity'][2])),physical_yaw_limit,rel_tol=0,abs_tol=1e-7): fail('smoother negative yaw != vehicle SSOT')
 if col['cmd_vel_in_topic']!='/cmd_vel/nav2_pre_collision' or col['cmd_vel_out_topic']!='/cmd_vel/autonomy_pre_smoother': fail('collision monitor command ownership invalid')
 if traj['output_cmd_topic']!='/cmd_vel/autonomy_integrated': fail('trajectory safety command ownership invalid')
 for src,token in [

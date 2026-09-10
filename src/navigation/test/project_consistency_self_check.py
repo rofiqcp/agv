@@ -109,14 +109,17 @@ for label, val in [
     if float(val) > nav_yaw_cap + 1e-7:
         fail(f'{label} yaw limit {val} exceeds autonomous v/R cap {nav_yaw_cap}')
 
-# velocity_smoother is a shared transport. Autonomous yaw is already bounded above,
-# while teleop uses angular.z as a normalized steering encoding. Therefore the
-# smoother must pass at least +/-yaw_max_deg_s or full-stick steering is truncated.
+# Teleop input may use a wider normalized angular encoding, but the shared smoother
+# is now the authoritative physical yaw limiter. Verify it matches vehicle SSOT
+# exactly in both directions and that the input encoding can still span that range.
 teleop_yaw_encoding = math.radians(float(teleop['yaw_max_deg_s']))
+vehicle_yaw_limit = float(vehicle['max_yaw_rate_rps'])
+if teleop_yaw_encoding + 1e-7 < vehicle_yaw_limit:
+    fail('teleop steering encoding smaller than physical vehicle yaw authority')
 for label, val in [('velocity_smoother max', sm['max_velocity'][2]),
                    ('velocity_smoother min', abs(sm['min_velocity'][2]))]:
-    if float(val) + 1e-7 < teleop_yaw_encoding:
-        fail(f'{label} {val} truncates teleop steering encoding {teleop_yaw_encoding}')
+    if not near(float(val), vehicle_yaw_limit, 1e-7):
+        fail(f'{label} {val} != vehicle yaw SSOT {vehicle_yaw_limit}')
 
 freq = float(nav2['controller_server']['ros__parameters']['controller_frequency'])
 dt = float(ctrl['model_dt'])

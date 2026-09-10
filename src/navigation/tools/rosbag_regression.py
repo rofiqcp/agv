@@ -15,12 +15,15 @@ from datetime import datetime
 from pathlib import Path
 
 TOPICS = [
-    "/tf", "/tf_static", "/imu/data", "/gnss/fix_raw", "/gnss/quality",
+    "/tf", "/tf_static", "/imu/data", "/imu/timing_status", "/gnss/fix_raw", "/gnss/quality",
     "/gnss/vel", "/gnss/velocity_position_fit", "/gnss/vel_map", "/gnss/base_velocity",
     "/gnss/base_velocity_fusion", "/gnss/cog_heading_fusion",
     "/gnss/motion_validation", "/gnss/velocity_qualified", "/gnss/cog_qualified",
     "/gnss/velocity_fusion_active", "/gnss/cog_fusion_active", "/gnss/fusion_status",
     "/gnss/speed_residual", "/gnss/course_residual", "/gnss/state", "/gnss/motion_diagnostics",
+    "/localization/innovation_status", "/localization/wheel_slip",
+    "/system/sensor_publishers_ok", "/system/sensor_publishers_status",
+    "/system/precision_localization_ready", "/system/precision_localization_status",
     "/esc/odom", "/odometry/filtered", "/odometry/filtered_map",
     "/cmd_vel_nav_raw", "/cmd_vel/autonomy_pre_smoother", "/cmd_vel/pre_smoother", "/cmd_vel/autonomy_integrated",
     "/cmd_vel/nav2_pre_collision", "/cmd_vel", "/cmd_vel/actuator",
@@ -51,7 +54,7 @@ def main():
         return run(["ros2","bag","record","-o",str(bag),*TOPICS])
     if args.cmd=="play":
         print("OFFLINE REPLAY: keep ESC disarmed / physical autonomy gate closed.")
-        return run(["ros2","bag","play",str(Path(args.bag).expanduser()),"--rate",str(args.rate)])
+        return run(["ros2","bag","play",str(Path(args.bag).expanduser()),"--rate",str(args.rate),"--clock"])
     return run(["ros2","bag","info",str(Path(args.bag).expanduser())])
 
 if __name__=="__main__": raise SystemExit(main())

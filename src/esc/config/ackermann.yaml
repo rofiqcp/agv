@@ -19,11 +19,10 @@ esc_ackermann:
     drive_wheel_radius_m: 0.145
     drive_motor_pole_pairs: 15
     drive_gear_ratio: 1.0
-    # Temporary commissioning baseline. 1.00 m/s == 8000 eRPM until outdoor calibration.
+    # Safe standalone fallback. In autonomous.launch these values are overridden
+    # from navigation/config/vehicle.yaml, the sole certified vehicle SSOT.
     drive_erpm_per_mps: 8000.0
-    # N2.1 provisional valid run 2000 eRPM: GNSS stable mean 0.381724 m/s.
-    # V_ground = V_raw_ESC * scale; rerun 4-point fit after robot mendapat lintasan bebas.
-    drive_odometry_calibration_scale: 1.5268972865
+    drive_odometry_calibration_scale: 1.0
     wheelbase_m: 0.7
     track_width_m: 0.48
     min_speed_for_nav_steering_mps: 0.05
@@ -122,6 +121,9 @@ esc_ackermann:
     base_frame: base_footprint
     odom_v_variance_base: 0.03
     odom_v_variance_rpm_error_gain: 0.2
+    wheel_slip_topic: /localization/wheel_slip
+    wheel_slip_timeout_sec: 0.75
+    wheel_slip_covariance_multiplier: 25.0
     odom_yaw_variance_base: 0.08
     odom_yaw_variance_steer_gain: 0.3
     odom_yaw_rate_variance_base: 0.05

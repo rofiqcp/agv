@@ -75,9 +75,11 @@ for key in ('stage2_min_velocity_epochs','stage2_min_cog_epochs','stage2_min_vel
             'stage2_min_cog_qualified_ratio','stage2_max_sync_gap_p95_sec','stage2_max_wheel_gnss_residual_p95_mps'):
     require(key in loc,f'persistent Stage-2 evidence missing: {key}')
 
-# 4) IMU calibration remains an autonomy interlock. Raw IMU orientation is fused only as
-# relative yaw + gyro-Z; COG and the pre-EKF heading validator are the only absolute-yaw inputs.
-require(imu.get('require_fresh_gyro_for_imu_publish') is False,'IMU orientation must survive stale gyro when yaw is valid')
+# 4) IMU calibration remains an autonomy interlock. robot_localization fuses gyro-Z only;
+# the supervisory heading path may consume time-aligned orientation, but /imu/data itself
+# is emitted on a fresh gyro measurement epoch so stale gyro can never receive a new stamp.
+require(imu.get('require_fresh_gyro_for_imu_publish') is True,'IMU gyro measurement epoch must remain fail-closed')
+require(0.005 <= float(imu.get('component_sync_max_gap_sec',0.0)) <= 0.10,'IMU component synchronization window invalid')
 for key in ('stationary_calibration_valid','stationary_calibration_saved_at','stationary_calibration_sample_count',
             'stationary_calibration_duration_sec','stationary_calibration_gyro_z_std_rps','stationary_calibration_accel_norm_error_mps2'):
     require(key in imu,f'IMU evidence missing: {key}')

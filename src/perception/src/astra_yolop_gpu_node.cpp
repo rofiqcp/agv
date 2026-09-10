@@ -3730,8 +3730,10 @@ private:
     safety::ObstacleGateResult gate_result;
     bool gate_valid = false;
 
-    const bool lane_authority_calibrated = camera_metric_calibration_validated_ ||
-      (lane_corridor_control_enabled_ && lane_corridor_manual_lines_enabled_);
+    // Manual pixel corridor remains useful for visualization/commissioning, but it is
+    // not metric calibration evidence. Active motion authority must match the CPU
+    // backend and remain fail-closed until physical camera metric calibration passes.
+    const bool lane_authority_calibrated = camera_metric_calibration_validated_;
     if (!lane_safety_enabled_) {
       decision = "DISABLED_PASSTHROUGH";
       blocked_latched_ = false;
@@ -3770,8 +3772,8 @@ private:
       desired = geometry_msgs::msg::Twist{};
     }
 
-    const bool applied = lane_safety_enabled_ && lane_authority_calibrated &&
-      control_mode_ == "active";
+    const bool applied = lane_safety_enabled_ && camera_metric_calibration_validated_ &&
+      lane_authority_calibrated && control_mode_ == "active";
     const geometry_msgs::msg::Twist output = applied ? desired : nav_cmd;
     safe_cmd_pub_->publish(output);
 

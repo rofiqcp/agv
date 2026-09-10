@@ -101,9 +101,18 @@ ament_target_dependencies(
   localization_core
   rclcpp sensor_msgs std_msgs builtin_interfaces geometry_msgs nav_msgs std_srvs tf2_ros)
 
+# Generic high-accuracy absolute-pose quality gate. RTK/LiDAR/VIO adapters feed
+# one PoseWithCovarianceStamped contract; precision Nav2 cannot arm from labels alone.
+add_executable(precision_localization_monitor src/precision_localization_monitor.cpp)
+ament_target_dependencies(precision_localization_monitor rclcpp std_msgs geometry_msgs)
+
 # Final command router: TELEOP/AUTONOMY arbitration happens before the single final velocity_smoother.
 add_executable(cmd_vel_router src/cmd_vel_router.cpp)
 ament_target_dependencies(cmd_vel_router rclcpp std_msgs geometry_msgs)
+
+# Runtime ROS graph contract: exactly one publisher owns every canonical critical sensor topic.
+add_executable(sensor_contract_monitor src/sensor_contract_monitor.cpp)
+ament_target_dependencies(sensor_contract_monitor rclcpp std_msgs)
 
 # NavigationCore hanya mengurus lifecycle/goal/autonomous routing.
 add_executable(navigation_core src/navigation_core.cpp)
@@ -175,6 +184,7 @@ if(BUILD_TESTING)
     minipc_launch_integration_self_check
     minipc_build_environment_self_check
     nav2_velocity_chain_self_check
+    navigation_deep_audit_impl_self_check
     gui_bab4_acquisition_self_check
     gui_navigation_tuning_workspace_self_check
     precision_part1_self_check
@@ -231,7 +241,9 @@ install(TARGETS
     mag_heading_fusion
     joint_state_visualizer
     localization_core
+    precision_localization_monitor
     cmd_vel_router
+    sensor_contract_monitor
     navigation_core
     mppi_closed_loop_supervisor
     vehicle_dynamics_observer
@@ -258,6 +270,11 @@ install(
     tools/minipc_nav2_preflight.py
     tools/nav2_gui_flow_check.sh
     tools/rosbag_regression.py
+    tools/navigation_calibration.py
+    tools/navigation_metrics.py
+    tools/planar_eskf_ab.py
+    tools/navigation_fault_suite.py
+    tools/certification_manifest.py
     tools/runtime_profile.py
     tools/serial_usb_preflight.py
     tools/stage1_commissioning_check.py

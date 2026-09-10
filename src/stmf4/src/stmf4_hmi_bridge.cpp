@@ -225,6 +225,7 @@ private:
     declare_parameter<std::string>("neo3_mag_frame_id", "gnss_link");
     declare_parameter<double>("neo3_mag_sigma_ut", 3.0);
     declare_parameter<bool>("publish_stm32_gnss", true);
+    declare_parameter<bool>("neo3_require_protocol_crc", true);
     declare_parameter<double>("vesc_transport_timeout_sec", 2.0);
     declare_parameter<int>("vesc_uart_baud_expected", 115200);
   }
@@ -254,6 +255,7 @@ private:
     neo3_mag_frame_id_ = get_parameter("neo3_mag_frame_id").as_string();
     neo3_mag_sigma_ut_ = std::clamp(get_parameter("neo3_mag_sigma_ut").as_double(), 0.1, 100.0);
     publish_stm32_gnss_ = get_parameter("publish_stm32_gnss").as_bool();
+    neo3_require_protocol_crc_ = get_parameter("neo3_require_protocol_crc").as_bool();
     vesc_transport_timeout_sec_ = std::clamp(get_parameter("vesc_transport_timeout_sec").as_double(), 0.25, 10.0);
     vesc_uart_baud_expected_ = static_cast<std::uint32_t>(std::clamp<std::int64_t>(get_parameter("vesc_uart_baud_expected").as_int(), 9600, 2000000));
     vesc_uart_baud_active_.store(vesc_uart_baud_expected_);
@@ -902,6 +904,73 @@ private:
     return a;
   }
 
+  static std::uint16_t sensorCrc16Ccitt(const std::string &text) {
+    std::uint16_t crc = 0xFFFFU;
+    for (const unsigned char byte : text) {
+      crc ^= static_cast<std::uint16_t>(byte) << 8U;
+      for (std::uint8_t bit = 0; bit < 8U; ++bit) {
+        crc = (crc & 0x8000U) != 0U ? static_cast<std::uint16_t>((crc << 1U) ^ 0x1021U)
+                                    : static_cast<std::uint16_t>(crc << 1U);
+      }
+    }
+    return crc;
+  }
+
+  bool validateNeo3Protocol(
+    const std::string &payload, std::string &legacy_payload, int &version, std::uint32_t &sequence)
+  {
+    legacy_payload.clear(); version = 0; sequence = 0U;
+    const auto crc_comma = payload.rfind(',');
+    const auto version_comma = crc_comma == std::string::npos ? std::string::npos :
+      payload.rfind(',', crc_comma - 1U);
+    if (crc_comma == std::string::npos || version_comma == std::string::npos) {
+      if (!neo3_require_protocol_crc_) { legacy_payload = payload; return true; }
+      ++neo3_crc_errors_;
+      return false;
+    }
+    char *end = nullptr;
+    errno = 0;
+    const long parsed_version = std::strtol(payload.c_str() + version_comma + 1U, &end, 10);
+    if (errno != 0 || end != payload.c_str() + crc_comma || parsed_version != 2L) {
+      ++neo3_crc_errors_;
+      return false;
+    }
+    errno = 0;
+    char *crc_end = nullptr;
+    const unsigned long supplied_crc = std::strtoul(payload.c_str() + crc_comma + 1U, &crc_end, 10);
+    if (errno != 0 || crc_end == payload.c_str() + crc_comma + 1U || *crc_end != '\0' || supplied_crc > 0xFFFFUL) {
+      ++neo3_crc_errors_;
+      return false;
+    }
+    legacy_payload = payload.substr(0, version_comma);
+    const auto calculated = sensorCrc16Ccitt(legacy_payload);
+    if (calculated != static_cast<std::uint16_t>(supplied_crc)) {
+      ++neo3_crc_errors_;
+      return false;
+    }
+    const auto first_comma = legacy_payload.find(',');
+    if (first_comma == std::string::npos) { ++neo3_crc_errors_; return false; }
+    errno = 0;
+    char *seq_end = nullptr;
+    const unsigned long parsed_seq = std::strtoul(legacy_payload.c_str(), &seq_end, 10);
+    if (errno != 0 || seq_end != legacy_payload.c_str() + first_comma || parsed_seq > UINT32_MAX) {
+      ++neo3_crc_errors_;
+      return false;
+    }
+    sequence = static_cast<std::uint32_t>(parsed_seq);
+    version = static_cast<int>(parsed_version);
+    if (neo3_sequence_initialized_) {
+      const std::uint32_t delta = sequence - neo3_last_sequence_;
+      if (delta == 0U) { ++neo3_duplicate_sequences_; return false; }
+      if (delta < 0x80000000U && delta > 1U) neo3_sequence_gaps_ += static_cast<std::uint64_t>(delta - 1U);
+      // A large unsigned delta is treated as an MCU reboot/sequence reset.
+    }
+    neo3_last_sequence_ = sequence;
+    neo3_sequence_initialized_ = true;
+    neo3_protocol_version_ = version;
+    return true;
+  }
+
   void publishNeo3Connected(bool connected) {
     if (neo3_gnss_connected_state_ == connected && neo3_gnss_connected_initialized_) return;
     neo3_gnss_connected_state_ = connected;
@@ -968,7 +1037,12 @@ private:
         << "{\"source\":\"" << source << "\",\"transport\":\"stm32f411_usb_cdc\""
         << ",\"receiver_valid\":" << (receiver_valid ? "true" : "false")
         << ",\"fix_type\":" << fix_type << ",\"satellites\":" << satellites
-        << ",\"hacc_m\":" << hacc_m << ",\"dop\":" << pdop << "}";
+        << ",\"hacc_m\":" << hacc_m << ",\"dop\":" << pdop
+        << ",\"protocol_version\":" << neo3_protocol_version_
+        << ",\"sequence\":" << neo3_last_sequence_
+        << ",\"sequence_gaps\":" << neo3_sequence_gaps_
+        << ",\"crc_errors\":" << neo3_crc_errors_
+        << ",\"duplicate_sequences\":" << neo3_duplicate_sequences_ << "}";
     state.data = out.str();
     neo3_gnss_state_pub_->publish(state);
   }
@@ -1030,7 +1104,7 @@ private:
 
     const double nan = std::numeric_limits<double>::quiet_NaN();
     std_msgs::msg::Float64MultiArray quality;
-    quality.data.assign(45, nan);
+    quality.data.assign(50, nan);
     quality.data[0] = static_cast<double>(satellites);
     quality.data[1] = pdop;
     quality.data[2] = h_sigma;
@@ -1045,16 +1119,24 @@ private:
     quality.data[11] = vel_e;
     quality.data[12] = vel_n;
     quality.data[13] = vel_d;
-    quality.data[20] = 0.0;  // NAV-COV position not transported by compact MCU frame
-    // NAV-PVT sAcc plus the explicit velocity covariance above is a valid velocity
-    // uncertainty source even when NAV-COV is not forwarded by the MCU.
-    quality.data[21] = velocity_valid ? 1.0 : 0.0;
+    // Canonical /gnss/quality indices 0..44 are transport invariant. The compact
+    // F411 frame does not carry UBX NAV-COV, so both NAV-COV validity bits must be
+    // false here. The Twist covariance derived from NAV-PVT sAcc remains valid and
+    // is advertised separately in the F411-only append extension at index 49.
+    quality.data[20] = 0.0;  // NAV-COV position valid
+    quality.data[21] = 0.0;  // NAV-COV velocity valid
     quality.data[22] = pvt_rate_hz;
     quality.data[23] = std::max(0.0, (now() - stamp).seconds());
-    quality.data[24] = 1.0;  // timestamp source: F411 MCU millis mapped to ROS epoch
+    quality.data[24] = 3.0;  // canonical timestamp source: 3 = F411 MCU millis mapped to ROS epoch
     quality.data[25] = flags2;
     quality.data[26] = flags3;
     quality.data[44] = qualified_fix ? 1.0 : 0.0;
+    // 45..48 protocol diagnostics, append-only to preserve existing consumers.
+    quality.data[45] = static_cast<double>(neo3_protocol_version_);
+    quality.data[46] = static_cast<double>(neo3_last_sequence_);
+    quality.data[47] = static_cast<double>(neo3_sequence_gaps_);
+    quality.data[48] = static_cast<double>(neo3_crc_errors_ + neo3_duplicate_sequences_);
+    quality.data[49] = velocity_valid ? 1.0 : 0.0;  // F411 extension: Twist covariance from NAV-PVT sAcc valid
     neo3_quality_pub_->publish(quality);
 
     last_neo3_gnss_time_ = std::chrono::steady_clock::now();
@@ -1065,8 +1147,18 @@ private:
 
   void handleNeo3Gnss(const std::string &payload) {
     if (!publish_stm32_gnss_) return;
+    std::string legacy_payload; int protocol_version = 0; std::uint32_t sequence = 0U;
+    if (!validateNeo3Protocol(payload, legacy_payload, protocol_version, sequence)) {
+      ++neo3_parse_errors_;
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+        "Rejected SENS:GNSS protocol/CRC/sequence frame (crc=%llu dup=%llu gaps=%llu)",
+        static_cast<unsigned long long>(neo3_crc_errors_),
+        static_cast<unsigned long long>(neo3_duplicate_sequences_),
+        static_cast<unsigned long long>(neo3_sequence_gaps_));
+      return;
+    }
     std::vector<double> v;
-    if (!parseCsvNumbers(payload, 23, v)) {
+    if (!parseCsvNumbers(legacy_payload, 23, v)) {
       ++neo3_parse_errors_;
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "Malformed SENS:GNSS frame");
       return;
@@ -1084,8 +1176,13 @@ private:
 
   void handleNeo3GnssFallback(const std::string &payload) {
     if (!publish_stm32_gnss_) return;
+    std::string legacy_payload; int protocol_version = 0; std::uint32_t sequence = 0U;
+    if (!validateNeo3Protocol(payload, legacy_payload, protocol_version, sequence)) {
+      ++neo3_parse_errors_;
+      return;
+    }
     std::vector<double> v;
-    if (!parseCsvNumbers(payload, 10, v)) {
+    if (!parseCsvNumbers(legacy_payload, 10, v)) {
       ++neo3_parse_errors_;
       return;
     }
@@ -1968,6 +2065,13 @@ private:
   std::uint32_t vesc_uart_baud_expected_{115200U};
   std::atomic<std::uint32_t> vesc_uart_baud_active_{115200U};
   bool publish_stm32_gnss_{true};
+  bool neo3_require_protocol_crc_{true};
+  bool neo3_sequence_initialized_{false};
+  int neo3_protocol_version_{0};
+  std::uint32_t neo3_last_sequence_{0U};
+  std::uint64_t neo3_sequence_gaps_{0U};
+  std::uint64_t neo3_crc_errors_{0U};
+  std::uint64_t neo3_duplicate_sequences_{0U};
   std::string neo3_gnss_frame_id_{"gnss_link"}, neo3_mag_frame_id_{"gnss_link"};
   double manual_speed_max_mps_{1.0}, steering_test_angle_deg_{20.0},
          hmi_steer_full_scale_deg_{90.0}, teleop_yaw_max_rps_{80.0 * kPi / 180.0};

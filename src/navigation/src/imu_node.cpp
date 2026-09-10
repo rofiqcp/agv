@@ -12,6 +12,8 @@
 #include <thread>
 #include <atomic>
 #include <stdexcept>
+#include <sstream>
+#include <iomanip>
 
 using Clock = std::chrono::steady_clock;
 
@@ -98,7 +100,15 @@ ImuNode::ImuNode(const rclcpp::NodeOptions & options)
   accel_packet_timeout_sec_ = std::max(0.05,
     this->declare_parameter<double>("accel_packet_timeout_sec", 0.50));
   require_fresh_gyro_for_imu_publish_ =
-    this->declare_parameter<bool>("require_fresh_gyro_for_imu_publish", false);
+    this->declare_parameter<bool>("require_fresh_gyro_for_imu_publish", true);
+  component_sync_max_gap_sec_ = std::clamp(
+    this->declare_parameter<double>("component_sync_max_gap_sec", 0.05), 0.005, 0.50);
+  timestamp_max_future_sec_ = std::clamp(
+    this->declare_parameter<double>("timestamp_max_future_sec", 0.02), 0.0, 0.25);
+  timestamp_max_regression_sec_ = std::clamp(
+    this->declare_parameter<double>("timestamp_max_regression_sec", 0.002), 0.0, 0.10);
+  timing_status_rate_hz_ = std::clamp(
+    this->declare_parameter<double>("timing_status_rate_hz", 2.0), 0.2, 20.0);
   sensor_config_retry_sec_ = std::max(2.0,
     this->declare_parameter<double>("sensor_config_retry_sec", 30.0));
   orientation_reopen_sec_ = std::max(orientation_packet_timeout_sec_ + 2.0,
@@ -204,6 +214,10 @@ ImuNode::ImuNode(const rclcpp::NodeOptions & options)
   pub_raw_sensor_vectors_ = this->create_publisher<std_msgs::msg::Float64MultiArray>("imu/raw_sensor_vectors", qos);
   pub_profile_status_ = this->create_publisher<std_msgs::msg::String>(
     "/imu/profile_status", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
+  pub_timing_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
+    "/imu/timing", rclcpp::SensorDataQoS().keep_last(20));
+  pub_timing_status_ = this->create_publisher<std_msgs::msg::String>(
+    "/imu/timing_status", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
   srv_configure_optimal_profile_ = this->create_service<std_srvs::srv::Trigger>(
     "/imu/configure_optimal_profile",
     [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
@@ -517,6 +531,11 @@ void ImuNode::openSerial(bool initial)
         last_accel_packet_time_ = 0.0;
         last_gyro_packet_time_ = 0.0;
         last_mag_packet_time_ = 0.0;
+        last_accel_measurement_stamp_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
+        last_gyro_measurement_stamp_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
+        last_orientation_measurement_stamp_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
+        last_mag_measurement_stamp_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
+        last_packet_stamp_ns_ = 0;
         has_acc_ = false;
         has_gyro_ = false;
         has_angle_ = false;
@@ -568,6 +587,12 @@ void ImuNode::closeSerial()
   last_accel_packet_time_ = 0.0;
   last_gyro_packet_time_ = 0.0;
   last_mag_packet_time_ = 0.0;
+  last_accel_measurement_stamp_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
+  last_gyro_measurement_stamp_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
+  last_orientation_measurement_stamp_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
+  last_mag_measurement_stamp_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
+  last_packet_stamp_ns_ = 0;
+  packet_clock_initialized_ = false;
   if (pub_connected_) { std_msgs::msg::Bool b; b.data = false; pub_connected_->publish(b); }
 }
 
@@ -584,21 +609,118 @@ bool ImuNode::logRateLimited(const std::string & msg, const std::string & level)
   return true;
 }
 
+// Build a measurement timestamp from steady_clock rather than publish-time now().
+// WIT packets have no device timestamp, so the host reception/parse epoch is the
+// strongest truthful timestamp available. The steady->ROS offset is anchored on
+// the first packet and monotonicity is enforced fail-closed.
+bool ImuNode::packetStampNow(rclcpp::Time & stamp)
+{
+  const auto steady_now = Clock::now();
+  const auto steady_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+    steady_now.time_since_epoch()).count();
+  const auto ros_now = this->now();
+  const auto ros_ns = ros_now.nanoseconds();
+  if (!packet_clock_initialized_) {
+    packet_clock_offset_ns_ = ros_ns - steady_ns;
+    packet_clock_initialized_ = true;
+  }
+
+  std::int64_t candidate_ns = packet_clock_offset_ns_ + steady_ns;
+  const std::int64_t max_future_ns = static_cast<std::int64_t>(timestamp_max_future_sec_ * 1.0e9);
+  if (candidate_ns > ros_ns + max_future_ns) {
+    ++timestamp_future_rejects_;
+    return false;
+  }
+  // Never future-date a hardware sample even inside the tolerance window.
+  candidate_ns = std::min(candidate_ns, ros_ns);
+  if (last_packet_stamp_ns_ > 0) {
+    const std::int64_t max_regression_ns =
+      static_cast<std::int64_t>(timestamp_max_regression_sec_ * 1.0e9);
+    if (candidate_ns + max_regression_ns < last_packet_stamp_ns_) {
+      ++timestamp_regression_rejects_;
+      return false;
+    }
+    // Equal/sub-tolerance arrival stamps are made strictly monotonic by 1 ns.
+    candidate_ns = std::max(candidate_ns, last_packet_stamp_ns_ + 1);
+  }
+  last_packet_stamp_ns_ = candidate_ns;
+  stamp = rclcpp::Time(candidate_ns, get_clock()->get_clock_type());
+  return true;
+}
+
+void ImuNode::publishTimingDiagnostics(
+  const rclcpp::Time & measurement_stamp, const rclcpp::Time & publish_stamp)
+{
+  if (!pub_timing_) return;
+  const auto age_ms = [&measurement_stamp](const rclcpp::Time & t) -> double {
+      if (t.nanoseconds() <= 0) return -1.0;
+      return (measurement_stamp - t).seconds() * 1000.0;
+    };
+  const double gyro_std_ms = gyro_period_count_ > 1 ?
+    std::sqrt(gyro_period_m2_sec2_ / static_cast<double>(gyro_period_count_ - 1)) * 1000.0 : 0.0;
+  std_msgs::msg::Float64MultiArray timing;
+  // Contract (append-only): seq, sensor stamp, publish stamp, publish age ms,
+  // accel/gyro/orientation/mag relative age ms, gyro period mean/std ms,
+  // future rejects, regression rejects, then histogram bins <=5,10,15,25,40,80,>80 ms.
+  timing.data = {
+    static_cast<double>(imu_publish_sequence_), measurement_stamp.seconds(), publish_stamp.seconds(),
+    (publish_stamp - measurement_stamp).seconds() * 1000.0,
+    age_ms(last_accel_measurement_stamp_), age_ms(last_gyro_measurement_stamp_),
+    age_ms(last_orientation_measurement_stamp_), age_ms(last_mag_measurement_stamp_),
+    gyro_period_mean_sec_ * 1000.0, gyro_std_ms,
+    static_cast<double>(timestamp_future_rejects_),
+    static_cast<double>(timestamp_regression_rejects_)};
+  for (const auto count : gyro_period_hist_) timing.data.push_back(static_cast<double>(count));
+  pub_timing_->publish(timing);
+
+  const double min_status_period = 1.0 / timing_status_rate_hz_;
+  if (!pub_timing_status_ ||
+      (last_timing_status_publish_.nanoseconds() > 0 &&
+       (publish_stamp - last_timing_status_publish_).seconds() < min_status_period)) return;
+  std::ostringstream out;
+  out << std::fixed << std::setprecision(3)
+      << "{\"seq\":" << imu_publish_sequence_
+      << ",\"measurement_age_ms\":" << (publish_stamp - measurement_stamp).seconds() * 1000.0
+      << ",\"gyro_period_mean_ms\":" << gyro_period_mean_sec_ * 1000.0
+      << ",\"gyro_period_std_ms\":" << gyro_std_ms
+      << ",\"future_rejects\":" << timestamp_future_rejects_
+      << ",\"regression_rejects\":" << timestamp_regression_rejects_
+      << ",\"hist_ms\":[";
+  for (size_t i = 0; i < gyro_period_hist_.size(); ++i) {
+    if (i) out << ',';
+    out << gyro_period_hist_[i];
+  }
+  out << "]}";
+  std_msgs::msg::String status;
+  status.data = out.str();
+  pub_timing_status_->publish(status);
+  last_timing_status_publish_ = publish_stamp;
+}
+
 // Fungsi: Menyusun Imu ROS dari state terakhir dengan bias, orientasi, dan covariance terkalibrasi.
 bool ImuNode::publishImu()
 {
   if (!(has_acc_ || has_gyro_ || has_angle_)) return false;
 
   const double stamp_sec = nowSec();
+  const auto publish_stamp = this->now();
   const bool gyro_fresh = has_gyro_ && last_gyro_packet_time_ > 0.0 &&
+    last_gyro_measurement_stamp_.nanoseconds() > 0 &&
     stamp_sec - last_gyro_packet_time_ >= 0.0 &&
     stamp_sec - last_gyro_packet_time_ <= gyro_packet_timeout_sec_;
-  const bool accel_fresh = has_acc_ && last_accel_packet_time_ > 0.0 &&
+  const bool accel_fresh_by_age = has_acc_ && last_accel_packet_time_ > 0.0 &&
+    last_accel_measurement_stamp_.nanoseconds() > 0 &&
     stamp_sec - last_accel_packet_time_ >= 0.0 &&
     stamp_sec - last_accel_packet_time_ <= accel_packet_timeout_sec_;
-  const bool orientation_fresh = has_angle_ && last_orientation_packet_time_ > 0.0 &&
+  const bool orientation_fresh_by_age = has_angle_ && last_orientation_packet_time_ > 0.0 &&
+    last_orientation_measurement_stamp_.nanoseconds() > 0 &&
     stamp_sec - last_orientation_packet_time_ >= 0.0 &&
     stamp_sec - last_orientation_packet_time_ <= orientation_publish_timeout_sec_;
+  const auto measurement_stamp = last_gyro_measurement_stamp_;
+  const bool accel_fresh = accel_fresh_by_age &&
+    std::abs((measurement_stamp - last_accel_measurement_stamp_).seconds()) <= component_sync_max_gap_sec_;
+  const bool orientation_fresh = orientation_fresh_by_age &&
+    std::abs((measurement_stamp - last_orientation_measurement_stamp_).seconds()) <= component_sync_max_gap_sec_;
   const bool mag_fresh = has_mag_ && last_mag_packet_time_ > 0.0 &&
     stamp_sec - last_mag_packet_time_ >= 0.0 &&
     stamp_sec - last_mag_packet_time_ <= mag_yaw_packet_timeout_sec_;
@@ -609,9 +731,10 @@ bool ImuNode::publishImu()
   const bool magnetic_yaw_valid = mag_fresh && mag_norm_ok &&
     std::hypot(mx_, my_) > 1.0;
 
-  // EKF yaw now comes from the absolute IMU orientation quaternion; vyaw comes
-  // from GNSS. A stale gyro therefore must not suppress a fresh orientation.
-  // The optional legacy fail-closed switch is retained for deployments that fuse gyro.
+  // /imu/data uses the gyro packet as its measurement epoch. Both local and global
+  // robot_localization instances fuse gyro-Z from this message; orientation remains
+  // available to the startup/heading supervisory path when its packet is time-aligned.
+  // Therefore a stale gyro must fail closed instead of receiving a fresh host stamp.
   if (require_fresh_gyro_for_imu_publish_ && !gyro_fresh) {
     RCLCPP_WARN_THROTTLE(
       this->get_logger(), *this->get_clock(), 5000,
@@ -621,7 +744,7 @@ bool ImuNode::publishImu()
   }
 
   sensor_msgs::msg::Imu msg;
-  msg.header.stamp = this->now();
+  msg.header.stamp = measurement_stamp;
   msg.header.frame_id = frame_id_;
 
   const bool yaw_source_valid = !use_magnetic_yaw_ || magnetic_yaw_valid;
@@ -692,6 +815,8 @@ bool ImuNode::publishImu()
   }
 
   pub_imu_->publish(msg);
+  ++imu_publish_sequence_;
+  publishTimingDiagnostics(measurement_stamp, publish_stamp);
   publishRawSensorVectors();
   return true;
 }
@@ -725,7 +850,7 @@ void ImuNode::publishMag()
   publishMagRawLsb();
   if (!publish_mag_tesla_) return;
   sensor_msgs::msg::MagneticField msg;
-  msg.header.stamp = this->now();
+  msg.header.stamp = last_mag_measurement_stamp_.nanoseconds() > 0 ? last_mag_measurement_stamp_ : this->now();
   msg.header.frame_id = frame_id_;
   msg.magnetic_field.x = vector_x_sign_ * mx_ * mag_scale_tesla_per_lsb_;
   msg.magnetic_field.y = vector_y_sign_ * my_ * mag_scale_tesla_per_lsb_;
@@ -752,6 +877,9 @@ bool ImuNode::parsePacket(const std::vector<uint8_t> & data)
 
   uint8_t ptype = data[1];
   int16_t v0, v1, v2;
+  rclcpp::Time packet_stamp(0, 0, get_clock()->get_clock_type());
+  if (!packetStampNow(packet_stamp)) return false;
+  const double packet_steady_sec = nowSec();
 
   switch (ptype) {
   case 0x51: // accel
@@ -762,7 +890,8 @@ bool ImuNode::parsePacket(const std::vector<uint8_t> & data)
     ay_ = (v1 / 32768.0) * 16.0 * 9.80665;
     az_ = (v2 / 32768.0) * 16.0 * 9.80665;
     has_acc_ = true;
-    last_accel_packet_time_ = nowSec();
+    last_accel_packet_time_ = packet_steady_sec;
+    last_accel_measurement_stamp_ = packet_stamp;
     ++packets_acc_;
     return true;
   case 0x52: // gyro
@@ -773,7 +902,21 @@ bool ImuNode::parsePacket(const std::vector<uint8_t> & data)
     gy_ = (v1 / 32768.0) * 2000.0;
     gz_ = (v2 / 32768.0) * 2000.0;
     has_gyro_ = true;
-    last_gyro_packet_time_ = nowSec();
+    if (last_gyro_packet_time_ > 0.0) {
+      const double period = packet_steady_sec - last_gyro_packet_time_;
+      if (period > 0.0 && period < 1.0) {
+        ++gyro_period_count_;
+        const double delta = period - gyro_period_mean_sec_;
+        gyro_period_mean_sec_ += delta / static_cast<double>(gyro_period_count_);
+        gyro_period_m2_sec2_ += delta * (period - gyro_period_mean_sec_);
+        const double ms = period * 1000.0;
+        const size_t bin = ms <= 5.0 ? 0U : ms <= 10.0 ? 1U : ms <= 15.0 ? 2U :
+          ms <= 25.0 ? 3U : ms <= 40.0 ? 4U : ms <= 80.0 ? 5U : 6U;
+        ++gyro_period_hist_[bin];
+      }
+    }
+    last_gyro_packet_time_ = packet_steady_sec;
+    last_gyro_measurement_stamp_ = packet_stamp;
     ++packets_gyro_;
     return true;
   case 0x53: // angle
@@ -785,7 +928,8 @@ bool ImuNode::parsePacket(const std::vector<uint8_t> & data)
     yaw_   = (v2 / 32768.0) * 180.0;
     has_angle_ = true;
     ++packets_angle_;
-    last_orientation_packet_time_ = nowSec();
+    last_orientation_packet_time_ = packet_steady_sec;
+    last_orientation_measurement_stamp_ = packet_stamp;
     orientation_recovery_attempted_ = false;
     orientation_recovery_started_time_ = 0.0;
     return true;
@@ -797,7 +941,8 @@ bool ImuNode::parsePacket(const std::vector<uint8_t> & data)
     my_ = static_cast<double>(v1);
     mz_ = static_cast<double>(v2);
     has_mag_ = true;
-    last_mag_packet_time_ = nowSec();
+    last_mag_packet_time_ = packet_steady_sec;
+    last_mag_measurement_stamp_ = packet_stamp;
     ++packets_mag_;
     return true;
   case 0x59: { // quaternion fallback: q0=w, q1=x, q2=y, q3=z
@@ -823,7 +968,8 @@ bool ImuNode::parsePacket(const std::vector<uint8_t> & data)
     yaw_ = std::atan2(siny_cosp, cosy_cosp) * 180.0 / M_PI;
     has_angle_ = true;
     ++packets_quat_;
-    last_orientation_packet_time_ = nowSec();
+    last_orientation_packet_time_ = packet_steady_sec;
+    last_orientation_measurement_stamp_ = packet_stamp;
     orientation_recovery_attempted_ = false;
     orientation_recovery_started_time_ = 0.0;
     return true;
@@ -901,8 +1047,9 @@ void ImuNode::pollSerial()
         last_valid_packet_time_ = nowSec();
         if (parsed_type == 0x54) {
           published_mag = true;
-        } else if (parsed_type == 0x53 || parsed_type == 0x59) {
-          // Angle atau quaternion merupakan boundary orientasi satu siklus.
+        } else if (parsed_type == 0x52) {
+          // Gyro is the high-rate EKF measurement. Publish on its fresh packet
+          // epoch; accel/orientation are attached only when time-coherent.
           published = true;
         }
       }
@@ -958,8 +1105,8 @@ void ImuNode::pollSerial()
     }
 
     const auto now = Clock::now();
-    // Sensor ANGLE/quaternion sendiri adalah boundary satu sampel. Jangan memakai
-    // gate persis 1/f karena jitter USB/timer sub-ms dapat membuat sampel 19.x ms
+    // Gyro packet is the fusion boundary. Jangan memakai gate persis 1/f karena
+    // jitter USB/timer sub-ms dapat membuat sampel 19.x ms
     // ditolak pada target 50 Hz dan menghasilkan aliasing sekitar 25-33 Hz.
     // Toleransi 20% tetap membatasi sumber yang lebih cepat, tetapi menerima
     // boundary sensor nominal pada rate yang dikonfigurasi.

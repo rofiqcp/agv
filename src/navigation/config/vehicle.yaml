@@ -10,6 +10,11 @@ vehicle:
     total_width_m: 0.55
     vehicle_length_m: 1.0
     wheel_radius_m: 0.145
+    # Electrical-to-ground-speed baseline belongs to the same vehicle SSOT.
+    # Physical certification still requires drive_odometry_calibration_valid=true.
+    drive_erpm_per_mps: 8000.0
+    drive_motor_pole_pairs: 15
+    drive_gear_ratio: 1.0
     # Linear odometry scale is certified by measured straight-run trials in GUI.
     drive_odometry_calibration_valid: false
     drive_odometry_calibration_scale: 1.0
@@ -43,4 +48,8 @@ vehicle:
     max_accel_mps2: 0.75
     max_decel_mps2: -1.0
     max_yaw_accel_rps2: 2.5
+    standard_xy_goal_tolerance_m: 0.35
+    precision_xy_goal_tolerance_m: 0.08
+    precision_controller_frequency_hz: 15.0
+    precision_costmap_resolution_m: 0.05
     footprint: '[[0.52,0.30],[0.52,-0.30],[-0.52,-0.30],[-0.52,0.30]]'

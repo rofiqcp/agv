@@ -17,7 +17,15 @@ def req(ok, msg):
 req("DeclareLaunchArgument('hmi_port', default_value='auto')" in launch, "F411 launch selector must default to auto")
 req("mag_heading_fusion = Node(" in launch, "mag_heading_fusion node definition missing")
 req("delayed_ekf = TimerAction(period=20.0, actions=[local_ekf, global_ekf])" in launch, "delayed EKF startup contract missing")
-req("delayed_ekf, localization_core, mag_heading_fusion, imu_speed_diagnostic" in launch, "delayed EKF / mag fusion actions are not in LaunchDescription")
+for action in ("delayed_ekf", "localization_core", "sensor_contract_monitor",
+               "precision_localization_monitor", "mag_heading_fusion", "imu_speed_diagnostic"):
+    req(action in launch, f"autonomous LaunchDescription missing action {action}")
+return_idx = launch.find("return LaunchDescription")
+order = [launch.find(token, return_idx) for token in
+         ("delayed_ekf", "localization_core", "sensor_contract_monitor",
+          "precision_localization_monitor", "mag_heading_fusion", "imu_speed_diagnostic")]
+req(all(i >= 0 for i in order) and order == sorted(order),
+    "localization/safety/magnetic actions are not ordered deterministically in LaunchDescription")
 req("'gnss_source'" in launch and "stm32=NEO3 via HMI USB CDC" in launch, "STM32 NEO3 launch contract missing")
 mp = mag['mag_heading_fusion']['ros__parameters']
 req(mp['neo3_mag_topic'] == '/neo3/mag', 'NEO3 magnetometer topic mismatch')

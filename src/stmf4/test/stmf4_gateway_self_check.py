@@ -4,7 +4,7 @@ from pathlib import Path
 import re, yaml
 ROOT=Path(__file__).resolve().parents[1]
 WS=ROOT.parents[1]
-F411=WS/'f411_pio'
+F411=WS/'F4gateway'
 bridge=(ROOT/'src/stmf4_hmi_bridge.cpp').read_text()
 hmi=(yaml.safe_load((ROOT/'config/hmi.yaml').read_text()) or {})['stmf4_hmi_bridge']['ros__parameters']
 main=(F411/'src/main.cpp').read_text(); vesc_h=(F411/'src/VescGateway.h').read_text(); vesc_cpp=(F411/'src/VescGateway.cpp').read_text()
@@ -25,8 +25,11 @@ req('gUsb' in main and 'Serial.' not in main, 'native application must use one C
 # HMI parity.
 for token in ('UiMenuId::OVERVIEW','UiMenuId::ESC_ROOT','UiMenuId::PERCEPTION_ROOT','UiMenuId::NAVIGATION_ROOT','SUBMENU_VISIBLE_CARDS = 3'):
     req(token in ui_cfg+ui_menu+ui_shell, 'native HMI contract missing: '+token)
-for token in ('drawOverviewDomainCard(0, UiMenuId::ESC_ROOT','drawOverviewDomainCard(1, UiMenuId::PERCEPTION_ROOT','drawOverviewDomainCard(2, UiMenuId::NAVIGATION_ROOT','drawCarouselFooter'):
+for token in ('drawOverviewHealthRail', 'menuChildren(UiMenuId::OVERVIEW',
+              'drawOverviewDomainCard(slot, children[index]', 'drawCarouselFooter'):
     req(token in ui_shell, 'native HMI renderer missing: '+token)
+for token in ('UiMenuId::ESC_ROOT', 'UiMenuId::PERCEPTION_ROOT', 'UiMenuId::NAVIGATION_ROOT', 'UiMenuId::SYSTEM_ROOT'):
+    req(token in ui_shell, 'overview domain health/render coverage missing: '+token)
 req('SoftKey::UP' not in ui_cfg+ui_touch+ui_shell and 'SoftKey::DOWN' not in ui_cfg+ui_touch+ui_shell, 'obsolete UP/DOWN softkeys returned')
 req('HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET)' in ui_touch, 'native touch CS initialization missing')
 req('uint32_t HmiDisplay::readId()' in (F411/'src/HmiDisplay.cpp').read_text() and '0xD3U' in (F411/'src/HmiDisplay.cpp').read_text(),
@@ -79,8 +82,8 @@ req(('active_baud_{kBaud}' in vesc_h or 'active_baud_{kBaud};' in vesc_h) and
         'requested == 1000000U' in vesc_cpp and 'requested == 2000000U' in vesc_cpp and
         'VESC:ERR:BAUD_UNSUPPORTED' in vesc_cpp,
         'F411 bounded diagnostic baud whitelist missing')
-board_h = (WS / 'f411_pio/include/BoardSupport.h').read_text(encoding='utf-8')
-board_cpp = (WS / 'f411_pio/src/BoardSupport.cpp').read_text(encoding='utf-8')
+board_h = (F411 / 'include/BoardSupport.h').read_text(encoding='utf-8')
+board_cpp = (F411 / 'src/BoardSupport.cpp').read_text(encoding='utf-8')
 req('HAL_UART_Transmit(handle_' not in board_cpp,
         'F411 UART TX must not use blocking HAL_UART_Transmit')
 for token in ('kTxSize = 4096U', 'availableForWrite() const', 'irqTxComplete()', 'tx_dropped_'):

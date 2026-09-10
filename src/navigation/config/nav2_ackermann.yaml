@@ -59,9 +59,9 @@ controller_server:
       movement_time_allowance: 30.0
     goal_checker:
       plugin: nav2_controller::SimpleGoalChecker
-      # 8 cm is tighter than one map cell yet still leaves margin for 0.12 m/s
-      # low-speed stopping and single-antenna GNSS noise; final validation uses TF+GNSS averaging.
-      xy_goal_tolerance: 0.08
+      # Standard tier: standalone GNSS/local odometry must not advertise centimeter accuracy.
+      # Precision mode materializes 0.08 m only behind /system/precision_localization_ready.
+      xy_goal_tolerance: 0.35
       yaw_goal_tolerance: 0.0872664626
       stateful: false
     FollowPath:
@@ -205,8 +205,8 @@ velocity_smoother:
     smoothing_frequency: 30.0
     scale_velocities: true
     feedback: OPEN_LOOP
-    max_velocity: [1.0, 0.0, 1.396263401595]
-    min_velocity: [-1.0, 0.0, -1.396263401595]
+    max_velocity: [1.0, 0.0, 0.625907910003]
+    min_velocity: [-1.0, 0.0, -0.625907910003]
     max_accel:
     - 0.45
     - 0.0

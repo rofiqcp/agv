@@ -1289,7 +1289,10 @@ void GnssNode::publish()
     itow_delta_abs_ms(nav_dop_.itow_ms, last_itow_ms_) <= 1500;
 
   std_msgs::msg::Float64MultiArray quality;
-  // Append-only layout. Indeks 0..8 dipertahankan untuk compatibility Part 2/3.
+  // Canonical transport-invariant append-only layout. Indices 0..44 have the
+  // exact same semantics for direct USB and F411 gateway sources; transport-specific
+  // diagnostics, when present, may only be appended at index >=45. Indeks 0..8
+  // dipertahankan untuk compatibility Part 2/3.
   //  0 sat, 1 pDOP/HDOP fallback, 2 hAcc, 3 fixType, 4 source, 5 sAcc,
   //  6 gSpeed, 7 COG ENU, 8 headAcc,
   //  9 iTOW ms, 10 vAcc, 11 velE, 12 velN, 13 velD(Down),

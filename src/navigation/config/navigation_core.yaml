@@ -40,6 +40,7 @@ navigation_core:
     log_heartbeat_sec: 10.0
     minimum_turning_radius_m: 1.597679121829
     require_stage3_production_certification: true
+    precision_mode: false
     require_collision_monitor_for_production: true
     require_perception_for_production: true
     stage3_production_certified: false

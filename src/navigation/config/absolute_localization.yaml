@@ -1,0 +1,14 @@
+precision_localization_monitor:
+  ros__parameters:
+    # Generic precision-aid interface. RTK/LiDAR/VIO adapters must publish a
+    # map-frame PoseWithCovarianceStamped here; this monitor never invents a fix.
+    pose_topic: /localization/absolute_pose
+    required_frame: map
+    timeout_sec: 0.5
+    max_stamp_age_sec: 0.5
+    max_future_stamp_sec: 0.05
+    max_position_std_m: 0.05
+    max_yaw_std_rad: 0.03490658504
+    max_sample_jump_m: 0.30
+    max_sample_yaw_jump_rad: 0.1745329252
+    min_consecutive_samples: 10

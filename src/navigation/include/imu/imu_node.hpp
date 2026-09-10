@@ -16,6 +16,8 @@
 #include <vector>
 #include <string>
 #include <chrono>
+#include <array>
+#include <cstdint>
 
 class ImuNode : public rclcpp::Node
 {
@@ -28,6 +30,8 @@ private:
   void closeSerial();
   void pollSerial();
   bool publishImu();
+  bool packetStampNow(rclcpp::Time & stamp);
+  void publishTimingDiagnostics(const rclcpp::Time & measurement_stamp, const rclcpp::Time & publish_stamp);
   void publishMag();
   void publishMagRawLsb();
   void publishRawSensorVectors();
@@ -75,6 +79,13 @@ private:
   double gyro_packet_timeout_sec_ = 0.35;
   double accel_packet_timeout_sec_ = 0.50;
   bool require_fresh_gyro_for_imu_publish_ = true;
+  // Hardware WIT frames do not expose an on-wire timestamp. We therefore anchor
+  // steady_clock to ROS time once and timestamp each checksum-valid packet at
+  // parse/reception time. This avoids re-stamping old gyro data at publish time.
+  double component_sync_max_gap_sec_ = 0.05;
+  double timestamp_max_future_sec_ = 0.02;
+  double timestamp_max_regression_sec_ = 0.002;
+  double timing_status_rate_hz_ = 2.0;
   double sensor_config_retry_sec_ = 30.0;
   double orientation_reopen_sec_ = 20.0;
   // Konversi sumbu sensor ke REP-103/ENU. yaw_sign mengubah orientasi dan
@@ -144,6 +155,21 @@ private:
   double last_accel_packet_time_ = 0.0;
   double last_gyro_packet_time_ = 0.0;
   double last_mag_packet_time_ = 0.0;
+  rclcpp::Time last_accel_measurement_stamp_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time last_gyro_measurement_stamp_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time last_orientation_measurement_stamp_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time last_mag_measurement_stamp_{0, 0, RCL_ROS_TIME};
+  bool packet_clock_initialized_ = false;
+  std::int64_t packet_clock_offset_ns_ = 0;
+  std::int64_t last_packet_stamp_ns_ = 0;
+  std::uint64_t timestamp_future_rejects_ = 0;
+  std::uint64_t timestamp_regression_rejects_ = 0;
+  std::uint64_t imu_publish_sequence_ = 0;
+  std::uint64_t gyro_period_count_ = 0;
+  double gyro_period_mean_sec_ = 0.0;
+  double gyro_period_m2_sec2_ = 0.0;
+  std::array<std::uint64_t, 7> gyro_period_hist_{{0, 0, 0, 0, 0, 0, 0}};
+  rclcpp::Time last_timing_status_publish_{0, 0, RCL_ROS_TIME};
   double last_sensor_config_try_ = 0.0;
   bool stream_announced_ = false;
   bool orientation_recovery_attempted_ = false;
@@ -164,6 +190,8 @@ private:
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_mag_raw_lsb_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_raw_sensor_vectors_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_profile_status_;
+  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_timing_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_timing_status_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_configure_optimal_profile_;
   rclcpp::Publisher<std_msgs::msg::ByteMultiArray>::SharedPtr pub_raw_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr pub_connected_;

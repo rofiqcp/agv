@@ -70,12 +70,16 @@ if 'id="sidebarBackdrop"' not in html or "$('sidebarBackdrop').onclick" not in j
     fail("mobile sidebar backdrop behavior missing")
 
 # BAB IV web workbench must expose the three source domains and real tuning/evidence surfaces.
-for token in ("CONTROL ENGINEERING", "Tuning & Control", "data-exp=\"navigation\"",
-              "data-exp=\"perception\"", "data-exp=\"steering\"",
+for token in ("CONTROL ENGINEERING", "Tuning & Control", "data-domain=\"navigation\"",
+              "data-domain=\"perception\"", "data-domain=\"esc\"",
               "id=\"tuningFields\"", "id=\"experimentGraphs\"", "id=\"experimentTables\"",
               "id=\"expMapCanvas\"", "id=\"expCameraImage\"", "id=\"expEscCanvas\"",
               "id=\"recordToggleBtn\""):
     if token not in html: fail(f"BAB IV web workbench missing {token}")
+for token in ("syncExperimentDomain", "DOMAIN_MENU[activeDomain]?.exp", "currentExp=exp"):
+    if token not in js: fail(f"BAB IV domain authority missing {token}")
+if "qa('.domain-tab')" in js:
+    fail("legacy in-workbench domain-tab handler remains; top domain tabs are the single authority")
 if 'id="yoloToggleBtn"' not in html or 'id="yoloToggleState"' not in html:
     fail("explicit YOLOPv2 perception toggle missing")
 # NEO-3 must expose GNSS receiver link/fix separately from the IST8310 compass.
@@ -111,7 +115,7 @@ for token in ("baselinePathForConfig", "ensureConfigBaseline", "baselineYamlValu
     if token not in cpp: fail(f"YAML baseline/reset backend missing {token}")
 for token in ('id="resetExperimentYaml"', '*.web.baseline', '.web.bak.*'):
     if token not in html: fail(f"YAML baseline/reset UI missing {token}")
-for token in ("baselineConfigValue", "resetSelectedExperimentYaml", "Reset YAML tahap ini"):
+for token in ("baselineConfigValue", "resetSelectedExperimentYaml", "Stage Baseline"):
     if token not in js: fail(f"YAML baseline/reset frontend missing {token}")
 for name in ("vehicle.yaml", "navigation_core.yaml", "nav2_ackermann.yaml", "ekf.yaml",
              "localization_cpp.yaml", "gnss.yaml", "imu.yaml", "stage3_navigation.yaml",
