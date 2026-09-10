@@ -35,9 +35,7 @@ data/
 .gpt_backups/
 .gpt_web_review/
 esc/
-px4/
-autoware/
-ardupilot/
-hoverboard-firmware-hack-FOC/
+UI/
+navigasi/
 # Local browser QA dependencies
 /.playwright/
