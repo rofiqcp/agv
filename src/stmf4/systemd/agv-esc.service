@@ -1,0 +1,17 @@
+[Unit]
+Description=AGV ESC + STM32F411 transport stack
+After=default.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Environment=ROS_DOMAIN_ID=42
+Environment=AGV_ROOT=@AGV_ROOT@
+ExecStart=/bin/bash -lc 'cd "$AGV_ROOT" && source /opt/ros/humble/setup.bash && source "$AGV_ROOT/install/setup.bash" && exec ros2 launch esc esc.launch.py start_teleop:=false publish_stm32_gnss:=false transport_mode:=stm32 serial_enabled:=true'
+Restart=always
+RestartSec=2
+KillMode=mixed
+TimeoutStopSec=8
+
+[Install]
+WantedBy=default.target

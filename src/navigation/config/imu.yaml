@@ -45,10 +45,24 @@ data_imu_node:
     - 0.0010990763825818317
     - -0.0007872455352585517
     - -0.00575776350095758
+    # Per-axis six-position correction; neutral until reviewed field evidence.
+    accel_scale:
+    - 1.0
+    - 1.0
+    - 1.0
     gyro_bias:
     - 0.0
     - 0.0
     - 0.0
+    # Short stationary calibration is a commissioning interlock only. Stage-2
+    # field certification requires the long-stationary + six-position + EMI campaign.
+    calibration_level: commissioning
+    field_calibration_valid: false
+    field_calibration_saved_at: ''
+    field_calibration_evidence_sha256: ''
+    field_calibration_stationary_duration_sec: 0.0
+    field_calibration_six_position_valid: false
+    field_calibration_motor_interference_valid: false
     stationary_calibration_valid: true
     stationary_calibration_saved_at: 2026-09-08T18:12:00+0700
     stationary_calibration_sample_count: 164

@@ -91,8 +91,8 @@ need(float(absolute['max_position_std_m'])<=0.05 and float(absolute['max_yaw_std
      'precision absolute-pose quality gate too loose')
 need('precision_localization_monitor' in cmake, 'precision monitor not compiled')
 
-for tool in ('navigation_calibration.py','navigation_metrics.py','planar_eskf_ab.py',
-             'navigation_fault_suite.py','certification_manifest.py','rosbag_regression.py'):
+for tool in ('navigation_calibration.py','navigation_field_campaign.py','stage2_calibration_proposal.py',
+             'navigation_metrics.py','planar_eskf_ab.py','navigation_fault_suite.py','certification_manifest.py','rosbag_regression.py'):
     p=WS/'src/navigation/tools'/tool
     need(p.is_file() and p.stat().st_size>100, 'missing validation tool '+tool)
     need(tool in cmake, 'validation tool not installed '+tool)

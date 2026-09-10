@@ -31,6 +31,7 @@
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "geometry_msgs/msg/twist_with_covariance_stamped.hpp"
 #include "geometry_msgs/msg/twist.hpp"
+#include "nav_msgs/msg/occupancy_grid.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp/parameter_client.hpp"
@@ -114,6 +115,68 @@ std::optional<std::string> kvString(const std::string &s, const std::string &key
   return trim(s.substr(start, end == std::string::npos ? std::string::npos : end - start));
 }
 
+std::optional<std::string> jsonObject(const std::string &s, const std::string &key) {
+  const std::string needle = "\"" + key + "\":{";
+  const auto pos = s.find(needle);
+  if (pos == std::string::npos) return std::nullopt;
+  const size_t start = pos + needle.size() - 1U;
+  int depth = 0;
+  bool in_string = false;
+  bool escape = false;
+  for (size_t i = start; i < s.size(); ++i) {
+    const char c = s[i];
+    if (in_string) {
+      if (escape) escape = false;
+      else if (c == '\\') escape = true;
+      else if (c == '"') in_string = false;
+      continue;
+    }
+    if (c == '"') { in_string = true; continue; }
+    if (c == '{') ++depth;
+    else if (c == '}' && --depth == 0) return s.substr(start, i - start + 1U);
+  }
+  return std::nullopt;
+}
+
+std::optional<double> kvNumber(const std::string &s, const std::string &key) {
+  const auto raw = kvString(s, key);
+  if (!raw || raw->empty() || *raw == "N/A") return std::nullopt;
+  errno = 0;
+  char *end = nullptr;
+  const double value = std::strtod(raw->c_str(), &end);
+  if (errno != 0 || end == raw->c_str() || *end != '\0' || !std::isfinite(value)) return std::nullopt;
+  return value;
+}
+
+std::optional<bool> kvBool(const std::string &s, const std::string &key) {
+  const auto raw = kvString(s, key);
+  if (!raw) return std::nullopt;
+  const std::string u = upper(*raw);
+  if (u == "TRUE" || u == "1" || u == "READY" || u == "YES") return true;
+  if (u == "FALSE" || u == "0" || u == "WAIT" || u == "NO") return false;
+  return std::nullopt;
+}
+
+std::string wireToken(std::string value, size_t max_len = 18U) {
+  value = upper(trim(value));
+  std::string out;
+  out.reserve(std::min(max_len, value.size()));
+  for (unsigned char c : value) {
+    if (out.size() >= max_len) break;
+    if (std::isalnum(c) || c == '_' || c == '-' || c == '.') out.push_back(static_cast<char>(c));
+    else if (c == ' ' || c == '/') out.push_back('_');
+  }
+  return out.empty() ? "UNKNOWN" : out;
+}
+
+uint32_t steadyAgeMs(const std::chrono::steady_clock::time_point &stamp) {
+  if (stamp.time_since_epoch().count() == 0) return 0xFFFFFFFFU;
+  const auto now = std::chrono::steady_clock::now();
+  if (now <= stamp) return 0U;
+  const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - stamp).count();
+  return static_cast<uint32_t>(std::min<int64_t>(ms, 0xFFFFFFFELL));
+}
+
 std::string className(int id) {
   if (id == 0) return "PERSON";
   if (id == 2) return "CAR";
@@ -162,9 +225,37 @@ public:
       std::chrono::duration<double>(1.0 / telemetry_rate_hz_), std::bind(&StmF4HmiBridge::telemetryTick, this));
     heartbeat_timer_ = create_wall_timer(500ms, [this]() {
       if (fd_ >= 0 && !vesc_maintenance_mode_) (void)sendLine("ROS:1");
-      if (fd_ >= 0 && last_rx_.time_since_epoch().count() != 0 &&
-          std::chrono::steady_clock::now() - last_rx_ > std::chrono::duration<double>(hmi_transport_timeout_sec_)) {
-        closeSerial("transport heartbeat timeout");
+      if (fd_ >= 0) {
+        const auto now = std::chrono::steady_clock::now();
+        if (last_rx_.time_since_epoch().count() == 0) {
+          if (serial_opened_at_.time_since_epoch().count() != 0 &&
+              now - serial_opened_at_ > std::chrono::duration<double>(hmi_transport_timeout_sec_)) {
+            ++silent_open_failures_;
+            if (silent_open_failures_ >= 3U) {
+              RCLCPP_ERROR(get_logger(),
+                "F411 CDC silent after open (%lu consecutive first-response timeouts); escalating USB session recovery fail-closed",
+                static_cast<unsigned long>(silent_open_failures_));
+              if (last_usb_recovery_request_.time_since_epoch().count() == 0 ||
+                  now - last_usb_recovery_request_ > std::chrono::seconds(8)) {
+                // One-way recovery request: it is intentionally useful when CDC OUT
+                // still works but the old IN transfer can no longer ACK.
+                if (sendLine("USB:RECOVER", 0)) {
+                  ++usb_recovery_requests_;
+                  last_usb_recovery_request_ = now;
+                }
+              }
+            } else {
+              RCLCPP_WARN(get_logger(), "F411 CDC first-response timeout; closing and retrying");
+            }
+            publishState();
+            closeSerial("first response timeout");
+          }
+        } else if (now - last_rx_ > std::chrono::duration<double>(hmi_transport_timeout_sec_)) {
+          closeSerial("transport heartbeat timeout");
+        } else if (last_usb_status_request_.time_since_epoch().count() == 0 ||
+                   now - last_usb_status_request_ > std::chrono::seconds(2)) {
+          if (sendLine("USB:STATUS", 0)) last_usb_status_request_ = now;
+        }
       }
       sensorWatchdogTick();
     });
@@ -357,6 +448,7 @@ private:
     vesc_rx_pub_ = create_publisher<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/rx", rclcpp::QoS(rclcpp::KeepLast(16)).reliable());
     vesc_status_pub_ = create_publisher<std_msgs::msg::String>("/stmf4/vesc/status", stateQos());
     vesc_error_pub_ = create_publisher<std_msgs::msg::String>("/stmf4/vesc/error", stateQos());
+    usb_status_pub_ = create_publisher<std_msgs::msg::String>("/stmf4/usb/status", stateQos());
     vesc_connected_pub_ = create_publisher<std_msgs::msg::Bool>("/stmf4/vesc/connected", stateQos());
     goal_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("/navigation/goal_request", 10);
     cancel_nav_client_ = create_client<action_msgs::srv::CancelGoal>("/navigate_to_pose/_action/cancel_goal");
@@ -403,8 +495,10 @@ private:
       });
     boolSub("/gnss/connected", gnss_ready_);
     boolSub("/imu/connected", imu_ready_);
-    boolSub("/perception/camera_connected", camera_ready_);
-    boolSub("/perception/camera_healthy", perception_ready_);
+    camera_connected_sub_ = create_subscription<std_msgs::msg::Bool>("/perception/camera_connected", stateQos(),
+      [this](std_msgs::msg::Bool::ConstSharedPtr msg) { camera_ready_ = msg->data; last_camera_state_time_ = std::chrono::steady_clock::now(); });
+    camera_healthy_sub_ = create_subscription<std_msgs::msg::Bool>("/perception/camera_healthy", stateQos(),
+      [this](std_msgs::msg::Bool::ConstSharedPtr msg) { perception_ready_ = msg->data; last_camera_state_time_ = std::chrono::steady_clock::now(); });
     boolSub("/perception/emergency_stop", perception_emergency_);
     boolSub("/esc/ready", esc_ready_);
     boolSub("/esc/feedback_valid", esc_feedback_);
@@ -437,10 +531,10 @@ private:
     imu_sub_ = create_subscription<sensor_msgs::msg::Imu>("/imu/data", rclcpp::SensorDataQoS(),
       [this](sensor_msgs::msg::Imu::ConstSharedPtr msg) {
         if (std::isfinite(msg->angular_velocity.z)) gyro_z_rps_ = msg->angular_velocity.z;
-        if (!gnss_ready_) {
-          heading_deg_ = yawFromQuat(msg->orientation) * 180.0 / kPi;
-          if (heading_deg_ < 0.0) heading_deg_ += 360.0;
-        }
+        imu_yaw_deg_ = yawFromQuat(msg->orientation) * 180.0 / kPi;
+        if (imu_yaw_deg_ < 0.0) imu_yaw_deg_ += 360.0;
+        if (!gnss_ready_) heading_deg_ = imu_yaw_deg_;
+        last_imu_data_time_ = std::chrono::steady_clock::now();
       });
     floatSub("/esc/drive_target_mps", drive_target_mps_);
     floatSub("/esc/drive_actual_mps", drive_actual_mps_);
@@ -458,22 +552,115 @@ private:
           }
         }
       });
+    foc_telemetry_sub_ = create_subscription<std_msgs::msg::String>("/esc/foc/telemetry", stateQos(),
+      [this](std_msgs::msg::String::ConstSharedPtr msg) {
+        const auto left = jsonObject(msg->data, "left");
+        const auto right = jsonObject(msg->data, "right");
+        const auto cal = jsonObject(msg->data, "steering_cal");
+        if (left && right) {
+          left_vbus_v_ = jsonNumber(*left, "vbus_v").value_or(0.0);
+          left_current_motor_a_ = jsonNumber(*left, "current_motor_a").value_or(0.0);
+          left_current_in_a_ = jsonNumber(*left, "current_in_a").value_or(0.0);
+          left_id_a_ = jsonNumber(*left, "id_a").value_or(0.0);
+          left_iq_a_ = jsonNumber(*left, "iq_a").value_or(0.0);
+          left_duty_ = jsonNumber(*left, "duty").value_or(0.0);
+          left_temp_mos_c_ = jsonNumber(*left, "temp_mos_c").value_or(0.0);
+          left_rpm_ = jsonNumber(*left, "rpm").value_or(0.0);
+          left_fault_ = static_cast<unsigned>(std::clamp(jsonNumber(*left, "fault").value_or(255.0), 0.0, 255.0));
+          left_position_deg_ = jsonNumber(*left, "position_deg").value_or(0.0);
+          right_vbus_v_ = jsonNumber(*right, "vbus_v").value_or(0.0);
+          right_current_motor_a_ = jsonNumber(*right, "current_motor_a").value_or(0.0);
+          right_current_in_a_ = jsonNumber(*right, "current_in_a").value_or(0.0);
+          right_id_a_ = jsonNumber(*right, "id_a").value_or(0.0);
+          right_iq_a_ = jsonNumber(*right, "iq_a").value_or(0.0);
+          right_duty_ = jsonNumber(*right, "duty").value_or(0.0);
+          right_temp_mos_c_ = jsonNumber(*right, "temp_mos_c").value_or(0.0);
+          right_rpm_ = jsonNumber(*right, "rpm").value_or(0.0);
+          right_fault_ = static_cast<unsigned>(std::clamp(jsonNumber(*right, "fault").value_or(255.0), 0.0, 255.0));
+          foc_values_valid_ = std::isfinite(left_vbus_v_) && std::isfinite(right_vbus_v_);
+        }
+        if (cal) {
+          steering_calibrated_ext_ = jsonBool(*cal, "calibrated").value_or(false);
+          steering_homed_ext_ = jsonBool(*cal, "homed").value_or(false);
+          steering_synced_ext_ = jsonBool(*cal, "encoder_synced").value_or(false);
+          steering_raw_count_ext_ = static_cast<int32_t>(jsonNumber(*cal, "raw_now").value_or(0.0));
+          steering_span_ext_ = static_cast<int32_t>(jsonNumber(*cal, "raw_right").value_or(0.0));
+          steering_raw_target_ext_ = static_cast<int32_t>(jsonNumber(*cal, "raw_target").value_or(0.0));
+          steering_cal_ext_valid_ = true;
+        }
+        last_foc_telemetry_time_ = std::chrono::steady_clock::now();
+      });
     obstacle_sub_ = create_subscription<std_msgs::msg::String>("/perception/obstacle_metrics", rclcpp::SensorDataQoS(),
       [this](std_msgs::msg::String::ConstSharedPtr msg) { parseObstacle(msg->data); });
     drivable_sub_ = create_subscription<std_msgs::msg::String>("/perception/drivable_space", rclcpp::SensorDataQoS(),
-      [this](std_msgs::msg::String::ConstSharedPtr msg) { if (auto v = jsonBool(msg->data, "valid")) drivable_valid_ = *v; });
+      [this](std_msgs::msg::String::ConstSharedPtr msg) {
+        if (auto v = jsonBool(msg->data, "valid")) drivable_valid_ = *v;
+        drivable_valid_rows_ = static_cast<unsigned>(std::max(0.0, jsonNumber(msg->data, "valid_rows").value_or(0.0)));
+        drivable_sample_rows_ = static_cast<unsigned>(std::max(0.0, jsonNumber(msg->data, "sample_rows").value_or(0.0)));
+        last_drivable_time_ = std::chrono::steady_clock::now();
+      });
     performance_sub_ = create_subscription<std_msgs::msg::String>("/perception/performance", rclcpp::SensorDataQoS(),
       [this](std_msgs::msg::String::ConstSharedPtr msg) {
         for (const char *key : {"fps", "pipeline_fps", "pipeline_fps_ema"}) {
           if (auto v = jsonNumber(msg->data, key)) { camera_fps_ = std::max(0.0, *v); break; }
         }
+        perception_latency_ms_ = jsonNumber(msg->data, "pipeline_ms_per_frame").value_or(0.0);
+        perception_dropped_frames_ = static_cast<unsigned>(std::max(0.0, jsonNumber(msg->data, "capture_dropped_total").value_or(0.0)));
+        perception_raw_detection_count_ = static_cast<unsigned>(std::max(0.0, jsonNumber(msg->data, "raw_detection_count").value_or(0.0)));
+        perception_confirmed_count_ = static_cast<unsigned>(std::max(0.0, jsonNumber(msg->data, "confirmed_obstacle_count").value_or(0.0)));
+        perception_backend_ = wireToken(jsonString(msg->data, "backend").value_or("UNKNOWN"), 10U);
+        last_performance_time_ = std::chrono::steady_clock::now();
+      });
+    lane_metrics_sub_ = create_subscription<std_msgs::msg::String>("/yolop/lane_metrics", rclcpp::SensorDataQoS(),
+      [this](std_msgs::msg::String::ConstSharedPtr msg) {
+        lane_metric_valid_ = jsonBool(msg->data, "valid").value_or(false);
+        lane_center_offset_m_ = jsonNumber(msg->data, "center_error_m").value_or(0.0);
+        lane_confidence_pct_ = 100.0 * jsonNumber(msg->data, "confidence").value_or(0.0);
+        lane_road_width_m_ = jsonNumber(msg->data, "road_width_m").value_or(0.0);
+        lane_left_clearance_m_ = jsonNumber(msg->data, "left_clearance_m").value_or(0.0);
+        lane_right_clearance_m_ = jsonNumber(msg->data, "right_clearance_m").value_or(0.0);
+        lane_heading_error_deg_ = jsonNumber(msg->data, "heading_error_rad").value_or(0.0) * 180.0 / kPi;
+        last_lane_metrics_time_ = std::chrono::steady_clock::now();
       });
     map_pose_sub_ = create_subscription<nav_msgs::msg::Odometry>("/odometry/filtered_map", rclcpp::SensorDataQoS(),
       [this](nav_msgs::msg::Odometry::ConstSharedPtr msg) {
         const auto &p = msg->pose.pose.position;
         if (!std::isfinite(p.x) || !std::isfinite(p.y)) return;
         map_x_ = p.x; map_y_ = p.y; map_yaw_ = yawFromQuat(msg->pose.pose.orientation);
+        map_cov_x_ = std::max(0.0, msg->pose.covariance[0]);
+        map_cov_y_ = std::max(0.0, msg->pose.covariance[7]);
+        map_yaw_var_ = std::max(0.0, msg->pose.covariance[35]);
         have_map_pose_ = true; last_map_pose_ = std::chrono::steady_clock::now();
+      });
+    local_odom_sub_ = create_subscription<nav_msgs::msg::Odometry>("/odometry/filtered", rclcpp::SensorDataQoS(),
+      [this](nav_msgs::msg::Odometry::ConstSharedPtr msg) {
+        const auto &p = msg->pose.pose.position;
+        if (!std::isfinite(p.x) || !std::isfinite(p.y)) return;
+        odom_x_ = p.x; odom_y_ = p.y; odom_yaw_ = yawFromQuat(msg->pose.pose.orientation);
+        odom_linear_mps_ = msg->twist.twist.linear.x; odom_yaw_rate_rps_ = msg->twist.twist.angular.z;
+        last_local_odom_time_ = std::chrono::steady_clock::now();
+      });
+    mppi_status_sub_ = create_subscription<std_msgs::msg::String>("/navigation/mppi_closed_loop/status", stateQos(),
+      [this](std_msgs::msg::String::ConstSharedPtr msg) {
+        mppi_status_text_ = msg->data;
+        last_mppi_status_time_ = std::chrono::steady_clock::now();
+      });
+    trajectory_state_sub_ = create_subscription<std_msgs::msg::String>("/navigation/trajectory_safety_state", stateQos(),
+      [this](std_msgs::msg::String::ConstSharedPtr msg) {
+        trajectory_state_text_ = msg->data;
+        last_trajectory_state_time_ = std::chrono::steady_clock::now();
+      });
+    costmap_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>("/local_costmap/costmap", rclcpp::QoS(rclcpp::KeepLast(1)).best_effort(),
+      [this](nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg) {
+        unsigned occupied = 0U;
+        bool blocked = false;
+        for (const auto cell : msg->data) {
+          if (cell >= 50) ++occupied;
+          if (cell >= 100) blocked = true;
+        }
+        costmap_obstacle_cells_ = occupied;
+        costmap_blocked_ = blocked;
+        last_costmap_time_ = std::chrono::steady_clock::now();
       });
     nav_goal_state_sub_ = create_subscription<std_msgs::msg::String>("/navigation/goal_state", stateQos(),
       [this](std_msgs::msg::String::ConstSharedPtr msg) { handleNavigationGoalState(msg->data); });
@@ -651,7 +838,10 @@ private:
     obstacle_count_ = std::max(0, static_cast<int>(std::lround(jsonNumber(raw, "count").value_or(0.0))));
     nearest_object_ = "NONE";
     nearest_distance_m_ = 0.0;
+    nearest_lateral_m_ = 0.0;
     nearest_conf_pct_ = 0.0;
+    nearest_track_id_ = -1;
+    nearest_missed_frames_ = 0U;
     size_t cursor = 0;
     while (true) {
       const auto p = raw.find("\"forward_m\":", cursor);
@@ -663,12 +853,19 @@ private:
       const double d = jsonNumber(fragment, "forward_m").value_or(0.0);
       if (d > 0.0 && (nearest_distance_m_ <= 0.0 || d < nearest_distance_m_)) {
         nearest_distance_m_ = d;
-        const int cls = static_cast<int>(std::lround(jsonNumber(fragment, "class_id").value_or(-1.0)));
-        nearest_object_ = className(cls);
+        nearest_lateral_m_ = jsonNumber(fragment, "left_m").value_or(0.0);
+        nearest_track_id_ = static_cast<int>(std::lround(jsonNumber(fragment, "track_id").value_or(-1.0)));
+        nearest_missed_frames_ = static_cast<unsigned>(std::max(0.0, jsonNumber(fragment, "missed_frames").value_or(0.0)));
+        if (auto name = jsonString(fragment, "class_name")) nearest_object_ = wireToken(*name, 20U);
+        else {
+          const int cls = static_cast<int>(std::lround(jsonNumber(fragment, "class_id").value_or(-1.0)));
+          nearest_object_ = className(cls);
+        }
         nearest_conf_pct_ = 100.0 * jsonNumber(fragment, "score").value_or(0.0);
       }
       cursor = fragment_end + 1;
     }
+    last_obstacle_time_ = std::chrono::steady_clock::now();
   }
 
   std::optional<std::string> resolveSerialDevice() {
@@ -745,6 +942,7 @@ private:
     std::this_thread::sleep_for(std::chrono::milliseconds(30));
     ::tcflush(fd_, TCIFLUSH);
     last_rx_ = {};
+    serial_opened_at_ = std::chrono::steady_clock::now();
     publishConnected(false);
     RCLCPP_INFO(get_logger(), "HMI USB opened: %s (selector=%s)", active_serial_device_.c_str(), serial_device_.c_str());
     sendLine("ROS:1");
@@ -755,6 +953,8 @@ private:
     sendLine("NEO:STATUS");
     sendLine("VESC:MODE:" + vesc_desired_mode_);
     sendLine("VESC:STATUS");
+    sendLine("USB:STATUS");
+    last_usb_status_request_ = std::chrono::steady_clock::now();
     return true;
   }
 
@@ -1785,7 +1985,13 @@ private:
 
   void handleHmiLine(const std::string &line) {
     last_rx_ = std::chrono::steady_clock::now();
+    silent_open_failures_ = 0U;
     if (!connected_) publishConnected(true);
+    if (line.rfind("USB:STAT:", 0) == 0) {
+      last_usb_status_ = line;
+      std_msgs::msg::String msg; msg.data = line; usb_status_pub_->publish(msg);
+      return;
+    }
     if (line.rfind("VESC:", 0) == 0) { handleVescLine(line); return; }
     if (line.rfind("SENS:GNSS:", 0) == 0) { handleNeo3Gnss(line.substr(10)); return; }
     if (line.rfind("SENS:GNSSF:", 0) == 0) { handleNeo3GnssFallback(line.substr(11)); return; }
@@ -1948,10 +2154,152 @@ private:
     source_pub_->publish(source);
   }
 
+  void extendedTelemetryTick() {
+    const auto now_steady = std::chrono::steady_clock::now();
+    if (last_extended_tx_.time_since_epoch().count() != 0 &&
+        now_steady - last_extended_tx_ < 200ms) return;
+    last_extended_tx_ = now_steady;
+
+    const auto flag = [](bool v) { return v ? "1" : "0"; };
+    const auto finite = [](double v) { return std::isfinite(v) ? v : 0.0; };
+    const auto send_ext = [this](const char *domain, const char *group, uint32_t seq,
+                                 uint32_t age, const std::string &payload) {
+      std::ostringstream line;
+      line << domain << ':' << group << ':' << seq << ':' << age << ':' << payload;
+      const std::string encoded = line.str();
+      if (encoded.size() <= 220U) (void)sendLine(encoded, 0);
+      else RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000,
+        "Extended HMI telemetry line exceeded 220 bytes: %s/%s size=%zu", domain, group, encoded.size());
+    };
+
+    const uint32_t foc_age = steadyAgeMs(last_foc_telemetry_time_);
+    const bool foc_valid = foc_values_valid_ && foc_age != 0xFFFFFFFFU;
+    const double vbus = (left_vbus_v_ > 0.1 && right_vbus_v_ > 0.1) ?
+      0.5 * (left_vbus_v_ + right_vbus_v_) : std::max(left_vbus_v_, right_vbus_v_);
+    {
+      std::ostringstream p; p << flag(foc_valid) << ',' << fixed(finite(vbus),2) << ','
+        << fixed(finite(right_current_motor_a_),2) << ',' << fixed(finite(right_current_in_a_),2) << ','
+        << fixed(finite(right_iq_a_),2) << ',' << fixed(finite(right_id_a_),2) << ','
+        << fixed(finite(right_duty_),4) << ',' << fixed(finite(right_temp_mos_c_),1) << ',' << right_fault_;
+      send_ext("ESCX","PWR",++escx_power_seq_,foc_age,p.str());
+    }
+    {
+      std::ostringstream p; p << flag(foc_valid) << ',' << fixed(finite(left_vbus_v_),2) << ','
+        << fixed(finite(left_current_motor_a_),2) << ',' << fixed(finite(left_duty_),4) << ',' << fixed(finite(left_rpm_),1) << ',' << left_fault_ << ','
+        << fixed(finite(right_vbus_v_),2) << ',' << fixed(finite(right_current_motor_a_),2) << ',' << fixed(finite(right_duty_),4) << ',' << fixed(finite(right_rpm_),1) << ',' << right_fault_;
+      send_ext("ESCX","MTR",++escx_motor_seq_,foc_age,p.str());
+    }
+    {
+      const bool enc_valid = steering_cal_ext_valid_ && foc_age != 0xFFFFFFFFU;
+      std::ostringstream p; p << flag(enc_valid) << ',' << steering_raw_count_ext_ << ',' << steering_span_ext_ << ',' << steering_raw_target_ext_ << ','
+        << flag(steering_calibrated_ext_) << ',' << flag(steering_homed_ext_) << ',' << flag(steering_synced_ext_) << ",0," << fixed(finite(left_position_deg_),2);
+      send_ext("ESCX","ENC",++escx_encoder_seq_,foc_age,p.str());
+    }
+    {
+      const uint32_t age = steadyAgeMs(last_vesc_rx_time_);
+      std::ostringstream p; p << flag(vesc_connected_state_) << ',' << vesc_uart_baud_active_.load() << ','
+        << (vesc_maintenance_mode_ ? "MAINT" : "RUNTIME");
+      send_ext("ESCX","LINK",++escx_link_seq_,age,p.str());
+    }
+    send_ext("ESCX","PERF",++escx_perf_seq_,0xFFFFFFFFU,"0,0,0");
+
+    const uint32_t cam_age = std::min(steadyAgeMs(last_camera_state_time_), steadyAgeMs(last_performance_time_));
+    const bool cam_seen = cam_age != 0xFFFFFFFFU;
+    {
+      std::ostringstream p; p << flag(cam_seen) << ',' << flag(perception_ready_) << ',' << fixed(finite(camera_fps_),2) << ','
+        << fixed(finite(perception_latency_ms_),2) << ',' << perception_dropped_frames_ << ",0," << wireToken(perception_backend_,10U) << ',' << flag(perception_inference_runtime_);
+      send_ext("PERX","CAM",++perx_cam_seq_,cam_age,p.str());
+    }
+    const uint32_t obs_age = steadyAgeMs(last_obstacle_time_);
+    const bool obs_seen = obs_age != 0xFFFFFFFFU;
+    {
+      std::ostringstream p; p << flag(obs_seen) << ',' << obstacle_count_ << ',' << obstacle_count_ << ',' << nearest_missed_frames_ << ',' << nearest_track_id_ << ','
+        << fixed(finite(nearest_distance_m_),3) << ',' << fixed(finite(nearest_lateral_m_),3) << ',' << fixed(finite(nearest_conf_pct_),1) << ',' << wireToken(nearest_object_,20U);
+      send_ext("PERX","DET",++perx_det_seq_,obs_age,p.str());
+    }
+    const uint32_t lane_age = steadyAgeMs(last_lane_metrics_time_);
+    const bool lane_seen = lane_age != 0xFFFFFFFFU;
+    {
+      std::ostringstream p; p << flag(lane_seen) << ',' << flag(lane_metric_valid_) << ',' << fixed(finite(lane_center_offset_m_),3) << ','
+        << fixed(finite(lane_confidence_pct_),1) << ',' << fixed(finite(lane_road_width_m_),3) << ',' << fixed(finite(lane_left_clearance_m_),3) << ','
+        << fixed(finite(lane_right_clearance_m_),3) << ',' << fixed(finite(lane_heading_error_deg_),2);
+      send_ext("PERX","LANE",++perx_lane_seq_,lane_age,p.str());
+    }
+    const uint32_t drv_age = steadyAgeMs(last_drivable_time_);
+    const bool drv_seen = drv_age != 0xFFFFFFFFU;
+    const double valid_row_pct = drivable_sample_rows_ > 0U ?
+      100.0 * static_cast<double>(drivable_valid_rows_) / static_cast<double>(drivable_sample_rows_) : 0.0;
+    {
+      std::ostringstream p; p << flag(drv_seen) << ',' << flag(drivable_valid_) << ',' << fixed(finite(valid_row_pct),1) << ",0,0,0";
+      send_ext("PERX","DRV",++perx_drv_seq_,drv_age,p.str());
+    }
+    {
+      const bool blocked = perception_emergency_;
+      std::ostringstream p; p << flag(obs_seen) << ',' << obstacle_count_ << ',' << flag(blocked) << ',' << fixed(finite(nearest_distance_m_),3) << ','
+        << fixed(finite(nearest_lateral_m_),3) << ',' << nearest_track_id_ << ',' << nearest_missed_frames_ << ",0";
+      send_ext("PERX","OBS",++perx_obs_seq_,obs_age,p.str());
+    }
+    const uint32_t perf_age = steadyAgeMs(last_performance_time_);
+    const bool perf_seen = perf_age != 0xFFFFFFFFU;
+    {
+      std::ostringstream p; p << flag(perf_seen) << ',' << fixed(finite(camera_fps_),2) << ',' << fixed(finite(perception_latency_ms_),2) << ','
+        << perception_dropped_frames_ << ',' << perception_raw_detection_count_ << ',' << perception_confirmed_count_ << ',' << wireToken(perception_backend_,10U);
+      send_ext("PERX","PERF",++perx_perf_seq_,perf_age,p.str());
+    }
+
+    const uint32_t pose_age = steadyAgeMs(last_map_pose_);
+    const bool pose_seen = have_map_pose_ && pose_age != 0xFFFFFFFFU;
+    {
+      std::ostringstream p; p << flag(pose_seen) << ',' << fixed(finite(map_x_),3) << ',' << fixed(finite(map_y_),3) << ',' << fixed(finite(map_yaw_ * 180.0 / kPi),2) << ','
+        << fixed(finite(map_cov_x_),4) << ',' << fixed(finite(map_cov_y_),4) << ',' << fixed(finite(map_yaw_var_),5);
+      send_ext("NAVX","POSE",++navx_pose_seq_,pose_age,p.str());
+    }
+    const uint32_t odom_age = steadyAgeMs(last_local_odom_time_);
+    const bool odom_seen = odom_age != 0xFFFFFFFFU;
+    {
+      std::ostringstream p; p << flag(odom_seen) << ',' << fixed(finite(odom_x_),3) << ',' << fixed(finite(odom_y_),3) << ',' << fixed(finite(odom_yaw_ * 180.0 / kPi),2) << ','
+        << fixed(finite(odom_linear_mps_),3) << ',' << fixed(finite(odom_yaw_rate_rps_),3);
+      send_ext("NAVX","ODOM",++navx_odom_seq_,odom_age,p.str());
+    }
+    const uint32_t imu_age = steadyAgeMs(last_imu_data_time_);
+    const bool imu_seen = imu_age != 0xFFFFFFFFU;
+    double heading_diff = std::fabs(heading_deg_ - imu_yaw_deg_);
+    if (heading_diff > 180.0) heading_diff = 360.0 - heading_diff;
+    {
+      std::ostringstream p; p << flag(imu_seen) << ',' << fixed(finite(imu_yaw_deg_),2) << ',' << fixed(finite(heading_deg_),2) << ',' << fixed(finite(heading_diff),2);
+      send_ext("NAVX","IMU",++navx_imu_seq_,imu_age,p.str());
+    }
+    const uint32_t mppi_age_local = steadyAgeMs(last_mppi_status_time_);
+    const uint32_t traj_age = steadyAgeMs(last_trajectory_state_time_);
+    const uint32_t nav_age = std::min(mppi_age_local, traj_age);
+    const bool nav_seen = nav_age != 0xFFFFFFFFU;
+    const bool path_valid = kvBool(trajectory_state_text_, "path_valid").value_or(false);
+    const uint32_t cmd_age_ms = static_cast<uint32_t>(std::clamp(kvNumber(mppi_status_text_, "mppi_age").value_or(999.0) * 1000.0, 0.0, 4294967294.0));
+    const double cmd_v = kvNumber(mppi_status_text_, "mppi_v").value_or(0.0);
+    const double cmd_w = kvNumber(mppi_status_text_, "mppi_w").value_or(0.0);
+    const bool controller_ready = kvBool(mppi_status_text_, "ready").value_or(nav2_ready_);
+    const bool smoother_ready = kvBool(mppi_status_text_, "smoother_closed_loop_eligible").value_or(false);
+    {
+      std::ostringstream p; p << flag(nav_seen) << ',' << flag(nav2_ready_) << ',' << flag(path_valid) << ',' << cmd_age_ms << ','
+        << fixed(finite(cmd_v),3) << ',' << fixed(finite(cmd_w),3) << ',' << (nav2_ready_ ? "READY" : "WAIT") << ','
+        << (controller_ready ? "READY" : "WAIT") << ',' << (smoother_ready ? "READY" : "WAIT");
+      send_ext("NAVX","NAV2",++navx_nav2_seq_,nav_age,p.str());
+    }
+    const uint32_t cost_age = steadyAgeMs(last_costmap_time_);
+    const bool cost_seen = cost_age != 0xFFFFFFFFU;
+    const unsigned path_relevant = static_cast<unsigned>(std::max(0.0, kvNumber(trajectory_state_text_, "path_relevant_points").value_or(0.0)));
+    {
+      std::ostringstream p; p << flag(cost_seen) << ',' << flag(cost_seen) << ',' << costmap_obstacle_cells_ << ',' << path_relevant << ',' << flag(costmap_blocked_);
+      send_ext("NAVX","COST",++navx_cost_seq_,cost_age,p.str());
+    }
+    {
+      std::ostringstream p; p << flag(nav_seen) << ',' << cmd_age_ms << ',' << fixed(finite(cmd_v),3) << ',' << fixed(finite(cmd_w),3);
+      send_ext("NAVX","CTRL",++navx_ctrl_seq_,mppi_age_local,p.str());
+    }
+  }
+
   void telemetryTick() {
     if (fd_ < 0 || vesc_maintenance_mode_) return;
-    const auto now_steady = std::chrono::steady_clock::now();
-    (void)now_steady;
     // Changed-only state transmission. openSerial() clears tx_cache_, so a CDC
     // reconnect already triggers a complete state resync. Periodically forcing
     // all ~40 fields at once created a deterministic burst that could delay
@@ -2021,6 +2369,7 @@ private:
     sendState("CFGSTEERTEST", fixed(steering_test_angle_deg_, 1), force);
     sendState("CFGDRVSCALE", fixed(drive_scale_runtime_, 4), force);
     sendState("CFGPERINF", perception_inference_runtime_ ? "1" : "0", force);
+    extendedTelemetryTick();
     mirrorWaypointState(force);
   }
 
@@ -2049,7 +2398,9 @@ private:
            << "\",\"selector\":\"" << serial_device_ << "\",\"baud\":" << serial_baud_
            << ",\"mode\":\"" << mode_ << "\",\"page\":\"" << page_
            << "\",\"navigation\":\"" << navigation_state_
-           << "\",\"target\":\"" << active_target_ << "\"}";
+           << "\",\"target\":\"" << active_target_
+           << "\",\"silent_open_failures\":" << silent_open_failures_
+           << ",\"usb_recovery_requests\":" << usb_recovery_requests_ << "}";
     s.data = status.str(); status_pub_->publish(s);
     publishWaypointState();
   }
@@ -2089,7 +2440,11 @@ private:
   std::string navigation_origin_{"NONE"}, last_goal_state_{"IDLE"};
   double steering_hmi_target_deg_{0.0};
   std::unordered_map<std::string, std::string> tx_cache_;
-  std::chrono::steady_clock::time_point last_reconnect_try_{}, last_forced_tx_{}, last_rx_{}, last_map_pose_{};
+  std::chrono::steady_clock::time_point last_reconnect_try_{}, last_forced_tx_{}, last_rx_{}, serial_opened_at_{},
+      last_usb_status_request_{}, last_usb_recovery_request_{}, last_map_pose_{};
+  std::uint32_t silent_open_failures_{0U};
+  std::uint32_t usb_recovery_requests_{0U};
+  std::string last_usb_status_{"UNKNOWN"};
   std::array<Waypoint, kWaypointCount> waypoints_{};
   int selected_waypoint_{0};
   bool have_map_pose_{false};
@@ -2124,6 +2479,36 @@ private:
   std::chrono::steady_clock::time_point last_vesc_line_time_{}, last_vesc_rx_time_{};
   std::string nearest_object_{"NONE"};
   double nearest_distance_m_{0.0}, nearest_conf_pct_{0.0}, camera_fps_{0.0};
+  // Extended HMI telemetry mirrors authoritative ROS sources; no duplicate control ownership.
+  bool foc_values_valid_{false}, steering_cal_ext_valid_{false};
+  double left_vbus_v_{0.0}, left_current_motor_a_{0.0}, left_current_in_a_{0.0}, left_id_a_{0.0}, left_iq_a_{0.0};
+  double left_duty_{0.0}, left_temp_mos_c_{0.0}, left_rpm_{0.0}, left_position_deg_{0.0};
+  double right_vbus_v_{0.0}, right_current_motor_a_{0.0}, right_current_in_a_{0.0}, right_id_a_{0.0}, right_iq_a_{0.0};
+  double right_duty_{0.0}, right_temp_mos_c_{0.0}, right_rpm_{0.0};
+  unsigned left_fault_{255U}, right_fault_{255U};
+  bool steering_calibrated_ext_{false}, steering_homed_ext_{false}, steering_synced_ext_{false};
+  int32_t steering_raw_count_ext_{0}, steering_span_ext_{0}, steering_raw_target_ext_{0};
+  double perception_latency_ms_{0.0}, lane_center_offset_m_{0.0}, lane_confidence_pct_{0.0};
+  double lane_road_width_m_{0.0}, lane_left_clearance_m_{0.0}, lane_right_clearance_m_{0.0}, lane_heading_error_deg_{0.0};
+  bool lane_metric_valid_{false};
+  unsigned perception_dropped_frames_{0U}, perception_raw_detection_count_{0U}, perception_confirmed_count_{0U};
+  unsigned drivable_valid_rows_{0U}, drivable_sample_rows_{0U};
+  std::string perception_backend_{"UNKNOWN"};
+  double nearest_lateral_m_{0.0};
+  int nearest_track_id_{-1};
+  unsigned nearest_missed_frames_{0U};
+  double map_cov_x_{0.0}, map_cov_y_{0.0}, map_yaw_var_{0.0};
+  double odom_x_{0.0}, odom_y_{0.0}, odom_yaw_{0.0}, odom_linear_mps_{0.0}, odom_yaw_rate_rps_{0.0};
+  double imu_yaw_deg_{0.0};
+  std::string mppi_status_text_{"UNKNOWN"}, trajectory_state_text_{"UNKNOWN"};
+  unsigned costmap_obstacle_cells_{0U};
+  bool costmap_blocked_{false};
+  std::chrono::steady_clock::time_point last_foc_telemetry_time_{}, last_camera_state_time_{}, last_performance_time_{},
+      last_obstacle_time_{}, last_lane_metrics_time_{}, last_drivable_time_{}, last_imu_data_time_{},
+      last_local_odom_time_{}, last_mppi_status_time_{}, last_trajectory_state_time_{}, last_costmap_time_{}, last_extended_tx_{};
+  uint32_t escx_power_seq_{0U}, escx_motor_seq_{0U}, escx_encoder_seq_{0U}, escx_link_seq_{0U}, escx_perf_seq_{0U};
+  uint32_t perx_cam_seq_{0U}, perx_det_seq_{0U}, perx_lane_seq_{0U}, perx_drv_seq_{0U}, perx_obs_seq_{0U}, perx_perf_seq_{0U};
+  uint32_t navx_pose_seq_{0U}, navx_odom_seq_{0U}, navx_imu_seq_{0U}, navx_nav2_seq_{0U}, navx_cost_seq_{0U}, navx_ctrl_seq_{0U};
 
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr connected_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr page_pub_, mode_pub_;
@@ -2137,20 +2522,23 @@ private:
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr neo3_quality_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr neo3_gnss_state_pub_, neo3_status_pub_;
   rclcpp::Publisher<std_msgs::msg::UInt8MultiArray>::SharedPtr vesc_rx_pub_;
-  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr vesc_status_pub_, vesc_error_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr vesc_status_pub_, vesc_error_pub_, usb_status_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr vesc_connected_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr neo3_gnss_connected_pub_, neo3_ist_connected_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr neo3_safety_switch_pub_, neo3_estop_pub_;
   rclcpp::Publisher<sensor_msgs::msg::MagneticField>::SharedPtr neo3_mag_pub_;
   rclcpp::Client<action_msgs::srv::CancelGoal>::SharedPtr cancel_nav_client_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr request_sub_, neo3_command_sub_, esc_status_sub_, obstacle_sub_, drivable_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr foc_telemetry_sub_, lane_metrics_sub_, mppi_status_sub_, trajectory_state_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr camera_connected_sub_, camera_healthy_sub_;
   rclcpp::Subscription<std_msgs::msg::UInt8MultiArray>::SharedPtr vesc_runtime_tx_sub_, vesc_maintenance_tx_sub_;
   bool vesc_maintenance_mode_{false};
   std::uint64_t vesc_runtime_tx_rejected_{0}, vesc_maintenance_tx_rejected_{0};
   std::mutex vesc_wire_tx_mutex_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr vesc_mode_sub_, vesc_diagnostic_command_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr performance_sub_, nav_goal_state_sub_;
-  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr map_pose_sub_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr map_pose_sub_, local_odom_sub_;
+  rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr costmap_sub_;
   rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr fix_sub_;
   rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr quality_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;

@@ -395,7 +395,7 @@ struct WorkspacePaths {
     put("gui",navCfg/"gui_calibration.yaml");
     put("gnss",navCfg/"gnss.yaml");
     put("imu",navCfg/"imu.yaml");
-    put("imu_calibration",navCfg/"imu_calibration.yaml");
+    // imu_calibration.yaml is retained on disk only as legacy evidence; imu.yaml is runtime authority.
     put("ekf",navCfg/"ekf.yaml");
     put("localization",navCfg/"localization_cpp.yaml");
     put("navigation_core",navCfg/"navigation_core.yaml");

@@ -1,3 +1,6 @@
+# LEGACY EVIDENCE ONLY — NOT RUNTIME AUTHORITY.
+# Runtime/GUI authority is src/navigation/config/imu.yaml. Do not launch this file.
+# Historical values are retained for traceability; certification is intentionally revoked.
 data_imu_node:
   ros__parameters:
     port: auto
@@ -23,11 +26,15 @@ data_imu_node:
     - 0.0008360663825818029
     - -4.186553525853398e-05
     - 0.0053725864990425976
+    accel_scale:
+    - 1.0
+    - 1.0
+    - 1.0
     gyro_bias:
     - 0.0
     - 0.0
     - 0.0
-    stationary_calibration_valid: true
+    stationary_calibration_valid: false
     stationary_calibration_saved_at: 2026-09-07T12:27:17+0700
     stationary_calibration_sample_count: 93
     stationary_calibration_duration_sec: 15.364674983999976

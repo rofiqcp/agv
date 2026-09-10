@@ -2704,9 +2704,8 @@ class ImuCalibrationPage:public QWidget{
   void applyYaml(){
     if(result_.isEmpty()||!result_.value("pass").toBool()) return;
     const QString saved=QDateTime::currentDateTime().toString(Qt::ISODate);
-    for(const QString &key:{
-      QString("imu"),QString("imu_calibration")
-    }){
+    // Runtime calibration authority is imu.yaml only. imu_calibration.yaml is legacy evidence.
+    for(const QString &key:{QString("imu")}){
       if(!s_.contains(key)) continue;
       for(const QString &name:{
         QString("gyro_bias"),QString("accel_bias"),
@@ -2722,28 +2721,9 @@ class ImuCalibrationPage:public QWidget{
       s_[key]->set("data_imu_node.ros__parameters.stationary_calibration_gyro_z_std_rps",result_.value("gyro_z_std_rps"));
       s_[key]->set("data_imu_node.ros__parameters.stationary_calibration_accel_norm_error_mps2",result_.value("accel_norm_error_mps2"));
     }
-    if(s_.contains("localization")){
-      auto loc=s_.value("localization");
-      // Estimator policy is invariant: GNSS contributes body vx+vyaw while
-      // absolute yaw remains IMU-only. Calibration revocation only clears
-      // evidence used by the autonomy quality gate; it must not starve EKF.
-      loc->set("localization_core.ros__parameters.enable_global_gnss_velocity_fusion",true);
-      loc->set("localization_core.ros__parameters.enable_global_gnss_cog_fusion",false);
-      loc->set("localization_core.ros__parameters.enable_gnss_course_yaw_correction",false);
-      loc->set("localization_core.ros__parameters.gnss_velocity_calibration_valid",false);
-      loc->set("localization_core.ros__parameters.gnss_cog_calibration_valid",false);
-      loc->set("localization_core.ros__parameters.gnss_velocity_calibration_saved_at",QString());
-      loc->set("localization_core.ros__parameters.gnss_cog_calibration_saved_at",QString());
-      loc->set("localization_core.ros__parameters.gnss_velocity_calibration_epoch_count",0);
-      loc->set("localization_core.ros__parameters.gnss_velocity_calibration_qualified_ratio",0.0);
-      loc->set("localization_core.ros__parameters.gnss_velocity_calibration_sync_p95_sec",0.0);
-      loc->set("localization_core.ros__parameters.gnss_velocity_calibration_wheel_residual_p95_mps",0.0);
-      loc->set("localization_core.ros__parameters.gnss_velocity_calibration_lateral_p95_mps",0.0);
-      loc->set("localization_core.ros__parameters.gnss_cog_calibration_epoch_count",0);
-      loc->set("localization_core.ros__parameters.gnss_cog_calibration_qualified_ratio",0.0);
-      loc->set("localization_core.ros__parameters.gnss_cog_calibration_residual_p95_rad",0.0);
-    }
-    status_->setText("IMU STAGE-2 CERTIFIED ✓ • GNSS evidence dicabut; EKF GNSS vx+vyaw tetap ON, ulangi straight-run Stage 2");
+    // This commissioning wizard intentionally does not touch GNSS evidence,
+    // EKF source enablement, or field-certification flags.
+    status_->setText("IMU COMMISSIONING CALIBRATED ✓ • field certification tetap WAIT");
     apply_->setEnabled(false);
   }
 };
@@ -2760,9 +2740,9 @@ class GnssCalibrationPage:public QWidget{
     l->addWidget(h);
     auto *d=new QLabel(
     "Live qualification hanya menunjukkan epoch saat ini. Stage 2 mewajibkan satu straight-run "
-    "lengkap dengan statistik PASS untuk quality gate autonomy. Estimator selalu memakai GNSS vx+vyaw, "
-    "sedangkan absolute yaw EKF hanya dari IMU. COG GNSS divalidasi sebagai diagnostik, bukan yaw source. "
-    "Drive odometry dan IMU stationary calibration harus PASS untuk sertifikasi commissioning.");
+    "lengkap dengan statistik PASS untuk quality gate autonomy. Local EKF memakai ESC vx + GNSS vx + IMU wz; "
+    "global EKF memakai GNSS map x/y + GNSS vx + COG absolute yaw + validated heading + IMU wz. "
+    "Drive odometry dan IMU commissioning calibration harus PASS sebelum GNSS field certification.");
     d->setWordWrap(true);
     l->addWidget(d);
     auto *bar=new QHBoxLayout();
@@ -2775,8 +2755,8 @@ class GnssCalibrationPage:public QWidget{
     }) bar->addWidget(w);
     l->addLayout(bar);
     auto *fuse=new QHBoxLayout();
-    velEnable_=new QPushButton("Certify GNSS vx + vyaw");
-    cogEnable_=new QPushButton("Certify COG Diagnostic");
+    velEnable_=new QPushButton("Certify GNSS vx");
+    cogEnable_=new QPushButton("Certify GNSS COG yaw");
     disable_=new QPushButton("Restore EKF Sensor Policy");
     revoke_=new QPushButton("Revoke Certifications");
     velPill_=new StatusPill("VEL --");
@@ -3171,9 +3151,10 @@ class GnssCalibrationPage:public QWidget{
     st->set("localization_core.ros__parameters.gnss_velocity_calibration_wheel_residual_p95_mps",result_.value("wheel_gnss_residual_p95_mps"));
     st->set("localization_core.ros__parameters.gnss_velocity_calibration_lateral_p95_mps",result_.value("base_lateral_velocity_p95_mps"));
     st->set("localization_core.ros__parameters.enable_global_gnss_velocity_fusion",true);
-    st->set("localization_core.ros__parameters.enable_global_gnss_cog_fusion",false);
+    // Keep the configured COG path enabled; certification gate keeps it blocked until COG PASS.
+    st->set("localization_core.ros__parameters.enable_global_gnss_cog_fusion",true);
     st->set("localization_core.ros__parameters.enable_gnss_course_yaw_correction",false);
-    status_->setText("GNSS vx+vyaw CERTIFIED ✓ • EKF policy: GNSS motion + IMU absolute yaw");
+    status_->setText("GNSS VELOCITY CERTIFIED ✓ • COG absolute-yaw certification masih WAIT");
   }
   void certifyCog(){
     if(!cogRunPass_){
@@ -3210,15 +3191,15 @@ class GnssCalibrationPage:public QWidget{
     st->set("localization_core.ros__parameters.enable_global_gnss_velocity_fusion",true);
     st->set("localization_core.ros__parameters.enable_global_gnss_cog_fusion",true);
     st->set("localization_core.ros__parameters.enable_gnss_course_yaw_correction",false);
-    status_->setText("EKF SENSOR POLICY RESTORED ✓ • GNSS=vx, COG=yaw(abs), IMU=vyaw(continuity)");
+    status_->setText("EKF SENSOR POLICY RESTORED ✓ • local: ESC/GNSS vx + IMU wz; global: GNSS xy/vx + COG/validated yaw + IMU wz");
   }
   void revokeCertifications(){
     if(QMessageBox::question(this,"Revoke Stage-2",
-    "Hapus certification velocity + COG? Estimator GNSS vx+vyaw tetap aktif; autonomy quality gate kembali WAIT. Gunakan setelah perubahan mounting, odometry scale, IMU, GNSS lever arm, atau wiring.")!=QMessageBox::Yes) return;
+    "Hapus certification velocity + COG? Source policy tetap enabled, tetapi certification gate akan memblokir fusion yang belum qualified dan autonomy kembali WAIT. Gunakan setelah perubahan mounting, odometry scale, GNSS lever arm, atau wiring.")!=QMessageBox::Yes) return;
     auto st=s_.value("localization");
     if(!st) return;
     st->set("localization_core.ros__parameters.enable_global_gnss_velocity_fusion",true);
-    st->set("localization_core.ros__parameters.enable_global_gnss_cog_fusion",false);
+    st->set("localization_core.ros__parameters.enable_global_gnss_cog_fusion",true);
     st->set("localization_core.ros__parameters.enable_gnss_course_yaw_correction",false);
     st->set("localization_core.ros__parameters.gnss_velocity_calibration_valid",false);
     st->set("localization_core.ros__parameters.gnss_cog_calibration_valid",false);
@@ -3234,7 +3215,6 @@ class GnssCalibrationPage:public QWidget{
     st->set("localization_core.ros__parameters.gnss_cog_calibration_residual_p95_rad",0.0);
     velocityRunPass_=false;
     cogRunPass_=false;
-    st->set("localization_core.ros__parameters.enable_gnss_course_yaw_correction",false);
-    status_->setText("STAGE-2 CERTIFICATION REVOKED • estimator GNSS vx+vyaw tetap ON; autonomy gate WAIT");
+    status_->setText("STAGE-2 CERTIFICATION REVOKED • source policy tetap enabled; certification gates + autonomy kembali WAIT");
   }
 };

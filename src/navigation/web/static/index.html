@@ -264,7 +264,7 @@
               <label class="perception-cal-field"><span>Lane safety</span><select id="perceptionCalLaneEnabled"><option value="false">Disabled / calibrate</option><option value="true">Enabled / active</option></select><small>Aktifkan setelah posisi garis sudah tervalidasi.</small></label>
               <label class="perception-cal-field"><span>Kp proportional</span><input id="perceptionCalKp" type="number" min="0" max="0.05" step="0.0005"><small>m correction / px penetration</small></label>
               <label class="perception-cal-field"><span>Object ROI</span><select id="perceptionCalRoiEnabled"><option value="true">Enabled</option><option value="false">Disabled</option></select><small>Reference: bottom-center bbox.</small></label>
-              <div class="perception-cal-actions"><button class="primary-btn" id="perceptionCalSave" type="button">Save + Apply YAML</button><button class="soft-btn" id="perceptionCalReload" type="button">Reload</button><button class="soft-btn" id="perceptionCalReset" type="button">Reset Draft</button></div>
+              <div class="perception-cal-actions"><button class="primary-btn" id="perceptionCalSave" type="button">Stage + Review Calibration</button><button class="soft-btn" id="perceptionCalReload" type="button">Reload</button><button class="soft-btn" id="perceptionCalReset" type="button">Reset Draft</button></div>
             </div>
             <div class="perception-cal-readout" id="perceptionCalReadout">Menunggu konfigurasi perception...</div>
           </article>
@@ -380,7 +380,7 @@
             <section class="vesc-section" id="vescDriveScaleSection">
               <div class="vesc-section-head"><div><span class="eyebrow">ACKERMANN DRIVE BASELINE</span><h3>1.00 m/s → 8000 eRPM</h3></div><span class="status-chip" id="vescDriveScaleState">BASELINE</span></div>
               <div class="vesc-form-row"><label>Baseline eRPM / (m/s)<input id="vescDriveNativeErpmPerMps" type="number" readonly></label><label>Calibration scale<input id="vescDriveScaleInput" type="number" min="0.2" max="5" step="0.001"></label><label>Effective command eRPM/(m/s)<input id="vescDriveEffectiveErpmPerMps" type="number" readonly></label><label>Command at 1.00 m/s<input id="vescDriveExampleErpm" type="number" readonly></label></div>
-              <div class="button-row"><button class="primary-btn" id="vescDriveScaleSave">Save + Apply Scale</button><button class="soft-btn" id="vescDriveScaleReload">Reload</button></div>
+              <div class="button-row"><button class="primary-btn" id="vescDriveScaleSave">Stage + Review Scale</button><button class="soft-btn" id="vescDriveScaleReload">Reload</button></div>
               <p class="hint">Baseline indoor sementara: eRPM = speed[m/s] × 8000 ÷ calibration_scale. Kalibrasi ground-speed final dilakukan di luar gedung.</p>
             </section>
 
@@ -463,10 +463,10 @@
               <label>Nav2 operational ±deg<input id="ackScaleOperationalLimit" type="number" min="1" max="30" step="0.1"></label>
             </div>
             <div class="button-row">
-              <button class="primary-btn grow" id="ackScaleSave">Save Ackermann Parameters</button>
+              <button class="primary-btn grow" id="ackScaleSave">Stage + Review Ackermann</button>
               <button class="warning-btn grow" id="calModeOn2">Enable Safe Cal Mode</button>
               <button class="soft-btn grow" id="calModeOff2">Disable</button>
-              <button class="soft-btn grow" id="ackScaleApplyCanonical">Restore Canonical Scaling</button>
+              <button class="soft-btn grow" id="ackScaleApplyCanonical">Stage Canonical Ackermann</button>
             </div>
             <p class="hint">Nav2 dan teleop dibatasi langsung ±30°. Domain VESC tetap 0/180/360 untuk fisik −30/0/+30°. Scaling VESC tetap 0/180/360.</p>
           </article>
@@ -499,7 +499,7 @@
               <div class="imu-wizard-console">
                 <div class="imu-profile-strip"><div><span>Serial Profile</span><b id="imuProfileState">WAIT</b><small id="imuProfileDetail">921600 • 50 Hz • AXIS6=1</small></div><button class="primary-btn" id="imuOptimalProfileBtn">Set Optimal 921600</button></div>
                 <div class="metric-grid imu-wizard-metrics"><div><span>Mounting</span><b id="imuMountingState">WAIT</b></div><div><span>Raw gravity</span><b id="imuMountingGravity">--</b></div><div><span>Gyro Z</span><b id="imuWizardGyro">--</b></div><div><span>Static</span><b id="imuWizardStatic">WAIT</b></div><div><span>Yahboom heading</span><b id="imuWizardYahHeading">--</b></div><div><span>IST8310 heading</span><b id="imuWizardNeoHeading">--</b></div><div><span>Fit RMS</span><b id="imuWizardRms">--</b></div><div><span>Fit max</span><b id="imuWizardMax">--</b></div></div>
-                <div class="imu-direction-row"><button class="primary-btn" id="imuCalStartCw">Start 8 Arah CW</button><button class="primary-btn" id="imuCalStartCcw">Start 8 Arah CCW</button><button class="warning-btn" id="imuCalStop">Stop</button><button class="success-btn" id="imuCalApply" disabled>Apply PASS Calibration</button></div>
+                <div class="imu-direction-row"><button class="primary-btn" id="imuCalStartCw">Start 8 Arah CW</button><button class="primary-btn" id="imuCalStartCcw">Start 8 Arah CCW</button><button class="warning-btn" id="imuCalStop">Stop</button><button class="success-btn" id="imuCalApply" disabled>Stage PASS Proposal</button></div>
                 <div class="imu-gate-box" id="imuWizardGateDetail">Fail-closed: apply hanya terbuka setelah 8/8, arah gyro benar, mounting top-up, RMS &lt;3°, max &lt;5°, dan kendaraan diam.</div>
                 <p class="hint">Jika IMU dipasang upside-down / side-mounted, wizard menolak capture. Rotasi planar depan-belakang tidak bisa ditentukan dari gravitasi saja; perubahan heading/mounting akan terlihat saat 8 arah dan tidak diterapkan diam-diam. Yahboom MAG tetap diagnostic; heading utama EKF tetap validated inertial + IST8310/GNSS sampai dynamic EMI qualification lulus.</p>
               </div>
@@ -573,6 +573,14 @@
                 <div id="trialGuideBody" class="trial-guide-body"></div>
               </article>
 
+              <article class="panel qualification-panel" id="qualificationPanel">
+                <div class="panel-head"><div><span class="eyebrow">COMMISSIONING LIFECYCLE</span><h2>Evidence Qualification</h2></div><span class="status-chip waiting" id="qualificationState">UNREVIEWED</span></div>
+                <div class="qualification-summary"><div><span>Lifecycle</span><b id="qualificationLifecycle">PREFLIGHT</b></div><div><span>Evidence selected</span><b id="qualificationEvidenceCount">0</b></div><div><span>Config fingerprint</span><b id="qualificationFingerprint">--</b></div><div><span>Reviewed</span><b id="qualificationReviewedAt">--</b></div></div>
+                <p class="hint" id="qualificationDetail">PASS tidak pernah dibuat hanya karena recording selesai. Pilih evidence trial pada tabel recap lalu review hasilnya.</p>
+                <label class="qualification-reason">Review reason / catatan<input id="qualificationReason" autocomplete="off" maxlength="240" placeholder="Contoh: final gate repeatable, no fault, metric within acceptance"></label>
+                <div class="button-row qualification-actions"><button class="primary-btn grow" id="qualificationPass" disabled>Mark PASS from Selected Evidence</button><button class="danger-btn grow" id="qualificationFail" disabled>Mark FAIL</button><button class="soft-btn" id="qualificationInvalidate">Invalidate</button></div>
+              </article>
+
               <article class="panel test-preflight-panel" id="testPreflightPanel">
                 <div class="panel-head"><div><span class="eyebrow">PREFLIGHT</span><h2>Required Data & Safety Gate</h2></div><span class="status-chip waiting" id="testPreflightState">CHECKING</span></div>
                 <div class="test-preflight-grid" id="testPreflightGrid"><div class="empty-state">Pilih subpengujian untuk mengecek source data.</div></div>
@@ -599,7 +607,7 @@
 
               <div class="lab-two-col">
                 <article class="panel tuning-editor">
-                  <div class="panel-head"><div><span class="eyebrow">PARAMETER TUNING</span><h2>YAML Aktual</h2><small class="hint">Baseline immutable: <code>*.web.baseline</code> • backup setiap apply: <code>.web.bak.*</code></small></div><div class="panel-actions"><button class="soft-btn" id="tuningValidateDraft" data-help-key="action.tuning.validate">Validate Draft</button><button class="primary-btn" id="tuningApplyDraft" data-help-key="action.tuning.apply" disabled>Apply + Save</button><button class="soft-btn" id="tuningRevertDraft" data-help-key="action.tuning.revert" disabled>Revert Draft</button><button class="warning-btn" id="resetExperimentYaml" hidden data-help-key="action.tuning.baseline">Stage Baseline</button><button class="soft-btn" id="refreshExperimentConfig">Reload Runtime/YAML</button></div></div>
+                  <div class="panel-head"><div><span class="eyebrow">PARAMETER TUNING</span><h2>YAML Aktual</h2><small class="hint">Baseline immutable: <code>*.web.baseline</code> • backup setiap apply: <code>.web.bak.*</code></small></div><div class="panel-actions"><button class="soft-btn" id="tuningValidateDraft" data-help-key="action.tuning.validate">Validate Draft</button><button class="primary-btn" id="tuningApplyDraft" data-help-key="action.tuning.apply" disabled>Apply Validated + Save</button><button class="soft-btn" id="tuningRevertDraft" data-help-key="action.tuning.revert" disabled>Revert Draft</button><button class="warning-btn" id="resetExperimentYaml" hidden data-help-key="action.tuning.baseline">Stage Baseline</button><button class="soft-btn" id="refreshExperimentConfig">Reload Runtime/YAML</button></div></div>
                   <div class="tuning-note" id="tuningNote">STAGED by default: perubahan input masuk DRAFT browser terlebih dahulu. Validate memeriksa tipe/range/dependency; Apply + Save baru menulis YAML atomik, menerapkan runtime sesuai capability, lalu melakukan read-back verification.</div>
                   <div id="tuningFields" class="tuning-fields"><div class="empty-state">Pilih subpengujian.</div></div>
                 </article>
@@ -658,13 +666,13 @@
                   </div>
                   <div class="obcal-actions">
                     <div class="obcal-result"><span class="eyebrow">CALIBRATION RESULT</span><b id="obcalResultTitle">WAITING 1–5 m</b><small id="obcalResultDetail">Lengkapi 40 capture: 5 jarak × 2 object × 4 orientasi.</small></div>
-                    <button class="soft-btn" id="obcalExportCsv">Export CSV</button><button class="soft-btn" id="obcalExportGraph">Export Graph PNG</button><button class="warning-btn" id="obcalReset">Reset All</button><button class="primary-btn" id="obcalSaveApply" disabled>Save & Apply Calibration</button>
+                    <button class="soft-btn" id="obcalExportCsv">Export CSV</button><button class="soft-btn" id="obcalExportGraph">Export Graph PNG</button><button class="warning-btn" id="obcalReset">Reset All</button><button class="primary-btn" id="obcalSaveApply" disabled>Stage + Review Calibration</button>
                   </div>
                   <p class="tuning-note">Save & Apply memakai seluruh sample orientasi valid untuk menulis koefisien koreksi Human/Motorcycle ke YAML dan melakukan safe restart node perception saat kendaraan diam. Tombol ini <b>tidak</b> mengubah camera_metric_calibration_validated menjadi true; qualification MAE/RMSE tetap harus PASS secara fisik.</p>
                 </section>
                 <section class="homography-assistant" id="homographyAssistant" hidden>
                   <div class="homography-head"><div><span class="eyebrow">METRIC CALIBRATION ASSISTANT</span><b>Click-to-GT Homography Points</b></div><span id="homographyPointCount">0/4 POINTS</span></div>
-                  <div class="homography-controls"><label>GT Forward (m)<input id="calGtForward" type="number" step="0.05" value="1.0"></label><label>GT Left + / Right - (m)<input id="calGtLeft" type="number" step="0.05" value="0.0"></label><label class="capture-check"><input id="homographyCaptureMode" type="checkbox"> CAPTURE POINT</label><button class="soft-btn" id="homographyResetBtn">Reset 4 Points</button><button class="primary-btn" id="applyHomographyBtn" disabled>Apply 4-Point Homography YAML</button></div>
+                  <div class="homography-controls"><label>GT Forward (m)<input id="calGtForward" type="number" step="0.05" value="1.0"></label><label>GT Left + / Right - (m)<input id="calGtLeft" type="number" step="0.05" value="0.0"></label><label class="capture-check"><input id="homographyCaptureMode" type="checkbox"> CAPTURE POINT</label><button class="soft-btn" id="homographyResetBtn">Reset 4 Points</button><button class="primary-btn" id="applyHomographyBtn" disabled>Stage + Review Homography</button></div>
                   <div id="homographyPointList" class="homography-points"><div class="empty-state">Pilih tahap kalibrasi metrik dan capture empat titik dengan ground truth fisik.</div></div>
                   <p class="tuning-note">Wizard hanya menulis source/destination points ke YAML. Flag camera_metric_calibration_validated tetap tidak diaktifkan otomatis; validasi MAE/RMSE wajib PASS lebih dulu.</p>
                 </section>
@@ -677,7 +685,7 @@
               </article>
 
               <article class="panel trial-recap" id="trialRecapPanel">
-                <div class="panel-head"><div><span class="eyebrow">PERSISTENT TRIALS</span><h2>Rekap Pengujian & Kalibrasi</h2></div><div class="panel-actions"><button class="soft-btn" id="trialCompareBtn">Compare Selected</button><button class="soft-btn" id="trialCompareClear">Clear Compare</button><button class="soft-btn" id="refreshTrialsBtn">Reload Trials</button><button class="primary-btn" id="optimalScaleBtn" hidden>Hitung + Apply Scale Optimal</button></div></div>
+                <div class="panel-head"><div><span class="eyebrow">PERSISTENT TRIALS</span><h2>Rekap Pengujian & Kalibrasi</h2></div><div class="panel-actions"><button class="soft-btn" id="trialCompareBtn">Compare Selected</button><button class="soft-btn" id="trialCompareClear">Clear Compare</button><button class="soft-btn" id="refreshTrialsBtn">Reload Trials</button><button class="primary-btn" id="optimalScaleBtn" hidden>Hitung + Review Scale Optimal</button></div></div>
                 <div id="trialOptimalState" class="tuning-note">Setiap STOP menambah satu trial ke YAML. Tandai beberapa run untuk side-by-side comparison sebelum memilih konfigurasi final.</div>
                 <div id="trialComparePanel" class="trial-compare-panel" hidden></div>
                 <div class="table-scroll"><table class="data-table"><thead id="trialRecapHead"></thead><tbody id="trialRecapBody"><tr><td>Belum ada trial.</td></tr></tbody></table></div>
@@ -742,7 +750,7 @@
               <details class="config-raw-drawer"><summary>Raw source snapshot / developer view</summary><pre class="config-view" id="configView">Loading...</pre></details>
             </section>
             <aside class="config-actions">
-              <button class="soft-btn" id="refreshConfigBtn">↻ Reload</button><button class="soft-btn" id="configCopyPathBtn">Copy Path</button><button class="soft-btn" id="configExportFileBtn">Export Snapshot</button><hr><div class="config-pending-head"><b>STAGED CHANGES</b><span class="count-badge" id="configPendingCount">0</span></div><div class="config-pending-list" id="configPendingList"><span class="muted">No staged changes.</span></div><div class="button-row config-pending-actions"><button class="primary-btn" id="configApplyAllBtn" disabled>Apply All + Verify</button><button class="soft-btn" id="configDiscardAllBtn" disabled>Discard</button></div><hr><div class="config-selection" id="configSelection"><b>No parameter selected</b>Click a parameter row to inspect its YAML path, baseline, and runtime status.</div><div class="config-param-editor" id="configParamEditor" hidden><label>VALUE<input id="configParamValue" autocomplete="off"></label><div class="config-editor-state" id="configParamState">SELECT PARAMETER</div><button class="primary-btn" id="configApplyBtn">Stage Change</button><button class="soft-btn" id="configResetBtn">Stage Baseline</button></div>
+              <button class="soft-btn" id="refreshConfigBtn">↻ Reload</button><button class="soft-btn" id="configCopyPathBtn">Copy Path</button><button class="soft-btn" id="configExportFileBtn">Export Snapshot</button><hr><div class="config-pending-head"><b>STAGED CHANGES</b><span class="count-badge" id="configPendingCount">0</span></div><div class="config-pending-list" id="configPendingList"><span class="muted">No staged changes.</span></div><div class="button-row config-pending-actions"><button class="primary-btn" id="configApplyAllBtn" disabled>Validate Before Apply</button><button class="soft-btn" id="configDiscardAllBtn" disabled>Discard</button></div><hr><div class="config-selection" id="configSelection"><b>No parameter selected</b>Click a parameter row to inspect its YAML path, baseline, and runtime status.</div><div class="config-param-editor" id="configParamEditor" hidden><label>VALUE<input id="configParamValue" autocomplete="off"></label><div class="config-editor-state" id="configParamState">SELECT PARAMETER</div><button class="primary-btn" id="configApplyBtn">Stage Change</button><button class="soft-btn" id="configResetBtn">Stage Baseline</button></div>
             </aside>
           </div>
           <p class="info-box">Parameter yang terdaftar pada katalog tuning dapat diedit langsung dari inspector ini. Parameter lain tetap <b>LOCKED</b>. Semua perubahan tetap memakai endpoint atomic backup, baseline, runtime apply, stationary gate, dan verification yang sama dengan Tuning & Control.</p>
@@ -762,9 +770,22 @@
       <details class="help-expert"><summary>Expert source</summary><code id="helpSource">—</code></details>
     </div>
   </aside>
+  <button class="config-diff-backdrop" id="configDiffBackdrop" aria-label="Tutup diff konfigurasi" hidden></button>
+  <aside class="config-diff-drawer" id="configDiffDrawer" aria-hidden="true" hidden>
+    <div class="help-drawer-head"><div><span class="eyebrow">VALIDATED CONFIG</span><h2>Diff Review</h2></div><button class="icon-button" id="configDiffClose" aria-label="Tutup diff">×</button></div>
+    <div class="config-diff-body">
+      <div class="config-diff-summary" id="configDiffSummary">Belum ada validation token.</div>
+      <div class="config-diff-list" id="configDiffList"></div>
+      <div class="button-row config-diff-actions"><button class="primary-btn grow" id="configDiffApply" disabled>Apply Validated + Verify</button><button class="soft-btn" id="configDiffRevalidate">Revalidate</button></div>
+      <p class="hint">Apply hanya aktif selama token Validate masih cocok dengan Draft, YAML, guard state, dan runtime read-back.</p>
+    </div>
+  </aside>
   <div class="toast-stack" id="toastStack" aria-live="polite"></div>
   <div class="modal-backdrop" id="confirmModal"><div class="modal"><span class="eyebrow">CONFIRM ACTION</span><h2 id="confirmTitle">Confirm</h2><p id="confirmText"></p><div class="button-row"><button class="soft-btn grow" id="confirmNo">Cancel</button><button class="danger-btn grow" id="confirmYes">Continue</button></div></div></div>
-  <script src="/app.js?v=20260910-ux-redesign-v1" defer></script>
+  <script src="/camera_geometry.js?v=20260910-stage2-v1" defer></script>
+  <script src="/analysis_session.js?v=20260910-stage2-v2" defer></script>
+  <script src="/diagnostics.js?v=20260910-stage2-v1" defer></script>
+  <script src="/app.js?v=20260910-stage2-v3" defer></script>
   <script src="/vesc_workbench.js?v=20260908-dual-runtime-v10" defer></script>
   <script src="/replay.js?v=20260908-final-v5" defer></script>
   <script src="/export_tools.js?v=20260904-bab4-report-v1" defer></script>

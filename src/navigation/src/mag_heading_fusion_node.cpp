@@ -95,6 +95,10 @@ public:
     declare_parameter<double>("validated_heading_variance_rad2", 0.01);
     declare_parameter<bool>("enable_imu_mag_heading", true);
     declare_parameter<bool>("enable_neo3_mag_heading", true);
+    declare_parameter<bool>("enable_current_emi_gate", false);
+    declare_parameter<std::string>("motor_current_topic", "/esc/motor_current_abs_a");
+    declare_parameter<double>("current_emi_gate_threshold_a", 1.0e6);
+    declare_parameter<double>("current_emi_gate_timeout_sec", 0.35);
 
     imu_topic_ = get_parameter("imu_topic").as_string();
     imu_mag_topic_ = get_parameter("imu_mag_topic").as_string();
@@ -175,6 +179,10 @@ public:
     validated_variance_ = std::clamp(get_parameter("validated_heading_variance_rad2").as_double(), 1.0e-4, 1.0);
     enable_imu_ = get_parameter("enable_imu_mag_heading").as_bool();
     enable_neo_ = get_parameter("enable_neo3_mag_heading").as_bool();
+    enable_current_emi_gate_ = get_parameter("enable_current_emi_gate").as_bool();
+    motor_current_topic_ = get_parameter("motor_current_topic").as_string();
+    current_emi_gate_threshold_a_ = std::max(0.0, get_parameter("current_emi_gate_threshold_a").as_double());
+    current_emi_gate_timeout_sec_ = std::clamp(get_parameter("current_emi_gate_timeout_sec").as_double(), 0.05, 2.0);
 
     const auto sensor_qos = rclcpp::SensorDataQoS().keep_last(10);
     const auto state_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
@@ -189,6 +197,13 @@ public:
     neo_mag_sub_ = create_subscription<sensor_msgs::msg::MagneticField>(
       neo3_mag_topic_, sensor_qos,
       [this](sensor_msgs::msg::MagneticField::ConstSharedPtr msg) { onMag(*msg, Source::NEO3); });
+    motor_current_sub_ = create_subscription<std_msgs::msg::Float64>(
+      motor_current_topic_, sensor_qos,
+      [this](std_msgs::msg::Float64::ConstSharedPtr msg) {
+        if (!std::isfinite(msg->data) || msg->data < 0.0) return;
+        motor_current_abs_a_ = msg->data;
+        last_motor_current_time_ = now();
+      });
     map_yaw_sub_ = create_subscription<std_msgs::msg::Float64>(
       map_yaw_topic_, state_qos, [this](std_msgs::msg::Float64::ConstSharedPtr msg) {
         if (std::isfinite(msg->data)) {
@@ -285,6 +300,15 @@ private:
     return delta <= max_heading_rate_rps_ * dt + rate_gate_margin_rad_;
   }
 
+  bool currentEmiGate(const rclcpp::Time &t, const char *&reason) const {
+    if (!enable_current_emi_gate_) return true;
+    if (last_motor_current_time_.nanoseconds() == 0) { reason = "motor_current_missing"; return false; }
+    const double age = (t - last_motor_current_time_).seconds();
+    if (age < 0.0 || age > current_emi_gate_timeout_sec_) { reason = "motor_current_stale"; return false; }
+    if (motor_current_abs_a_ > current_emi_gate_threshold_a_) { reason = "current_emi_gate"; return false; }
+    return true;
+  }
+
   double applyImuHeadingLut(double yaw_enu) const {
     if (!imu_heading_lut_enabled_ || imu_heading_lut_.size() < 2) return normalizeAngle(yaw_enu);
     const double y = normalizeAngle(yaw_enu);
@@ -304,6 +328,8 @@ private:
     const auto reject = [&](const char *reason) { ++state.rejected; state.reject_reason=reason; setValid(Source::IMU,false); };
     const auto t=now();
     if (msg.data.size() < 3) { reject("raw_lsb_size"); return; }
+    const char *emi_reason = nullptr;
+    if (!currentEmiGate(t, emi_reason)) { reject(emi_reason); return; }
     if (!have_map_yaw_) { reject("map_yaw_unavailable"); return; }
     if (!have_tilt_ || (t-last_tilt_time_).seconds() < 0.0 || (t-last_tilt_time_).seconds() > tilt_timeout_sec_) { reject("tilt_stale"); return; }
     if (std::abs(roll_rad_) > imu_planar_max_tilt_rad_ || std::abs(pitch_rad_) > imu_planar_max_tilt_rad_) { reject("planar_tilt_out_of_range"); return; }
@@ -356,6 +382,8 @@ private:
     };
 
     const auto t = now();
+    const char *emi_reason = nullptr;
+    if (!currentEmiGate(t, emi_reason)) { reject(emi_reason); return; }
     if (!have_map_yaw_) { reject("map_yaw_unavailable"); return; }
     if (!have_tilt_ || (t - last_tilt_time_).seconds() < 0.0 ||
         (t - last_tilt_time_).seconds() > tilt_timeout_sec_) { reject("tilt_stale"); return; }
@@ -476,7 +504,11 @@ private:
       ";consensus_error_deg=" + std::to_string(consensus_error_rad_ * 180.0 / kPi) +
       ";consensus_valid=" + (consensus_valid_ ? "true" : "false") +
       ";validated_heading_deg=" + std::to_string(validated_heading_rad_ * 180.0 / kPi) +
-      ";gyro_bias_z_rps=" + std::to_string(gyro_bias_z_rps_);
+      ";gyro_bias_z_rps=" + std::to_string(gyro_bias_z_rps_) +
+      ";current_emi_gate=" + (enable_current_emi_gate_ ? "true" : "false") +
+      ";motor_current_abs_a=" + std::to_string(motor_current_abs_a_) +
+      ";motor_current_age_sec=" + std::to_string(last_motor_current_time_.nanoseconds() == 0 ? 999.0 : (t - last_motor_current_time_).seconds()) +
+      ";current_emi_threshold_a=" + std::to_string(current_emi_gate_threshold_a_);
     status_pub_->publish(msg);
   }
 
@@ -498,9 +530,14 @@ private:
   double consensus_max_error_rad_{0.0872664626}, consensus_hold_sec_{2.0}, consensus_timeout_sec_{0.5};
   double validated_variance_{0.01}, inertial_heading_rad_{0.0}, validated_heading_rad_{0.0}, consensus_error_rad_{kPi};
   bool enable_imu_{true}, enable_neo_{true};
+  bool enable_current_emi_gate_{false};
+  std::string motor_current_topic_{"/esc/motor_current_abs_a"};
+  double current_emi_gate_threshold_a_{1.0e6}, current_emi_gate_timeout_sec_{0.35};
+  double motor_current_abs_a_{0.0};
   bool have_tilt_{false}, have_map_yaw_{false}, have_inertial_heading_{false}, consensus_valid_{false};
   double roll_rad_{0.0}, pitch_rad_{0.0}, map_yaw_from_enu_{0.0};
   rclcpp::Time last_tilt_time_{0, 0, RCL_ROS_TIME}, last_map_yaw_time_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time last_motor_current_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_inertial_time_{0,0,RCL_ROS_TIME}, consensus_since_{0,0,RCL_ROS_TIME};
   rclcpp::Time stationary_since_{0,0,RCL_ROS_TIME}, last_correction_time_{0,0,RCL_ROS_TIME};
   double gyro_bias_z_rps_{0.0};
@@ -509,6 +546,7 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   rclcpp::Subscription<sensor_msgs::msg::MagneticField>::SharedPtr imu_mag_sub_, neo_mag_sub_;
   rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr imu_raw_mag_sub_;
+  rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr motor_current_sub_;
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr map_yaw_sub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr imu_heading_pub_, neo_heading_pub_, inertial_heading_pub_, validated_heading_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr imu_valid_pub_, neo_valid_pub_, consensus_valid_pub_;

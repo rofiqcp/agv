@@ -26,6 +26,9 @@ localization_core:
     gnss_cog_fit_course_max_rad: 0.3490658504
     gnss_lateral_velocity_warn_mps: 0.15
     wheel_gnss_slip_residual_mps: 0.25
+    wheel_gnss_nis_gate: 6.634896601
+    cog_nis_gate: 6.634896601
+    innovation_min_variance: 1.0e-06
     cog_valid_hold_sec: 1.5
     cog_invalid_hold_sec: 0.5
     gnss_require_measurement_timestamp: true
@@ -35,8 +38,8 @@ localization_core:
     gnss_quality_timeout_sec: 0.6
     gnss_velocity_covariance_min_variance: 1.0e-06
     gnss_velocity_covariance_max_variance: 1.0
-    require_gnss_velocity_certification_for_fusion: false
-    require_gnss_cog_certification_for_fusion: false
+    require_gnss_velocity_certification_for_fusion: true
+    require_gnss_cog_certification_for_fusion: true
     gnss_velocity_calibration_valid: false
     gnss_cog_calibration_valid: false
     gnss_velocity_calibration_saved_at: ''
@@ -142,7 +145,7 @@ localization_core:
     imu_topic: /imu/data
     local_odom_topic: /odometry/filtered
     global_odom_topic: /odometry/filtered_map
-    use_imu_initial_heading: true
+    use_imu_initial_heading: false
     allow_map_calibration_with_degraded_fix: true
     map_calibration_samples_file: ''
     multi_point_map_calibration: true

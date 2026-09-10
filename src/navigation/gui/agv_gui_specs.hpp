@@ -961,6 +961,10 @@ inline QVector<TabDef> buildTabs() {
       },QStringLiteral(""),QStringLiteral("")
     });
     t.specs.push_back(SettingSpec{
+      QStringLiteral("Scale"),QStringLiteral("Accel scale [x,y,z]"),QStringLiteral("imu"),QStringLiteral("data_imu_node.ros__parameters.accel_scale"),QStringLiteral("list"),0.5,1.5,0.001,6,QStringList{
+      },QStringLiteral(""),QStringLiteral("Per-axis scale hasil six-position. Biarkan [1,1,1] sebelum field evidence PASS.")
+    });
+    t.specs.push_back(SettingSpec{
       QStringLiteral("Bias"),QStringLiteral("Gyro bias [x,y,z]"),QStringLiteral("imu"),QStringLiteral("data_imu_node.ros__parameters.gyro_bias"),QStringLiteral("list"),-1000000000.0,1000000000.0,0.01,4,QStringList{
       },QStringLiteral(""),QStringLiteral("")
     });

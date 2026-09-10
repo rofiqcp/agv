@@ -35,6 +35,7 @@ private:
   void publishMag();
   void publishMagRawLsb();
   void publishRawSensorVectors();
+  void publishCalibrationVectors();
   void publishProfileStatus(const std::string & state, const std::string & detail);
   bool configureOptimalProfile(std::string & detail);
   void publishRaw(const std::vector<uint8_t> & packet);
@@ -121,6 +122,8 @@ private:
   bool mag_yaw_filter_initialized_ = false;
   double filtered_mag_yaw_rad_ = 0.0;
   std::vector<double> accel_bias_{0.0, 0.0, 0.0};
+  // Per-axis six-position scale. Neutral until field evidence is reviewed.
+  std::vector<double> accel_scale_{1.0, 1.0, 1.0};
   std::vector<double> gyro_bias_{0.0, 0.0, 0.0};
   std::vector<double> orientation_covariance_{0.001, 0.001, 0.003};
   std::vector<double> angular_velocity_covariance_{0.005, 0.005, 0.005};
@@ -189,6 +192,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::MagneticField>::SharedPtr pub_mag_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_mag_raw_lsb_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_raw_sensor_vectors_;
+  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_calibration_vectors_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_profile_status_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_timing_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_timing_status_;

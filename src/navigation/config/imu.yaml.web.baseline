@@ -41,10 +41,22 @@ data_imu_node:
     - 0.0
     - 0.0
     - 0.0
+    # Per-axis six-position correction; neutral until reviewed field evidence.
+    accel_scale:
+    - 1.0
+    - 1.0
+    - 1.0
     gyro_bias:
     - 0.0
     - 0.0
     - 0.0
+    calibration_level: commissioning
+    field_calibration_valid: false
+    field_calibration_saved_at: ''
+    field_calibration_evidence_sha256: ''
+    field_calibration_stationary_duration_sec: 0.0
+    field_calibration_six_position_valid: false
+    field_calibration_motor_interference_valid: false
     stationary_calibration_valid: false
     stationary_calibration_saved_at: ''
     stationary_calibration_sample_count: 0

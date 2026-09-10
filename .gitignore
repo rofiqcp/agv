@@ -28,14 +28,10 @@ compile_commands.json
 *~
 *.swp
 
-embedded/stm32f401/.pio
-embedded/stm32f401/.pio/build
-embedded/hoverboard-firmware-hack-FOC/.pio
 data/
-.gpt_backups/
-.gpt_web_review/
-esc/
-UI/
-navigasi/
+referensi/esc/
+referensi/UI/
+referensi/navigasi/
+referensi/hmi/
 # Local browser QA dependencies
 /.playwright/

@@ -305,6 +305,91 @@ QJsonObject loadConfigSnapshot() {
 }
 
 
+QString uiParameterMetadataPath() {
+  const QString env = qEnvironmentVariable("AGV_WEB_CONFIG_DIR").trimmed();
+  if (!env.isEmpty()) {
+    const QString p = QDir(env).filePath(QStringLiteral("ui_parameter_metadata.yaml"));
+    if (QFileInfo(p).isFile()) return QDir::cleanPath(p);
+  }
+  try {
+    const QString share = QString::fromStdString(ament_index_cpp::get_package_share_directory("navigation"));
+    const QString installed = share + QStringLiteral("/web/config/ui_parameter_metadata.yaml");
+    if (QFileInfo(installed).isFile()) return QDir::cleanPath(installed);
+    const QString marker = QStringLiteral("/install/");
+    const int idx = share.indexOf(marker);
+    if (idx > 0) {
+      const QString source = share.left(idx) + QStringLiteral("/src/navigation/web/config/ui_parameter_metadata.yaml");
+      if (QFileInfo(source).isFile()) return QDir::cleanPath(source);
+    }
+  } catch (...) {}
+  const QString fallback = agvPath(QStringLiteral("src/navigation/web/config/ui_parameter_metadata.yaml"));
+  return QFileInfo(fallback).isFile() ? QDir::cleanPath(fallback) : QString();
+}
+
+QJsonObject loadUiParameterMetadata() {
+  const QString path = uiParameterMetadataPath();
+  if (path.isEmpty()) return QJsonObject{{"version", 2}, {"parameters", QJsonObject()}, {"error", "metadata_not_found"}};
+  try {
+    const QJsonValue value = yamlToJson(YAML::LoadFile(path.toStdString()));    if (!value.isObject()) return QJsonObject{{"version", 2}, {"parameters", QJsonObject()}, {"error", "metadata_root_not_object"}, {"path", path}};
+    QJsonObject out = value.toObject();
+    out["path"] = path;
+    return out;
+  } catch (const std::exception &e) {
+    return QJsonObject{{"version", 2}, {"parameters", QJsonObject()}, {"error", QString::fromUtf8(e.what())}, {"path", path}};
+  }
+}
+
+QString sha256File(const QString &path) {
+  QFile f(path);
+  if (!f.open(QIODevice::ReadOnly)) return QString();
+  QCryptographicHash hash(QCryptographicHash::Sha256);
+  if (!hash.addData(&f)) return QString();
+  return QString::fromLatin1(hash.result().toHex());
+}
+
+QJsonObject configRevisionState() {
+  const auto candidates = configCandidates();
+  QJsonObject files;
+  QStringList lines;
+  for (auto it = candidates.cbegin(); it != candidates.cend(); ++it) {
+    if (!QFileInfo(it.value()).isFile()) continue;
+    const QString revision = sha256File(it.value());
+    files[it.key()] = revision;
+    lines << it.key() + QStringLiteral("=") + revision;
+  }
+  std::sort(lines.begin(), lines.end());
+  const QByteArray joined = lines.join(QStringLiteral("\n")).toUtf8();  const QString global = QString::fromLatin1(QCryptographicHash::hash(joined, QCryptographicHash::Sha256).toHex());
+  return QJsonObject{{"files", files}, {"config_revision", global}, {"snapshot_at_ms", nowMs()}};
+}
+
+QString configDraftSignature(const QJsonArray &items) {
+  QStringList rows;
+  for (const QJsonValue &v : items) {
+    if (!v.isObject()) continue;
+    const QJsonObject o = v.toObject();
+    const QString id = o.value("file_key").toString() + QStringLiteral(":") + o.value("path").toString();
+    QJsonArray wrapped; wrapped.append(o.value("value"));
+    const QString encoded = QString::fromUtf8(QJsonDocument(wrapped).toJson(QJsonDocument::Compact));
+    rows << id + QStringLiteral("=") + encoded + QStringLiteral("|generated=") +
+      (o.value("generated").toBool(false) ? QStringLiteral("1") : QStringLiteral("0")) +
+      QStringLiteral("|proposal=") + o.value("proposal_id").toString();
+  }
+  std::sort(rows.begin(), rows.end());
+  return QString::fromLatin1(QCryptographicHash::hash(rows.join(QStringLiteral("\n")).toUtf8(), QCryptographicHash::Sha256).toHex());
+}
+
+bool metadataNumericWithin(const QJsonObject &meta, const QJsonValue &value, QString *error, QString *warning) {
+  if (!value.isDouble()) return true;
+  const double n = value.toDouble();
+  if (!std::isfinite(n)) { if (error) *error = QStringLiteral("Nilai numerik wajib finite"); return false; }
+  if (meta.contains("hard_min") && n < meta.value("hard_min").toDouble()) { if (error) *error = QStringLiteral("Nilai di bawah hard_min"); return false; }
+  if (meta.contains("hard_max") && n > meta.value("hard_max").toDouble()) { if (error) *error = QStringLiteral("Nilai di atas hard_max"); return false; }
+  if (warning && ((meta.contains("recommended_min") && n < meta.value("recommended_min").toDouble()) ||
+                  (meta.contains("recommended_max") && n > meta.value("recommended_max").toDouble())))
+    *warning = QStringLiteral("Di luar recommended range; review evidence sebelum Apply");
+  return true;
+}
+
 QString jsonScalarInlineYaml(const QJsonValue &value) {
   if (value.isNull() || value.isUndefined()) return QStringLiteral("~");
   if (value.isBool()) return value.toBool() ? QStringLiteral("true") : QStringLiteral("false");
@@ -853,6 +938,35 @@ class WebRosBridge {
   QByteArray localCostmapPng() const {
     std::lock_guard<std::mutex> lock(mediaMutex_);
     return localCostmapPng_;
+  }
+
+  QJsonObject configRuntimeState(const QString &fileKey, const QString &yamlPath) {
+    QJsonObject out{{"file_key", fileKey}, {"path", yamlPath}};
+    const auto targets = runtimeTargetsForChange(fileKey, yamlPath);
+    QJsonArray targetNames;
+    for (const auto &target : targets) targetNames.append(QJsonObject{{"restart_node", target.first}, {"parameter_node", target.second}});
+    out["targets"] = targetNames;
+    out["has_runtime_target"] = !targets.isEmpty();
+    if (targets.isEmpty()) {
+      out["readback_capable"] = false;
+      out["status"] = "NO_RUNTIME_TARGET";
+      return out;
+    }
+    const QString parameterName = parameterNameForYamlPath(yamlPath);
+    const QJsonValue expected = expectedRuntimeValue(fileKey, yamlPath);
+    QJsonArray reads;
+    bool capable = !parameterName.isEmpty();
+    for (const auto &target : targets) {
+      const QJsonObject one = readRuntimeParameter(target.second, parameterName, expected);
+      reads.append(one);
+      capable = capable && one.contains("actual") &&
+                (one.value("status").toString() == QStringLiteral("MATCH") || one.value("status").toString() == QStringLiteral("MISMATCH"));
+    }
+    out["parameter"] = parameterName;
+    out["readback"] = reads;
+    out["readback_capable"] = capable;
+    out["status"] = capable ? QStringLiteral("READBACK_OK") : QStringLiteral("READBACK_UNAVAILABLE");
+    return out;
   }
 
   bool vehicleStationary(QString *reason) const { return vehicleStationaryForRuntimeApply(reason); }
@@ -2238,6 +2352,269 @@ class LocalHttpServer : public QObject {
     QByteArray body;
   };
 
+  void purgeValidationSnapshots() {
+    const double now = nowMs();
+    for (auto it = validationSnapshots_.begin(); it != validationSnapshots_.end();) {
+      if (it.value().value("expires_at_ms").toDouble() <= now) it = validationSnapshots_.erase(it);
+      else ++it;
+    }
+  }
+
+  void purgeConfigProposals() {
+    const double now = nowMs();
+    for (auto it = configProposals_.begin(); it != configProposals_.end();) {
+      if (it.value().value("expires_at_ms").toDouble() <= now) it = configProposals_.erase(it);
+      else ++it;
+    }
+  }
+
+  QJsonObject registerConfigProposal(const QString &sourceTask, const QJsonArray &items, const QJsonObject &evidence = {}) {
+    purgeConfigProposals();
+    const QJsonObject revision = configRevisionState();
+    const double created = nowMs(), expires = created + 600000.0;
+    const QByteArray evidenceBytes = QJsonDocument(evidence).toJson(QJsonDocument::Compact);
+    const QString evidenceDigest = QString::fromLatin1(QCryptographicHash::hash(evidenceBytes,QCryptographicHash::Sha256).toHex());
+    const QString seed = sourceTask + QString::number(created,'f',0) + configDraftSignature(items) + revision.value("config_revision").toString();
+    const QString id = QString::fromLatin1(QCryptographicHash::hash(seed.toUtf8(),QCryptographicHash::Sha256).toHex().left(24));
+    QJsonObject proposal{{"proposal_id",id},{"source_task",sourceTask},{"created_at_ms",created},{"expires_at_ms",expires},
+      {"base_config_revision",revision.value("config_revision")},{"items",items},{"evidence",evidence},{"evidence_digest",evidenceDigest},
+      {"validation_summary",QJsonObject{{"item_count",items.size()},{"config_write",false},{"runtime_write",false}}}};
+    configProposals_[id]=proposal;
+    return proposal;
+  }
+
+  bool generatedProposalItemValid(const QJsonObject &item, const QString &identity, QString *reason) {
+    purgeConfigProposals();
+    const QString proposalId=item.value("proposal_id").toString();
+    if(proposalId.isEmpty()||!configProposals_.contains(proposalId)){if(reason)*reason="GENERATED_PROPOSAL_REQUIRED";return false;}
+    const QJsonObject proposal=configProposals_.value(proposalId);
+    if(proposal.value("base_config_revision").toString()!=configRevisionState().value("config_revision").toString()){
+      if (reason) *reason = "GENERATED_PROPOSAL_STALE_CONFIG";
+      return false;
+    }
+    for(const QJsonValue &v:proposal.value("items").toArray()){
+      const QJsonObject p=v.toObject();const QString pid=p.value("file_key").toString()+":"+p.value("path").toString();
+      if(pid==identity&&jsonRuntimeEquivalent(p.value("value"),item.value("value")))return true;
+    }
+    if (reason) *reason = "GENERATED_PROPOSAL_ITEM_MISMATCH";
+    return false;
+  }
+
+  static QJsonArray runtimeActuals(const QJsonObject &runtime) {
+    QJsonArray out;
+    for (const QJsonValue &v : runtime.value("readback").toArray()) {
+      const QJsonObject r = v.toObject();
+      if (!r.contains("actual")) continue;
+      out.append(QJsonObject{{"node", r.value("node")}, {"parameter", r.value("parameter")}, {"actual", r.value("actual")}});
+    }
+    return out;
+  }
+
+  QJsonObject validateConfigBatch(const QJsonArray &items, bool storeSnapshot) {
+    QJsonObject result{{"ok", false}, {"valid", false}, {"can_apply", false}, {"at_ms", nowMs()}};
+    if (items.isEmpty() || items.size() > 64) {
+      result["message"] = "items harus berisi 1..64 parameter";
+      return result;
+    }
+    const QJsonObject metadataRoot = loadUiParameterMetadata();
+    const QJsonObject metadata = metadataRoot.value("parameters").toObject();
+    const QJsonObject revisions = configRevisionState();
+    const QJsonObject fileRevisions = revisions.value("files").toObject();
+    QJsonArray checked, errors, warnings;
+    QSet<QString> seen;
+    QMap<QString, QJsonValue> draftValues;
+    for (const QJsonValue &v : items) {
+      if (!v.isObject()) continue;
+      const QJsonObject item = v.toObject();
+      const QString fk = item.value("file_key").toString().trimmed();
+      const QString path = item.value("path").toString().trimmed();
+      if (!fk.isEmpty() && !path.isEmpty()) draftValues[fk + QStringLiteral(":") + path] = item.value("value");
+    }
+    auto resolveIdentityValue = [&](const QString &identity, QJsonValue *value, QString *why) {
+      if (draftValues.contains(identity)) { if (value) *value = draftValues.value(identity); return true; }
+      const int sep = identity.indexOf(':');
+      if (sep <= 0 || sep + 1 >= identity.size()) { if (why) *why = QStringLiteral("Dependency identity invalid: ") + identity; return false; }
+      return currentYamlValue(identity.left(sep), identity.mid(sep + 1), value, why);
+    };
+    bool stationaryChecked = false, stationary = true;
+    QString stationaryReason;
+    for (const QJsonValue &v : items) {
+      if (!v.isObject()) { errors.append("item harus object"); continue; }
+      const QJsonObject item = v.toObject();
+      const QString fk = item.value("file_key").toString().trimmed();
+      const QString path = item.value("path").toString().trimmed();
+      const QString identity = fk + QStringLiteral(":") + path;
+      QJsonObject row{{"identity", identity}, {"file_key", fk}, {"path", path}, {"draft", item.value("value")}};
+      QJsonArray itemErrors, itemWarnings;
+      if (fk.isEmpty() || path.isEmpty() || seen.contains(identity)) itemErrors.append("file_key/path kosong atau duplikat");
+      seen.insert(identity);
+      const QJsonObject meta = metadata.value(identity).toObject();
+      row["metadata"] = meta;
+      row["metadata_complete"] = !meta.isEmpty() && meta.value("metadata_complete").toBool(false);
+      row["risk"] = meta.value("risk"); row["apply_mode"] = meta.value("apply_mode");
+      row["requires_stationary"] = meta.value("requires_stationary").toBool(false);
+      if (meta.isEmpty() || !meta.value("metadata_complete").toBool(false)) itemErrors.append("METADATA_INCOMPLETE");
+      if (meta.value("write_authority").toString() == QStringLiteral("calibration_generated")) {
+        QString generatedReason;
+        if (!item.value("generated").toBool(false) || !generatedProposalItemValid(item,identity,&generatedReason))
+          itemErrors.append(generatedReason.isEmpty()?QStringLiteral("CALIBRATION_GENERATED_ONLY"):generatedReason);
+      }
+      if (meta.value("apply_mode").toString() == QStringLiteral("read_only")) itemErrors.append("READ_ONLY");
+      QJsonValue current; QString why;
+      if (!currentYamlValue(fk, path, &current, &why)) itemErrors.append(why);
+      else {
+        row["yaml_current"] = current;
+        if (!compatibleConfigType(current, item.value("value"))) itemErrors.append("TYPE_MISMATCH");
+        QString hardError, recommendedWarning;
+        if (!metadataNumericWithin(meta, item.value("value"), &hardError, &recommendedWarning)) itemErrors.append(hardError);
+        if (!recommendedWarning.isEmpty()) itemWarnings.append(recommendedWarning);
+      }
+      QJsonValue baseline;
+      if (baselineYamlValue(fk, path, &baseline, nullptr)) row["baseline"] = baseline;
+      row["file_revision"] = fileRevisions.value(fk);
+      const QJsonObject runtime = bridge_->configRuntimeState(fk, path);
+      row["runtime"] = runtime;
+      if (meta.value("requires_stationary").toBool(false)) {
+        if (!stationaryChecked) { stationary = bridge_->vehicleStationary(&stationaryReason); stationaryChecked = true; }
+        if (!stationary) itemErrors.append(QStringLiteral("STATIONARY_REQUIRED: ") + stationaryReason);
+      }
+      const QJsonArray options = meta.value("options").toArray();
+      if (!options.isEmpty()) {
+        bool found = false; for (const QJsonValue &o : options) if (o == item.value("value")) { found = true; break; }
+        if (!found) itemErrors.append("ENUM_INVALID");
+      }
+      if (meta.contains("list_length")) {
+        const int expectedLength = meta.value("list_length").toInt(-1);
+        if (!item.value("value").isArray() || expectedLength < 0 || item.value("value").toArray().size() != expectedLength)
+          itemErrors.append(QStringLiteral("LIST_LENGTH_MISMATCH expected=") + QString::number(expectedLength));
+      }
+      if (!meta.value("array_bounds").toArray().isEmpty()) {
+        if (!item.value("value").isArray()) itemErrors.append("ARRAY_BOUNDS_REQUIRE_LIST");
+        else {
+          const QJsonArray a = item.value("value").toArray();
+          for (const QJsonValue &bv : meta.value("array_bounds").toArray()) {
+            const QJsonObject bound = bv.toObject();
+            const int index = bound.value("index").toInt(-1);
+            if (index < 0 || index >= a.size() || !a.at(index).isDouble()) { itemErrors.append(QStringLiteral("ARRAY_INDEX_INVALID ") + QString::number(index)); continue; }
+            const double n = a.at(index).toDouble();
+            if (!std::isfinite(n) || (bound.contains("hard_min") && n < bound.value("hard_min").toDouble()) ||
+                (bound.contains("hard_max") && n > bound.value("hard_max").toDouble()))
+              itemErrors.append(QStringLiteral("ARRAY_BOUND_INVALID index=") + QString::number(index));
+          }
+        }
+      }
+      QJsonArray dependencyResults;
+      for (const QJsonValue &dv : meta.value("dependencies").toArray()) {
+        const QJsonObject dep = dv.toObject();
+        if (dep.contains("when_candidate") && !jsonRuntimeEquivalent(item.value("value"), dep.value("when_candidate"))) continue;
+        const QString depIdentity = dep.value("identity").toString();
+        const QString op = dep.value("operator").toString();
+        QJsonValue depValue; QString depWhy;
+        bool depOk = resolveIdentityValue(depIdentity, &depValue, &depWhy);
+        const QJsonValue candidate = item.value("value");
+        if (depOk) {
+          if (op == QStringLiteral("eq")) depOk = jsonRuntimeEquivalent(depValue, dep.value("value"));
+          else if (op == QStringLiteral("neq")) depOk = !jsonRuntimeEquivalent(depValue, dep.value("value"));
+          else if (depValue.isDouble() && candidate.isDouble()) {
+            const double a = depValue.toDouble(), c = candidate.toDouble();
+            if (op == QStringLiteral("gt_candidate")) depOk = a > c;
+            else if (op == QStringLiteral("gte_candidate")) depOk = a >= c;
+            else if (op == QStringLiteral("lt_candidate")) depOk = a < c;
+            else if (op == QStringLiteral("lte_candidate")) depOk = a <= c;
+            else if (op == QStringLiteral("abs_gte_candidate")) depOk = std::abs(a) >= c;
+            else if (op == QStringLiteral("lte_abs_candidate")) depOk = a <= std::abs(c);
+            else if (op == QStringLiteral("gte_candidate_plus")) depOk = c >= a + dep.value("delta").toDouble();
+            else if (op == QStringLiteral("lte_candidate_minus")) depOk = c <= a - dep.value("delta").toDouble();
+            else depOk = false;
+          } else depOk = false;
+        }
+        const QString depMessage = dep.value("message").toString(
+          depWhy.isEmpty() ? QStringLiteral("DEPENDENCY_FAILED: ") + depIdentity : depWhy);
+        dependencyResults.append(QJsonObject{{"identity", depIdentity}, {"operator", op}, {"actual", depValue}, {"pass", depOk}, {"message", depMessage}});
+        if (!depOk) itemErrors.append(depMessage);
+      }
+      row["dependency_results"] = dependencyResults;
+      QString status = QStringLiteral("CHANGE_VALID");
+      if (row.contains("yaml_current") && jsonRuntimeEquivalent(row.value("yaml_current"), item.value("value"))) status = QStringLiteral("ALREADY_MATCHES_YAML");
+      else if (!itemWarnings.isEmpty()) status = QStringLiteral("RECOMMENDED_RANGE_WARNING");
+      else if (meta.value("apply_mode").toString() == QStringLiteral("startup_only")) status = QStringLiteral("STARTUP_ONLY");
+      else if (meta.value("apply_mode").toString() == QStringLiteral("node_restart")) status = QStringLiteral("RESTART_REQUIRED");
+      if (!itemErrors.isEmpty()) status = itemErrors.contains("METADATA_INCOMPLETE") ? QStringLiteral("METADATA_INCOMPLETE") : QStringLiteral("INVALID");
+      row["status"] = status; row["errors"] = itemErrors; row["warnings"] = itemWarnings;
+      for (const QJsonValue &e : itemErrors) errors.append(QJsonObject{{"identity", identity}, {"message", e}});
+      for (const QJsonValue &w : itemWarnings) warnings.append(QJsonObject{{"identity", identity}, {"message", w}});
+      checked.append(row);
+    }
+    const bool valid = errors.isEmpty();
+    const QString signature = configDraftSignature(items);
+    result["ok"] = valid; result["valid"] = valid; result["can_apply"] = valid && !bridge_->readOnly();
+    result["message"] = valid ? QStringLiteral("Validate OK; YAML belum ditulis") : QStringLiteral("Validate gagal; perbaiki item invalid");
+    result["items"] = checked; result["errors"] = errors; result["warnings"] = warnings;
+    result["draft_signature"] = signature; result["config_revision"] = revisions.value("config_revision");
+    result["guard_state"] = QJsonObject{{"stationary", stationary}, {"reason", stationaryReason}, {"read_only", bridge_->readOnly()}};
+    if (valid && storeSnapshot) {
+      purgeValidationSnapshots();
+      const QString seed = signature + QString::number(nowMs(), 'f', 0) + QString::number(reinterpret_cast<quintptr>(this));
+      const QString id = QString::fromLatin1(QCryptographicHash::hash(seed.toUtf8(), QCryptographicHash::Sha256).toHex().left(24));
+      QJsonObject snapshot{{"validation_id", id}, {"draft_signature", signature}, {"items", checked},
+                           {"raw_items", items}, {"created_at_ms", nowMs()}, {"expires_at_ms", nowMs() + 120000.0},
+                           {"config_revision", revisions.value("config_revision")}};
+      validationSnapshots_[id] = snapshot;
+      result["validation_id"] = id; result["expires_at_ms"] = snapshot.value("expires_at_ms");
+    }
+    return result;
+  }
+
+  QJsonObject checkValidatedApply(const QString &validationId, const QJsonArray &items) {
+    purgeValidationSnapshots();
+    QJsonObject out{{"ok", false}, {"code", "VALIDATION_REQUIRED"}};
+    if (validationId.isEmpty() || !validationSnapshots_.contains(validationId)) {
+      out["message"] = "validation_id tidak dikenal atau sudah kedaluwarsa"; return out;
+    }
+    const QJsonObject snap = validationSnapshots_.value(validationId);
+    if (configDraftSignature(items) != snap.value("draft_signature").toString()) {
+      out["code"] = "VALIDATION_PAYLOAD_CHANGED"; out["message"] = "Payload berubah setelah Validate"; return out;
+    }
+    QJsonArray conflicts;
+    const QJsonObject currentRevisions = configRevisionState();
+    const QJsonObject fileRevisions = currentRevisions.value("files").toObject();
+    if (currentRevisions.value("config_revision").toString() != snap.value("config_revision").toString()) {
+      conflicts.append(QJsonObject{{"identity", "*"}, {"kind", "CONFIG_REVISION_CHANGED"},
+        {"validated_revision", snap.value("config_revision")}, {"current_revision", currentRevisions.value("config_revision")}});
+    }
+    for (const QJsonValue &v : snap.value("items").toArray()) {
+      const QJsonObject row = v.toObject();
+      const QString fk = row.value("file_key").toString(), path = row.value("path").toString();
+      const QString identity = row.value("identity").toString();
+      QJsonValue current; QString why;
+      if (!currentYamlValue(fk, path, &current, &why) || !jsonRuntimeEquivalent(current, row.value("yaml_current")) ||
+          fileRevisions.value(fk).toString() != row.value("file_revision").toString()) {
+        conflicts.append(QJsonObject{{"identity", identity}, {"kind", "YAML_CHANGED"}, {"validated_yaml", row.value("yaml_current")}, {"current_yaml", current}});
+        continue;
+      }
+      const QJsonObject beforeRuntime = row.value("runtime").toObject();
+      if (beforeRuntime.value("readback_capable").toBool(false)) {
+        const QJsonObject nowRuntime = bridge_->configRuntimeState(fk, path);
+        if (!nowRuntime.value("readback_capable").toBool(false) || runtimeActuals(nowRuntime) != runtimeActuals(beforeRuntime)) {
+          conflicts.append(QJsonObject{{"identity", identity}, {"kind", "EXTERNAL_RUNTIME_CHANGE"},
+                                       {"validated_runtime", runtimeActuals(beforeRuntime)}, {"current_runtime", runtimeActuals(nowRuntime)}});
+        }
+      }
+      if (row.value("requires_stationary").toBool(false)) {
+        QString stationaryReason;
+        if (!bridge_->vehicleStationary(&stationaryReason))
+          conflicts.append(QJsonObject{{"identity", identity}, {"kind", "STATIONARY_REQUIRED"}, {"reason", stationaryReason}});
+      }
+    }
+    if (!conflicts.isEmpty()) {
+      out["code"] = "CONFIG_CONFLICT"; out["message"] = "Config/runtime berubah setelah Validate; Apply diblokir"; out["conflicts"] = conflicts;
+      return out;
+    }
+    out["ok"] = true; out["code"] = "VALIDATED"; out["snapshot"] = snap;
+    return out;
+  }
+
+
   WebRosBridge *bridge_{nullptr};
   QTcpServer server_;
   QTimer eventTimer_;
@@ -2278,6 +2655,8 @@ class LocalHttpServer : public QObject {
   QString lastXlsxPath_;
   QString lastXlsxName_;
   QStringList lastGraphPaths_;
+  QMap<QString, QJsonObject> validationSnapshots_;
+  QMap<QString, QJsonObject> configProposals_;
 
   QString navigationSharePath() const {
     try { return QString::fromStdString(ament_index_cpp::get_package_share_directory("navigation")); }
@@ -2334,21 +2713,23 @@ class LocalHttpServer : public QObject {
     return true;
   }
 
-  bool applyImuCalibration(QString *message, QJsonObject *result) {
-    if (bridge_->readOnly()) { if(message)*message="Web GUI read-only"; return false; }
+  bool proposeImuCalibration(QString *message, QJsonObject *result) {
     if (imuCalibrationProcess_.state()!=QProcess::NotRunning) { if(message)*message="Tunggu kalibrasi selesai"; return false; }
-    QString stationary; if(!bridge_->vehicleStationary(&stationary)){if(message)*message=stationary;return false;}
     const QString script=navigationSharePath()+QStringLiteral("/tools/yahboom_apply_calibration.py");
-    QProcess proc; proc.setProgram(agvPythonPath()); proc.setArguments({script,QStringLiteral("--workspace"),agvRootPath()}); proc.start();
-    if(!proc.waitForStarted(1000) || !proc.waitForFinished(6000)){proc.kill();if(message)*message="Apply calibration backend timeout";return false;}
+    QProcess proc; proc.setProgram(agvPythonPath());
+    proc.setArguments({script,QStringLiteral("--workspace"),agvRootPath(),QStringLiteral("--propose")}); proc.start();
+    if(!proc.waitForStarted(1000) || !proc.waitForFinished(6000)){proc.kill();if(message)*message="Calibration proposal backend timeout";return false;}
     QJsonParseError pe{}; const QJsonDocument doc=QJsonDocument::fromJson(proc.readAllStandardOutput().trimmed(),&pe);
-    if(pe.error!=QJsonParseError::NoError || !doc.isObject()){if(message)*message="Apply backend menghasilkan response invalid";return false;}
-    QJsonObject r=doc.object(); if(result)*result=r;
-    if(proc.exitCode()!=0 || !r.value("ok").toBool(false)){if(message)*message=r.value("message").toString("Fit tidak lolos gate");return false;}
-    const QJsonObject runtime=bridge_->applyConfigChange(QStringLiteral("mag_heading"),QStringLiteral("mag_heading_fusion.ros__parameters.imu_mag_yaw_offset_rad"));
-    if(result)(*result)["runtime_apply"]=runtime;
-    if(message)*message=r.value("message").toString()+QStringLiteral(" Runtime: ")+runtime.value("status").toString();
-    return runtime.value("status").toString()!=QStringLiteral("RUNTIME_MISMATCH");
+    if(pe.error!=QJsonParseError::NoError || !doc.isObject()){if(message)*message="Calibration proposal backend menghasilkan response invalid";return false;}
+    QJsonObject r=doc.object();
+    if(proc.exitCode()!=0 || !r.value("ok").toBool(false)){if(result)*result=r;if(message)*message=r.value("message").toString("Fit tidak lolos gate");return false;}
+    const QJsonArray proposalItems=r.value("proposal_items").toArray();
+    if(proposalItems.isEmpty()){if(message)*message="Calibration proposal kosong";return false;}
+    const QJsonObject proposal=registerConfigProposal(QStringLiteral("imu:yahboom"),proposalItems,r.value("evidence").toObject());
+    r["proposal"]=proposal;r["proposal_only"]=true;r["runtime_write"]=false;r["yaml_write"]=false;
+    if (result) *result = r;
+    if (message) *message = "Yahboom PASS → server proposal dibuat; review Diff sebelum config transaction";
+    return true;
   }
 
   void acceptConnections() {
@@ -2415,11 +2796,20 @@ class LocalHttpServer : public QObject {
     if (request.method == "GET" && request.path == "/api/config") return sendJson(socket, 200, loadConfigSnapshot());
     if (request.method == "GET" && request.path == "/api/config/state") {
       const QJsonObject snap = loadConfigSnapshot();
-      return sendJson(socket, 200, QJsonObject{{"ok", true}, {"read_only", bridge_->readOnly()}, {"model", "BASELINE/YAML/DRAFT/RUNTIME"}, {"files", snap.value("files")}, {"runtime_config_apply", bridge_->snapshot().value("runtime_config_apply")}, {"at_ms", nowMs()}});
+      const QJsonObject revisions = configRevisionState();
+      return sendJson(socket, 200, QJsonObject{{"ok", true}, {"read_only", bridge_->readOnly()},
+        {"model", "BASELINE/YAML/DRAFT/RUNTIME"}, {"files", snap.value("files")},
+        {"file_revisions", revisions.value("files")}, {"config_revision", revisions.value("config_revision")},
+        {"snapshot_at_ms", revisions.value("snapshot_at_ms")},
+        {"runtime_config_apply", bridge_->snapshot().value("runtime_config_apply")}, {"at_ms", nowMs()}});
     }
     if (request.method == "GET" && request.path == "/api/config/schema") {
-      const QJsonObject snap = loadConfigSnapshot();
-      return sendJson(socket, 200, QJsonObject{{"ok", true}, {"version", 1}, {"files", snap.value("files")}, {"capabilities", QJsonObject{{"validate", true}, {"atomic_batch_apply", true}, {"transaction_backup", true}, {"rollback_on_failure", true}, {"runtime_readback", true}, {"revert", true}}}, {"at_ms", nowMs()}});
+      const QJsonObject meta = loadUiParameterMetadata();
+      return sendJson(socket, 200, QJsonObject{{"ok", !meta.contains("error")}, {"version", 2},
+        {"parameters", meta.value("parameters")}, {"policy", meta.value("policy")}, {"metadata_path", meta.value("path")},
+        {"capabilities", QJsonObject{{"validate", true}, {"validation_token", true}, {"optimistic_concurrency", true},
+          {"atomic_batch_apply", true}, {"transaction_backup", true}, {"rollback_on_failure", true},
+          {"runtime_readback", true}, {"revert", true}}}, {"at_ms", nowMs()}});
     }
     if (request.method == "GET" && request.path == "/api/imu/calibration/status") return sendJson(socket, 200, imuCalibrationStatus());
     if (request.method == "GET" && request.path == "/api/experiment/record/status") {
@@ -2428,6 +2818,7 @@ class LocalHttpServer : public QObject {
     if (request.method == "GET" && request.path == "/api/experiment/trials") {
       return sendJson(socket, 200, loadTrialStore());
     }
+    if (request.method == "GET" && request.path == "/api/commissioning/state") return sendJson(socket,200,commissioningState());
     if (request.method == "GET" && request.path == "/api/camera.jpg") {
       const QByteArray bytes = bridge_->cameraJpeg();
       if (bytes.isEmpty()) return sendText(socket, 503, "text/plain; charset=utf-8", "Camera frame belum tersedia");
@@ -2480,183 +2871,108 @@ class LocalHttpServer : public QObject {
     const QJsonObject json = doc.isObject() ? doc.object() : QJsonObject();
     QString message;
     bool ok = false;
-    if (request.path == "/api/perception/evidence") {
+    if (request.path == "/api/config/proposal") {
+      const QString sourceTask=json.value("source_task").toString();const QJsonArray proposalItems=json.value("items").toArray();
+      const QMap<QString,QSet<QString>> allowedPaths{
+        {QStringLiteral("perception:homography"),QSet<QString>{QStringLiteral("perception.ros__parameters.ground_src_points"),QStringLiteral("perception.ros__parameters.ground_dst_points")}},
+        {QStringLiteral("perception:obstacle-distance"),QSet<QString>{QStringLiteral("perception.ros__parameters.obstacle_distance_calibration_coefficients")}},
+        {QStringLiteral("perception:lane-roi"),QSet<QString>{QStringLiteral("perception.ros__parameters.lane_safety_enabled"),QStringLiteral("perception.ros__parameters.lane_corridor_correction_gain_m_per_px"),QStringLiteral("perception.ros__parameters.lane_corridor_top_y_ratio"),QStringLiteral("perception.ros__parameters.lane_corridor_bottom_y_ratio"),QStringLiteral("perception.ros__parameters.lane_corridor_left_top_x_ratio"),QStringLiteral("perception.ros__parameters.lane_corridor_left_bottom_x_ratio"),QStringLiteral("perception.ros__parameters.lane_corridor_right_top_x_ratio"),QStringLiteral("perception.ros__parameters.lane_corridor_right_bottom_x_ratio"),QStringLiteral("perception.ros__parameters.nav2_obstacle_roi_enabled"),QStringLiteral("perception.ros__parameters.nav2_obstacle_roi_points")}}
+      };
+      if(!allowedPaths.contains(sourceTask)||proposalItems.isEmpty()||proposalItems.size()>32)return sendJson(socket,400,QJsonObject{{"ok",false},{"message","proposal source/items invalid"}});
+      const QSet<QString> sourceAllowed=allowedPaths.value(sourceTask);
+      for(const QJsonValue &v:proposalItems){const QJsonObject x=v.toObject();const QString path=x.value("path").toString();if(x.value("file_key").toString()!=QStringLiteral("perception")||!sourceAllowed.contains(path))return sendJson(socket,400,QJsonObject{{"ok",false},{"message","proposal identity tidak diizinkan untuk source_task"},{"source_task",sourceTask},{"path",path}});}
+      const QJsonObject proposal=registerConfigProposal(sourceTask,proposalItems,json.value("evidence").toObject());
+      return sendJson(socket,200,QJsonObject{{"ok",true},{"message","Generated proposal registered; no config write"},{"proposal",proposal},{"at_ms",nowMs()}});
+    } else if (request.path == "/api/commissioning/qualification") {
+      if (bridge_->readOnly()) return sendJson(socket,403,QJsonObject{{"ok",false},{"code","READ_ONLY"},{"message","Read-only; qualification persistence ditolak"}});
+      QJsonObject result;ok=setQualification(json,&message,&result);return sendJson(socket,ok?200:409,QJsonObject{{"ok",ok},{"message",message},{"qualification",result},{"commissioning",commissioningState()},{"at_ms",nowMs()}});
+    } else if (request.path == "/api/perception/evidence") {
       QJsonObject result;
       ok = savePerceptionEvidence(json.value("label").toString(), &result, &message);
       return sendJson(socket, ok ? 200 : 409, QJsonObject{{"ok", ok}, {"message", message}, {"evidence", result}, {"at_ms", nowMs()}});
     } else if (request.path == "/api/config/validate") {
       const QJsonArray items = json.value("items").toArray();
-      if (items.isEmpty() || items.size() > 64) return sendJson(socket, 400, QJsonObject{{"ok", false}, {"valid", false}, {"message", "items harus berisi 1..64 parameter"}});
-      QJsonArray checked; QSet<QString> seen;
-      for (const QJsonValue &v : items) {
-        if (!v.isObject()) return sendJson(socket, 400, QJsonObject{{"ok", false}, {"valid", false}, {"message", "item harus object"}});
-        const QJsonObject item=v.toObject(); const QString fk=item.value("file_key").toString(), yp=item.value("path").toString(), id=fk+":"+yp;
-        if (fk.isEmpty() || yp.isEmpty() || seen.contains(id)) {
-          return sendJson(socket, 400, QJsonObject{{"ok", false}, {"valid", false}, {"message", "file_key/path kosong atau duplikat"}});
-        }
-        seen.insert(id);
-        QJsonValue current; QString why; if(!currentYamlValue(fk,yp,&current,&why)) return sendJson(socket,409,QJsonObject{{"ok",false},{"valid",false},{"message",why},{"file_key",fk},{"path",yp}});
-        const QJsonValue candidate=item.value("value"); if(candidate.isUndefined()||!compatibleConfigType(current,candidate)) return sendJson(socket,409,QJsonObject{{"ok",false},{"valid",false},{"message","Tipe draft tidak kompatibel dengan YAML"},{"file_key",fk},{"path",yp}});
-        checked.append(QJsonObject{{"file_key",fk},{"path",yp},{"current_value",current},{"value",candidate}});
-      }
-      return sendJson(socket,200,QJsonObject{{"ok",true},{"valid",true},{"message",QStringLiteral("Validate OK; belum ada YAML yang ditulis")},{"items",checked},{"at_ms",nowMs()}});
+      const QJsonObject result = validateConfigBatch(items, true);
+      const int status = result.value("valid").toBool(false) ? 200 : 409;
+      return sendJson(socket, status, result);
     } else if (request.path == "/api/config/apply" || request.path == "/api/config/revert") {
-      if (bridge_->readOnly()) return sendJson(socket,403,QJsonObject{{"ok",false},{"message","Web GUI read-only; transactional apply ditolak"}});
-      const bool useBaseline=request.path.endsWith("/revert"); const QJsonArray items=json.value("items").toArray();
-      if(items.isEmpty()||items.size()>64) return sendJson(socket,400,QJsonObject{{"ok",false},{"message","items harus berisi 1..64 parameter"}});
-      const QMap<QString,QString> candidates=configCandidates(); QSet<QString> seen; QMap<QString,QString> sourceFiles; QJsonArray resolved;
-      for(const QJsonValue &v:items){
-        if(!v.isObject()) return sendJson(socket,400,QJsonObject{{"ok",false},{"message","item harus object"}});
-        const QJsonObject item=v.toObject(); const QString fk=item.value("file_key").toString(),yp=item.value("path").toString(),id=fk+":"+yp;
-        if (!candidates.contains(fk) || yp.isEmpty() || seen.contains(id)) {
-          return sendJson(socket, 400, QJsonObject{{"ok", false}, {"message", "file_key/path tidak valid atau duplikat"}});
+      if (bridge_->readOnly()) return sendJson(socket,403,QJsonObject{{"ok",false},{"code","READ_ONLY"},{"message","Web GUI read-only; transactional apply ditolak"}});
+      const bool useBaseline = request.path.endsWith("/revert");
+      QJsonArray items = json.value("items").toArray();
+      if (items.isEmpty() || items.size() > 64) return sendJson(socket,400,QJsonObject{{"ok",false},{"message","items harus berisi 1..64 parameter"}});
+      if (useBaseline) {
+        QJsonArray baselineItems;
+        for (const QJsonValue &v : items) {
+          const QJsonObject i = v.toObject(); QJsonValue baseline; QString why;
+          if (!baselineYamlValue(i.value("file_key").toString(), i.value("path").toString(), &baseline, &why))
+            return sendJson(socket,409,QJsonObject{{"ok",false},{"message",why}});
+          QJsonObject b = i; b["value"] = baseline; baselineItems.append(b);
         }
-        seen.insert(id);
-        QJsonValue current; QString why; if(!currentYamlValue(fk,yp,&current,&why)) return sendJson(socket,409,QJsonObject{{"ok",false},{"message",why},{"file_key",fk},{"path",yp}});
-        QJsonValue target=item.value("value"); if(useBaseline){if(!baselineYamlValue(fk,yp,&target,&why))return sendJson(socket,409,QJsonObject{{"ok",false},{"message",why},{"file_key",fk},{"path",yp}});}
+        items = baselineItems;
+      }
+      const QString validationId = json.value("validation_id").toString();
+      const QJsonObject gate = checkValidatedApply(validationId, items);
+      if (!gate.value("ok").toBool(false)) return sendJson(socket,409,gate);
+      const QMap<QString,QString> candidates = configCandidates();
+      QSet<QString> seen; QMap<QString,QString> sourceFiles; QJsonArray resolved;
+      for (const QJsonValue &v : items) {
+        const QJsonObject item=v.toObject(); const QString fk=item.value("file_key").toString(),yp=item.value("path").toString(),id=fk+":"+yp;
+        if (!candidates.contains(fk) || yp.isEmpty() || seen.contains(id)) return sendJson(socket,400,QJsonObject{{"ok",false},{"message","file_key/path tidak valid atau duplikat"}});
+        seen.insert(id); QJsonValue current; QString why;
+        if(!currentYamlValue(fk,yp,&current,&why)) return sendJson(socket,409,QJsonObject{{"ok",false},{"message",why},{"file_key",fk},{"path",yp}});
+        const QJsonValue target=item.value("value");
         if(target.isUndefined()||!compatibleConfigType(current,target)) return sendJson(socket,409,QJsonObject{{"ok",false},{"message","Tipe target tidak kompatibel dengan YAML"},{"file_key",fk},{"path",yp}});
         sourceFiles[fk]=candidates.value(fk); resolved.append(QJsonObject{{"file_key",fk},{"path",yp},{"value",target},{"old_value",current}});
       }
-      const QString stamp=QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz"); QMap<QString,QString> txBackups; QJsonObject backupJson;
-      for(auto it=sourceFiles.cbegin();it!=sourceFiles.cend();++it){const QString backup=it.value()+QStringLiteral(".web.txn.bak.")+stamp;if(!QFile::copy(it.value(),backup))return sendJson(socket,409,QJsonObject{{"ok",false},{"message",QStringLiteral("Gagal membuat transaction backup: ")+it.value()}});txBackups[it.key()]=backup;backupJson[it.key()]=backup;}
+      const QString transactionId = QString::fromLatin1(QCryptographicHash::hash((validationId+QString::number(nowMs(),'f',0)).toUtf8(),QCryptographicHash::Sha256).toHex().left(20));
+      const QString stamp=QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz");
+      QMap<QString,QString> txBackups; QJsonObject backupJson;
+      for(auto it=sourceFiles.cbegin();it!=sourceFiles.cend();++it){
+        const QString backup=it.value()+QStringLiteral(".web.txn.bak.")+stamp;
+        if(!QFile::copy(it.value(),backup))return sendJson(socket,409,QJsonObject{{"ok",false},{"transaction_id",transactionId},{"message",QStringLiteral("Gagal membuat transaction backup: ")+it.value()}});
+        txBackups[it.key()]=backup; backupJson[it.key()]=backup;
+      }
       auto restoreFiles=[&](){bool rb=true;for(auto it=sourceFiles.cbegin();it!=sourceFiles.cend();++it){const QString b=txBackups.value(it.key());if(b.isEmpty()||!QFileInfo::exists(b)){rb=false;continue;}QFile::remove(it.value());if(!QFile::copy(b,it.value()))rb=false;}return rb;};
       QJsonArray saved; QString saveError; bool allSaved=true;
-      for(const QJsonValue &v:resolved){const QJsonObject item=v.toObject();QJsonValue actual;QString one;if(!setYamlValueAtomic(item.value("file_key").toString(),item.value("path").toString(),item.value("value"),&one,&actual)){allSaved=false;saveError=one;break;}saved.append(QJsonObject{{"file_key",item.value("file_key")},{"path",item.value("path")},{"saved_value",actual}});}
-      if(!allSaved){const bool rb=restoreFiles();return sendJson(socket,409,QJsonObject{{"ok",false},{"message",saveError},{"rolled_back",rb},{"batch_backups",backupJson},{"saved_before_failure",saved}});}
+      for(const QJsonValue &v:resolved){
+        const QJsonObject item=v.toObject(); QJsonValue actual; QString one;
+        if(!setYamlValueAtomic(item.value("file_key").toString(),item.value("path").toString(),item.value("value"),&one,&actual)){allSaved=false;saveError=one;break;}
+        saved.append(QJsonObject{{"identity",item.value("file_key").toString()+":"+item.value("path").toString()},
+          {"file_key",item.value("file_key")},{"path",item.value("path")},{"saved_value",actual}});
+      }
+      if(!allSaved){const bool rb=restoreFiles();validationSnapshots_.remove(validationId);return sendJson(socket,409,QJsonObject{{"ok",false},{"transaction_id",transactionId},{"message",saveError},{"rolled_back",rb},{"batch_backups",backupJson},{"saved_before_failure",saved}});}
       QJsonArray runtimeChanges; for(const QJsonValue &v:resolved){const QJsonObject i=v.toObject();runtimeChanges.append(QJsonObject{{"file_key",i.value("file_key")},{"path",i.value("path")}});}
-      const QJsonObject runtimeApply=bridge_->applyConfigChanges(runtimeChanges); const QString status=runtimeApply.value("status").toString(); const bool match=runtimeApply.value("runtime_match").toBool(false);
-      if(status=="RUNTIME_MISMATCH"){const bool rb=restoreFiles();QJsonArray rollbackChanges;for(const QJsonValue &v:resolved){const QJsonObject i=v.toObject();rollbackChanges.append(QJsonObject{{"file_key",i.value("file_key")},{"path",i.value("path")}});}const QJsonObject rollbackRuntime=bridge_->applyConfigChanges(rollbackChanges);return sendJson(socket,409,QJsonObject{{"ok",false},{"message","Runtime verification mismatch; YAML transaction di-rollback"},{"rolled_back",rb},{"runtime_apply",runtimeApply},{"rollback_runtime",rollbackRuntime},{"batch_backups",backupJson},{"config",loadConfigSnapshot()},{"at_ms",nowMs()}});}
-      return sendJson(socket,200,QJsonObject{{"ok",true},{"message",useBaseline?"Transactional baseline revert selesai":"Transactional apply selesai"},{"items",saved},{"batch_backups",backupJson},{"runtime_apply",runtimeApply},{"runtime_match",match},{"config",loadConfigSnapshot()},{"at_ms",nowMs()}});
-    } else if (request.path == "/api/config/set") {
-      if (bridge_->readOnly()) {
-        return sendJson(socket, 403, QJsonObject{{"ok", false}, {"message", "Web GUI read-only; perubahan YAML ditolak"}});
+      const QJsonObject runtimeApply=bridge_->applyConfigChanges(runtimeChanges);
+      const QString status=runtimeApply.value("status").toString();
+      const bool match=runtimeApply.value("runtime_match").toBool(false);
+      if(status=="RUNTIME_MISMATCH"){
+        const bool rb=restoreFiles(); QJsonArray rollbackChanges;
+        for(const QJsonValue &v:resolved){const QJsonObject i=v.toObject();rollbackChanges.append(QJsonObject{{"file_key",i.value("file_key")},{"path",i.value("path")}});}
+        const QJsonObject rollbackRuntime=bridge_->applyConfigChanges(rollbackChanges); validationSnapshots_.remove(validationId);
+        return sendJson(socket,409,QJsonObject{{"ok",false},{"code","RUNTIME_MISMATCH"},{"transaction_id",transactionId},{"message","Runtime verification mismatch; YAML transaction di-rollback"},{"rolled_back",rb},{"runtime_apply",runtimeApply},{"rollback_runtime",rollbackRuntime},{"batch_backups",backupJson},{"config",loadConfigSnapshot()},{"at_ms",nowMs()}});
       }
-      const QString fileKey=json.value("file_key").toString();
-      const QString yamlPath=json.value("path").toString();
-      QJsonValue saved;
-      ok = setYamlValueAtomic(fileKey, yamlPath, json.value("value"), &message, &saved);
-      QJsonObject runtimeApply;
-      if (ok) runtimeApply=bridge_->applyConfigChange(fileKey,yamlPath);
-      const QString runtimeStatus=runtimeApply.value("status").toString();
-      const QString combined=ok
-          ? message + QStringLiteral(" Runtime: ") + runtimeStatus + QStringLiteral(". ") + runtimeApply.value("message").toString()
-          : message;
-      return sendJson(socket, ok ? 200 : 409, QJsonObject{{"ok", ok}, {"message", combined},
-                       {"file_key", fileKey}, {"path", yamlPath}, {"saved_value", saved},
-                       {"runtime_apply", runtimeApply}, {"runtime_match", runtimeApply.value("runtime_match")},
-                       {"config", loadConfigSnapshot()}, {"at_ms", nowMs()}});
-    } else if (request.path == "/api/config/reset") {
-      if (bridge_->readOnly()) {
-        return sendJson(socket, 403, QJsonObject{{"ok", false}, {"message", "Web GUI read-only; reset YAML ditolak"}});
+      const QJsonObject metadata=loadUiParameterMetadata().value("parameters").toObject(); QJsonArray itemResults;
+      for(const QJsonValue &v:saved){
+        QJsonObject one=v.toObject(); const QString identity=one.value("identity").toString();
+        const QJsonObject meta=metadata.value(identity).toObject(); const QJsonObject runtime=bridge_->configRuntimeState(one.value("file_key").toString(),one.value("path").toString());
+        QString itemStatus;
+        if(meta.value("apply_mode").toString()==QStringLiteral("startup_only") || !runtime.value("has_runtime_target").toBool(false)) itemStatus=QStringLiteral("NEXT_START");
+        else if(runtime.value("readback_capable").toBool(false)){
+          bool allMatch=true;for(const QJsonValue &rv:runtime.value("readback").toArray())allMatch=allMatch&&rv.toObject().value("match").toBool(false);
+          itemStatus=allMatch?QStringLiteral("ACTIVE_MATCH"):status;
+        }else itemStatus=status.isEmpty()?QStringLiteral("YAML_SAVED"):status;
+        one["apply_status"]=itemStatus; one["runtime"]=runtime; one["apply_mode"]=meta.value("apply_mode"); itemResults.append(one);
       }
-      const QString fileKey = json.value("file_key").toString();
-      const QString yamlPath = json.value("path").toString();
-      QJsonValue baselineValue;
-      QString baselineMessage;
-      ok = baselineYamlValue(fileKey, yamlPath, &baselineValue, &baselineMessage);
-      QJsonValue saved;
-      if (ok) ok = setYamlValueAtomic(fileKey, yamlPath, baselineValue, &message, &saved);
-      else message = baselineMessage;
-      QJsonObject runtimeApply;
-      if (ok) runtimeApply = bridge_->applyConfigChange(fileKey, yamlPath);
-      const QString runtimeStatus = runtimeApply.value("status").toString();
-      const QString combined = ok
-          ? QStringLiteral("RESET BASELINE: ") + message + QStringLiteral(" Runtime: ") + runtimeStatus +
-                QStringLiteral(". ") + runtimeApply.value("message").toString()
-          : message;
-      return sendJson(socket, ok ? 200 : 409, QJsonObject{{"ok", ok}, {"message", combined},
-                       {"file_key", fileKey}, {"path", yamlPath}, {"baseline_value", baselineValue},
-                       {"saved_value", saved}, {"runtime_apply", runtimeApply},
-                       {"runtime_match", runtimeApply.value("runtime_match")},
-                       {"config", loadConfigSnapshot()}, {"at_ms", nowMs()}});
-    } else if (request.path == "/api/config/reset-batch") {
-      if (bridge_->readOnly()) {
-        return sendJson(socket, 403, QJsonObject{{"ok", false}, {"message", "Web GUI read-only; batch reset YAML ditolak"}});
-      }
-      const QJsonArray items = json.value("items").toArray();
-      if (items.isEmpty() || items.size() > 64) {
-        return sendJson(socket, 400, QJsonObject{{"ok", false}, {"message", "items reset harus berisi 1..64 parameter"}});
-      }
-      const QMap<QString, QString> candidates = configCandidates();
-      QJsonArray resolved;
-      QSet<QString> seen;
-      QMap<QString, QString> sourceFiles;
-      for (const QJsonValue &value : items) {
-        if (!value.isObject()) return sendJson(socket, 400, QJsonObject{{"ok", false}, {"message", "item reset harus object"}});
-        const QJsonObject item = value.toObject();
-        const QString fileKey = item.value("file_key").toString();
-        const QString yamlPath = item.value("path").toString();
-        const QString identity = fileKey + QStringLiteral(":") + yamlPath;
-        if (seen.contains(identity)) continue;
-        seen.insert(identity);
-        QJsonValue baselineValue;
-        QString baselineMessage;
-        if (!baselineYamlValue(fileKey, yamlPath, &baselineValue, &baselineMessage)) {
-          return sendJson(socket, 409, QJsonObject{{"ok", false}, {"message", baselineMessage},
-                           {"file_key", fileKey}, {"path", yamlPath}});
-        }
-        if (!candidates.contains(fileKey)) {
-          return sendJson(socket, 409, QJsonObject{{"ok", false}, {"message", "file_key reset tidak diizinkan"}});
-        }
-        sourceFiles[fileKey] = candidates.value(fileKey);
-        resolved.append(QJsonObject{{"file_key", fileKey}, {"path", yamlPath}, {"baseline_value", baselineValue}});
-      }
-      if (resolved.isEmpty()) {
-        return sendJson(socket, 400, QJsonObject{{"ok", false}, {"message", "Tidak ada parameter unik untuk di-reset"}});
-      }
-
-      const QString stamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz");
-      QMap<QString, QString> batchBackups;
-      QJsonObject backupJson;
-      for (auto it = sourceFiles.cbegin(); it != sourceFiles.cend(); ++it) {
-        const QString backup = it.value() + QStringLiteral(".web.reset.bak.") + stamp;
-        if (!QFile::copy(it.value(), backup)) {
-          return sendJson(socket, 409, QJsonObject{{"ok", false},
-                           {"message", QStringLiteral("Gagal membuat batch backup sebelum reset: ") + it.value()}});
-        }
-        batchBackups[it.key()] = backup;
-        backupJson[it.key()] = backup;
-      }
-
-      QJsonArray savedItems;
-      QString saveError;
-      bool allSaved = true;
-      for (const QJsonValue &value : resolved) {
-        const QJsonObject item = value.toObject();
-        QJsonValue savedValue;
-        QString oneMessage;
-        if (!setYamlValueAtomic(item.value("file_key").toString(), item.value("path").toString(),
-                                item.value("baseline_value"), &oneMessage, &savedValue)) {
-          allSaved = false;
-          saveError = oneMessage;
-          break;
-        }
-        savedItems.append(QJsonObject{{"file_key", item.value("file_key")}, {"path", item.value("path")},
-                                      {"saved_value", savedValue}});
-      }
-      if (!allSaved) {
-        bool rollbackOk = true;
-        for (auto it = sourceFiles.cbegin(); it != sourceFiles.cend(); ++it) {
-          const QString backup = batchBackups.value(it.key());
-          if (backup.isEmpty() || !QFileInfo::exists(backup)) { rollbackOk = false; continue; }
-          QFile::remove(it.value());
-          if (!QFile::copy(backup, it.value())) rollbackOk = false;
-        }
-        return sendJson(socket, 409, QJsonObject{{"ok", false}, {"message", saveError},
-                         {"rolled_back", rollbackOk}, {"batch_backups", backupJson},
-                         {"saved_before_failure", savedItems}});
-      }
-
-      const QJsonObject runtimeApply = bridge_->applyConfigChanges(resolved);
-      const QString runtimeStatus = runtimeApply.value("status").toString();
-      const bool runtimeMatch = runtimeApply.value("runtime_match").toBool(false);
-      const QString combined = QStringLiteral("Batch reset baseline selesai: ") + QString::number(resolved.size()) +
-                               QStringLiteral(" parameter. Runtime: ") + runtimeStatus + QStringLiteral(". ") +
-                               runtimeApply.value("message").toString();
-      return sendJson(socket, 200, QJsonObject{{"ok", true}, {"message", combined},
-                       {"items", savedItems}, {"batch_backups", backupJson},
-                       {"runtime_apply", runtimeApply}, {"runtime_match", runtimeMatch},
-                       {"config", loadConfigSnapshot()}, {"at_ms", nowMs()}});
+      validationSnapshots_.remove(validationId);
+      const QJsonObject revisions=configRevisionState();
+      return sendJson(socket,200,QJsonObject{{"ok",true},{"code","TRANSACTION_APPLIED"},{"transaction_id",transactionId},
+        {"message",useBaseline?"Validated baseline transaction selesai":"Validated config transaction selesai"},
+        {"items",itemResults},{"batch_backups",backupJson},{"runtime_apply",runtimeApply},{"runtime_match",match},
+        {"config_revision",revisions.value("config_revision")},{"file_revisions",revisions.value("files")},
+        {"config",loadConfigSnapshot()},{"at_ms",nowMs()}});
+    } else if (request.path == "/api/config/set" || request.path == "/api/config/reset" || request.path == "/api/config/reset-batch") {
+      return sendJson(socket,409,QJsonObject{{"ok",false},{"code","USE_CONFIG_TRANSACTION"},
+        {"message","Legacy direct config write dinonaktifkan; gunakan Draft → Validate → Diff Review → /api/config/apply atau /api/config/revert"},{"at_ms",nowMs()}});
     } else if (request.path == "/api/experiment/record/start") {
       ok = startRecording(json, &message);
       return sendJson(socket, ok ? 200 : 409, QJsonObject{{"ok", ok}, {"message", message},
@@ -2676,18 +2992,27 @@ class LocalHttpServer : public QObject {
       QJsonObject result; ok=deleteTrial(json,&message,&result);result["ok"]=ok;result["message"]=message;result["at_ms"]=nowMs();
       return sendJson(socket,ok?200:409,result);
     } else if (request.path == "/api/experiment/trial/optimal-scale") {
-      if (bridge_->readOnly() && json.value("apply").toBool(false)) return sendJson(socket,403,QJsonObject{{"ok",false},{"message","Web GUI read-only; apply scale ditolak"}});
-      QJsonObject result;ok=calculateOptimalScale(json.value("apply").toBool(false),&message,&result);result["ok"]=ok;result["message"]=message;result["at_ms"]=nowMs();
+      if (json.value("apply").toBool(false)) return sendJson(socket,409,QJsonObject{{"ok",false},{"code","USE_CONFIG_TRANSACTION"},{"message","Direct optimal-scale apply dinonaktifkan; gunakan proposal_items → Validate → Diff Review → Apply"}});
+      QJsonObject result;ok=calculateOptimalScaleProposal(&message,&result);
+      if(ok){const double scale=result.value("scale").toDouble();const QString iso=QDateTime::currentDateTime().toString(Qt::ISODateWithMs);QJsonArray proposalItems;
+        proposalItems.append(QJsonObject{{"file_key","esc"},{"path","esc_ackermann.ros__parameters.drive_odometry_calibration_scale"},{"value",scale}});
+        proposalItems.append(QJsonObject{{"file_key","vehicle"},{"path","vehicle.ros__parameters.drive_odometry_calibration_scale"},{"value",scale},{"generated",true}});
+        proposalItems.append(QJsonObject{{"file_key","vehicle"},{"path","vehicle.ros__parameters.drive_odometry_calibration_valid"},{"value",true},{"generated",true}});
+        proposalItems.append(QJsonObject{{"file_key","vehicle"},{"path","vehicle.ros__parameters.drive_odometry_calibration_saved_at"},{"value",iso},{"generated",true}});
+        const QJsonObject evidence{{"accepted_trials",result.value("accepted_trials")},{"valid_trials",result.value("valid_trials")},{"rejected_trial_ids",result.value("rejected_trial_ids")}};
+        const QJsonObject proposal=registerConfigProposal(QStringLiteral("navigation:N2.1"),proposalItems,evidence);
+        result["proposal_items"]=proposalItems;result["proposal"]=proposal;result["proposal_only"]=true;}
+      result["ok"]=ok;result["message"]=message;result["at_ms"]=nowMs();
       return sendJson(socket,ok?200:409,result);
     } else if (request.path == "/api/experiment/trial/motion") {
       const bool active = json.value("active").toBool(false);
       const QString subsystem = json.value("subsystem").toString();
-      if (active && subsystem == QStringLiteral("navigation") && trialList(QStringLiteral("steering"), QStringLiteral("4.9")).isEmpty()) {
+      if (active && subsystem == QStringLiteral("navigation") && !taskQualified(QStringLiteral("steering"), QStringLiteral("4.9"))) {
         return sendJson(socket,409,QJsonObject{{"ok",false},{"message","Commissioning gate: ESC 4.9 final evidence belum tersedia"},{"at_ms",nowMs()}});
       }
       if (active && subsystem == QStringLiteral("perception")) {
-        const bool esc_ready = !trialList(QStringLiteral("steering"), QStringLiteral("4.9")).isEmpty();
-        const bool nav_ready = !trialList(QStringLiteral("navigation"), QStringLiteral("N16.1")).isEmpty() || !trialList(QStringLiteral("navigation"), QStringLiteral("N17.1")).isEmpty();
+        const bool esc_ready = taskQualified(QStringLiteral("steering"), QStringLiteral("4.9"));
+        const bool nav_ready = taskQualified(QStringLiteral("navigation"), QStringLiteral("N16.1")) || taskQualified(QStringLiteral("navigation"), QStringLiteral("N17.1"));
         if (!esc_ready || !nav_ready) return sendJson(socket,409,QJsonObject{{"ok",false},{"message","Commissioning gate belum memenuhi ESC → Navigasi → Persepsi"},{"at_ms",nowMs()}});
       }
       ok=bridge_->publishTrialMotion(json.value("id").toString(), json.value("erpm").toDouble(0.0), json.value("steering_deg").toDouble(0.0), active, &message);
@@ -2700,8 +3025,10 @@ class LocalHttpServer : public QObject {
       ok=startImuCalibration(json.value("direction").toString(),&message);
     } else if (request.path == "/api/imu/calibration/stop") {
       ok=stopImuCalibration(&message);
+    } else if (request.path == "/api/imu/calibration/proposal") {
+      QJsonObject result;ok=proposeImuCalibration(&message,&result);result["ok"]=ok;result["message"]=message;result["at_ms"]=nowMs();return sendJson(socket,ok?200:409,result);
     } else if (request.path == "/api/imu/calibration/apply") {
-      QJsonObject result;ok=applyImuCalibration(&message,&result);result["ok"]=ok;result["message"]=message;result["at_ms"]=nowMs();return sendJson(socket,ok?200:409,result);
+      return sendJson(socket,409,QJsonObject{{"ok",false},{"code","USE_CONFIG_TRANSACTION"},{"message","Direct IMU apply dinonaktifkan; gunakan /api/imu/calibration/proposal → Validate → Diff Review → Apply"},{"at_ms",nowMs()}});
     } else if (request.path == "/api/perception/inference") {
       ok = bridge_->setPerceptionInference(json.value("enabled").toBool(false), &message);
     } else if (request.path == "/api/navigation/goal") {
@@ -2928,14 +3255,14 @@ class LocalHttpServer : public QObject {
       if (message) *message = QStringLiteral("subsystem/id recording tidak valid");
       return false;
     }
-    if (subsystem == QStringLiteral("navigation") && trialList(QStringLiteral("steering"), QStringLiteral("4.9")).isEmpty()) {
+    if (subsystem == QStringLiteral("navigation") && !taskQualified(QStringLiteral("steering"), QStringLiteral("4.9"))) {
       if (message) *message = QStringLiteral("Commissioning gate: selesaikan ESC 4.9 Final Gate sebelum recording Navigasi");
       return false;
     }
     if (subsystem == QStringLiteral("perception")) {
-      const bool esc_ready = !trialList(QStringLiteral("steering"), QStringLiteral("4.9")).isEmpty();
-      const bool nav_ready = !trialList(QStringLiteral("navigation"), QStringLiteral("N16.1")).isEmpty() ||
-                             !trialList(QStringLiteral("navigation"), QStringLiteral("N17.1")).isEmpty();
+      const bool esc_ready = taskQualified(QStringLiteral("steering"), QStringLiteral("4.9"));
+      const bool nav_ready = taskQualified(QStringLiteral("navigation"), QStringLiteral("N16.1")) ||
+                             taskQualified(QStringLiteral("navigation"), QStringLiteral("N17.1"));
       if (!esc_ready || !nav_ready) {
         if (message) *message = !esc_ready ?
           QStringLiteral("Commissioning gate: ESC 4.9 belum memiliki final evidence") :
@@ -3062,6 +3389,97 @@ class LocalHttpServer : public QObject {
     return agvPath(QStringLiteral("data/experiment_trials.yaml"));
   }
 
+  QString taskConfigFingerprint(const QString &subsystem, const QString &id) const {
+    QSet<QString> keys;
+    for (const ExperimentSpec &spec : buildExperimentCatalog(subsystem)) {
+      if (spec.id != id) continue;
+      for (const ExperimentParameterField &field : spec.parameterFields)
+        if (!field.yamlFileKey.isEmpty()) keys.insert(field.yamlFileKey);
+      break;
+    }
+    const bool finalGate = (subsystem == QStringLiteral("steering") && id == QStringLiteral("4.9")) ||
+      (subsystem == QStringLiteral("navigation") && (id == QStringLiteral("N16.1") || id == QStringLiteral("N17.1"))) ||
+      (subsystem == QStringLiteral("perception") && id == QStringLiteral("4.9"));
+    if (finalGate || keys.isEmpty()) {
+      if (subsystem == QStringLiteral("steering")) keys.unite(QSet<QString>{"esc","vehicle","foc_thesis","vesc_tool"});
+      else if (subsystem == QStringLiteral("navigation")) keys.unite(QSet<QString>{"vehicle","navigation_core","nav2","ekf","localization","gnss","imu","mag_heading","imu_speed","trajectory_safety","collision","mppi_closed_loop","esc"});
+      else if (subsystem == QStringLiteral("perception")) keys.unite(QSet<QString>{"perception","bbox_calibration","trajectory_safety","navigation_core"});
+    }
+    const QJsonObject revs = configRevisionState().value("files").toObject();
+    QStringList rows;
+    for (const QString &key : keys) if (revs.contains(key)) rows << key + QStringLiteral("=") + revs.value(key).toString();
+    std::sort(rows.begin(), rows.end());
+    return QString::fromLatin1(QCryptographicHash::hash(rows.join(QStringLiteral("\n")).toUtf8(), QCryptographicHash::Sha256).toHex());
+  }
+
+  QJsonObject qualificationRecord(const QString &subsystem, const QString &id) const {
+    return loadTrialStore().value("qualifications").toObject().value(subsystem).toObject().value(id).toObject();
+  }
+
+  QJsonObject effectiveQualification(const QString &subsystem, const QString &id) const {
+    QJsonObject q = qualificationRecord(subsystem, id);
+    if (q.isEmpty()) return QJsonObject{{"subsystem",subsystem},{"task_id",id},{"status","UNREVIEWED"},{"effective_status","UNREVIEWED"}};
+    const QString current = taskConfigFingerprint(subsystem, id);
+    const bool same = !q.value("config_fingerprint").toString().isEmpty() && q.value("config_fingerprint").toString() == current;
+    QString effective = q.value("status").toString(QStringLiteral("UNREVIEWED"));
+    if (effective == QStringLiteral("PASS") && !same) effective = QStringLiteral("INVALIDATED");
+    q["fingerprint_current"] = current;
+    q["fingerprint_match"] = same;
+    q["effective_status"] = effective;
+    return q;
+  }
+
+  bool taskQualified(const QString &subsystem, const QString &id) const {
+    return effectiveQualification(subsystem, id).value("effective_status").toString() == QStringLiteral("PASS");
+  }
+
+  QJsonObject commissioningState() const {
+    QJsonObject out{{"ok",true},{"at_ms",nowMs()}};
+    QJsonObject effective;
+    const QJsonObject stored = loadTrialStore().value("qualifications").toObject();
+    for (const QString &subsystem : {QStringLiteral("steering"),QStringLiteral("navigation"),QStringLiteral("perception")}) {
+      QJsonObject domain;
+      const QJsonObject src = stored.value(subsystem).toObject();
+      for (const QString &id : src.keys()) domain[id] = effectiveQualification(subsystem,id);
+      effective[subsystem] = domain;
+    }
+    const bool esc = taskQualified(QStringLiteral("steering"),QStringLiteral("4.9"));
+    const bool nav16 = taskQualified(QStringLiteral("navigation"),QStringLiteral("N16.1"));
+    const bool nav17 = taskQualified(QStringLiteral("navigation"),QStringLiteral("N17.1"));
+    const bool per = taskQualified(QStringLiteral("perception"),QStringLiteral("4.9"));
+    out["qualifications"] = effective;
+    out["phase"] = QJsonObject{{"esc_pass",esc},{"navigation_pass",nav16||nav17},{"perception_pass",per},
+      {"navigation_gate_open",esc},{"perception_gate_open",esc&&(nav16||nav17)}};
+    return out;
+  }
+
+  bool setQualification(const QJsonObject &json, QString *message, QJsonObject *result) {
+    const QString subsystem=json.value("subsystem").toString().trimmed();
+    const QString id=json.value("id").toString().trimmed();
+    const QString status=json.value("status").toString().trimmed().toUpper();
+    if (!QStringList{"steering","navigation","perception"}.contains(subsystem) || id.isEmpty() ||
+        !QStringList{"UNREVIEWED","PASS","FAIL","INVALIDATED"}.contains(status)) {
+      if (message) *message = "qualification subsystem/id/status invalid";
+      return false;
+    }
+    const QJsonArray trials=trialList(subsystem,id), requested=json.value("evidence_trial_ids").toArray();
+    QSet<QString> existing; for(const QJsonValue &v:trials)existing.insert(v.toObject().value("trial_id").toString());
+    QJsonArray evidence;
+    for(const QJsonValue &v:requested){const QString tid=v.toString();if(!tid.isEmpty()&&existing.contains(tid))evidence.append(tid);else if(!tid.isEmpty()){if(message)*message="Evidence trial tidak ditemukan: "+tid;return false;}}
+    if((status==QStringLiteral("PASS")||status==QStringLiteral("FAIL"))&&evidence.isEmpty()){if(message)*message=status+" membutuhkan minimal satu evidence trial yang valid";return false;}
+    QJsonObject q{{"subsystem",subsystem},{"task_id",id},{"status",status},{"effective_status",status},
+      {"evidence_trial_ids",evidence},{"config_fingerprint",taskConfigFingerprint(subsystem,id)},
+      {"config_revision",configRevisionState().value("config_revision")},{"reviewer_source","operator_review"},
+      {"reason",json.value("reason").toString()},{"metric_summary",json.value("metric_summary")},
+      {"qualified_at",QDateTime::currentDateTime().toString(Qt::ISODateWithMs)}};
+    QJsonObject store=loadTrialStore(),qual=store.value("qualifications").toObject(),domain=qual.value(subsystem).toObject();
+    domain[id]=q;qual[subsystem]=domain;store["qualifications"]=qual;store["version"]=2;store["updated_at"]=QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
+    if(!saveTrialStore(store,message))return false;
+    if (result) *result = effectiveQualification(subsystem, id);
+    if (message) *message = "Qualification " + subsystem + ":" + id + " → " + status;
+    return true;
+  }
+
   QJsonObject loadTrialStore() const {
     QFile f(trialStorePath());
     if (!f.open(QIODevice::ReadOnly)) return QJsonObject{{"version",1}};
@@ -3146,7 +3564,9 @@ class LocalHttpServer : public QObject {
     QJsonObject o{{"trial_no",trialNo},{"trial_id",QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz")},
       {"subsystem",recordingSubsystem_},{"experiment_id",recordingSourceExperimentId_},{"candidate",recordingCandidate_},{"variation",recordingVariation_},
       {"condition",recordingCondition_},{"started_at",recordingStartedIso_},{"stopped_at",QDateTime::currentDateTime().toString(Qt::ISODateWithMs)},
-      {"samples",recordingRows_.size()},{"sample_rate_hz",recordingRateHz_},{"inputs",recordingTrialInputs_}};
+      {"samples",recordingRows_.size()},{"sample_rate_hz",recordingRateHz_},{"inputs",recordingTrialInputs_},
+      {"config_revision",configRevisionState().value("config_revision")},
+      {"task_config_fingerprint",taskConfigFingerprint(recordingSubsystem_,recordingSourceExperimentId_)}};
     auto input=[&](const char*k)->std::optional<double>{const QJsonValue v=recordingTrialInputs_.value(k); if(v.isDouble())return v.toDouble(); bool ok=false;double x=v.toString().toDouble(&ok);return ok?std::optional<double>(x):std::nullopt;};
     putNumber(o,"rpm_set",input("test_erpm")); putNumber(o,"steering_set_deg",input("test_steering_deg"));
     const auto rpm=meanRecording("vesc_right_values.rpm"),raw=meanRecording("esc_drive_raw"),esc=meanRecording("esc_odom.v"),
@@ -3203,7 +3623,11 @@ class LocalHttpServer : public QObject {
     bool removed=false;for(const auto&v:old){const auto o=v.toObject();if(o.value("trial_id").toString()==trialId){removed=true;continue;}list.append(o);}
     if(!removed){if(message)*message="Trial tidak ditemukan";return false;}
     for(int i=0;i<list.size();++i){auto o=list[i].toObject();o["trial_no"]=i+1;list[i]=o;}
-    domain[id]=list;store[subsystem]=domain;store["updated_at"]=QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
+    domain[id]=list;store[subsystem]=domain;
+    QJsonObject qualifications=store.value("qualifications").toObject(),qDomain=qualifications.value(subsystem).toObject(),qual=qDomain.value(id).toObject();
+    bool evidenceReferenced=false;for(const QJsonValue &ev:qual.value("evidence_trial_ids").toArray())if(ev.toString()==trialId){evidenceReferenced=true;break;}
+    if(evidenceReferenced){qual["status"]="INVALIDATED";qual["effective_status"]="INVALIDATED";qual["reason"]="Referenced evidence trial deleted: "+trialId;qual["invalidated_at"]=QDateTime::currentDateTime().toString(Qt::ISODateWithMs);qDomain[id]=qual;qualifications[subsystem]=qDomain;store["qualifications"]=qualifications;}
+    store["updated_at"]=QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
     if(!saveTrialStore(store,message))return false;
     if (result) *result = QJsonObject{{"trials", list}, {"trial_count", list.size()}};
     if (message) *message = "Trial dihapus dari YAML";
@@ -3212,53 +3636,60 @@ class LocalHttpServer : public QObject {
 
   static double median(QVector<double> v){if(v.empty())return std::numeric_limits<double>::quiet_NaN();std::sort(v.begin(),v.end());const int n=v.size();return n%2?v[n/2]:0.5*(v[n/2-1]+v[n/2]);}
 
-  bool calculateOptimalScale(bool apply,QString *message,QJsonObject *result) {
-    const QJsonArray list=trialList("navigation","N2.1");
-    struct P{double raw,gnss,scale;QString id;}; QVector<P> valid; QVector<double> scales;
-    for(const auto&v:list){const auto o=v.toObject();const double raw=std::abs(o.value("mean_v_esc_raw_mps").toDouble()),gnss=std::abs(o.value("mean_v_gnss_mps").toDouble());
-      if(raw>0.03&&gnss>0.03){const double k=gnss/raw;if(std::isfinite(k)&&k>=0.2&&k<=5.0){valid.push_back({raw,gnss,k,o.value("trial_id").toString()});scales.push_back(k);}}}
-    if(valid.size()<3){if(message)*message="Butuh minimal 3 trial valid N2.1 untuk scale optimal";return false;}
-    const double med=median(scales);QVector<double> dev;for(double k:scales)dev.push_back(std::abs(k-med));const double mad=median(dev);
-    const double tol=std::max(0.05*std::abs(med),3.0*1.4826*mad);double xy=0.0,xx=0.0;int accepted=0;QJsonArray rejected;
-    for(const auto&p:valid){if(std::abs(p.scale-med)>tol){rejected.append(p.id);continue;}xy+=p.raw*p.gnss;xx+=p.raw*p.raw;++accepted;}
-    if(accepted<2||xx<=1e-9){if(message)*message="Trial valid setelah outlier rejection tidak cukup";return false;}
-    const double scale=std::clamp(xy/xx,0.20,5.0);QString runtimeMessage;bool runtimeOk=true;
-    if(apply){
-      const QString escPath="esc_ackermann.ros__parameters.drive_odometry_calibration_scale";
-      const QString vehiclePath="vehicle.ros__parameters.drive_odometry_calibration_scale";
-      const QString validPath="vehicle.ros__parameters.drive_odometry_calibration_valid";
-      const QJsonValue oldEsc=configStoredValue("esc",escPath),oldVehicle=configStoredValue("vehicle",vehiclePath),oldValid=configStoredValue("vehicle",validPath);
-      const double oldRuntime=oldEsc.isDouble()?oldEsc.toDouble():1.0;
-      runtimeOk=bridge_->setDriveOdometryScale(scale,&runtimeMessage);
-      if(runtimeOk){
-        QJsonValue saved;QString m;QVector<QPair<QPair<QString,QString>,QJsonValue>> written;
-        auto writeOne=[&](const QString &file,const QString &path,const QJsonValue &value,const QJsonValue &oldValue){
-          if(!setYamlValueAtomic(file,path,value,&m,&saved))return false;
-          written.push_back({{file,path},oldValue});return true;
-        };
-        runtimeOk=writeOne("esc",escPath,scale,oldEsc)&&writeOne("vehicle",vehiclePath,scale,oldVehicle)&&writeOne("vehicle",validPath,true,oldValid);
-        if(!runtimeOk){
-          QString rollbackMessage;QJsonValue rollbackSaved;
-          for(auto it=written.crbegin();it!=written.crend();++it){if(!it->second.isUndefined())setYamlValueAtomic(it->first.first,it->first.second,it->second,&rollbackMessage,&rollbackSaved);}
-          QString runtimeRollback;bridge_->setDriveOdometryScale(oldRuntime,&runtimeRollback);
-          runtimeMessage=QStringLiteral("YAML apply gagal; runtime/parameter utama di-rollback. ")+m+QStringLiteral(" | ")+runtimeRollback;
-        }else{
-          const QString iso=QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
-          QString stampMessage;QJsonValue stampSaved;
-          if(!setYamlValueAtomic("vehicle","vehicle.ros__parameters.drive_odometry_calibration_saved_at",iso,&stampMessage,&stampSaved))runtimeMessage+=QStringLiteral(" | warning timestamp YAML: ")+stampMessage;
-        }
+  bool calculateOptimalScaleProposal(QString *message,QJsonObject *result) {
+    const QJsonArray list = trialList("navigation", "N2.1");
+    struct P { double raw, gnss, scale; QString id; };
+    QVector<P> valid;
+    QVector<double> scales;
+    for (const auto &v : list) {
+      const auto o = v.toObject();
+      const double raw = std::abs(o.value("mean_v_esc_raw_mps").toDouble());
+      const double gnss = std::abs(o.value("mean_v_gnss_mps").toDouble());
+      if (raw <= 0.03 || gnss <= 0.03) continue;
+      const double k = gnss / raw;
+      if (std::isfinite(k) && k >= 0.20 && k <= 5.00) {
+        valid.push_back({raw, gnss, k, o.value("trial_id").toString()});
+        scales.push_back(k);
       }
     }
-    QJsonObject store=loadTrialStore(),results=store.value("calibration_results").toObject(),nav=results.value("navigation").toObject();
-    nav["N2.1"]=QJsonObject{{"optimal_scale",scale},{"accepted_trials",accepted},{"total_valid_trials",valid.size()},{"median_candidate",med},{"mad",mad},{"rejected_trial_ids",rejected},{"applied",apply&&runtimeOk},{"updated_at",QDateTime::currentDateTime().toString(Qt::ISODateWithMs)} };
-    results["navigation"]=nav;store["calibration_results"]=results;saveTrialStore(store,nullptr);
-    if(result)*result=QJsonObject{{"scale",scale},{"accepted_trials",accepted},{"valid_trials",valid.size()},{"rejected_trial_ids",rejected},{"applied",apply&&runtimeOk},{"runtime_message",runtimeMessage}};
-    if (message) {
-      *message = apply ?
-        (runtimeOk ? "Scale optimal tersimpan dan aktif live" : "Scale dihitung tetapi apply runtime gagal: " + runtimeMessage) :
-        "Scale optimal berhasil dihitung";
+    if (valid.size() < 3) {
+      if (message) *message = "Butuh minimal 3 trial valid N2.1 untuk scale optimal";
+      return false;
     }
-    return !apply || runtimeOk;
+    const double med = median(scales);
+    QVector<double> dev;
+    for (double k : scales) dev.push_back(std::abs(k - med));
+    const double mad = median(dev);
+    const double tol = std::max(0.05 * std::abs(med), 3.0 * 1.4826 * mad);
+    double xy = 0.0, xx = 0.0;
+    int accepted = 0;
+    QJsonArray rejected;
+    for (const auto &p : valid) {
+      if (std::abs(p.scale - med) > tol) { rejected.append(p.id); continue; }
+      xy += p.raw * p.gnss;
+      xx += p.raw * p.raw;
+      ++accepted;
+    }
+    if (accepted < 2 || xx <= 1e-9) {
+      if (message) *message = "Trial valid setelah outlier rejection tidak cukup";
+      return false;
+    }
+    const double scale = std::clamp(xy / xx, 0.20, 5.0);
+    QJsonObject store = loadTrialStore();
+    QJsonObject results = store.value("calibration_results").toObject();
+    QJsonObject nav = results.value("navigation").toObject();
+    nav["N2.1"] = QJsonObject{{"optimal_scale", scale}, {"accepted_trials", accepted},
+      {"total_valid_trials", valid.size()}, {"median_candidate", med}, {"mad", mad},
+      {"rejected_trial_ids", rejected}, {"applied", false}, {"proposal_only", true},
+      {"updated_at", QDateTime::currentDateTime().toString(Qt::ISODateWithMs)}};
+    results["navigation"] = nav;
+    store["calibration_results"] = results;
+    saveTrialStore(store, nullptr);
+    if (result) *result = QJsonObject{{"scale", scale}, {"accepted_trials", accepted},
+      {"valid_trials", valid.size()}, {"rejected_trial_ids", rejected},
+      {"applied", false}, {"proposal_only", true}};
+    if (message) *message = "Scale optimal berhasil dihitung sebagai proposal; belum ada YAML/runtime write";
+    return true;
   }
 
   bool exportTrialArtifacts(const QString &csvPath,const QJsonObject &summary,const QJsonArray &trials,const QJsonObject &clientArtifacts,QJsonObject *result,QString *message) {

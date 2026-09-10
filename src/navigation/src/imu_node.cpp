@@ -147,6 +147,7 @@ ImuNode::ImuNode(const rclcpp::NodeOptions & options)
   mag_yaw_max_norm_ut_ = std::max(mag_yaw_min_norm_ut_ + 1.0,
     this->declare_parameter<double>("mag_yaw_max_norm_ut", 1000.0));
   accel_bias_ = this->declare_parameter<std::vector<double>>("accel_bias", {0.0, 0.0, 0.0});
+  accel_scale_ = this->declare_parameter<std::vector<double>>("accel_scale", {1.0, 1.0, 1.0});
   gyro_bias_ = this->declare_parameter<std::vector<double>>("gyro_bias", {0.0, 0.0, 0.0});
   // Stage-2 commissioning metadata. The driver does not alter these values;
   // NavigationCore/GUI use them as persistent evidence that bias/covariance were
@@ -172,9 +173,15 @@ ImuNode::ImuNode(const rclcpp::NodeOptions & options)
         return std::isfinite(value);
       });
     };
-  if (!valid3(accel_bias_) || !valid3(gyro_bias_) || !valid3(orientation_covariance_) ||
-      !valid3(angular_velocity_covariance_) || !valid3(linear_acceleration_covariance_)) {
+  if (!valid3(accel_bias_) || !valid3(accel_scale_) || !valid3(gyro_bias_) ||
+      !valid3(orientation_covariance_) || !valid3(angular_velocity_covariance_) ||
+      !valid3(linear_acceleration_covariance_)) {
     throw std::invalid_argument("IMU calibration parameters must contain exactly 3 finite values");
+  }
+  if (!std::all_of(accel_scale_.begin(), accel_scale_.end(), [](double value) {
+        return value > 0.5 && value < 1.5;
+      })) {
+    throw std::invalid_argument("accel_scale values must be finite and within 0.5..1.5");
   }
   const auto valid_variance = [](const std::vector<double> & covariance) {
       return std::all_of(covariance.begin(), covariance.end(), [](double value) {
@@ -212,6 +219,7 @@ ImuNode::ImuNode(const rclcpp::NodeOptions & options)
   pub_mag_ = this->create_publisher<sensor_msgs::msg::MagneticField>("imu/mag", qos);
   pub_mag_raw_lsb_ = this->create_publisher<std_msgs::msg::Float64MultiArray>("imu/mag_raw_lsb", qos);
   pub_raw_sensor_vectors_ = this->create_publisher<std_msgs::msg::Float64MultiArray>("imu/raw_sensor_vectors", qos);
+  pub_calibration_vectors_ = this->create_publisher<std_msgs::msg::Float64MultiArray>("imu/calibration_vectors", qos);
   pub_profile_status_ = this->create_publisher<std_msgs::msg::String>(
     "/imu/profile_status", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
   pub_timing_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
@@ -804,9 +812,9 @@ bool ImuNode::publishImu()
     // Koreksi mounting planar 180 derajat harus konsisten untuk seluruh vektor.
     // Jika roll/pitch dibalik, sumbu body X/Y sensor juga berlawanan terhadap
     // base_footprint. Z tidak berubah untuk rotasi murni 180 derajat terhadap Z.
-    msg.linear_acceleration.x = vector_x_sign_ * ax_ - accel_bias_[0];
-    msg.linear_acceleration.y = vector_y_sign_ * ay_ - accel_bias_[1];
-    msg.linear_acceleration.z = vector_z_sign_ * az_ - accel_bias_[2];
+    msg.linear_acceleration.x = (vector_x_sign_ * ax_ - accel_bias_[0]) * accel_scale_[0];
+    msg.linear_acceleration.y = (vector_y_sign_ * ay_ - accel_bias_[1]) * accel_scale_[1];
+    msg.linear_acceleration.z = (vector_z_sign_ * az_ - accel_bias_[2]) * accel_scale_[2];
     msg.linear_acceleration_covariance[0] = linear_acceleration_covariance_[0];
     msg.linear_acceleration_covariance[4] = linear_acceleration_covariance_[1];
     msg.linear_acceleration_covariance[8] = linear_acceleration_covariance_[2];
@@ -818,6 +826,7 @@ bool ImuNode::publishImu()
   ++imu_publish_sequence_;
   publishTimingDiagnostics(measurement_stamp, publish_stamp);
   publishRawSensorVectors();
+  publishCalibrationVectors();
   return true;
 }
 
@@ -832,9 +841,22 @@ void ImuNode::publishRawSensorVectors()
   pub_raw_sensor_vectors_->publish(msg);
 }
 
-// Fungsi: Menerbitkan raw magnetometer Yahboom dalam LSB resmi protokol, tetapi
-// sudah diputar ke frame body REP-103 yang sama dengan accel/gyro. Ini adalah
-// jalur kalibrasi yang benar karena dokumen Yahboom tidak menetapkan LSB->Tesla.
+// Body-frame SI vectors before bias/scale correction. Stage-2 six-position and
+// long-stationary campaigns must use this topic so calibration is not fitted
+// against already-corrected /imu/data values. Layout: ax,ay,az,gx,gy,gz.
+void ImuNode::publishCalibrationVectors()
+{
+  if (!pub_calibration_vectors_) return;
+  std_msgs::msg::Float64MultiArray msg;
+  msg.data = {vector_x_sign_ * ax_, vector_y_sign_ * ay_, vector_z_sign_ * az_,
+              vector_x_sign_ * gx_ * M_PI / 180.0,
+              vector_y_sign_ * gy_ * M_PI / 180.0,
+              vector_z_sign_ * gz_ * M_PI / 180.0};
+  pub_calibration_vectors_->publish(msg);
+}
+
+// Raw magnetometer Yahboom in protocol LSB, rotated to REP-103 body frame.
+// Physical Tesla scaling remains unavailable until independently calibrated.
 void ImuNode::publishMagRawLsb()
 {
   if (!pub_mag_raw_lsb_) return;

@@ -12,7 +12,7 @@ CAT = (ROOT / "gui/agv_experiment_catalog.hpp").read_text()
 checks = {
     "data health": "overviewDataHealthSection" in HTML and "CHANNEL_REGISTRY" in APP,
     "sse sequence": "__event_seq" in CPP and "sseGapCount" in APP,
-    "staged config": "configPending" in APP and "Apply All + Verify" in HTML,
+    "staged config": all(token in APP for token in ("configPending", "validation_id", "configPayload")) and all(token in HTML for token in ("configDiffDrawer", "Apply Validated + Verify")) and all(token in CPP for token in ("/api/config/validate", "/api/config/apply", "TRANSACTION_APPLIED")),
     "replay lock": "REPLAY MODE" in REPLAY and "replay-mode" in REPLAY,
     "test preflight": "testPreflightPanel" in HTML and "testPreflightStatus" in APP,
     "mission dock": "missionDraftDock" in HTML and "renderMissionDraft" in APP,

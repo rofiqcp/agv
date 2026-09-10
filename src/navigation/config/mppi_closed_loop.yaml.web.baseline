@@ -11,9 +11,9 @@ mppi_closed_loop_supervisor:
     # are still required before changing feedback mode.
     qualification_window_sec: 12.0
     min_qualification_samples: 60
-    # Local EKF publishes /odometry/filtered at 10 Hz. Keep an 8 Hz floor so
-    # scheduling jitter is tolerated without making CLOSED_LOOP qualification impossible.
-    min_odom_rate_hz: 8.0
+    # Local EKF publishes /odometry/filtered at 30 Hz. Stage-2 CLOSED_LOOP
+    # qualification requires >=25 Hz so MPPI 15 Hz never runs from undersampled feedback.
+    min_odom_rate_hz: 25.0
     max_odom_jitter_sec: 0.020
     max_velocity_rmse_mps: 0.08
     max_steering_rmse_rad: 0.12

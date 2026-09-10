@@ -1,0 +1,26 @@
+'use strict';
+(function(global){
+  const canonicalSeverity=v=>{const s=String(v||'INFO').toUpperCase();if(['DANGER','CRITICAL'].includes(s))return'CRITICAL';if(s==='ERROR'||s==='FAIL')return'ERROR';if(['WARN','WARNING','DEGRADED','STALE'].includes(s))return'WARNING';return'INFO'};
+  const severityCss=v=>({CRITICAL:'danger',ERROR:'danger',WARNING:'warn',INFO:'info'})[canonicalSeverity(v)]||'info';
+  function normalizeEvent(input={}){
+    const timestamp_ms=Number.isFinite(+input.timestamp_ms)?+input.timestamp_ms:Date.now(),severity=canonicalSeverity(input.severity);
+    return {timestamp_ms,atMs:timestamp_ms,severity,severity_css:severityCss(severity),domain:String(input.domain||'system'),layer:String(input.layer||'runtime'),source:String(input.source||'ros_web'),code:String(input.code||input.kind||'EVENT'),summary:String(input.summary||input.kind||'Runtime event'),state:String(input.state??input.value??''),value:String(input.state??input.value??''),kind:String(input.summary||input.kind||input.code||'EVENT'),text:String(input.text||`${input.summary||input.kind||'EVENT'}: ${input.state??input.value??''}`),related_channels:Array.isArray(input.related_channels)?input.related_channels:[],related_evidence:Array.isArray(input.related_evidence)?input.related_evidence:[],analysis_time_s:Number.isFinite(+input.analysis_time_s)?Math.max(0,+input.analysis_time_s):null};
+  }
+  const str=v=>v==null?'--':typeof v==='string'?v:JSON.stringify(v);
+  function buildFindings(ctx={}){
+    const value=ctx.value||(()=>undefined),object=ctx.object||(()=>({})),age=ctx.age||(()=>Infinity),fresh=ctx.fresh||((k,s)=>age(k)<s),truth=k=>value(k)===true;
+    const out=[],push=(id,domain,layer,source,label,state,severity,detail,channels=[])=>out.push({id,domain,layer,source,label,state,severity:canonicalSeverity(severity),detail:str(detail),age_s:Math.min(9999,Math.max(0,+age(source)||0)),channels});
+    const hmi=truth('connected.hmi');push('f4-hmi','system','transport','connected.hmi','F4 HMI / USB CDC',hmi?'CONNECTED':'OFFLINE',hmi?'INFO':'WARNING',`${value('hmi_page')||'--'} • ${value('hmi_mode')||'--'}`,['connected.hmi','hmi_page','hmi_mode']);
+    const vt=truth('connected.vesc_transport'),ve=value('vesc_transport_error');push('f411-f103','esc','transport','vesc_transport_status','F411 ↔ F103 VESC Transport',vt?'CONNECTED':'OFFLINE',vt?(ve?'WARNING':'INFO'):'ERROR',ve||str(object('vesc_transport_status')),['connected.vesc_transport','vesc_transport_status','vesc_transport_error']);
+    const ef=truth('connected.esc_feedback'),mr=truth('system.motion_ready');push('esc-feedback','esc','actuator','esc_status','ESC Feedback / Actuator',ef?'FRESH':'NO FEEDBACK',!ef&&mr?'CRITICAL':ef?'INFO':'ERROR',str(object('esc_status')),['connected.esc_feedback','connected.esc_ready','esc_status']);
+    const gn=truth('connected.gnss'),gf=fresh('gnss_quality',2.5);push('gnss','navigation','sensor','gnss_quality','GNSS Quality / Fix',gn?(gf?'LIVE':'STALE'):'OFFLINE',!gn?'ERROR':gf?'INFO':'WARNING',str(object('gnss_quality')),['connected.gnss','gnss_fix','gnss_quality','gnss_status','neo3_status']);
+    const im=truth('connected.imu'),imf=fresh('imu',2.0);push('imu','navigation','sensor','imu','Yahboom IMU',im?(imf?'LIVE':'STALE'):'OFFLINE',!im?'ERROR':imf?'INFO':'WARNING',str(object('imu_status')),['connected.imu','imu','imu_status']);
+    const ekfl=fresh('ekf_local',2.0),ekfg=fresh('ekf_global',2.0),loc=object('localization_state');push('localization','navigation','localization','localization_state','Localization / EKF',ekfl&&ekfg?'LIVE':'DEGRADED',ekfl&&ekfg?'INFO':'WARNING',str(loc),['localization_state','ekf_local','ekf_global','ekf_local_status','ekf_global_status']);
+    const nav=truth('system.nav2_ready');push('nav2','navigation','control','system.nav2_ready','Nav2 Planner / Controller',nav?'READY':'NOT READY',nav?'INFO':'WARNING',str(object('mppi_status')),['system.nav2_ready','mppi_status','smoother_qualification','trajectory_safety_state']);
+    const cam=truth('connected.camera'),healthy=truth('camera_healthy'),cf=fresh('camera_frame',3.0);push('camera','perception','sensor','camera_frame','Camera / Frame Pipeline',cam&&healthy&&cf?'HEALTHY':cam?'DEGRADED':'OFFLINE',!cam?'ERROR':healthy&&cf?'INFO':'WARNING',str(object('camera_health_state')),['connected.camera','camera_healthy','camera_frame','camera_health_state','perception_performance']);
+    const pe=truth('perception_emergency'),ts=fresh('trajectory_safety_state',3.0);push('perception-safety','perception','safety','trajectory_safety_state','Perception Safety Chain',pe?'EMERGENCY':ts?'LIVE':'STALE',pe?'CRITICAL':ts?'INFO':'WARNING',str(object('trajectory_safety_state')),['perception_emergency','near_field_state','trajectory_safety_state','collision_monitor_state']);
+    const tool=object('vesc_tool_status');push('vesc-owner','esc','authority','vesc_tool_status','VESC Maintenance Authority',tool.owner||tool.mode||'RUNTIME','INFO',str(tool),['vesc_tool_status','vesc_maintenance_active']);
+    const rank={CRITICAL:0,ERROR:1,WARNING:2,INFO:3};return out.sort((a,b)=>(rank[a.severity]??9)-(rank[b.severity]??9));
+  }
+  global.AGVDiagnostics={canonicalSeverity,severityCss,normalizeEvent,buildFindings};
+})(window);

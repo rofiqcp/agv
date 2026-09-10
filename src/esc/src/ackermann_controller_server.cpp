@@ -1106,6 +1106,7 @@ private:
     active_source_pub_ = create_publisher<std_msgs::msg::String>(active_source_topic_, stateQos());
     status_pub_ = create_publisher<std_msgs::msg::String>("/esc/status", stateQos());
     foc_telemetry_pub_ = create_publisher<std_msgs::msg::String>("/esc/foc/telemetry", stateQos());
+    motor_current_abs_pub_ = create_publisher<std_msgs::msg::Float64>("/esc/motor_current_abs_a", 10);
     ready_pub_ = create_publisher<std_msgs::msg::Bool>("/esc/ready", stateQos());
     armed_pub_ = create_publisher<std_msgs::msg::Bool>("/esc/armed", stateQos());
     feedback_valid_pub_ = create_publisher<std_msgs::msg::Bool>("/esc/feedback_valid", stateQos());
@@ -2484,6 +2485,11 @@ private:
       << ",\"rx_overflows\":" << vesc_rx_overflow_count_ << "}";
     msg.data = o.str();
     foc_telemetry_pub_->publish(msg);
+    if (motor_current_abs_pub_) {
+      std_msgs::msg::Float64 current;
+      current.data = std::max(std::abs(left_current_motor_a_), std::abs(right_current_motor_a_));
+      motor_current_abs_pub_->publish(current);
+    }
   }
 
   void stm32TransportTick()
@@ -3219,6 +3225,7 @@ private:
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr active_source_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr foc_telemetry_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr motor_current_abs_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr ready_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr armed_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr feedback_valid_pub_;

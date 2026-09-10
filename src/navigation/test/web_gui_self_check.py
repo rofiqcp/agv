@@ -111,8 +111,8 @@ for token in ("setYamlValueAtomic", "patchExistingYamlScalar", "captureRecording
 # Navigation tuning must preserve an immutable initial YAML baseline and expose safe reset.
 for token in ("baselinePathForConfig", "ensureConfigBaseline", "baselineYamlValue",
               "applyConfigChanges", "safe_batch_restart", "batch_backups",
-              "baseline_data", "RESET BASELINE", "/api/config/reset", "/api/config/reset-batch"):
-    if token not in cpp: fail(f"YAML baseline/reset backend missing {token}")
+              "baseline_data", "/api/config/revert", "Legacy direct config write dinonaktifkan", "USE_CONFIG_TRANSACTION"):
+    if token not in cpp: fail(f"YAML baseline/revert backend missing {token}")
 for token in ('id="resetExperimentYaml"', '*.web.baseline', '.web.bak.*'):
     if token not in html: fail(f"YAML baseline/reset UI missing {token}")
 for token in ("baselineConfigValue", "resetSelectedExperimentYaml", "Stage Baseline"):

@@ -20,6 +20,13 @@ mag_heading_fusion:
     neo3_heading_variance_rad2: 0.02
     max_heading_rate_rps: 3.0
     rate_gate_margin_rad: 0.35
+    field_qualification_valid: false
+    field_qualification_saved_at: ''
+    field_qualification_evidence_sha256: ''
+    enable_current_emi_gate: false
+    motor_current_topic: /esc/motor_current_abs_a
+    current_emi_gate_threshold_a: 1000000.0
+    current_emi_gate_timeout_sec: 0.35
     enable_imu_mag_heading: true
     enable_neo3_mag_heading: true
     imu_inertial_heading_topic: /imu/inertial_heading

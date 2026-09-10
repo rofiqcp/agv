@@ -2,6 +2,7 @@
 
 // Offline recorder replay. This module never sends ROS commands.
 const replayStore={rows:[],headers:[],index:0,playing:false,raf:0,playWall:0,playData:0,fileName:'',duration:0};
+window.replayStore=replayStore;
 const replayFlatPrefixes=['connected.','system.'];
 
 function replayCsvRows(text){
@@ -38,7 +39,7 @@ function replaySetDeep(root,path,value){
 function replayApplyRow(index){
   if(!replayStore.rows.length)return;
   const i=Math.max(0,Math.min(replayStore.rows.length-1,index|0)),entry=replayStore.rows[i],row=entry.raw,now=Date.now();
-  replayStore.index=i;
+  replayStore.index=i;window.analysisSession?.syncReplay(entry.time,i);
   for(const [key,rawValue] of Object.entries(row)){
     if(['time_iso','elapsed_s','subsystem','section_id','source_experiment_id','section_label','variation','condition'].includes(key))continue;
     const value=replayScalar(rawValue);
@@ -102,12 +103,12 @@ function replayEnter(){
   if(!replayStore.rows.length)return toast('Load recorder CSV terlebih dahulu.',true);
   replayStop();replayMode=true;if(sse){sse.close();sse=null}document.body.classList.add('replay-mode');setRealtimeUi('offline');
   $('replayEnterBtn').disabled=true;$('replayExitBtn').disabled=false;replaySetEnabled(true);$('replayStateChip').textContent='REPLAY LOCKED';$('replayStateChip').className='status-chip waiting';
-  replayApplyRow(replayStore.index);toast('REPLAY MODE aktif • command/write locked');
+  window.analysisSession?.setSource('REPLAY');replayApplyRow(replayStore.index);toast('REPLAY MODE aktif • command/write locked');
 }
 
 async function replayExit(){
   replayStop();replayMode=false;document.body.classList.remove('replay-mode');$('replayEnterBtn').disabled=!replayStore.rows.length;$('replayExitBtn').disabled=true;replaySetEnabled(false);$('replayStateChip').textContent='LIVE RESYNC';$('replayStateChip').className='status-chip waiting';
-  connectSse();await fullState(true);$('replayStateChip').textContent='FILE READY';$('replayStateChip').className='status-chip';queueRender();toast('Replay selesai • live state restored');
+  window.analysisSession?.setSource('LIVE');connectSse();await fullState(true);$('replayStateChip').textContent='FILE READY';$('replayStateChip').className='status-chip';queueRender();toast('Replay selesai • live state restored');
 }
 $('replayFile').onchange=async e=>{const file=e.target.files?.[0];if(!file)return;try{await replayLoadFile(file)}catch(err){toast('Replay load gagal: '+err.message,true)}};
 $('replayEnterBtn').onclick=replayEnter;$('replayExitBtn').onclick=replayExit;$('replayPlayBtn').onclick=replayTogglePlay;
@@ -116,4 +117,5 @@ $('replayTimeline').oninput=e=>{replayStop();replayApplyRow(+e.target.value)};
 $('replayOpenMapBtn').onclick=()=>{if(!replayMode)return toast('Enter Replay dulu.',true);activatePage('navigation',false,'navigation');drawMap()};
 $('replaySpeed').onchange=()=>{if(replayStore.playing){replayStore.playWall=performance.now();replayStore.playData=replayStore.rows[replayStore.index]?.time||0}};
 
+window.analysisSession?.registerReplayAdapter({seekTime(time){if(!replayStore.rows.length)return;let lo=0,hi=replayStore.rows.length-1;while(lo<hi){const mid=Math.floor((lo+hi)/2);if(replayStore.rows[mid].time<time)lo=mid+1;else hi=mid}let i=lo;if(i>0&&Math.abs(replayStore.rows[i-1].time-time)<Math.abs(replayStore.rows[i].time-time))i--;replayStop();replayApplyRow(i)}});
 replaySetEnabled(false);renderReplayUi();

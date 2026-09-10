@@ -1,3 +1,0 @@
-ADV VESC+MissionPlanner UI refactor started 2026-09-08
-Master references: VESC Tool, MissionPlanner, UAVLogViewer, WebTools, dronecan-webtools
-Functional contract: preserve ROS IDs, APIs, telemetry, tuning, localhost:5000

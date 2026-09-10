@@ -25,9 +25,15 @@ req('gUsb' in main and 'Serial.' not in main, 'native application must use one C
 # HMI parity.
 for token in ('UiMenuId::OVERVIEW','UiMenuId::ESC_ROOT','UiMenuId::PERCEPTION_ROOT','UiMenuId::NAVIGATION_ROOT','SUBMENU_VISIBLE_CARDS = 3'):
     req(token in ui_cfg+ui_menu+ui_shell, 'native HMI contract missing: '+token)
-for token in ('drawOverviewHealthRail', 'menuChildren(UiMenuId::OVERVIEW',
-              'drawOverviewDomainCard(slot, children[index]', 'drawCarouselFooter'):
+# Current native HMI IA is HOME -> MAIN_MENU -> ESC/PERCEPTION/NAVIGATION.
+# Validate the actual renderer rather than the retired overview carousel.
+for token in ('drawHome', 'drawMainMenu',
+              'drawOperatorCard(slot, menuCardAt(UiMenuId::MAIN_MENU',
+              'drawCarouselFooter', 'domainHealthColor(ready[i], fresh[i])',
+              'drawStatusDot(dotX[i], HOME_HEALTH_Y + 6'):
     req(token in ui_shell, 'native HMI renderer missing: '+token)
+req('case UiMenuId::MAIN_MENU: count = 3U; return mainMenu;' in ui_menu,
+    'main menu must expose exactly ESC/PERCEPTION/NAVIGATION roots')
 for token in ('UiMenuId::ESC_ROOT', 'UiMenuId::PERCEPTION_ROOT', 'UiMenuId::NAVIGATION_ROOT', 'UiMenuId::SYSTEM_ROOT'):
     req(token in ui_shell, 'overview domain health/render coverage missing: '+token)
 req('SoftKey::UP' not in ui_cfg+ui_touch+ui_shell and 'SoftKey::DOWN' not in ui_cfg+ui_touch+ui_shell, 'obsolete UP/DOWN softkeys returned')

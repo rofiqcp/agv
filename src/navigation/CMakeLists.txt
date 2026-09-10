@@ -178,6 +178,8 @@ if(BUILD_TESTING)
     gui_qt_signal_slot_self_check
     gui_nav2_embed_self_check
     web_gui_self_check
+    web_config_stage1_self_check
+    web_stage2_ui_self_check
     launch_dependency_self_check
     humble_build_compat_self_check
     minipc_navigation_only_self_check
@@ -194,6 +196,7 @@ if(BUILD_TESTING)
     project_consistency_self_check
     stage1_foundation_self_check
     stage2_localization_foundation_self_check
+    stage2_physical_pipeline_self_check
     stage3_nav2_safety_self_check
     steering_physical_part1_self_check
     steering_physical_part2_self_check
@@ -262,6 +265,7 @@ install(DIRECTORY docs tools DESTINATION share/${PROJECT_NAME})
 
 # Static browser assets untuk agv_web_gui.
 install(DIRECTORY web/static DESTINATION share/${PROJECT_NAME}/web)
+install(DIRECTORY web/config DESTINATION share/${PROJECT_NAME}/web)
 
 # GUI assets are shared resources for the native C++/Qt HMI.
 install(
@@ -271,6 +275,8 @@ install(
     tools/nav2_gui_flow_check.sh
     tools/rosbag_regression.py
     tools/navigation_calibration.py
+    tools/navigation_field_campaign.py
+    tools/stage2_calibration_proposal.py
     tools/navigation_metrics.py
     tools/planar_eskf_ab.py
     tools/navigation_fault_suite.py

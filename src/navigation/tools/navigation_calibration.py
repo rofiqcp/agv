@@ -132,7 +132,21 @@ def control(rows,wheelbase):
         else: aa,cc=a0[lag:],c0[:-lag]
         cor.append(float(np.dot(aa,cc)/(np.linalg.norm(aa)*np.linalg.norm(cc)+1e-12)))
     lag=int(np.argmax(cor)); pred=np.where(np.abs(act)>1e-6,v*np.tan(act)/wheelbase,0.0); err=w-pred
+    taus=[];step_threshold=max(0.02,0.15*(float(np.max(cmd))-float(np.min(cmd))))
+    dcmd=np.diff(cmd)
+    for i in np.where(np.abs(dcmd)>=step_threshold)[0]:
+        start=i+1;pre=float(act[i]);target=float(cmd[start]);span=target-pre
+        if abs(span)<1e-4: continue
+        y63=pre+0.6321205588*span
+        stop=min(len(t),start+max(2,int(2.0/max(dt,1e-4))))
+        for j in range(start,stop):
+            if (span>0 and act[j]>=y63) or (span<0 and act[j]<=y63):
+                tau=float(t[j]-t[start])-float(lag*dt)
+                if 0.0<=tau<=2.0: taus.append(tau)
+                break
+    tau_med=float(np.median(taus)) if taus else math.nan
     return {'analysis':'Steering/control identification','samples':len(rows),'median_dt_sec':float(dt),'estimated_steering_delay_sec':float(lag*dt),
+      'estimated_steering_tau_sec':tau_med,'steering_tau_step_count':len(taus),
       'steering_tracking_rmse_rad':float(np.sqrt(np.mean((act-cmd)**2))),'kinematic_yaw_rate_rmse_rps':float(np.sqrt(np.mean(err*err))),
       'kinematic_yaw_rate_p95_rps':p95_abs(err),'peak_delay_correlation':cor[lag]}
 

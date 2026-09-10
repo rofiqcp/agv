@@ -45,6 +45,11 @@ vehicle:
     max_reverse_speed_mps: 1.0
     # Kinematic ceiling at max_forward_speed_mps / minimum_turning_radius_m.
     max_yaw_rate_rps: 0.625907910003
+    # Stage-2 low-level steering/yaw tuning is certified only from physical
+    # step/slalom/circle evidence; default false prevents software-only promotion.
+    control_field_calibration_valid: false
+    control_field_calibration_saved_at: ''
+    control_field_evidence_sha256: ''
     max_accel_mps2: 0.75
     max_decel_mps2: -1.0
     max_yaw_accel_rps2: 2.5
