@@ -23,7 +23,6 @@ stmf4_hmi_bridge:
     neo3_gnss_frame_id: gnss_link
     neo3_mag_frame_id: gnss_link
     neo3_mag_sigma_ut: 3.0
+    # Fix2 does not expose active constellation mask; default conservatively to GPS.
+    neo3pro_navsat_service_mask: 1
     publish_stm32_gnss: true
-    vesc_transport_timeout_sec: 2.0
-    # Internal motor UART only. Host USB CDC serial_baud above always remains 1 Mbps.
-    vesc_uart_baud_expected: 115200
