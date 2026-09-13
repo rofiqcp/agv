@@ -291,6 +291,16 @@ install(
     tools/stage3_certify.py
   DESTINATION lib/${PROJECT_NAME})
 
+# Unified AGV data recorder. Source lives at workspace tools/data.py so the
+# same operator-facing tool is available both directly and through ros2 run.
+install(
+  PROGRAMS ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/data.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME data)
+install(
+  FILES ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/data_common.py
+  DESTINATION lib/${PROJECT_NAME})
+
 install(
   DIRECTORY gui/assets
   DESTINATION share/${PROJECT_NAME}/gui)
