@@ -3075,6 +3075,7 @@ class LocalHttpServer : public QObject {
       static const QSet<QString> steer{QStringLiteral("LEFT"), QStringLiteral("CENTER"), QStringLiteral("RIGHT")};
       if (drive.contains(action)) ok = bridge_->publishHmiRequest("DRIVE:" + action, &message);
       else if (steer.contains(action)) ok = bridge_->publishHmiRequest("STEER:" + action, &message);
+      else if (action == "STEER_STOP") ok = bridge_->publishHmiRequest("STEER:STOP", &message);
       else return sendJson(socket, 400, QJsonObject{{"ok", false}, {"message", "Control HMI tidak valid"}});
     } else if (request.path == "/api/hmi/speed") {
       const int pct = json.value("pct").toInt(-1);

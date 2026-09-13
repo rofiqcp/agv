@@ -1,0 +1,15 @@
+/* Shell and component rhythm. */
+.content{padding:var(--space-2) var(--space-3) var(--space-3)!important}
+.page>*+*{margin-top:var(--space-2)!important}.panel{padding:var(--space-2)!important;border-radius:var(--radius-panel)!important}
+.hero-grid,.two-col,.sensor-hero,.esc-hero,.camera-layout,.lab-two-col,.workbench-grid,.workbench-main{gap:var(--space-2)!important}
+.brand strong{font-size:var(--fs-section)!important}.brand span,.version{font-size:var(--fs-micro)!important}
+.sidebar-context-head span,.page-heading span,.eyebrow,.nav-section-label,.sidebar-tuning-head span,.sidebar-report-head span{font-size:var(--fs-micro)!important}
+.sidebar-context-head b,.page-heading h1{line-height:var(--lh-tight)}
+.nav-item b,.top-domain,.workspace-tab,.test-phase-tab,.test-family-tab{font-size:var(--fs-xs)!important}
+.nav-item.tuning-nav b,.nav-item.report-nav b,.chapter-list .experiment-item b{font-size:var(--fs-xs)!important;line-height:var(--lh-ui)!important}
+.nav-item.tuning-nav>span,.nav-item.report-nav>span,.chapter-list .experiment-item span,.chapter-group span,.test-role{font-size:var(--fs-micro)!important}
+.nav-item small,.chapter-list .experiment-item small,.test-phase-tab small,.trial-compare-panel th small{font-size:var(--fs-micro)!important;line-height:var(--lh-ui)!important}
+.runtime-pill span,.runtime-pill strong,.status-chip,.live-dot,.mini-health b,.mini-health span{font-size:var(--fs-micro)!important}
+.soft-btn,.primary-btn,.danger-btn,.warning-btn,.record-toggle,.param-save,.hmi-mode-btn,.hmi-speed-row button{min-height:var(--control-h);font-size:var(--fs-xs)!important;border-radius:var(--radius-control)}
+.icon-button,.sidebar-collapse{min-width:var(--control-h);width:var(--control-h);height:var(--control-h)}
+input,select,textarea{min-height:var(--control-h);font-size:var(--fs-xs)!important}

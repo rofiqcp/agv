@@ -79,9 +79,16 @@ public:
     declare_parameter<double>("imu_planar_max_tilt_rad", 0.2617993878);
     declare_parameter<double>("neo3_mag_yaw_sign", -1.0);
     declare_parameter<double>("neo3_mag_yaw_offset_rad", 1.5707963268);
+    declare_parameter<std::string>("neo3_calibration_owner", "ros_host");
+    declare_parameter<bool>("neo3_calibration_ownership_verified", false);
     declare_parameter<bool>("neo3_planar_calibration_enabled", false);
+    declare_parameter<double>("neo3_planar_max_tilt_rad", 0.2617993878);
     declare_parameter<std::vector<double>>("neo3_mag_bias_xy_ut", std::vector<double>{0.0, 0.0});
     declare_parameter<std::vector<double>>("neo3_mag_matrix_xy", std::vector<double>{1.0, 0.0, 0.0, 1.0});
+    declare_parameter<bool>("neo3_full_calibration_enabled", false);
+    declare_parameter<std::vector<double>>("neo3_mag_bias_xyz_ut", std::vector<double>{0.0, 0.0, 0.0});
+    declare_parameter<std::vector<double>>("neo3_mag_matrix_3x3", std::vector<double>{
+      1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0});
     declare_parameter<bool>("neo3_heading_lut_enabled", false);
     declare_parameter<std::vector<double>>("neo3_heading_lut_input_rad", std::vector<double>{});
     declare_parameter<std::vector<double>>("neo3_heading_lut_correction_rad", std::vector<double>{});
@@ -93,6 +100,9 @@ public:
     declare_parameter<double>("consensus_hold_sec", 2.0);
     declare_parameter<double>("consensus_timeout_sec", 0.5);
     declare_parameter<double>("validated_heading_variance_rad2", 0.01);
+    declare_parameter<bool>("field_qualification_valid", false);
+    declare_parameter<std::string>("field_qualification_saved_at", "");
+    declare_parameter<std::string>("field_qualification_evidence_sha256", "");
     declare_parameter<bool>("enable_imu_mag_heading", true);
     declare_parameter<bool>("enable_neo3_mag_heading", true);
     declare_parameter<bool>("enable_current_emi_gate", false);
@@ -139,7 +149,14 @@ public:
     imu_planar_max_tilt_rad_ = std::clamp(get_parameter("imu_planar_max_tilt_rad").as_double(), 0.05, 0.7);
     neo_sign_ = get_parameter("neo3_mag_yaw_sign").as_double() >= 0.0 ? 1.0 : -1.0;
     neo_offset_ = get_parameter("neo3_mag_yaw_offset_rad").as_double();
+    neo_calibration_owner_ = get_parameter("neo3_calibration_owner").as_string();
+    neo_calibration_ownership_verified_ = get_parameter("neo3_calibration_ownership_verified").as_bool();
+    if (neo_calibration_owner_ != "ros_host" && neo_calibration_owner_ != "ap_periph") {
+      RCLCPP_ERROR(get_logger(), "Invalid neo3_calibration_owner='%s'; NEO3 heading disabled", neo_calibration_owner_.c_str());
+      neo_calibration_ownership_verified_ = false;
+    }
     neo_planar_calibration_enabled_ = get_parameter("neo3_planar_calibration_enabled").as_bool();
+    neo_planar_max_tilt_rad_ = std::clamp(get_parameter("neo3_planar_max_tilt_rad").as_double(), 0.05, 0.7);
     const auto neo_bias = get_parameter("neo3_mag_bias_xy_ut").as_double_array();
     const auto neo_matrix = get_parameter("neo3_mag_matrix_xy").as_double_array();
     if (neo_bias.size() == 2) { neo_bias_x_ut_ = neo_bias[0]; neo_bias_y_ut_ = neo_bias[1]; }
@@ -152,6 +169,37 @@ public:
         neo_planar_calibration_enabled_ = false;
       }
     } else { RCLCPP_WARN(get_logger(), "NEO3 matrix XY invalid size=%zu; calibration disabled", neo_matrix.size()); neo_planar_calibration_enabled_ = false; }
+    neo_full_calibration_enabled_ = get_parameter("neo3_full_calibration_enabled").as_bool();
+    const auto neo_bias3 = get_parameter("neo3_mag_bias_xyz_ut").as_double_array();
+    const auto neo_matrix3 = get_parameter("neo3_mag_matrix_3x3").as_double_array();
+    if (neo_bias3.size() == 3U) {
+      for (size_t i = 0; i < 3U; ++i) neo_bias_xyz_ut_[i] = neo_bias3[i];
+    } else {
+      RCLCPP_WARN(get_logger(), "NEO3 3D bias invalid size=%zu; full calibration disabled", neo_bias3.size());
+      neo_full_calibration_enabled_ = false;
+    }
+    if (neo_matrix3.size() == 9U) {
+      for (size_t i = 0; i < 9U; ++i) neo_matrix_3x3_[i] = neo_matrix3[i];
+      const double det3 =
+        neo_matrix_3x3_[0] * (neo_matrix_3x3_[4] * neo_matrix_3x3_[8] - neo_matrix_3x3_[5] * neo_matrix_3x3_[7]) -
+        neo_matrix_3x3_[1] * (neo_matrix_3x3_[3] * neo_matrix_3x3_[8] - neo_matrix_3x3_[5] * neo_matrix_3x3_[6]) +
+        neo_matrix_3x3_[2] * (neo_matrix_3x3_[3] * neo_matrix_3x3_[7] - neo_matrix_3x3_[4] * neo_matrix_3x3_[6]);
+      const bool finite3 = std::all_of(neo_matrix_3x3_.begin(), neo_matrix_3x3_.end(), [](double v){ return std::isfinite(v); }) &&
+                           std::all_of(neo_bias_xyz_ut_.begin(), neo_bias_xyz_ut_.end(), [](double v){ return std::isfinite(v); });
+      if (!finite3 || !std::isfinite(det3) || std::abs(det3) < 1.0e-6) {
+        RCLCPP_WARN(get_logger(), "NEO3 3D calibration invalid/singular; full calibration disabled");
+        neo_full_calibration_enabled_ = false;
+      }
+    } else {
+      RCLCPP_WARN(get_logger(), "NEO3 3D matrix invalid size=%zu; full calibration disabled", neo_matrix3.size());
+      neo_full_calibration_enabled_ = false;
+    }
+    if (neo_calibration_owner_ == "ap_periph" && (neo_planar_calibration_enabled_ || neo_full_calibration_enabled_)) {
+      RCLCPP_ERROR(get_logger(), "NEO3 calibration owner is AP_Periph but ROS host calibration is enabled; host correction disabled to prevent double calibration");
+      neo_planar_calibration_enabled_ = false;
+      neo_full_calibration_enabled_ = false;
+    }
+    if (neo_full_calibration_enabled_) neo_planar_calibration_enabled_ = false;
     neo_heading_lut_enabled_ = get_parameter("neo3_heading_lut_enabled").as_bool();
     const auto lut_in = get_parameter("neo3_heading_lut_input_rad").as_double_array();
     const auto lut_corr = get_parameter("neo3_heading_lut_correction_rad").as_double_array();
@@ -177,6 +225,7 @@ public:
     consensus_hold_sec_ = std::clamp(get_parameter("consensus_hold_sec").as_double(), 0.2, 30.0);
     consensus_timeout_sec_ = std::clamp(get_parameter("consensus_timeout_sec").as_double(), 0.1, 2.0);
     validated_variance_ = std::clamp(get_parameter("validated_heading_variance_rad2").as_double(), 1.0e-4, 1.0);
+    field_qualification_valid_ = get_parameter("field_qualification_valid").as_bool();
     enable_imu_ = get_parameter("enable_imu_mag_heading").as_bool();
     enable_neo_ = get_parameter("enable_neo3_mag_heading").as_bool();
     enable_current_emi_gate_ = get_parameter("enable_current_emi_gate").as_bool();
@@ -382,6 +431,10 @@ private:
     };
 
     const auto t = now();
+    if (source == Source::NEO3 && !neo_calibration_ownership_verified_) {
+      reject("calibration_ownership_unverified");
+      return;
+    }
     const char *emi_reason = nullptr;
     if (!currentEmiGate(t, emi_reason)) { reject(emi_reason); return; }
     if (!have_map_yaw_) { reject("map_yaw_unavailable"); return; }
@@ -401,7 +454,17 @@ private:
 
     double mx_heading = mx;
     double my_heading = my;
-    if (source == Source::NEO3 && neo_planar_calibration_enabled_) {
+    double mz_heading = mz;
+    if (source == Source::NEO3 && neo_full_calibration_enabled_) {
+      const std::array<double, 3> b{{
+        mx - neo_bias_xyz_ut_[0], my - neo_bias_xyz_ut_[1], mz - neo_bias_xyz_ut_[2]}};
+      mx_heading = neo_matrix_3x3_[0]*b[0] + neo_matrix_3x3_[1]*b[1] + neo_matrix_3x3_[2]*b[2];
+      my_heading = neo_matrix_3x3_[3]*b[0] + neo_matrix_3x3_[4]*b[1] + neo_matrix_3x3_[5]*b[2];
+      mz_heading = neo_matrix_3x3_[6]*b[0] + neo_matrix_3x3_[7]*b[1] + neo_matrix_3x3_[8]*b[2];
+    } else if (source == Source::NEO3 && neo_planar_calibration_enabled_) {
+      if (std::abs(roll_rad_) > neo_planar_max_tilt_rad_ || std::abs(pitch_rad_) > neo_planar_max_tilt_rad_) {
+        reject("neo3_planar_tilt_out_of_range"); return;
+      }
       const double bx = mx - neo_bias_x_ut_;
       const double by = my - neo_bias_y_ut_;
       mx_heading = neo_m00_ * bx + neo_m01_ * by;
@@ -409,8 +472,8 @@ private:
     }
     const double cr = std::cos(roll_rad_), sr = std::sin(roll_rad_);
     const double cp = std::cos(pitch_rad_), sp = std::sin(pitch_rad_);
-    const double xh = mx_heading * cp + mz * sp;
-    const double yh = mx_heading * sr * sp + my_heading * cr - mz * sr * cp;
+    const double xh = mx_heading * cp + mz_heading * sp;
+    const double yh = mx_heading * sr * sp + my_heading * cr - mz_heading * sr * cp;
     if (std::hypot(xh, yh) < 1.0) { reject("horizontal_field_too_small"); return; }
 
     const double raw_north_in_body = std::atan2(yh, xh);
@@ -451,6 +514,13 @@ private:
 
   void publishConsensusIfValid() {
     const auto t = now();
+    if (!field_qualification_valid_ || !neo_calibration_ownership_verified_) {
+      consensus_since_ = rclcpp::Time(0,0,RCL_ROS_TIME);
+      if (consensus_valid_) {
+        consensus_valid_ = false; std_msgs::msg::Bool b; b.data=false; consensus_valid_pub_->publish(b);
+      }
+      return;
+    }
     const bool inertial_fresh = have_inertial_heading_ && (t - last_inertial_time_).seconds() >= 0.0 && (t - last_inertial_time_).seconds() <= consensus_timeout_sec_;
     const bool neo_fresh = neo_state_.valid && neo_state_.stamp.nanoseconds() != 0 && (t - neo_state_.stamp).seconds() >= 0.0 && (t - neo_state_.stamp).seconds() <= consensus_timeout_sec_;
     const double err = (inertial_fresh && neo_fresh) ? std::abs(normalizeAngle(inertial_heading_rad_ - neo_state_.heading_rad)) : kPi;
@@ -502,6 +572,11 @@ private:
       ";map_yaw_age_sec=" + std::to_string(map_age) +
       ";inertial_heading_deg=" + std::to_string(inertial_heading_rad_ * 180.0 / kPi) +
       ";consensus_error_deg=" + std::to_string(consensus_error_rad_ * 180.0 / kPi) +
+      ";field_qualified=" + (field_qualification_valid_ ? "true" : "false") +
+      ";neo3_cal_owner=" + neo_calibration_owner_ +
+      ";neo3_cal_owner_verified=" + (neo_calibration_ownership_verified_ ? "true" : "false") +
+      ";neo3_full3d=" + (neo_full_calibration_enabled_ ? "true" : "false") +
+      ";neo3_planar=" + (neo_planar_calibration_enabled_ ? "true" : "false") +
       ";consensus_valid=" + (consensus_valid_ ? "true" : "false") +
       ";validated_heading_deg=" + std::to_string(validated_heading_rad_ * 180.0 / kPi) +
       ";gyro_bias_z_rps=" + std::to_string(gyro_bias_z_rps_) +
@@ -521,15 +596,21 @@ private:
   double imu_m00_{1.0}, imu_m01_{0.0}, imu_m10_{0.0}, imu_m11_{1.0};
   double imu_corrected_norm_min_{0.70}, imu_corrected_norm_max_{1.30}, imu_planar_max_tilt_rad_{0.2617993878}, imu_corrected_norm_{0.0};
   std::vector<std::pair<double,double>> imu_heading_lut_;
-  bool neo_planar_calibration_enabled_{false}, neo_heading_lut_enabled_{false};
+  std::string neo_calibration_owner_{"ros_host"};
+  bool neo_calibration_ownership_verified_{false};
+  bool neo_planar_calibration_enabled_{false}, neo_full_calibration_enabled_{false}, neo_heading_lut_enabled_{false};
+  double neo_planar_max_tilt_rad_{0.2617993878};
   double neo_bias_x_ut_{0.0}, neo_bias_y_ut_{0.0};
   double neo_m00_{1.0}, neo_m01_{0.0}, neo_m10_{0.0}, neo_m11_{1.0};
+  std::array<double, 3> neo_bias_xyz_ut_{{0.0, 0.0, 0.0}};
+  std::array<double, 9> neo_matrix_3x3_{{1.0,0.0,0.0, 0.0,1.0,0.0, 0.0,0.0,1.0}};
   std::vector<std::pair<double, double>> neo_heading_lut_;
   double imu_variance_{0.08}, neo_variance_{0.06};
   double max_heading_rate_rps_{3.0}, rate_gate_margin_rad_{0.35};
   double consensus_max_error_rad_{0.0872664626}, consensus_hold_sec_{2.0}, consensus_timeout_sec_{0.5};
   double validated_variance_{0.01}, inertial_heading_rad_{0.0}, validated_heading_rad_{0.0}, consensus_error_rad_{kPi};
   bool enable_imu_{true}, enable_neo_{true};
+  bool field_qualification_valid_{false};
   bool enable_current_emi_gate_{false};
   std::string motor_current_topic_{"/esc/motor_current_abs_a"};
   double current_emi_gate_threshold_a_{1.0e6}, current_emi_gate_timeout_sec_{0.35};

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import yaml
+from web_static_bundle import read_app_bundle
 ROOT=Path(__file__).resolve().parents[1]
-web=ROOT/'web'; app=(web/'static/app.js').read_text(); vesc=(web/'static/vesc_workbench.js').read_text(); html=(web/'static/index.html').read_text(); cpp=(web/'web_server.cpp').read_text()
+web=ROOT/'web'; app=read_app_bundle(web/'static'); vesc=(web/'static/vesc_workbench.js').read_text(); html=(web/'static/index.html').read_text(); cpp=(web/'web_server.cpp').read_text()
 meta=yaml.safe_load((web/'config/ui_parameter_metadata.yaml').read_text())
 assert meta.get('version')==2
 params=meta.get('parameters') or {}
@@ -26,8 +27,8 @@ assert 'calculateOptimalScale(bool apply' not in cpp
 assert 'calculateOptimalScaleProposal' in cpp
 assert 'CONFIG_REVISION_CHANGED' in cpp and 'dependency_results' in cpp
 assert 'list_length' in cpp and 'array_bounds' in cpp
-assert "body:JSON.stringify({apply:false})" in app
-assert "body:JSON.stringify({apply:true})" not in app
+assert "writeRequest('/api/experiment/trial/optimal-scale',{apply:false})" in app
+assert "writeRequest('/api/experiment/trial/optimal-scale',{apply:true})" not in app
 assert "if(/topic|frame|plugin|source|debug|raw/.test(text))" not in app
 assert 'metadata_complete' in app and "write_authority!=='ros_yaml'" in app
 

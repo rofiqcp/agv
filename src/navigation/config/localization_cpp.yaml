@@ -138,6 +138,8 @@ localization_core:
     quality_topic: /gnss/quality
     imu_topic: /imu/data
     local_odom_topic: /odometry/filtered
+    raw_wheel_odom_topic: /esc/odom_validation
+    require_independent_wheel_validation: true
     global_odom_topic: /odometry/filtered_map
     use_imu_initial_heading: false
     allow_map_calibration_with_degraded_fix: true

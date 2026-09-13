@@ -91,7 +91,7 @@ require('require_imu_calibration_ && !imu_calibration_validated_' in nav_cpp,'Na
 cpp=(ROOT/'src/localization_core.cpp').read_text()
 for token in ('qualityFreshUnlocked','validVelocityCovarianceUnlocked','gnssMeasurementStampUsableUnlocked',
               'imu_yaw_unavailable','have_local_motion_at_gnss_ = localStateAtUnlocked',
-              'No rejection: this is the expected state when ESC is disabled/offline',
+              'GNSS velocity must remain usable even when the ESC serial link is absent.',
               'course_enu - *last_gnss_velocity_course_enu_rad_',
               'gnss_yaw_rate_variance_','degraded_anchor_ok','DEGRADED_BOOTSTRAP'):
     require(token in cpp,f'LocalizationCore revised contract missing: {token}')

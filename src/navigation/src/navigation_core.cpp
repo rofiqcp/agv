@@ -150,6 +150,17 @@ private:
     declare_parameter<bool>("require_sensor_publisher_contract", true);
     declare_parameter<std::string>("sensor_publisher_contract_topic", "/system/sensor_publishers_ok");
     declare_parameter<double>("sensor_publisher_contract_timeout_sec", 0.75);
+    declare_parameter<bool>("require_sensor_integrity_contract", true);
+    declare_parameter<std::string>("sensor_integrity_topic", "/system/sensors_transport_ok");
+    declare_parameter<double>("sensor_integrity_timeout_sec", 0.75);
+    // Explicit bench integration mode. Physical ESC readiness is never forged;
+    // the gate opens only when launch opted in AND the ESC node publishes a
+    // fresh /esc/integration_bypass_active heartbeat while its UART is disabled.
+    declare_parameter<bool>("allow_esc_integration_bypass", false);
+    declare_parameter<double>("esc_integration_bypass_timeout_sec", 1.0);
+    // /esc/ready and /esc/feedback_valid are transient-local state, so the
+    // boolean alone is not proof the actuator process/link is still alive.
+    declare_parameter<double>("esc_state_timeout_sec", 0.75);
     declare_parameter<bool>("require_camera_metric_calibration", false);
     declare_parameter<bool>("camera_metric_calibration_validated", false);
     // Stage-1 commissioning interlocks. Autonomous motion must stay fail-closed
@@ -216,6 +227,15 @@ private:
     sensor_publisher_contract_topic_ = get_parameter("sensor_publisher_contract_topic").as_string();
     sensor_publisher_contract_timeout_sec_ = std::clamp(
       get_parameter("sensor_publisher_contract_timeout_sec").as_double(), 0.1, 5.0);
+    require_sensor_integrity_contract_ = get_parameter("require_sensor_integrity_contract").as_bool();
+    sensor_integrity_topic_ = get_parameter("sensor_integrity_topic").as_string();
+    sensor_integrity_timeout_sec_ = std::clamp(
+      get_parameter("sensor_integrity_timeout_sec").as_double(), 0.1, 5.0);
+    allow_esc_integration_bypass_ = get_parameter("allow_esc_integration_bypass").as_bool();
+    esc_integration_bypass_timeout_sec_ = std::clamp(
+      get_parameter("esc_integration_bypass_timeout_sec").as_double(), 0.1, 5.0);
+    esc_state_timeout_sec_ = std::clamp(
+      get_parameter("esc_state_timeout_sec").as_double(), 0.1, 5.0);
     require_camera_calibration_ = get_parameter("require_camera_metric_calibration").as_bool();
     camera_calibration_validated_ = get_parameter("camera_metric_calibration_validated").as_bool();
     require_steering_calibration_ =
@@ -329,6 +349,13 @@ private:
         sensor_publisher_contract_ok_ = msg->data;
         last_sensor_publisher_contract_time_ = now();
       });
+    sensor_integrity_sub_ = create_subscription<std_msgs::msg::Bool>(
+      sensor_integrity_topic_, stateQos(),
+      [this](std_msgs::msg::Bool::SharedPtr msg) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        sensor_integrity_ok_ = msg->data;
+        last_sensor_integrity_time_ = now();
+      });
     precision_localization_sub_ = create_subscription<std_msgs::msg::Bool>(
       "/system/precision_localization_ready", stateQos(),
       [this](std_msgs::msg::Bool::SharedPtr msg) {
@@ -415,6 +442,7 @@ private:
       [this](std_msgs::msg::Bool::SharedPtr msg) {
         std::lock_guard<std::mutex> lock(mutex_);
         esc_feedback_valid_ = msg->data;
+        last_esc_feedback_valid_time_ = now();
       });
     gnss_connected_sub_ = create_subscription<std_msgs::msg::Bool>(
       "/gnss/connected", stateQos(), [this](std_msgs::msg::Bool::SharedPtr msg) {
@@ -462,6 +490,14 @@ private:
       [this](std_msgs::msg::Bool::SharedPtr msg) {
         std::lock_guard<std::mutex> lock(mutex_);
         esc_ready_ = msg->data;
+        last_esc_ready_time_ = now();
+      });
+    esc_integration_bypass_sub_ = create_subscription<std_msgs::msg::Bool>(
+      "/esc/integration_bypass_active", stateQos(),
+      [this](std_msgs::msg::Bool::SharedPtr msg) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        esc_integration_bypass_active_ = msg->data;
+        last_esc_integration_bypass_time_ = now();
       });
     estop_sub_ = create_subscription<std_msgs::msg::Bool>(
       "/safety/estop", stateQos(),
@@ -594,12 +630,31 @@ private:
     // gates active, but permits indoor motion before GNSS strict/certification is
     // complete. clampCommand() enforces the commissioning speed cap.
     const bool commissioning = stage3_commissioning_mode_ && !stage3_production_certified_;
-    if (estop_ || !esc_ready_ || !map_ready_ || !velocity_smoother_active_ ||
+    bool bypass_fresh = false;
+    if (allow_esc_integration_bypass_ && esc_integration_bypass_active_ &&
+        last_esc_integration_bypass_time_.nanoseconds() > 0) {
+      const double age = (t - last_esc_integration_bypass_time_).seconds();
+      bypass_fresh = age >= 0.0 && age <= esc_integration_bypass_timeout_sec_;
+    }
+    const auto esc_state_fresh = [this, &t](const rclcpp::Time & stamp) {
+      if (stamp.nanoseconds() == 0) return false;
+      const double age = (t - stamp).seconds();
+      return age >= 0.0 && age <= esc_state_timeout_sec_;
+    };
+    const bool esc_ready_fresh = esc_ready_ && esc_feedback_valid_ &&
+      esc_state_fresh(last_esc_ready_time_) && esc_state_fresh(last_esc_feedback_valid_time_);
+    const bool esc_gate_ok = esc_ready_fresh || bypass_fresh;
+    if (estop_ || !esc_gate_ok || !map_ready_ || !velocity_smoother_active_ ||
         !planning_localization_ready_) return false;
     if (require_sensor_publisher_contract_) {
       if (!sensor_publisher_contract_ok_ || last_sensor_publisher_contract_time_.nanoseconds() == 0) return false;
       const double publisher_contract_age = (t - last_sensor_publisher_contract_time_).seconds();
       if (publisher_contract_age < 0.0 || publisher_contract_age > sensor_publisher_contract_timeout_sec_) return false;
+    }
+    if (require_sensor_integrity_contract_) {
+      if (!sensor_integrity_ok_ || last_sensor_integrity_time_.nanoseconds() == 0) return false;
+      const double integrity_age = (t - last_sensor_integrity_time_).seconds();
+      if (integrity_age < 0.0 || integrity_age > sensor_integrity_timeout_sec_) return false;
     }
     if (precision_mode_ && !precision_localization_ready_) return false;
     if (!commissioning && !motion_localization_ready_) return false;
@@ -960,6 +1015,7 @@ private:
     bool perception_fresh = false;
     bool estop = false;
     bool esc_ready = false;
+    bool esc_integration_bypass = false;
     bool gnss_connected = false;
     bool imu_connected = false;
     bool camera_connected = false;
@@ -1013,14 +1069,24 @@ private:
         (snapshot_time - last_perception_time_).seconds() >= 0.0 &&
         (snapshot_time - last_perception_time_).seconds() <= perception_timeout_sec_;
       estop = estop_;
-      esc_ready = esc_ready_;
+      const auto esc_status_fresh = [this, &snapshot_time](const rclcpp::Time & stamp) {
+        if (stamp.nanoseconds() == 0) return false;
+        const double age = (snapshot_time - stamp).seconds();
+        return age >= 0.0 && age <= esc_state_timeout_sec_;
+      };
+      esc_ready = esc_ready_ && esc_feedback_valid_ &&
+        esc_status_fresh(last_esc_ready_time_) && esc_status_fresh(last_esc_feedback_valid_time_);
+      esc_integration_bypass = allow_esc_integration_bypass_ && esc_integration_bypass_active_ &&
+        last_esc_integration_bypass_time_.nanoseconds() > 0 &&
+        (snapshot_time - last_esc_integration_bypass_time_).seconds() >= 0.0 &&
+        (snapshot_time - last_esc_integration_bypass_time_).seconds() <= esc_integration_bypass_timeout_sec_;
       gnss_connected = gnss_connected_;
       imu_connected = imu_connected_;
       camera_connected = camera_connected_;
       esc_drive_connected = esc_drive_connected_;
       esc_steer_connected = esc_steer_connected_;
       esc_armed = esc_armed_;
-      esc_feedback_valid = esc_feedback_valid_;
+      esc_feedback_valid = esc_feedback_valid_ && esc_status_fresh(last_esc_feedback_valid_time_);
       precision_localization_ready = precision_localization_ready_;
       localization = localization_state_;
       gnss = gnss_status_;
@@ -1094,6 +1160,7 @@ private:
        << ";nav2_action=" << nav2_action
        << ";velocity_smoother_active=" << smoother_active
        << ";sensor_publishers=" << sensor_publisher_contract_ok_
+       << ";sensor_transport=" << sensor_integrity_ok_
        << ";autonomy_motion_allowed=" << motion_allowed
        << ";perception=" << perception_fresh
        << ";camera_usb=" << camera_connected
@@ -1111,6 +1178,7 @@ private:
        << ";stage3_commissioning=" << stage3_commissioning_mode_
        << ";estop=" << estop
        << ";esc_ready=" << esc_ready
+       << ";esc_bypass=" << esc_integration_bypass
        << ";goal=" << goal_state;
     std_msgs::msg::String status;
     status.data = ss.str();
@@ -1341,6 +1409,12 @@ private:
   bool require_sensor_publisher_contract_{true};
   std::string sensor_publisher_contract_topic_{"/system/sensor_publishers_ok"};
   double sensor_publisher_contract_timeout_sec_{0.75};
+  bool require_sensor_integrity_contract_{true};
+  std::string sensor_integrity_topic_{"/system/sensors_transport_ok"};
+  double sensor_integrity_timeout_sec_{0.75};
+  bool allow_esc_integration_bypass_{false};
+  double esc_integration_bypass_timeout_sec_{1.0};
+  double esc_state_timeout_sec_{0.75};
   bool require_camera_calibration_{true}, camera_calibration_validated_{false};
   bool require_steering_calibration_{true};
   bool steering_calibration_validated_{false};
@@ -1372,10 +1446,16 @@ private:
   bool planning_localization_ready_{false}, motion_localization_ready_{false};
   bool sensor_publisher_contract_ok_{false};
   rclcpp::Time last_sensor_publisher_contract_time_{0, 0, RCL_ROS_TIME};
+  bool sensor_integrity_ok_{false};
+  rclcpp::Time last_sensor_integrity_time_{0, 0, RCL_ROS_TIME};
   bool nav2_action_ready_{false}, nav2_lifecycle_started_{false}, nav2_startup_requested_{false};
   bool velocity_smoother_active_{false};
   bool smoother_state_request_in_flight_{false}, smoother_transition_request_in_flight_{false};
   bool estop_{false}, esc_ready_{false};
+  rclcpp::Time last_esc_ready_time_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time last_esc_feedback_valid_time_{0, 0, RCL_ROS_TIME};
+  bool esc_integration_bypass_active_{false};
+  rclcpp::Time last_esc_integration_bypass_time_{0, 0, RCL_ROS_TIME};
   bool gnss_connected_{false}, imu_connected_{false}, camera_connected_{false};
   bool esc_drive_connected_{false}, esc_steer_connected_{false}, esc_armed_{false}, esc_feedback_valid_{false};
   rclcpp::Time last_perception_time_{0, 0, RCL_ROS_TIME};
@@ -1409,7 +1489,7 @@ private:
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr gnss_map_sub_, esc_odom_sub_;
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr esc_steering_actual_sub_, esc_drive_target_sub_, esc_drive_actual_sub_, esc_steering_target_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
-  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr planning_loc_sub_, motion_loc_sub_, sensor_contract_sub_, precision_localization_sub_, esc_ready_sub_, estop_sub_, esc_feedback_valid_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr planning_loc_sub_, motion_loc_sub_, sensor_contract_sub_, sensor_integrity_sub_, precision_localization_sub_, esc_ready_sub_, esc_integration_bypass_sub_, estop_sub_, esc_feedback_valid_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr gnss_connected_sub_, imu_connected_sub_, camera_connected_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr esc_drive_connected_sub_, esc_steer_connected_sub_, esc_armed_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr localization_state_sub_, gnss_status_sub_, imu_status_sub_;

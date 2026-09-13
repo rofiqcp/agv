@@ -7,6 +7,13 @@
   <link rel="icon" href="data:,">
   <title>ADV Operator Console</title>
   <link rel="stylesheet" href="/styles.css?v=20260910-ux-redesign-v1">
+  <link rel="stylesheet" href="/tokens.css?v=20260913-stage6-v1">
+  <link rel="stylesheet" href="/base.css?v=20260913-stage6-v1">
+  <link rel="stylesheet" href="/shell.css?v=20260913-stage6-v1">
+  <link rel="stylesheet" href="/components.css?v=20260913-stage6-v1">
+  <link rel="stylesheet" href="/responsive.css?v=20260913-stage6-v1">
+  <link rel="stylesheet" href="/accessibility.css?v=20260913-stage6-v1">
+  <link rel="stylesheet" href="/workspaces.css?v=20260913-stage6-v1">
 </head>
 <body>
   <div class="app-shell">
@@ -42,7 +49,7 @@
           <div class="runtime-pill"><i id="rosDot"></i><span>ROS2</span><strong id="rosStatus">--</strong></div>
           <div class="runtime-pill"><i id="motionDot"></i><span>Motion</span><strong id="motionStatus">--</strong></div>
           <div class="runtime-pill danger" id="estopPill"><i></i><span>E-STOP</span><strong id="estopStatus">CLEAR</strong></div>
-          <button class="icon-button" id="themeButton" title="Mode tampilan">◐</button>
+          <button class="icon-button" id="themeButton" aria-label="Ganti mode tampilan terang atau gelap" title="Mode tampilan">◐</button>
         </div>
       </header>
       <nav class="workspace-tabs" id="workspaceTabs" aria-label="Engineering workspace tabs"></nav>
@@ -50,6 +57,9 @@
       <main class="content">
         <!-- OVERVIEW -->
         <section class="page active" id="page-overview">
+          <div class="operator-priority-strip" id="overviewPriority" role="status" aria-live="polite" aria-label="Operator safety snapshot">
+            <div class="operator-priority-item"><span>SYSTEM READY</span><b id="priorityMotion">WAIT</b><small id="priorityMotionDetail">motion gate</small></div><div class="operator-priority-item"><span>AUTHORITY</span><b id="priorityAuthority">IDLE</b><small id="priorityAuthorityDetail">command owner</small></div><div class="operator-priority-item"><span>LOCALIZATION</span><b id="priorityLocalization">WAIT</b><small id="priorityLocalizationDetail">map pose</small></div><div class="operator-priority-item"><span>ESC</span><b id="priorityEsc">WAIT</b><small id="priorityEscDetail">feedback link</small></div><div class="operator-priority-item"><span>PERCEPTION</span><b id="priorityPerception">WAIT</b><small id="priorityPerceptionDetail">camera safety</small></div><div class="operator-priority-item"><span>SAFETY</span><b id="prioritySafety">GUARDED</b><small id="prioritySafetyDetail">E-stop / emergency</small></div>
+          </div>
           <div class="hero-grid">
             <article class="panel hero-panel">
               <div class="panel-head"><div><span class="eyebrow">VEHICLE READINESS</span><h2>Operational Overview</h2></div><span class="status-chip waiting" id="overallChip">WAITING</span></div>
@@ -126,7 +136,7 @@
                   <button class="soft-btn" id="mapLayerToggleBtn" aria-expanded="true">☷ Layers</button>
                 </div>
               </div>
-              <div class="map-stage rviz-stage" id="mapStage">
+              <div class="map-stage rviz-stage" id="mapStage" tabindex="0" aria-label="Peta navigasi interaktif. Gunakan toolbar atau input koordinat sebagai alternatif pointer.">
                 <canvas id="mapCanvas" width="1200" height="720"></canvas>
                 <aside class="rviz-layer-panel" id="mapLayerPanel" aria-label="Map layers">
                   <div class="layer-head"><b>DISPLAY</b><button class="layer-collapse" id="mapLayerCollapseBtn" title="Collapse layer panel">‹</button></div>
@@ -250,8 +260,11 @@
 
         <!-- PERCEPTION -->
         <section class="page" id="page-perception">
+          <div class="operator-priority-strip perception-priority" role="status" aria-live="polite" aria-label="Perception operator snapshot">
+            <div class="operator-priority-item"><span>CAMERA</span><b id="perPriorityCamera">WAIT</b><small>capture health</small></div><div class="operator-priority-item"><span>YOLOPv2</span><b id="perPriorityInference">OFF</b><small>inference mode</small></div><div class="operator-priority-item"><span>PIPELINE P95</span><b id="perPriorityLatency">--</b><small>measured latency</small></div><div class="operator-priority-item"><span>SAFETY GATE</span><b id="perPrioritySafety">FAIL-CLOSED</b><small id="perPrioritySafetyDetail">trajectory supervisor</small></div>
+          </div>
           <div class="camera-layout" id="perceptionCameraLayout">
-            <article class="panel camera-panel" id="perceptionCameraSection"><div class="panel-head"><div><span class="eyebrow">ASTRA PRO / YOLOPv2</span><h2>Live Perception</h2></div><span class="status-chip waiting" id="cameraChip">WAIT</span></div><div class="camera-stage" id="perceptionCameraStage"><img id="cameraImage" alt="Live camera frame"><canvas id="perceptionCalOverlay" class="perception-cal-overlay" aria-label="Lane dan obstacle calibration overlay"></canvas><div id="cameraPlaceholder" class="camera-placeholder">Menunggu frame kamera...</div><div class="camera-meta"><span id="cameraSource">--</span><span id="cameraResolution">--</span></div></div><div class="yolop-toggle-panel"><div><span>YOLOPv2 DETECTION</span><b id="yoloToggleState">OFF • CAMERA ONLY</b><small>OFF menjaga kamera tetap hidup tanpa inference. ON menampilkan bounding box, drivable area, dan lane overlay.</small></div><button class="soft-btn yolop-toggle" id="yoloToggleBtn" type="button" aria-pressed="false">Aktifkan YOLOPv2</button></div></article>
+            <article class="panel camera-panel" id="perceptionCameraSection"><div class="panel-head"><div><span class="eyebrow">ASTRA PRO / YOLOPv2</span><h2>Live Perception</h2></div><span class="status-chip waiting" id="cameraChip">WAIT</span></div><div class="camera-stage" id="perceptionCameraStage"><img id="cameraImage" alt="Live camera frame"><canvas id="perceptionCalOverlay" tabindex="0" class="perception-cal-overlay" aria-label="Editor geometri Lane dan obstacle ROI. Tekan 1 sampai 4 untuk memilih handle, lalu tombol panah untuk menggeser."></canvas><div id="cameraPlaceholder" class="camera-placeholder">Menunggu frame kamera...</div><div class="camera-meta"><span id="cameraSource">--</span><span id="cameraResolution">--</span></div></div><div class="yolop-toggle-panel"><div><span>YOLOPv2 DETECTION</span><b id="yoloToggleState">OFF • CAMERA ONLY</b><small>OFF menjaga kamera tetap hidup tanpa inference. ON menampilkan bounding box, drivable area, dan lane overlay.</small></div><button class="soft-btn yolop-toggle" id="yoloToggleBtn" type="button" aria-pressed="false">Aktifkan YOLOPv2</button></div></article>
             <div class="stack" id="perceptionRealtimeStack">
               <article class="panel compact" id="perceptionLaneSection"><div class="panel-head"><div><span class="eyebrow">LANE</span><h2>Lane Safety</h2></div></div><div class="kv-list"><div><span>State</span><b id="laneState">--</b></div><div><span>Control</span><b id="laneControl">--</b></div><div><span>Drivable</span><b id="drivableState">--</b></div><div><span>Near field</span><b id="nearFieldState">--</b></div></div></article>
               <article class="panel compact" id="perceptionPlanningSection"><div class="panel-head"><div><span class="eyebrow">POINT CLOUD</span><h2>Planning Inputs</h2></div></div><div class="kv-list"><div><span>Objects</span><b id="cloudObjects">--</b></div><div><span>Path relevant</span><b id="cloudPath">--</b></div><div><span>Planning</span><b id="cloudPlanning">--</b></div><div><span>Boundary</span><b id="cloudBoundary">--</b></div></div></article>
@@ -264,7 +277,7 @@
               <label class="perception-cal-field"><span>Lane safety</span><select id="perceptionCalLaneEnabled"><option value="false">Disabled / calibrate</option><option value="true">Enabled / active</option></select><small>Aktifkan setelah posisi garis sudah tervalidasi.</small></label>
               <label class="perception-cal-field"><span>Kp proportional</span><input id="perceptionCalKp" type="number" min="0" max="0.05" step="0.0005"><small>m correction / px penetration</small></label>
               <label class="perception-cal-field"><span>Object ROI</span><select id="perceptionCalRoiEnabled"><option value="true">Enabled</option><option value="false">Disabled</option></select><small>Reference: bottom-center bbox.</small></label>
-              <div class="perception-cal-actions"><button class="primary-btn" id="perceptionCalSave" type="button">Stage + Review Calibration</button><button class="soft-btn" id="perceptionCalReload" type="button">Reload</button><button class="soft-btn" id="perceptionCalReset" type="button">Reset Draft</button></div>
+              <div class="perception-cal-actions"><button class="primary-btn" id="perceptionCalSave" type="button">Stage + Review Calibration</button><button class="soft-btn" id="perceptionCalReload" type="button">Reload</button><button class="warning-btn" id="perceptionCalKeepDraft" type="button" hidden>Keep Draft</button><button class="soft-btn" id="perceptionCalReset" type="button">Reset Draft</button></div>
             </div>
             <div class="perception-cal-readout" id="perceptionCalReadout">Menunggu konfigurasi perception...</div>
           </article>
@@ -539,6 +552,8 @@
             <div class="tuning-mode-state"><b id="tuningDraftCount">0 DRAFT</b><small>Input hanya stage; write terjadi setelah Validate + Apply.</small></div>
           </div>
 
+          <div class="tuning-mode-guide" id="tuningModeGuide" aria-live="polite"><b id="tuningModeGuideTitle">TASK</b><span id="tuningModeGuideText">Pilih prosedur, preflight, evidence, lalu qualification sebelum berpindah tahap.</span></div>
+
           <article class="panel commissioning-roadmap" id="commissioningRoadmap">
             <div class="commissioning-step" data-phase="esc"><i>1</i><div><span>FIRST</span><b>ESC / FOC Total</b><small>Sensor motor → FOC current → outer loop → step → repeatability → load → final gate</small></div><em id="phaseEscState">REQUIRED</em></div>
             <div class="commissioning-arrow">→</div>
@@ -719,8 +734,9 @@
             <button class="soft-btn" id="replayExitBtn" disabled>Exit Replay</button>
             <span class="status-chip waiting" id="replayStateChip">NO FILE</span>
           </div>
+          <div class="operator-mode-banner replay-banner"><b>REPLAY ISOLATION</b><span>Replay aktif memutus live SSE dan mengunci write request; Exit Replay melakukan full-state resync sebelum kembali LIVE.</span></div>
           <article class="panel replay-timeline-panel">
-            <div class="replay-controls"><button class="soft-btn" id="replayPlayBtn" disabled>▶ Play</button><button class="soft-btn" id="replayStepBackBtn" disabled>◀</button><button class="soft-btn" id="replayStepForwardBtn" disabled>▶</button><select id="replaySpeed" disabled><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="5">5×</option></select><span id="replayTime">00:00.000 / 00:00.000</span></div>
+            <div class="replay-controls"><button class="soft-btn" id="replayPlayBtn" disabled>▶ Play</button><button class="soft-btn" id="replayStepBackBtn" aria-label="Mundur satu langkah replay" disabled>◀</button><button class="soft-btn" id="replayStepForwardBtn" aria-label="Maju satu langkah replay" disabled>▶</button><select id="replaySpeed" disabled><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="5">5×</option></select><span id="replayTime">00:00.000 / 00:00.000</span></div>
             <input id="replayTimeline" class="replay-timeline" type="range" min="0" max="0" step="1" value="0" disabled>
             <div class="replay-meta" id="replayMeta">Select a recorder CSV generated by ROS Web.</div>
           </article>
@@ -733,11 +749,13 @@
         <!-- DIAGNOSTICS -->
         <section class="page" id="page-diagnostics">
           <div class="four-metrics"><div><span>SSE connection</span><b id="diagSse">--</b></div><div><span>State channels</span><b id="diagChannels">0</b></div><div><span>Server latency</span><b id="diagLatency">--</b></div><div><span>Web mode</span><b id="diagReadOnly">--</b></div></div>
+          <div class="operator-mode-banner diagnostic-banner"><b>DIAGNOSTIC VIEW</b><span>Status dan raw state di halaman ini bersifat observasi; gunakan workspace domain untuk aksi operator.</span></div>
           <div class="two-col"><article class="panel"><div class="panel-head"><div><span class="eyebrow">SYSTEM STATUS</span><h2>ROS Runtime Snapshot</h2></div><button class="soft-btn" id="refreshStateBtn">Refresh</button></div><div class="diagnostic-table" id="diagnosticTable"></div></article><article class="panel"><div class="panel-head"><div><span class="eyebrow">EVENT</span><h2>Latest Web Action</h2></div></div><div class="json-pretty" id="webAction">No web action yet.</div><div class="panel-head sub"><div><span class="eyebrow">RAW STATE</span><h2>Developer Inspector</h2></div></div><details><summary>Show JSON</summary><pre class="raw-json" id="rawState">{}</pre></details></article></div>
         </section>
 
         <!-- CONFIGURATION -->
         <section class="page" id="page-configuration">
+          <div class="config-lifecycle" aria-label="Configuration lifecycle"><div><span>1 • BASELINE</span><b>IMMUTABLE</b><small>reference</small></div><i>→</i><div><span>2 • YAML</span><b>CURRENT</b><small>source of truth</small></div><i>→</i><div><span>3 • DRAFT</span><b id="configLifecycleDraft">EMPTY</b><small>staged in browser</small></div><i>→</i><div><span>4 • RUNTIME</span><b id="configLifecycleRuntime">READBACK</b><small>verify after apply</small></div></div>
           <div class="config-workbench" aria-label="YAML parameter browser">
             <aside class="config-tree">
               <div class="config-tree-head"><span class="eyebrow">YAML SOURCES</span><b>Configuration Files</b><small>Mission Planner-style source browser</small><input id="configSearch" class="config-search" type="search" placeholder="Search parameter / path..." autocomplete="off"></div>
@@ -761,7 +779,7 @@
     </div>
   </div>
   <button class="help-backdrop" id="helpBackdrop" aria-label="Tutup bantuan" hidden></button>
-  <aside class="help-drawer" id="helpDrawer" aria-hidden="true" hidden>
+  <aside class="help-drawer" id="helpDrawer" role="dialog" aria-modal="true" aria-labelledby="helpTitle" aria-hidden="true" tabindex="-1" hidden>
     <div class="help-drawer-head"><div><span class="eyebrow">CONTEXT HELP</span><h2 id="helpTitle">Bantuan</h2></div><button class="icon-button" id="helpCloseBtn" aria-label="Tutup bantuan" title="Tutup">×</button></div>
     <div class="help-drawer-body">
       <p id="helpSummary">Pilih ikon ? pada parameter atau panel.</p>
@@ -771,8 +789,8 @@
     </div>
   </aside>
   <button class="config-diff-backdrop" id="configDiffBackdrop" aria-label="Tutup diff konfigurasi" hidden></button>
-  <aside class="config-diff-drawer" id="configDiffDrawer" aria-hidden="true" hidden>
-    <div class="help-drawer-head"><div><span class="eyebrow">VALIDATED CONFIG</span><h2>Diff Review</h2></div><button class="icon-button" id="configDiffClose" aria-label="Tutup diff">×</button></div>
+  <aside class="config-diff-drawer" id="configDiffDrawer" role="dialog" aria-modal="true" aria-labelledby="configDiffTitle" aria-hidden="true" tabindex="-1" hidden>
+    <div class="help-drawer-head"><div><span class="eyebrow">VALIDATED CONFIG</span><h2 id="configDiffTitle">Diff Review</h2></div><button class="icon-button" id="configDiffClose" aria-label="Tutup diff">×</button></div>
     <div class="config-diff-body">
       <div class="config-diff-summary" id="configDiffSummary">Belum ada validation token.</div>
       <div class="config-diff-list" id="configDiffList"></div>
@@ -781,12 +799,26 @@
     </div>
   </aside>
   <div class="toast-stack" id="toastStack" aria-live="polite"></div>
-  <div class="modal-backdrop" id="confirmModal"><div class="modal"><span class="eyebrow">CONFIRM ACTION</span><h2 id="confirmTitle">Confirm</h2><p id="confirmText"></p><div class="button-row"><button class="soft-btn grow" id="confirmNo">Cancel</button><button class="danger-btn grow" id="confirmYes">Continue</button></div></div></div>
+  <div class="modal-backdrop" id="confirmModal"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmText" tabindex="-1"><span class="eyebrow">CONFIRM ACTION</span><h2 id="confirmTitle">Confirm</h2><p id="confirmText"></p><div class="button-row"><button class="soft-btn grow" id="confirmNo">Cancel</button><button class="danger-btn grow" id="confirmYes">Continue</button></div></div></div>
   <script src="/camera_geometry.js?v=20260910-stage2-v1" defer></script>
   <script src="/analysis_session.js?v=20260910-stage2-v2" defer></script>
   <script src="/diagnostics.js?v=20260910-stage2-v1" defer></script>
-  <script src="/app.js?v=20260910-stage2-v3" defer></script>
-  <script src="/vesc_workbench.js?v=20260908-dual-runtime-v10" defer></script>
+  <script src="/core.js?v=20260913-stage6-v1" defer></script>
+  <script src="/navigation.js?v=20260913-stage6-v1" defer></script>
+  <script src="/perception.js?v=20260913-stage6-v1" defer></script>
+  <script src="/sensors.js?v=20260913-stage6-v1" defer></script>
+  <script src="/esc.js?v=20260913-stage6-v1" defer></script>
+  <script src="/system_views.js?v=20260913-stage6-v1" defer></script>
+  <script src="/perception_calibration.js?v=20260913-stage6-v1" defer></script>
+  <script src="/imu_calibration.js?v=20260913-stage6-v1" defer></script>
+  <script src="/tuning_catalog.js?v=20260913-stage6-v1" defer></script>
+  <script src="/tuning_ui.js?v=20260913-stage6-v1" defer></script>
+  <script src="/tuning_charts.js?v=20260913-stage6-v1" defer></script>
+  <script src="/tuning_trials.js?v=20260913-stage6-v1" defer></script>
+  <script src="/tuning_evidence.js?v=20260913-stage6-v1" defer></script>
+  <script src="/config.js?v=20260913-stage6-v1" defer></script>
+  <script src="/boot.js?v=20260913-stage6-v1" defer></script>
+  <script src="/vesc_workbench.js?v=20260913-stage6-v1" defer></script>
   <script src="/replay.js?v=20260908-final-v5" defer></script>
   <script src="/export_tools.js?v=20260904-bab4-report-v1" defer></script>
 </body>

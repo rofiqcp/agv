@@ -1,0 +1,37 @@
+/* ==============================================================
+   COLLAPSED SIDEBAR V2 — logo only in topbar, no empty left rail
+   ============================================================== */
+@media(min-width:821px){
+  body.sidebar-collapsed{--sidebar:0px}
+  body.sidebar-collapsed .app-shell{grid-template-columns:1fr}
+  body.sidebar-collapsed .main-shell{grid-column:1}
+  body.sidebar-collapsed .sidebar{
+    top:0;left:0;bottom:auto;width:82px;height:82px;padding:0;
+    overflow:hidden;border-right:0;border-bottom:1px solid var(--border);
+    background:rgba(6,11,13,.88);backdrop-filter:blur(16px);z-index:25;
+  }
+  body.sidebar-collapsed .brand{
+    width:82px;height:82px;min-height:82px;margin:0;padding:0;
+    display:grid;place-items:center;border:0;
+  }
+  body.sidebar-collapsed .brand-mark{
+    width:52px;height:52px;border-radius:13px;cursor:pointer;
+  }
+  body.sidebar-collapsed .brand-copy,
+  body.sidebar-collapsed .sidebar-collapse,
+  body.sidebar-collapsed .sidebar-context-head,
+  body.sidebar-collapsed #contextNav,
+  body.sidebar-collapsed .sidebar-bottom{display:none!important}
+  body.sidebar-collapsed .topbar{padding-left:106px}
+  body.sidebar-collapsed .content,
+  body.sidebar-collapsed .footer{margin-left:0}
+}
+
+/* Explicit YOLOPv2 runtime toggle — camera remains live while inference is OFF. */
+.yolop-toggle-panel{display:flex;align-items:center;gap:14px;margin-top:10px;padding:11px 12px;border:1px solid var(--border);border-radius:10px;background:#081315}.yolop-toggle-panel>div{min-width:0;flex:1}.yolop-toggle-panel span,.yolop-toggle-panel small{display:block}.yolop-toggle-panel span{font-size:9px;color:var(--muted);font-weight:850;letter-spacing:.8px}.yolop-toggle-panel b{display:block;margin:3px 0;color:var(--amber);font:900 12px ui-monospace}.yolop-toggle-panel small{font-size:8px;color:var(--dim);line-height:1.45}.yolop-toggle-panel.active{border-color:rgba(54,230,161,.4);background:rgba(54,230,161,.055)}.yolop-toggle-panel.active b{color:var(--green)}.yolop-toggle.active{border-color:rgba(54,230,161,.48);background:rgba(54,230,161,.14);color:var(--green)}.light .yolop-toggle-panel{background:#f7fbfa}@media(max-width:620px){.yolop-toggle-panel{align-items:stretch;flex-direction:column}.yolop-toggle{width:100%;min-height:44px}}
+
+/* Export controls for recorded evidence. */
+.chart-export-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.chart-png-btn{min-height:30px;padding:6px 10px;font-size:8px;white-space:nowrap}
+@media(max-width:620px){.chart-export-actions{width:100%;justify-content:flex-start}.chart-png-btn{flex:1}}
+

@@ -3,10 +3,9 @@ import os
 from pathlib import Path
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -34,15 +33,13 @@ def generate_launch_description():
 
     args = [
         DeclareLaunchArgument("use_sim_time", default_value="false"),
-        DeclareLaunchArgument("start_gateway", default_value="true"),
-        DeclareLaunchArgument("hmi_port", default_value="auto"),
-        DeclareLaunchArgument("publish_stm32_gnss", default_value="true"),
         DeclareLaunchArgument("start_teleop", default_value="true"),
         DeclareLaunchArgument("start_ackermann", default_value="true"),
         DeclareLaunchArgument("start_vesc_tool_bridge", default_value="true"),
-        DeclareLaunchArgument("transport_mode", default_value="stm32"),
+        DeclareLaunchArgument("transport_mode", default_value="direct_vesc"),
         DeclareLaunchArgument("serial_device", default_value="auto"),
         DeclareLaunchArgument("serial_enabled", default_value="true"),
+        DeclareLaunchArgument("integration_bypass", default_value="false"),
         DeclareLaunchArgument("nav2_topic", default_value="/cmd_vel"),
         DeclareLaunchArgument("teleop_topic", default_value="/cmd_vel/teleop"),
         DeclareLaunchArgument("teleop_source_topic", default_value="/teleop/active_source"),
@@ -59,17 +56,6 @@ def generate_launch_description():
         DeclareLaunchArgument("vehicle_drive_gear_ratio", default_value="1.0"),
     ]
 
-
-    stmf4_share = get_package_share_directory("stmf4")
-    gateway = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(os.path.join(stmf4_share, "launch", "stmf4.launch.py")),
-        condition=IfCondition(LaunchConfiguration("start_gateway")),
-        launch_arguments={
-            "serial_device": LaunchConfiguration("hmi_port"),
-            "publish_stm32_gnss": LaunchConfiguration("publish_stm32_gnss"),
-            "use_sim_time": LaunchConfiguration("use_sim_time"),
-        }.items(),
-    )
 
     teleop = Node(
         package="esc",
@@ -101,7 +87,14 @@ def generate_launch_description():
                 # values cannot be shadowed by node-scoped YAML defaults.
                 "transport_mode": LaunchConfiguration("transport_mode"),
                 "serial_device": LaunchConfiguration("serial_device"),
-                "serial_enabled": ParameterValue(LaunchConfiguration("serial_enabled"), value_type=bool),
+                # integration_bypass always hard-disables the physical UART even if
+                # serial_enabled=true was supplied accidentally on the CLI.
+                "serial_enabled": ParameterValue(PythonExpression([
+                    "'", LaunchConfiguration("serial_enabled"), "' == 'true' and '",
+                    LaunchConfiguration("integration_bypass"), "' != 'true'"
+                ]), value_type=bool),
+                "integration_bypass": ParameterValue(
+                    LaunchConfiguration("integration_bypass"), value_type=bool),
                 "nav2_topic": LaunchConfiguration("nav2_topic"),
                 "teleop_topic": LaunchConfiguration("teleop_topic"),
                 "teleop_source_topic": LaunchConfiguration("teleop_source_topic"),
@@ -133,4 +126,4 @@ def generate_launch_description():
         parameters=[vesc_tool_params, {"use_sim_time": ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)}],
     )
 
-    return LaunchDescription(args + [gateway, teleop, ackermann, vesc_tool])
+    return LaunchDescription(args + [teleop, ackermann, vesc_tool])

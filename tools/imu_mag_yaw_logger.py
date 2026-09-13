@@ -5,7 +5,8 @@ from datetime import datetime
 from pathlib import Path
 import serial
 
-OUT_DEFAULT = Path('/home/sirobo/agv/data/navigasi/IMU_MAG_CAL')
+AGV_ROOT = Path(os.environ.get('AGV_ROOT', str(Path.home() / 'agv'))).expanduser().resolve()
+OUT_DEFAULT = AGV_ROOT / 'data/navigasi/IMU_MAG_CAL'
 G = 9.80665
 
 def wrap360(v): return float(v) % 360.0

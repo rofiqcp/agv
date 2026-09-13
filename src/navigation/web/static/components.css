@@ -1,0 +1,23 @@
+/* Readability floor for dense operational metadata. */
+small,.hint,.empty-state,.map-legend,.map-statusbar,.path-tag,.camera-meta span,.info-box,.alert-item{font-size:var(--fs-micro)!important;line-height:var(--lh-ui)!important}
+.metric-3 span,.metric-grid span,.four-metrics span,.health-card span,.health-card small,.kv-list span,.big-coordinates span,.orientation-values span{font-size:var(--fs-micro)!important}
+.metric-3 b,.metric-grid b,.four-metrics b,.health-card b,.kv-list b,.big-coordinates b,.orientation-values b{font-size:var(--fs-sm)!important}
+.data-table,.config-grid,.diagnostic-table,.data-health-table,.mission-table{font-size:var(--fs-xs)!important;line-height:var(--lh-ui)}
+.data-table th,.data-table td,.config-grid th,.config-grid td,.experiment-data-table th,.experiment-data-table td,.mission-table th,.mission-table td{font-size:var(--fs-micro)!important;line-height:var(--lh-ui)!important}
+.diag-row,.event-row,.test-preflight-item b,.test-preflight-item span,.test-preflight-item em,.authority-detail,.authority-detail b{font-size:var(--fs-micro)!important;line-height:var(--lh-ui)!important}
+.config-file-group,.config-file-btn,.config-file-btn small,.config-grid .cfg-status,.config-grid .cfg-name small,.config-selection code,.config-selection span,.config-param-editor label,.config-editor-state{font-size:var(--fs-micro)!important}
+.config-param-editor input,.config-param-editor select,.config-param-editor button,.config-pending-item b,.config-pending-item small,.config-pending-item span{font-size:var(--fs-micro)!important}
+.tuning-note,.tuning-field-head label,.tuning-field-head span,.runtime-badge,.tuning-field code,.tuning-field small,.param-state-line>span,.param-state-line>span b{font-size:var(--fs-micro)!important;line-height:var(--lh-ui)!important}
+.tuning-input-row>input,.tuning-input-row>select,.param-number-control>input[type=number]{font-size:var(--fs-xs)!important;min-height:var(--control-h-compact)}
+.tuning-mode-group>span,.tuning-mode-btn,.tuning-level-btn,.tuning-mode-state b,.tuning-mode-state small{font-size:var(--fs-micro)!important}
+/* Charts, reports, commissioning and perception use the same scale. */
+.chart-title b,.chart-title span,.chart-axis-labels,.chart-legend,.chart-legend-item,.chart-legend-item b,.chart-legend-item small,.chart-tool-btn,.vesc-scope-tools .soft-btn,.vesc-preset-btn,.vesc-chart-foot{font-size:var(--fs-micro)!important}
+.source-pills span,.audit-ribbon b,.audit-ribbon summary,.direct-table-title>span,.direct-table-title>b,.direct-table-title>small{font-size:var(--fs-micro)!important;line-height:var(--lh-ui)!important}
+.commissioning-step span,.commissioning-step b,.commissioning-step small,.commissioning-step>em,.commissioning-arrow{font-size:var(--fs-micro)!important;line-height:var(--lh-ui)!important}
+.perception-perf-grid span,.perception-perf-grid small,.safety-funnel span,.qualification-item b,.qualification-item span,.qualification-item em,.homography-controls label,.homography-points span{font-size:var(--fs-micro)!important}
+.perception-perf-grid b,.safety-funnel b,.homography-head b,.homography-head>span{font-size:var(--fs-sm)!important}
+.qualification-summary span,.qualification-summary b,.qualification-reason,.perception-cal-readout,.config-diff-row header b,.config-diff-row header em,.config-diff-row code,.config-diff-values span,.config-diff-values b,.config-diff-warnings{font-size:var(--fs-micro)!important;line-height:var(--lh-ui)!important}
+.hmi-state-strip span,.hmi-state-strip b,.hmi-control-grid>button small,.hmi-speed-row>span,.hmi-camera-mirror>span,.hmi-camera-mirror>b,.hmi-camera-mirror button,.hmi-waypoint-state span,.hmi-waypoint-state b,.hmi-waypoint-list b,.hmi-waypoint-list span{font-size:var(--fs-micro)!important}
+.nav-rail-head span,.nav-rail-head b,.nav-rail-section label,.nav-rail-section label small,.nav-kv span,.nav-kv b,.nav-inspector>summary span,.nav-inspector>summary b,.nav-inspector-tabs button{font-size:var(--fs-micro)!important}
+.layer-head b,.layer-head span,.rviz-layer-panel label,.rviz-layer-panel em,.layer-opacity-row span,.zoom-readout{font-size:var(--fs-micro)!important}
+.help-drawer-body,.help-grid dt,.help-grid dd,.help-drawer-body h3,.help-expert code{font-size:var(--fs-micro)!important;line-height:var(--lh-copy)!important}

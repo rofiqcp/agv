@@ -22,6 +22,15 @@ navigation_core:
     min_speed_for_yaw_mps: 0.08
     require_perception_for_autonomy_motion: false
     perception_timeout_sec: 1.5
+    require_sensor_publisher_contract: true
+    sensor_publisher_contract_topic: /system/sensor_publishers_ok
+    sensor_publisher_contract_timeout_sec: 0.75
+    require_sensor_integrity_contract: true
+    sensor_integrity_topic: /system/sensors_transport_ok
+    sensor_integrity_timeout_sec: 0.75
+    allow_esc_integration_bypass: false
+    esc_integration_bypass_timeout_sec: 1.0
+    esc_state_timeout_sec: 0.75
     require_camera_metric_calibration: false
     camera_metric_calibration_validated: false
     require_steering_calibration_for_autonomy: true

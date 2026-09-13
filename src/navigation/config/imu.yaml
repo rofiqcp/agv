@@ -23,7 +23,12 @@ data_imu_node:
     gyro_packet_timeout_sec: 0.35
     accel_packet_timeout_sec: 0.5
     require_fresh_gyro_for_imu_publish: true
-    component_sync_max_gap_sec: 0.05
+    component_sync_max_gap_sec: 0.03
+    # Parser scaling contract. Keep unverified until the exact device FSR is
+    # confirmed by readback/device documentation plus six-position evidence.
+    accel_full_scale_g: 16.0
+    gyro_full_scale_dps: 2000.0
+    range_configuration_verified: false
     timestamp_max_future_sec: 0.02
     timestamp_max_regression_sec: 0.002
     timing_status_rate_hz: 2.0
@@ -63,7 +68,7 @@ data_imu_node:
     field_calibration_stationary_duration_sec: 0.0
     field_calibration_six_position_valid: false
     field_calibration_motor_interference_valid: false
-    stationary_calibration_valid: true
+    stationary_calibration_valid: false
     stationary_calibration_saved_at: 2026-09-08T18:12:00+0700
     stationary_calibration_sample_count: 164
     stationary_calibration_duration_sec: 25.0

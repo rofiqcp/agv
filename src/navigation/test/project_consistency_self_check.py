@@ -30,13 +30,12 @@ imu = load(ROOT/'config/imu.yaml')['data_imu_node']['ros__parameters']
 hmi = load(WS/'stmf4/config/hmi.yaml')['stmf4_hmi_bridge']['ros__parameters']
 launch = (ROOT/'launch/autonomous.launch.py').read_text()
 
-# Production transport is one identity-checked F411 CDC gateway for NEO-3/IST8310
-# and F103 VESC, plus one direct CP2102 IMU. Legacy CH340/PL2303 routes are
-# recovery-only and must never use physical by-path fallback because USB topology
-# can be re-used by the F411 after reflashing/replugging.
+# Production transport separates authority: F411 CDC owns NEO-3/NEO3PRO + HMI,
+# F103 VESC uses its dedicated identity-checked USB-UART, and IMU remains CP2102.
+# Recovery selectors remain by-id only; physical by-path fallback stays disabled.
 if str(hmi.get('serial_device','')).lower() != 'auto': fail('F411 gateway must default to auto identity discovery')
 if "DeclareLaunchArgument('gnss_source', default_value='stm32'" not in launch: fail('GNSS production source must be F411/stm32')
-if "DeclareLaunchArgument('esc_transport_mode', default_value='stm32'" not in launch: fail('ESC production transport must be F411/stm32')
+if "DeclareLaunchArgument('esc_transport_mode', default_value='direct_vesc'" not in launch: fail('ESC production transport must be dedicated direct_vesc')
 expected_ids = {
     'ESC_RECOVERY': (esc['serial_auto_id_contains'], 'Prolific_Technology_Inc._USB-Serial_Controller'),
     'GNSS_RECOVERY': (gnss['auto_port_id_contains'], '1a86_USB_Serial'),
@@ -139,5 +138,5 @@ for token in [
     if token not in gui: fail(f'GUI steering authority propagation missing {token}')
 
 print('PASS project_consistency_self_check')
-print('serial route: NEO-3/IST8310 + VESC via identity-checked F411 CDC | IMU via CP2102 | legacy physical by-path DISABLED')
+print('serial route: F411 CDC=GNSS/HMI | VESC=dedicated PL2303 direct_vesc | IMU=CP2102 | physical by-path DISABLED')
 print(f'uncalibrated geometry: Rmin={rmin:.6f} m | vehicle yaw cap={vehicle["max_yaw_rate_rps"]:.6f} rad/s | autonomous yaw cap={nav_yaw_cap:.6f} rad/s')

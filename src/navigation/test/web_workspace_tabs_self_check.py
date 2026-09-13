@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import re, sys
+from web_static_bundle import read_app_bundle, read_css_bundle
 
 root=Path(__file__).resolve().parents[1]
 html=(root/'web/static/index.html').read_text()
-js=(root/'web/static/app.js').read_text()
-css=(root/'web/static/styles.css').read_text()
+js=read_app_bundle(root/'web/static')
+css=read_css_bundle(root/'web/static')
 vesc=(root/'web/static/vesc_workbench.js').read_text()
 
 def req(ok,msg):

@@ -31,8 +31,8 @@ imu = load_params(NAV / "config/imu.yaml", "data_imu_node")
 hmi = load_params(ROOT / "stmf4/config/hmi.yaml", "stmf4_hmi_bridge")
 launch_text = (NAV / "launch/autonomous.launch.py").read_text(encoding="utf-8")
 
-# 1) Production routing: NEO-3/IST8310 + F103 VESC share one identity-checked
-# F411 CDC gateway; IMU remains direct CP2102. Legacy direct serial is by-id only.
+# 1) Production routing: F411 CDC owns NEO-3/NEO3PRO + HMI; F103 VESC uses
+# its dedicated PL2303 USB-UART; IMU remains direct CP2102. All are by-id only.
 identities = {
     "ESC": esc["serial_auto_id_contains"],
     "GNSS": gnss["auto_port_id_contains"],
@@ -49,7 +49,7 @@ selectors = {
 }
 require(str(hmi.get("serial_device", "")).lower() == "auto", "F411 gateway must use auto identity discovery")
 require("DeclareLaunchArgument('gnss_source', default_value='stm32'" in launch_text, "GNSS must default to F411/stm32")
-require("DeclareLaunchArgument('esc_transport_mode', default_value='stm32'" in launch_text, "ESC must default to F411/stm32")
+require("DeclareLaunchArgument('esc_transport_mode', default_value='direct_vesc'" in launch_text, "ESC must default to dedicated direct_vesc")
 require(not any(str(v).strip() for v in selectors.values()), "physical by-path fallback must be disabled")
 
 # 2) Calibration state must be explicit, but this regression test must remain
@@ -148,6 +148,6 @@ for bad in (
 require("bool reload(){" in gui, "YamlStore::reload must report parse success/failure")
 
 print("STAGE1 FOUNDATION SELF-CHECK: PASS")
-print("serial route: F411 CDC shared GNSS/IST8310+VESC | IMU CP2102 | physical by-path disabled")
+print("serial route: F411 CDC GNSS/HMI | VESC dedicated PL2303 direct_vesc | IMU CP2102 | physical by-path disabled")
 print(f"safe fallback steering: +/-{op:.3f} deg")
 print(f"safe fallback turning radius: {actual_r:.6f} m")

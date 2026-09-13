@@ -102,8 +102,10 @@ esc = params(ESC / "config/ackermann.yaml", "esc_ackermann")
 esc_launch = (ESC / "launch/esc.launch.py").read_text(encoding="utf-8")
 need("serial_enabled" not in esc, "ESC serial_enabled must be launch-owned, not node-scoped YAML")
 need('DeclareLaunchArgument("serial_enabled", default_value="true")' in esc_launch and
-     '"serial_enabled": ParameterValue(LaunchConfiguration("serial_enabled"), value_type=bool)' in esc_launch,
-     "ESC launch-owned serial_enabled contract missing")
+     '"serial_enabled": ParameterValue(PythonExpression([' in esc_launch and
+     'LaunchConfiguration("serial_enabled")' in esc_launch and
+     'LaunchConfiguration("integration_bypass")' in esc_launch,
+     "ESC launch-owned serial_enabled + integration-bypass hard-disable contract missing")
 
 gui = read_gui_source(ROOT)
 need("perception.ros__parameters.perception_mode" in gui, "GUI perception mode YAML selector missing")

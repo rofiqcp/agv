@@ -1,12 +1,13 @@
 'use strict';
-const fs=require('fs'),path=require('path');
+const fs=require('fs'),path=require('path'),http=require('http'),https=require('https');
 const root=process.env.AGV_ROOT||path.resolve(__dirname,'..');
 const {chromium}=require(path.join(root,'.playwright/node_modules/playwright'));
-const strict=process.env.STRICT_HARDWARE==='1', base='http://127.0.0.1:5000';
+const strict=process.env.STRICT_HARDWARE==='1', base=(process.env.ROS_WEB_BASE_URL||'http://127.0.0.1:5000').replace(/\/+$/,'');
+const probe=url=>new Promise((resolve,reject)=>{const u=new URL(url),client=u.protocol==='https:'?https:http,req=client.get(u,res=>{res.resume();res.on('end',()=>res.statusCode>=200&&res.statusCode<400?resolve(res.statusCode):reject(new Error(`HTTP ${res.statusCode} ${url}`)))});req.setTimeout(3000,()=>req.destroy(new Error(`timeout ${url}`)));req.on('error',reject)});
 const out=process.env.QA_SCREENSHOT_DIR||'/tmp/agv_ros_web_qa_20260910';fs.mkdirSync(out,{recursive:true});
 const assert=(ok,msg)=>{if(!ok)throw new Error(msg)};
-(async()=>{const browser=await chromium.launch({headless:true});const report={mode:strict?'strict-hardware':'layout-read-only',viewports:{},errors:[],badResponses:[],failedRequests:[],posts:[]};
-for(const vp of [{name:'desktop-1920',width:1920,height:1080},{name:'desktop-1600',width:1600,height:900},{name:'laptop-1366',width:1366,height:768},{name:'laptop-1280',width:1280,height:720},{name:'tablet-1024',width:1024,height:768},{name:'tablet-820',width:820,height:1180},{name:'tablet-768',width:768,height:1024},{name:'mobile-430',width:430,height:932},{name:'mobile-390',width:390,height:844}]){
+(async()=>{console.log(`ROS_WEB_BASE_URL=${base}`);try{await probe(base+'/api/health')}catch(e){throw new Error(`ROS Web tidak reachable di ${base}: ${e.message}`)}const browser=await chromium.launch({headless:true});const report={mode:strict?'strict-hardware':'layout-read-only',viewports:{},errors:[],badResponses:[],failedRequests:[],posts:[]};
+for(const vp of [{name:'desktop-2560',width:2560,height:1440},{name:'desktop-1920',width:1920,height:1080},{name:'desktop-1600',width:1600,height:900},{name:'laptop-1366',width:1366,height:768},{name:'laptop-1280',width:1280,height:720},{name:'tablet-1024',width:1024,height:768},{name:'tablet-820',width:820,height:1180},{name:'tablet-768',width:768,height:1024},{name:'mobile-430',width:430,height:932},{name:'mobile-390',width:390,height:844},{name:'mobile-360',width:360,height:800}]){
  const page=await browser.newPage({viewport:{width:vp.width,height:vp.height}});const errors=[],bad=[],failed=[],posts=[];
  page.on('console',m=>{if(m.type()==='error'&&(strict||!m.text().includes('503 (Service Unavailable)')))errors.push(m.text())});page.on('pageerror',e=>errors.push(e.message));
  page.on('response',r=>{if(r.status()>=400&&!/\/api\/(camera\.jpg|map\.png|global_costmap\.png|local_costmap\.png)/.test(r.url()))bad.push(`${r.status()} ${r.url()}`)});

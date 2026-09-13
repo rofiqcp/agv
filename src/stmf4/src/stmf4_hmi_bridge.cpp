@@ -388,6 +388,7 @@ private:
     declare_parameter<double>("heartbeat_sec", 5.0);
     declare_parameter<double>("hmi_transport_timeout_sec", 2.0);
     declare_parameter<double>("manual_speed_max_mps", 1.0);
+    declare_parameter<double>("manual_command_lease_sec", 0.30);
     declare_parameter<int>("manual_speed_min_pct", 10);
     declare_parameter<int>("manual_speed_max_pct", 50);
     declare_parameter<int>("manual_speed_default_pct", 20);
@@ -419,6 +420,7 @@ private:
     heartbeat_sec_ = std::clamp(get_parameter("heartbeat_sec").as_double(), 0.25, 5.0);
     hmi_transport_timeout_sec_ = std::clamp(get_parameter("hmi_transport_timeout_sec").as_double(), 0.5, 10.0);
     manual_speed_max_mps_ = std::clamp(get_parameter("manual_speed_max_mps").as_double(), 0.05, 3.0);
+    manual_command_lease_sec_ = std::clamp(get_parameter("manual_command_lease_sec").as_double(), 0.15, 1.0);
     speed_min_pct_ = std::clamp(static_cast<int>(get_parameter("manual_speed_min_pct").as_int()), 1, 100);
     speed_max_pct_ = std::clamp(static_cast<int>(get_parameter("manual_speed_max_pct").as_int()), speed_min_pct_, 100);
     manual_speed_pct_ = std::clamp(static_cast<int>(get_parameter("manual_speed_default_pct").as_int()), speed_min_pct_, speed_max_pct_);
@@ -446,6 +448,15 @@ private:
     for (size_t i = 0; i < kWaypointCount; ++i) waypoints_[i].name = defaults[i];
   }
 
+  static bool waypointPoseSane(const Waypoint &wp) {
+    constexpr double kMaxMapCoordinateM = 1.0e6;
+    return std::isfinite(wp.x) && std::isfinite(wp.y) && std::isfinite(wp.yaw) &&
+           std::isfinite(wp.lat) && std::isfinite(wp.lon) &&
+           std::abs(wp.x) <= kMaxMapCoordinateM && std::abs(wp.y) <= kMaxMapCoordinateM &&
+           std::abs(wp.yaw) <= (2.0 * kPi + 1.0e-6) &&
+           wp.lat >= -90.0 && wp.lat <= 90.0 && wp.lon >= -180.0 && wp.lon <= 180.0;
+  }
+
   void loadWaypoints() {
     if (waypoint_file_.empty()) return;
     std::ifstream in(waypoint_file_);
@@ -466,6 +477,7 @@ private:
         if (!name.empty()) wp.name = name;
         wp.x = std::stod(f[3]); wp.y = std::stod(f[4]); wp.yaw = std::stod(f[5]);
         wp.lat = std::stod(f[6]); wp.lon = std::stod(f[7]);
+        if (!waypointPoseSane(wp)) wp.saved = false;
       } catch (...) {
         wp.saved = false;
       }
@@ -476,7 +488,8 @@ private:
     if (waypoint_file_.empty()) return false;
     try {
       const fs::path target(waypoint_file_);
-      if (target.has_parent_path()) fs::create_directories(target.parent_path());
+      const fs::path parent = target.has_parent_path() ? target.parent_path() : fs::path(".");
+      fs::create_directories(parent);
       const fs::path temp = target.string() + ".tmp";
       {
         std::ofstream out(temp, std::ios::trunc);
@@ -487,14 +500,24 @@ private:
           out << i << '\t' << (wp.saved ? 1 : 0) << '\t' << wp.name << '\t'
               << wp.x << '\t' << wp.y << '\t' << wp.yaw << '\t' << wp.lat << '\t' << wp.lon << '\n';
         }
+        out.flush();
+        if (!out.good()) return false;
       }
+      const int tmp_fd = ::open(temp.c_str(), O_RDONLY | O_CLOEXEC);
+      if (tmp_fd < 0) return false;
+      const bool file_synced = ::fsync(tmp_fd) == 0;
+      ::close(tmp_fd);
+      if (!file_synced) return false;
+
       std::error_code ec;
       fs::rename(temp, target, ec);
-      if (ec) {
-        fs::copy_file(temp, target, fs::copy_options::overwrite_existing, ec);
-        if (!ec) fs::remove(temp, ec);
-      }
-      return !ec;
+      if (ec) { fs::remove(temp, ec); return false; }
+
+      const int dir_fd = ::open(parent.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+      if (dir_fd < 0) return false;
+      const bool dir_synced = ::fsync(dir_fd) == 0;
+      ::close(dir_fd);
+      return dir_synced;
     } catch (const std::exception &e) {
       RCLCPP_ERROR(get_logger(), "Waypoint persistence failed: %s", e.what());
       return false;
@@ -566,11 +589,10 @@ private:
     neo3_command_sub_ = create_subscription<std_msgs::msg::String>("/neo3/command", 10,
       [this](std_msgs::msg::String::ConstSharedPtr msg) {
         const std::string command = upper(trim(msg->data));
-        if (command == "LED:AUTO" || command == "LED:ON" || command == "LED:OFF" ||
-            command == "BUZZER:OFF" || command == "STATUS" || command.rfind("BEEP:", 0) == 0) {
+        if (neo3CommandAllowed(command)) {
           (void)sendLine("NEO:" + command);
         } else {
-          RCLCPP_WARN(get_logger(), "Rejected /neo3/command: %s", msg->data.c_str());
+          RCLCPP_WARN(get_logger(), "Rejected unsupported NEO3PRO command: %s", msg->data.c_str());
         }
       });
     // ESC transport intentionally absent: F411/stmf4 is HMI + sensor bridge only.
@@ -706,8 +728,9 @@ private:
     map_pose_sub_ = create_subscription<nav_msgs::msg::Odometry>("/odometry/filtered_map", rclcpp::SensorDataQoS(),
       [this](nav_msgs::msg::Odometry::ConstSharedPtr msg) {
         const auto &p = msg->pose.pose.position;
-        if (!std::isfinite(p.x) || !std::isfinite(p.y)) return;
-        map_x_ = p.x; map_y_ = p.y; map_yaw_ = yawFromQuat(msg->pose.pose.orientation);
+        const double yaw = yawFromQuat(msg->pose.pose.orientation);
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(yaw)) return;
+        map_x_ = p.x; map_y_ = p.y; map_yaw_ = yaw;
         map_cov_x_ = std::max(0.0, msg->pose.covariance[0]);
         map_cov_y_ = std::max(0.0, msg->pose.covariance[7]);
         map_yaw_var_ = std::max(0.0, msg->pose.covariance[35]);
@@ -796,14 +819,14 @@ private:
     navigation_state_pub_->publish(msg);
   }
 
-  void mirrorWaypointState(bool force) {
+  void mirrorWaypointState(bool force, bool force_nav = false) {
     for (size_t i = 0; i < kWaypointCount; ++i) {
       const Waypoint &wp = waypoints_[i];
       sendState("WP" + std::to_string(i), std::string(wp.saved ? "1:" : "0:") + wp.name, force);
     }
     sendState("WPSEL", std::to_string(selected_waypoint_), force);
     sendState("TARGET", active_target_.empty() ? "NONE" : active_target_, force);
-    sendState("NAV", navigation_state_, force);
+    sendState("NAV", navigation_state_, force || force_nav);
   }
 
   void selectWaypoint(int index, const std::string &origin, bool mirror) {
@@ -850,11 +873,26 @@ private:
                 index, wp.name.c_str(), wp.x, wp.y, wp.yaw);
   }
 
+  bool navigationMotionGateReady() const {
+    if (estop_ || !motion_ready_ || !nav2_ready_ || !esc_ready_ || !esc_feedback_ || !mapPoseFresh()) return false;
+    const bool planning_ready = kvBool(localization_state_text_, "planning_ready").value_or(false);
+    const bool localization_motion_ready = kvBool(localization_state_text_, "motion_localization_ready").value_or(false);
+    return planning_ready && localization_motion_ready;
+  }
+
   void goWaypoint(int index, const std::string &origin) {
     if (!validWaypointIndex(index)) { reject("waypoint index must be 0..3"); return; }
     const Waypoint &wp = waypoints_[static_cast<size_t>(index)];
     if (!wp.saved) { reject("selected waypoint has not been saved"); sendLine("ERR:WP_NOT_SAVED"); return; }
+    if (!waypointPoseSane(wp)) {
+      reject("saved waypoint contains invalid pose/range"); sendLine("ERR:WP_INVALID_POSE"); return;
+    }
     if (mode_ != "AUTO") { reject("waypoint navigation requires AUTO mode"); sendLine("ERR:WP_GO_REQUIRES_AUTO"); return; }
+    if (!navigationMotionGateReady()) {
+      reject("navigation requires E-stop clear + ESC + Nav2 + fresh motion localization");
+      sendLine("ERR:WP_GO_NOT_READY");
+      return;
+    }
     geometry_msgs::msg::PoseStamped goal;
     goal.header.stamp = now();
     goal.header.frame_id = "map";
@@ -878,12 +916,12 @@ private:
 
   void stopNavigation(const std::string &origin) {
     navigation_origin_ = origin;
+    // Never block the single-threaded executor waiting for Nav2. Serial CDC and
+    // manual-safety timers must keep running even when the cancel service is down.
     if (!cancel_nav_client_->service_is_ready()) {
-      if (!cancel_nav_client_->wait_for_service(250ms)) {
-        reject("Nav2 cancel service unavailable");
-        sendLine("ERR:NAV_CANCEL_UNAVAILABLE");
-        return;
-      }
+      reject("Nav2 cancel service unavailable");
+      sendLine("ERR:NAV_CANCEL_UNAVAILABLE");
+      return;
     }
     auto request = std::make_shared<action_msgs::srv::CancelGoal::Request>();
     cancel_nav_client_->async_send_request(request,
@@ -982,12 +1020,84 @@ private:
     return std::nullopt;
   }
 
+  static bool parseU32DecimalStrict(const std::string &text, std::uint32_t &out) {
+    if (text.empty()) return false;
+    for (const char c : text) if (c < '0' || c > '9') return false;
+    errno = 0;
+    char *end = nullptr;
+    const unsigned long value = std::strtoul(text.c_str(), &end, 10);
+    if (errno != 0 || end == text.c_str() || *end != '\0' || value > 0xFFFFFFFFUL) return false;
+    out = static_cast<std::uint32_t>(value);
+    return true;
+  }
+
+  bool neo3CommandAllowed(const std::string &command) const {
+    if (command == "STATUS" || command == "CAN:STATUS" || command == "CAN:RECOVER" ||
+        command == "BARO:ON" || command == "BARO:OFF" || command == "LED:OFF") return true;
+    if (command.rfind("LED:BRIGHTNESS:", 0) == 0) {
+      const std::string raw = command.substr(sizeof("LED:BRIGHTNESS:") - 1U);
+      char *end = nullptr; errno = 0;
+      const unsigned long value = std::strtoul(raw.c_str(), &end, 10);
+      return errno == 0 && end != raw.c_str() && *end == '\0' && value <= 100UL;
+    }
+    if (command.rfind("LED:", 0) == 0) {
+      unsigned r = 0U, g = 0U, b = 0U; char extra = '\0';
+      return std::sscanf(command.c_str() + 4, "%u,%u,%u%c", &r, &g, &b, &extra) == 3 &&
+             r <= 255U && g <= 255U && b <= 255U;
+    }
+    return false;
+  }
+
+  void resetTransportEpochState(const char *reason, bool publish_invalid) {
+    neo3_sequence_initialized_ = false;
+    neo3_last_sequence_ = 0U;
+    neo3_protocol_version_ = 0;
+    for (auto &entry : neo3pro_wire_state_) {
+      entry.second.initialized = false;
+      entry.second.last_sequence = 0U;
+    }
+    neo3pro_active_ = false;
+    neo3pro_gnss_meta_ = {}; neo3pro_gnss_cov_ = {}; neo3pro_mag_meta_ = {};
+    neo3pro_heading_ = {}; neo3pro_node_health_ = {}; neo3pro_gnss_health_ = {};
+    neo3pro_timestamp_source_code_ = 3;
+    last_neo3_gnss_time_ = {}; last_neo3_mag_time_ = {}; last_neo3pro_baro_time_ = {};
+    neo3pro_started_time_ = {};
+    mcu_clock_initialized_ = false; mcu_last_raw_ms_ = 0U; mcu_unwrapped_ms_ = 0U;
+    mcu_clock_offset_ns_ = 0; last_mcu_stamp_ns_ = 0;
+    neo3pro_node_connected_state_ = false;
+    neo3pro_gnss_status_connected_state_ = false;
+    neo3pro_baro_connected_state_ = false;
+    neo3_ist_connected_state_ = false;
+    if (!publish_invalid) return;
+
+    std_msgs::msg::Bool b; b.data = false;
+    neo3_gnss_connected_pub_->publish(b);
+    neo3_mag_connected_pub_->publish(b);
+    neo3pro_rm3100_connected_pub_->publish(b);
+    neo3_ist_connected_pub_->publish(b);
+    neo3pro_node_connected_pub_->publish(b);
+    neo3pro_gnss_status_connected_pub_->publish(b);
+    neo3pro_baro_connected_pub_->publish(b);
+    neo3pro_safety_button_pub_->publish(b);
+
+    std_msgs::msg::String text;
+    const std::string why = reason != nullptr ? wireToken(reason, 24U) : "DISCONNECTED";
+    text.data = "{\"connected\":false,\"reason\":\"" + why + "\"}";
+    neo3_gnss_state_pub_->publish(text);
+    neo3pro_node_status_pub_->publish(text);
+    neo3pro_gnss_status_pub_->publish(text);
+    neo3pro_can_status_pub_->publish(text);
+    neo3pro_health_pub_->publish(text);
+    neo3pro_dna_status_pub_->publish(text);
+  }
+
   void sendInitialSessionCommands() {
     sendLine("ROS:1");
     sendLine("PING");
     sendLine("GET:STATE");
     sendLine("MODE:" + mode_);
-    sendLine("NEO:LED:AUTO");
+    // Do not mutate peripheral indication state on reconnect. LED commands are
+    // explicit operator actions only; this also avoids reconnect-triggered load.
     sendLine("NEO:STATUS");
     sendLine("USB:STATUS");
     last_usb_status_request_ = std::chrono::steady_clock::now();
@@ -1060,23 +1170,16 @@ private:
     best_effort_lines_.clear();
     awaiting_host_session_ = false;
     host_session_token_ = 0U;
+    host_transport_generation_ = 0U;
+    resetExtendedTelemetrySession(0U);
     last_host_hello_tx_ = {};
     if (was) RCLCPP_WARN(get_logger(), "HMI USB disconnected: %s", reason);
     publishConnected(false);
-    publishNeo3Connected(false);
-    if (neo3_ist_connected_state_) {
-      neo3_ist_connected_state_ = false;
-      std_msgs::msg::Bool b; b.data = false; neo3_ist_connected_pub_->publish(b);
-    }
-    last_neo3_gnss_time_ = {}; last_neo3_mag_time_ = {};
-    if (neo3pro_node_connected_state_) { std_msgs::msg::Bool b; b.data=false; neo3pro_node_connected_pub_->publish(b); }
-    if (neo3pro_gnss_status_connected_state_) { std_msgs::msg::Bool b; b.data=false; neo3pro_gnss_status_connected_pub_->publish(b); }
-    if (neo3pro_baro_connected_state_) { std_msgs::msg::Bool b; b.data=false; neo3pro_baro_connected_pub_->publish(b); }
-    neo3pro_node_connected_state_ = false;
-    neo3pro_gnss_status_connected_state_ = false;
-    neo3pro_baro_connected_state_ = false;
+    resetTransportEpochState(reason, true);
     drive_ = "STOP";
     steer_ = "NONE";
+    last_drive_command_time_ = {};
+    last_steer_command_time_ = {};
     control_origin_ = "NONE";
     publishState();
   }
@@ -1158,12 +1261,23 @@ private:
       if (awaiting_host_session_) {
         const std::string expected = "ACK:HOST:SESSION:" + std::to_string(host_session_token_) + ":";
         if (line.rfind(expected, 0) == 0) {
+          std::uint32_t transport_generation = 0U;
+          const std::string generation_text = line.substr(expected.size());
+          if (!parseU32DecimalStrict(generation_text, transport_generation) || transport_generation == 0U) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+              "Ignoring malformed F411 host-session ACK for token=%u", host_session_token_);
+            continue;
+          }
           awaiting_host_session_ = false;
+          host_transport_generation_ = transport_generation;
+          resetTransportEpochState("NEW_HOST_SESSION", false);
+          resetExtendedTelemetrySession(host_session_token_);
           last_rx_ = std::chrono::steady_clock::now();
           silent_open_failures_ = 0U;
           best_effort_lines_.clear();
           publishConnected(true);
-          RCLCPP_INFO(get_logger(), "F411 host session synchronized token=%u", host_session_token_);
+          RCLCPP_INFO(get_logger(), "F411 host session synchronized token=%u transport_generation=%u",
+                      host_session_token_, host_transport_generation_);
           sendInitialSessionCommands();
         }
         // Ignore every pre-session byte, including stale CDC backlog.
@@ -1336,26 +1450,17 @@ private:
 
   rclcpp::Time stampFromNeo3ProGnss(const Neo3ProGnssMeta &meta, const rclcpp::Time &fallback) {
     neo3pro_timestamp_source_code_ = 3;
-    if (meta.gnss_timestamp_usec == 0U) return fallback;
-    std::int64_t utc_usec = static_cast<std::int64_t>(meta.gnss_timestamp_usec);
-    if (meta.time_standard == 1) { // TAI -> UTC = TAI - leap_seconds - 10
-      if (meta.leap_seconds <= 0) return fallback;
-      utc_usec -= static_cast<std::int64_t>(meta.leap_seconds + 10) * 1000000LL;
-    } else if (meta.time_standard == 2) {
-      // already UTC since Unix epoch
-    } else if (meta.time_standard == 3) { // GPS -> UTC = GPS - leap_seconds + 9
-      if (meta.leap_seconds <= 0) return fallback;
-      utc_usec += static_cast<std::int64_t>(9 - meta.leap_seconds) * 1000000LL;
-    } else {
-      return fallback;
-    }
-    if (utc_usec <= 0 || utc_usec > (INT64_MAX / 1000LL)) return fallback;
-    const std::int64_t stamp_ns = utc_usec * 1000LL;
+    // ArduPilot AP_GPS_DroneCAN only treats Fix2 absolute epoch as authoritative
+    // when gnss_time_standard is UTC. Other time standards remain reception-time
+    // telemetry unless a separately tested DSDL conversion contract is added.
+    if (meta.gnss_timestamp_usec == 0U || meta.time_standard != 2) return fallback;
+    if (meta.gnss_timestamp_usec > static_cast<std::uint64_t>(INT64_MAX / 1000LL)) return fallback;
+    const std::int64_t stamp_ns = static_cast<std::int64_t>(meta.gnss_timestamp_usec) * 1000LL;
     const std::int64_t host_ns = now().nanoseconds();
     constexpr std::int64_t kMaxClockDisagreementNs = 7LL * 24LL * 3600LL * 1000000000LL;
     const std::int64_t delta = stamp_ns >= host_ns ? stamp_ns - host_ns : host_ns - stamp_ns;
     if (delta > kMaxClockDisagreementNs) return fallback;
-    neo3pro_timestamp_source_code_ = 4; // absolute DroneCAN GNSS time
+    neo3pro_timestamp_source_code_ = 4;
     return rclcpp::Time(stamp_ns, get_clock()->get_clock_type());
   }
 
@@ -2364,9 +2469,8 @@ private:
     const auto second = first == std::string::npos ? std::string::npos : body.find(':', first + 1U);
     if (first == std::string::npos || second == std::string::npos) return;
     const std::string txn_text = body.substr(0, first);
-    char *txn_end = nullptr;
-    const unsigned long txn_raw = std::strtoul(txn_text.c_str(), &txn_end, 10);
-    if (txn_end == txn_text.c_str() || *txn_end != '\0' || txn_raw == 0UL || txn_raw > 65535UL) return;
+    std::uint32_t txn_raw = 0U;
+    if (!parseU32DecimalStrict(txn_text, txn_raw) || txn_raw == 0U || txn_raw > 65535U) return;
     const auto txn = static_cast<std::uint16_t>(txn_raw);
     const std::string key = upper(trim(body.substr(first + 1U, second - first - 1U)));
     const std::string raw = trim(body.substr(second + 1U));
@@ -2375,7 +2479,10 @@ private:
       bool manual = false;
       if (!parseBool01(raw, &manual)) { sendConfigReply(false, txn, key, "INVALID_BOOL"); return; }
       config_epoch_.fetch_add(1U);
-      setMode(manual ? "MANUAL" : "AUTO", "TFT_CFG", false);
+      if (!setMode(manual ? "MANUAL" : "AUTO", "TFT_CFG", false)) {
+        sendConfigReply(false, txn, key, "MODE_INTERLOCK");
+        return;
+      }
       sendConfigReply(true, txn, key, mode_ == "MANUAL" ? "1" : "0");
       return;
     }
@@ -2678,21 +2785,48 @@ private:
     if (req == "SYNC") { tx_cache_.clear(); sendLine("GET:STATE"); telemetryTick(); return; }
   }
 
-  void setMode(const std::string &requested, const std::string &origin, bool mirror) {
+  bool navigationStateActive() const {
+    return navigation_state_ == "QUEUED" || navigation_state_ == "NAVIGATING";
+  }
+
+  bool setMode(const std::string &requested, const std::string &origin, bool mirror) {
     const std::string next = requested == "MANUAL" ? "MANUAL" : "AUTO";
+    if (next == "MANUAL" &&
+        (!connected_ || estop_ || !esc_ready_ || !esc_feedback_ ||
+         std::abs(drive_actual_mps_) > 0.02 || navigationStateActive())) {
+      reject("MANUAL mode requires connected/stationary ESC, E-stop clear, navigation idle");
+      if (mirror) sendLine("MODE:" + mode_);
+      return false;
+    }
     mode_ = next;
     control_origin_ = origin;
     if (mode_ == "AUTO") {
       drive_ = "STOP"; steer_ = "NONE"; steering_hmi_target_deg_ = 0.0;
+      last_drive_command_time_ = {}; last_steer_command_time_ = {};
       if (steering_test_active_ || steering_test_enable_in_flight_) disableSteeringTest();
     }
     if (mirror) sendLine("MODE:" + mode_);
     publishState();
+    return true;
   }
 
-  bool manualMotionAllowed(bool steering) {
-    if (!connected_ || mode_ != "MANUAL" || estop_ || !esc_ready_ || !esc_feedback_) return false;
-    return !steering || steer_connected_;
+  bool manualMotionAllowed(bool steering) const {
+    if (!connected_ || awaiting_host_session_ || mode_ != "MANUAL" || estop_ ||
+        !esc_ready_ || !esc_feedback_ || navigationStateActive()) return false;
+    if (steering && (!steer_connected_ || std::abs(drive_actual_mps_) > 0.02)) return false;
+    return true;
+  }
+
+  bool manualInitialMotionAllowed(bool steering) const {
+    // Match the physical TFT initial-motion interlock: a new manual motion may
+    // only start from a stopped vehicle. Once an identical DRIVE lease is active,
+    // refresh packets are permitted while moving so the deadman can remain alive.
+    return manualMotionAllowed(steering) && std::abs(drive_actual_mps_) <= 0.02;
+  }
+
+  bool manualLeaseFresh(const std::chrono::steady_clock::time_point &stamp) const {
+    if (stamp.time_since_epoch().count() == 0) return false;
+    return std::chrono::steady_clock::now() - stamp <= std::chrono::duration<double>(manual_command_lease_sec_);
   }
 
   void reject(const std::string &reason) {
@@ -2704,22 +2838,38 @@ private:
   void applyDrive(std::string action, const std::string &origin, bool mirror) {
     action = upper(trim(action));
     if (action == "STOP") {
-      drive_ = "STOP"; control_origin_ = origin;
+      drive_ = "STOP"; last_drive_command_time_ = {}; control_origin_ = origin;
       (void)mirror;
       publishState(); return;
     }
     if (action != "FWD" && action != "REV") return;
-    if (!manualMotionAllowed(false)) { reject("drive requires MANUAL + HMI + ESC ACK + E-STOP clear"); return; }
-    drive_ = action; control_origin_ = origin; last_rejection_.clear();
+    const bool same_direction_refresh = drive_ == action && manualLeaseFresh(last_drive_command_time_);
+    if ((drive_ == "FWD" || drive_ == "REV") && drive_ != action) {
+      reject("manual direction reversal requires explicit STOP first");
+      return;
+    }
+    if (same_direction_refresh) {
+      if (!manualMotionAllowed(false)) { reject("manual drive lease lost safety authority"); return; }
+    } else if (!manualInitialMotionAllowed(false)) {
+      reject("drive start requires MANUAL + stopped vehicle + ESC ACK + E-STOP clear + nav idle");
+      return;
+    }
+    drive_ = action; last_drive_command_time_ = std::chrono::steady_clock::now();
+    control_origin_ = origin; last_rejection_.clear();
     (void)mirror;
     publishState();
   }
 
   void applySteer(std::string action, const std::string &origin, bool mirror) {
     action = upper(trim(action));
+    if (action == "STOP" || action == "NONE") {
+      steer_ = "NONE"; last_steer_command_time_ = {}; steering_hmi_target_deg_ = 0.0;
+      control_origin_ = origin; publishState(); return;
+    }
     if (action != "LEFT" && action != "RIGHT" && action != "CENTER") return;
-    if (!manualMotionAllowed(true)) { reject("steering requires MANUAL + HMI + ESC/encoder ready"); return; }
-    steer_ = action; control_origin_ = origin; last_rejection_.clear();
+    if (!manualMotionAllowed(true)) { reject("steering requires MANUAL + HMI + ESC/encoder ready + vehicle stopped"); return; }
+    steer_ = action; last_steer_command_time_ = std::chrono::steady_clock::now();
+    control_origin_ = origin; last_rejection_.clear();
     steering_hmi_target_deg_ = action == "LEFT" ? -hmi_steer_full_scale_deg_ : (action == "RIGHT" ? hmi_steer_full_scale_deg_ : 0.0);
     (void)mirror;
     publishState();
@@ -2727,11 +2877,25 @@ private:
 
   void commandTick() {
     publishSteeringTestTick();
+    bool lease_expired = false;
+    if ((drive_ == "FWD" || drive_ == "REV") && !manualLeaseFresh(last_drive_command_time_)) {
+      drive_ = "STOP"; last_drive_command_time_ = {}; ++manual_lease_expirations_; lease_expired = true;
+    }
+    if ((steer_ == "LEFT" || steer_ == "RIGHT" || steer_ == "CENTER") && !manualLeaseFresh(last_steer_command_time_)) {
+      steer_ = "NONE"; steering_hmi_target_deg_ = 0.0; last_steer_command_time_ = {};
+      ++manual_lease_expirations_; lease_expired = true;
+    }
+    if (lease_expired) {
+      control_origin_ = "LEASE_TIMEOUT";
+      last_rejection_ = "manual command lease expired; output forced to zero";
+      publishState();
+    }
     geometry_msgs::msg::Twist cmd;
     std_msgs::msg::String source;
     const bool allowed = manualMotionAllowed(false);
-    const bool drive_active = allowed && (drive_ == "FWD" || drive_ == "REV");
-    const bool steer_active = allowed && steer_connected_ && (steer_ == "LEFT" || steer_ == "RIGHT" || steer_ == "CENTER");
+    const bool drive_active = allowed && manualLeaseFresh(last_drive_command_time_) && (drive_ == "FWD" || drive_ == "REV");
+    const bool steer_active = manualMotionAllowed(true) && manualLeaseFresh(last_steer_command_time_) &&
+                              (steer_ == "LEFT" || steer_ == "RIGHT" || steer_ == "CENTER");
     if (drive_active) {
       const double speed = manual_speed_max_mps_ * static_cast<double>(manual_speed_pct_) / 100.0;
       cmd.linear.x = drive_ == "FWD" ? speed : -speed;
@@ -2747,7 +2911,17 @@ private:
     source_pub_->publish(source);
   }
 
+  void resetExtendedTelemetrySession(uint32_t session) {
+    extended_session_id_ = session;
+    escx_power_seq_ = escx_motor_seq_ = escx_encoder_seq_ = escx_link_seq_ = escx_perf_seq_ = 0U;
+    perx_cam_seq_ = perx_det_seq_ = perx_lane_seq_ = perx_drv_seq_ = perx_obs_seq_ = perx_perf_seq_ = 0U;
+    navx_pose_seq_ = navx_odom_seq_ = navx_imu_seq_ = navx_nav2_seq_ = navx_cost_seq_ = navx_ctrl_seq_ = 0U;
+    last_extended_tx_ = {};
+    last_critical_state_tx_ = {};
+  }
+
   void extendedTelemetryTick() {
+    if (awaiting_host_session_ || extended_session_id_ == 0U) return;
     const auto now_steady = std::chrono::steady_clock::now();
     if (last_extended_tx_.time_since_epoch().count() != 0 &&
         now_steady - last_extended_tx_ < 200ms) return;
@@ -2755,13 +2929,6 @@ private:
 
     const auto flag = [](bool v) { return v ? "1" : "0"; };
     const auto finite = [](double v) { return std::isfinite(v) ? v : 0.0; };
-    if (extended_session_id_ == 0U) {
-      const auto ticks = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count());
-      extended_session_id_ = static_cast<uint32_t>(ticks) ^
-        (static_cast<uint32_t>(::getpid()) * 2654435761U);
-      if (extended_session_id_ == 0U) extended_session_id_ = 1U;
-    }
     const auto send_ext = [this](const char *domain, const char *group, uint32_t seq,
                                  uint32_t age, const std::string &payload) {
       const char *d = std::strcmp(domain, "ESCX") == 0 ? "ESC" :
@@ -2905,12 +3072,16 @@ private:
   }
 
   void telemetryTick() {
-    if (fd_ < 0) return;
-    // Changed-only state transmission. openSerial() clears tx_cache_, so a CDC
-    // reconnect already triggers a complete state resync. Periodically forcing
-    // all ~40 fields at once created a deterministic burst that could delay
-    // runtime_tx in the single-threaded executor.
+    if (fd_ < 0 || awaiting_host_session_) return;
+    // Best-effort display telemetry remains changed-only. Safety/readiness state
+    // gets a tiny periodic refresh so a line accepted by Linux but dropped inside
+    // the F411 cannot remain stale forever. Nine short lines/s is negligible next
+    // to the session-bound F4X3 stream and avoids the old ~40-field burst.
     const bool force = false;
+    const auto now_steady = std::chrono::steady_clock::now();
+    const bool force_critical = last_critical_state_tx_.time_since_epoch().count() == 0 ||
+        now_steady - last_critical_state_tx_ >= std::chrono::seconds(1);
+    if (force_critical) last_critical_state_tx_ = now_steady;
 
     const bool manual_ready = esc_ready_ && esc_feedback_ && !estop_;
     const bool auto_ready = motion_ready_ && nav2_ready_ && esc_ready_ && !estop_;
@@ -2924,15 +3095,15 @@ private:
     const bool ekf_global_fresh = kvString(ekf_global_status_text_, "fresh").value_or("false") == "true";
     const std::string gnss_source = kvString(gnss_status_text_, "src").value_or(gnss_ready_ ? "GNSS" : "OFFLINE");
 
-    sendState("SYS", estop_ ? "FAULT" : (ready ? "READY" : "NOT READY"), force);
-    sendState("MODE", mode_, force);
-    sendState("STATE", estop_ ? "FAULT" : (std::abs(drive_actual_mps_) > 0.02 ? "RUNNING" : "STOPPED"), force);
-    sendState("ESTOP", estop_ ? "1" : "0", force);
-    sendState("VESC_LINK", (esc_ready_ && esc_feedback_) ? "1" : "0", force);
-    sendState("ESC", (esc_ready_ && esc_feedback_) ? "1" : "0", force);
-    sendState("ENC", (steer_connected_ && esc_feedback_) ? "1" : "0", force);
-    sendState("MOTION", motion_ready_ ? "1" : "0", force);
-    sendState("NAV2", nav2_ready_ ? "1" : "0", force);
+    sendState("SYS", estop_ ? "FAULT" : (ready ? "READY" : "NOT READY"), force_critical);
+    sendState("MODE", mode_, force_critical);
+    sendState("STATE", estop_ ? "FAULT" : (std::abs(drive_actual_mps_) > 0.02 ? "RUNNING" : "STOPPED"), force_critical);
+    sendState("ESTOP", estop_ ? "1" : "0", force_critical);
+    sendState("VESC_LINK", (esc_ready_ && esc_feedback_) ? "1" : "0", force_critical);
+    sendState("ESC", (esc_ready_ && esc_feedback_) ? "1" : "0", force_critical);
+    sendState("ENC", (steer_connected_ && esc_feedback_) ? "1" : "0", force_critical);
+    sendState("MOTION", motion_ready_ ? "1" : "0", force_critical);
+    sendState("NAV2", nav2_ready_ ? "1" : "0", force_critical);
 
     sendState("SPD", fixed(std::abs(drive_actual_mps_) * 3.6, 2), force);
     sendState("DRIVE_TGT", fixed(drive_target_mps_, 3), force);
@@ -2976,7 +3147,7 @@ private:
     sendState("CFGDRVSCALE", fixed(drive_scale_runtime_, 4), force);
     sendState("CFGPERINF", perception_inference_runtime_ ? "1" : "0", force);
     extendedTelemetryTick();
-    mirrorWaypointState(force);
+    mirrorWaypointState(force, force_critical);
   }
 
   void publishConnected(bool value) {
@@ -3032,7 +3203,7 @@ private:
   std::uint64_t neo3_duplicate_sequences_{0U};
   std::string neo3_gnss_frame_id_{"gnss_link"}, neo3_mag_frame_id_{"gnss_link"}, neo3pro_baro_frame_id_{"gnss_link"};
   bool neo3_safety_button_as_estop_{false};
-  double manual_speed_max_mps_{1.0}, steering_test_angle_deg_{20.0},
+  double manual_speed_max_mps_{1.0}, manual_command_lease_sec_{0.30}, steering_test_angle_deg_{20.0},
          hmi_steer_full_scale_deg_{90.0}, teleop_yaw_max_rps_{80.0 * kPi / 180.0};
   int speed_min_pct_{10}, speed_max_pct_{50}, manual_speed_pct_{20};
   bool invert_hmi_steering_{true};
@@ -3049,10 +3220,13 @@ private:
   double steering_hmi_target_deg_{0.0};
   std::unordered_map<std::string, std::string> tx_cache_;
   std::chrono::steady_clock::time_point last_reconnect_try_{}, last_forced_tx_{}, last_rx_{}, serial_opened_at_{},
-      last_usb_status_request_{}, last_usb_recovery_request_{}, last_map_pose_{};
+      last_usb_status_request_{}, last_usb_recovery_request_{}, last_map_pose_{},
+      last_drive_command_time_{}, last_steer_command_time_{};
   std::uint32_t silent_open_failures_{0U};
   std::uint32_t usb_recovery_requests_{0U};
+  std::uint64_t manual_lease_expirations_{0U};
   std::uint32_t host_session_token_{0U};
+  std::uint32_t host_transport_generation_{0U};
   bool awaiting_host_session_{false};
   std::chrono::steady_clock::time_point last_host_hello_tx_{};
   std::string last_usb_status_{"UNKNOWN"};
@@ -3128,7 +3302,8 @@ private:
   bool costmap_blocked_{false};
   std::chrono::steady_clock::time_point last_foc_telemetry_time_{}, last_camera_state_time_{}, last_performance_time_{},
       last_obstacle_time_{}, last_lane_metrics_time_{}, last_drivable_time_{}, last_imu_data_time_{},
-      last_local_odom_time_{}, last_mppi_status_time_{}, last_trajectory_state_time_{}, last_costmap_time_{}, last_extended_tx_{};
+      last_local_odom_time_{}, last_mppi_status_time_{}, last_trajectory_state_time_{}, last_costmap_time_{}, last_extended_tx_{},
+      last_critical_state_tx_{};
   uint32_t extended_session_id_{0U};
   uint32_t escx_power_seq_{0U}, escx_motor_seq_{0U}, escx_encoder_seq_{0U}, escx_link_seq_{0U}, escx_perf_seq_{0U};
   uint32_t perx_cam_seq_{0U}, perx_det_seq_{0U}, perx_lane_seq_{0U}, perx_drv_seq_{0U}, perx_obs_seq_{0U}, perx_perf_seq_{0U};

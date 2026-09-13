@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import re, yaml
+from web_static_bundle import read_app_bundle, read_css_bundle
 ROOT=Path(__file__).resolve().parents[1]
 WEB=ROOT/'web'; STATIC=WEB/'static'
-app=(STATIC/'app.js').read_text(); html=(STATIC/'index.html').read_text(); css=(STATIC/'styles.css').read_text()
+app=read_app_bundle(STATIC); html=(STATIC/'index.html').read_text(); css=read_css_bundle(STATIC)
 replay=(STATIC/'replay.js').read_text(); geom=(STATIC/'camera_geometry.js').read_text(); analysis=(STATIC/'analysis_session.js').read_text(); diag=(STATIC/'diagnostics.js').read_text(); cpp=(WEB/'web_server.cpp').read_text(); imu=(ROOT/'tools/yahboom_apply_calibration.py').read_text()
 meta=yaml.safe_load((WEB/'config/ui_parameter_metadata.yaml').read_text()) or {}; params=meta.get('parameters') or {}
 
 def need(text,needle): assert needle in text, needle
 # Load order: pure helpers must exist before app orchestration; replay remains after app.
-order=[html.index('/camera_geometry.js'),html.index('/analysis_session.js'),html.index('/diagnostics.js'),html.index('/app.js'),html.index('/replay.js')]
+order=[html.index('/camera_geometry.js'),html.index('/analysis_session.js'),html.index('/diagnostics.js'),html.index('/core.js'),html.index('/navigation.js'),html.index('/perception_calibration.js'),html.index('/tuning_catalog.js'),html.index('/config.js'),html.index('/boot.js'),html.index('/replay.js')]
 assert order==sorted(order), order
 # One camera acquisition owner, shared geometry, no double-mirrored overlay.
 need(geom,'class CameraGeometry'); need(geom,'class CameraFrameStore'); need(app,'new AGVCameraFrameStore')
@@ -31,7 +32,7 @@ for needle in ['/api/config/proposal','registerConfigProposal','generatedProposa
 for ident in ['perception:perception.ros__parameters.nav2_obstacle_roi_points','perception:perception.ros__parameters.ground_src_points','perception:perception.ros__parameters.ground_dst_points','perception:perception.ros__parameters.obstacle_distance_calibration_coefficients','vehicle:vehicle.ros__parameters.drive_odometry_calibration_scale','mag_heading:mag_heading_fusion.ros__parameters.imu_mag_yaw_offset_rad']:
     assert params[ident]['write_authority']=='calibration_generated', ident
 # N2.1 and Yahboom are proposal-only at Web boundary.
-need(app,"body:JSON.stringify({apply:false})"); assert "body:JSON.stringify({apply:true})" not in app
+need(app,"writeRequest('/api/experiment/trial/optimal-scale',{apply:false})"); assert "writeRequest('/api/experiment/trial/optimal-scale',{apply:true})" not in app
 need(cpp,'USE_CONFIG_TRANSACTION'); need(cpp,'/api/imu/calibration/proposal'); need(cpp,'navigation:N2.1'); need(cpp,'imu:yahboom')
 need(imu,"add_argument('--propose'"); need(imu,"if args.propose")
 for legacy in ['/api/config/set','/api/config/reset','/api/config/reset-batch']:

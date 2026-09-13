@@ -377,6 +377,18 @@ def _vehicle_params(path: str) -> dict:
         raise RuntimeError(f'Cannot load vehicle SSOT {path}: {exc}') from exc
 
 
+def _nav2_costmap_params(data: dict, key: str) -> dict:
+    """Return the ROS parameters map for standard Nav2 nested costmap YAML."""
+    root = data.get(key, {})
+    if not isinstance(root, dict):
+        return {}
+    nested = root.get(key, {})
+    if isinstance(nested, dict) and isinstance(nested.get('ros__parameters'), dict):
+        return nested['ros__parameters']
+    params = root.get('ros__parameters', {})
+    return params if isinstance(params, dict) else {}
+
+
 def _materialize_nav2_vehicle_ssot(base_path: str, vehicle_path: str, precision: bool = False) -> str:
     """Generate Nav2 runtime YAML from vehicle.yaml so geometry/limits cannot drift."""
     with open(base_path, 'r', encoding='utf-8') as handle:
@@ -392,6 +404,7 @@ def _materialize_nav2_vehicle_ssot(base_path: str, vehicle_path: str, precision:
     try:
         controller = data['controller_server']['ros__parameters']
         follow = controller['FollowPath']
+        planner = data['planner_server']['ros__parameters']['GridBased']
         smoother = data['velocity_smoother']['ros__parameters']
     except (KeyError, TypeError) as exc:
         raise RuntimeError('Nav2 YAML missing controller/smoother structure required by vehicle SSOT') from exc
@@ -408,6 +421,13 @@ def _materialize_nav2_vehicle_ssot(base_path: str, vehicle_path: str, precision:
     follow['ax_min'] = decel
     follow['az_max'] = yaw_accel
     follow.setdefault('AckermannConstraints', {})['min_turning_r'] = radius
+    planner['minimum_turning_radius'] = radius
+    footprint = vehicle.get('footprint')
+    if footprint is not None:
+        for costmap_key in ('local_costmap', 'global_costmap'):
+            params = _nav2_costmap_params(data, costmap_key)
+            if params:
+                params['footprint'] = footprint
     smoother['max_velocity'] = [vmax, 0.0, wz]
     smoother['min_velocity'] = [-vrev, 0.0, -wz]
     smoother['max_accel'] = [accel, 0.0, yaw_accel]
@@ -426,10 +446,10 @@ def _materialize_nav2_vehicle_ssot(base_path: str, vehicle_path: str, precision:
         smoother['smoothing_frequency'] = max(30.0, 2.0 * controller_hz)
         resolution = float(vehicle.get('precision_costmap_resolution_m', 0.05))
         for key in ('local_costmap', 'global_costmap'):
-            params = data.get(key, {}).get('ros__parameters', {})
+            params = _nav2_costmap_params(data, key)
             if params:
                 params['resolution'] = resolution
-        local_params = data.get('local_costmap', {}).get('ros__parameters', {})
+        local_params = _nav2_costmap_params(data, 'local_costmap')
         if local_params:
             local_params['update_frequency'] = max(float(local_params.get('update_frequency', 8.0)), controller_hz)
         data.get('bt_navigator', {}).get('ros__parameters', {})['bt_loop_duration'] = max(30, int(round(1000.0 / controller_hz)))
@@ -449,6 +469,7 @@ def _validate_vehicle_runtime_contract(context, vehicle_path: str):
         with open(nav2_path, 'r', encoding='utf-8') as handle:
             nav = yaml.safe_load(handle) or {}
         follow = nav['controller_server']['ros__parameters']['FollowPath']
+        planner = nav['planner_server']['ros__parameters']['GridBased']
         smoother = nav['velocity_smoother']['ros__parameters']
     except (OSError, KeyError, TypeError, yaml.YAMLError) as exc:
         raise RuntimeError(f'Cannot validate Nav2/vehicle SSOT: {exc}') from exc
@@ -456,11 +477,13 @@ def _validate_vehicle_runtime_contract(context, vehicle_path: str):
         'vx_max': float(vehicle['max_forward_speed_mps']),
         'wz_max': float(vehicle['max_yaw_rate_rps']),
         'min_turning_r': float(vehicle['minimum_turning_radius_m']),
+        'planner_min_turning_r': float(vehicle['minimum_turning_radius_m']),
     }
     actual = {
         'vx_max': float(follow['vx_max']),
         'wz_max': float(follow['wz_max']),
         'min_turning_r': float(follow['AckermannConstraints']['min_turning_r']),
+        'planner_min_turning_r': float(planner['minimum_turning_radius']),
     }
     smoother_max = smoother.get('max_velocity', [])
     smoother_min = smoother.get('min_velocity', [])
@@ -472,6 +495,12 @@ def _validate_vehicle_runtime_contract(context, vehicle_path: str):
             errors.append(f'{key}: nav2={actual[key]} vehicle={expected_value}')
     if abs(float(smoother_max[0]) - expected['vx_max']) > 1.0e-9 or        abs(float(smoother_max[2]) - expected['wz_max']) > 1.0e-9 or        abs(float(smoother_min[0]) + float(vehicle['max_reverse_speed_mps'])) > 1.0e-9 or        abs(float(smoother_min[2]) + expected['wz_max']) > 1.0e-9:
         errors.append('velocity_smoother limits disagree with vehicle SSOT')
+    vehicle_footprint = vehicle.get('footprint')
+    if vehicle_footprint is not None:
+        for costmap_key in ('local_costmap', 'global_costmap'):
+            actual_footprint = _nav2_costmap_params(nav, costmap_key).get('footprint')
+            if actual_footprint != vehicle_footprint:
+                errors.append(f'{costmap_key} footprint disagrees with vehicle SSOT')
     precision_mode = LaunchConfiguration('precision_mode').perform(context).strip().lower() in {'1','true','yes'}
     controller_hz = float(nav['controller_server']['ros__parameters'].get('controller_frequency', 0.0))
     model_dt = float(follow.get('model_dt', 0.0))
@@ -485,7 +514,7 @@ def _validate_vehicle_runtime_contract(context, vehicle_path: str):
         if abs(goal_tol - expected_tol) > 1.0e-9:
             errors.append('precision goal tolerance mismatch')
         for key in ('local_costmap','global_costmap'):
-            r=float(nav.get(key,{}).get('ros__parameters',{}).get('resolution',999.0))
+            r=float(_nav2_costmap_params(nav,key).get('resolution',999.0))
             if abs(r-expected_res)>1.0e-9: errors.append(f'{key} precision resolution mismatch')
     else:
         expected_tol = float(vehicle.get('standard_xy_goal_tolerance_m', 0.35))
@@ -599,6 +628,7 @@ def generate_launch_description() -> LaunchDescription:
     nav_share = get_package_share_directory('navigation')
     nav_config_dir = _active_config_dir(nav_share)
     esc_share = get_package_share_directory('esc')
+    stmf4_share = get_package_share_directory('stmf4')
     # Perception/TensorRT is optional for the mini-PC navigation-only profile.
     # Do not resolve it as a hard launch dependency when the package was skipped.
     astra_share = _optional_package_share('perception')
@@ -728,9 +758,11 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('start_vesc_tool_bridge', default_value='true'),
         DeclareLaunchArgument('start_hmi', default_value='true'),
         DeclareLaunchArgument('hmi_port', default_value='auto'),
-        DeclareLaunchArgument('esc_transport_mode', default_value='stm32'),
+        DeclareLaunchArgument('esc_transport_mode', default_value='direct_vesc'),
         DeclareLaunchArgument('esc_port', default_value='auto'),
         DeclareLaunchArgument('esc_serial_enabled', default_value='true'),
+        DeclareLaunchArgument('esc_integration_bypass', default_value='false',
+                              description='Bench only: hard-disable ESC UART and inject stationary odom for Nav2 integration qualification'),
         DeclareLaunchArgument('start_gnss', default_value='true'),
         DeclareLaunchArgument('gnss_source', default_value='stm32', description='GNSS transport: stm32 | usb'),
         DeclareLaunchArgument('start_imu', default_value='true'),
@@ -805,26 +837,40 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ESC runtime: motor_teleop + esc_ackermann + fail-closed VESC maintenance bridge.
-    # Physical F103 UART ownership is centralized in stmf4_hmi_bridge via the F411 gateway.
+    # F103 ESC is direct USB-UART owned by package esc; F411/stmf4 is sensor/HMI-only.
+    stmf4_runtime = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(os.path.join(stmf4_share, 'launch', 'stmf4.launch.py')),
+        condition=IfCondition(PythonExpression([
+            "'", LaunchConfiguration('start_hmi'), "' == 'true' or ('", LaunchConfiguration('start_gnss'),
+            "' == 'true' and '", LaunchConfiguration('gnss_source'), "'.lower() == 'stm32')"])),
+        launch_arguments={
+            'serial_device': LaunchConfiguration('hmi_port'),
+            'publish_stm32_gnss': PythonExpression([
+                "'", LaunchConfiguration('start_gnss'), "' == 'true' and '",
+                LaunchConfiguration('gnss_source'), "'.lower() == 'stm32'"]),
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+        }.items(),
+    )
+
     esc_runtime = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(esc_share, 'launch', 'esc.launch.py')),
         launch_arguments={
             'use_sim_time': LaunchConfiguration('use_sim_time'),
-            'start_gateway': PythonExpression([
-                "'", LaunchConfiguration('start_hmi'), "' == 'true' or '", LaunchConfiguration('start_esc_ackermann'), "' == 'true' or '", LaunchConfiguration('start_vesc_tool_bridge'), "' == 'true' or ('", LaunchConfiguration('start_gnss'), "' == 'true' and '", LaunchConfiguration('gnss_source'), "'.lower() == 'stm32')"]),
-            'hmi_port': LaunchConfiguration('hmi_port'),
-            # Exactly one GNSS owner: direct USB OR F411-published NEO3, never both.
-            'publish_stm32_gnss': PythonExpression([
-                "'", LaunchConfiguration('start_gnss'), "' == 'true' and '",
-                LaunchConfiguration('gnss_source'), "'.lower() == 'stm32'"]),
             'start_teleop': PythonExpression([
                 "'", LaunchConfiguration('enable_keyboard'), "' == 'true' or '",
                 LaunchConfiguration('enable_joystick'), "' == 'true'"]),
             'start_ackermann': LaunchConfiguration('start_esc_ackermann'),
-            'start_vesc_tool_bridge': LaunchConfiguration('start_vesc_tool_bridge'),
+            'start_vesc_tool_bridge': PythonExpression([
+                "'", LaunchConfiguration('start_vesc_tool_bridge'), "' == 'true' and '",
+                LaunchConfiguration('esc_integration_bypass'), "' != 'true'"
+            ]),
             'transport_mode': LaunchConfiguration('esc_transport_mode'),
             'serial_device': LaunchConfiguration('esc_port'),
-            'serial_enabled': LaunchConfiguration('esc_serial_enabled'),
+            'serial_enabled': PythonExpression([
+                "'", LaunchConfiguration('esc_serial_enabled'), "' == 'true' and '",
+                LaunchConfiguration('esc_integration_bypass'), "' != 'true'"
+            ]),
+            'integration_bypass': LaunchConfiguration('esc_integration_bypass'),
             # Main runtime has ONE command chain for both joystick and autonomy:
             # motor_teleop -> cmd_vel_router -> velocity_smoother -> /cmd_vel -> Ackermann.
             # Direct Ackermann teleop subscription is intentionally pointed at an unused
@@ -1167,6 +1213,8 @@ def generate_launch_description() -> LaunchDescription:
             # Stage-2 IMU calibration state is persistent in imu.yaml. Local EKF
             # uses gyro-Z, so autonomous motion remains fail-closed until this PASS.
             'imu_calibration_validated': imu_calibration_default,
+            'allow_esc_integration_bypass': ParameterValue(
+                LaunchConfiguration('esc_integration_bypass'), value_type=bool),
             'max_forward_speed_mps': max_forward_speed,
             'max_reverse_speed_mps': max_reverse_speed,
             'max_yaw_rate_rps': max_yaw_rate,
@@ -1255,7 +1303,10 @@ def generate_launch_description() -> LaunchDescription:
                   perception_cpu_executable_available, perception_gpu_executable_available]),
         LogInfo(msg=['[AGV] autonomous stack | mode=', LaunchConfiguration('mode'),
                      ' | velocity smoother + measured steering calibration + safety gates enabled']),
-        LogInfo(msg=['[AGV] GNSS source=', LaunchConfiguration('gnss_source'), ' | precision_mode=', LaunchConfiguration('precision_mode'), ' | stm32=NEO3 via HMI USB CDC; usb=legacy direct receiver']),
+        LogInfo(msg=['[AGV] GNSS source=', LaunchConfiguration('gnss_source'), ' | precision_mode=', LaunchConfiguration('precision_mode'), ' | stm32=NEO3/NEO3PRO via F411 USB CDC; usb=legacy direct receiver']),
+        LogInfo(
+            condition=IfCondition(LaunchConfiguration('esc_integration_bypass')),
+            msg='[AGV] ESC INTEGRATION BYPASS ACTIVE: UART/physical actuation hard-disabled; stationary synthetic odom is for bench Nav2 qualification only.'),
         LogInfo(
             condition=IfCondition(perception_requested_but_unavailable),
             msg='[AGV] ERROR: package perception/camera backend tidak tersedia.'),
@@ -1282,7 +1333,7 @@ def generate_launch_description() -> LaunchDescription:
         LogInfo(
             condition=IfCondition(camera_only_enabled),
             msg='[AGV] PERCEPTION OFF: camera-only aktif; raw/preview kamera jalan, model/inference OFF.'),
-        robot_state, joint_state_visualizer, gnss, imu, esc_runtime,
+        robot_state, joint_state_visualizer, gnss, imu, stmf4_runtime, esc_runtime,
         delayed_ekf, localization_core, sensor_contract_monitor, precision_localization_monitor, mag_heading_fusion, imu_speed_diagnostic,
         camera_only, perception_cpu, perception_gpu, semantic_obstacle,
         map_server, lifecycle_map, controller, planner, behavior, cmd_vel_router, smoother, collision, navigator,

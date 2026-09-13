@@ -37,6 +37,14 @@ mag_heading_fusion:
     consensus_hold_sec: 2.0
     consensus_timeout_sec: 0.5
     validated_heading_variance_rad2: 0.01
+    # AP_Periph compass.get_field() may already carry onboard correction.
+    # ROS heading authority therefore stays closed until exactly one calibration owner is verified.
+    neo3_calibration_owner: ros_host
+    neo3_calibration_ownership_verified: false
+    neo3_planar_max_tilt_rad: 0.2617993878
+    neo3_full_calibration_enabled: false
+    neo3_mag_bias_xyz_ut: [0.0, 0.0, 0.0]
+    neo3_mag_matrix_3x3: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
     neo3_planar_calibration_enabled: true
     neo3_mag_bias_xy_ut:
     - 7.647139035678742

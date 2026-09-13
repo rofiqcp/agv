@@ -1,0 +1,20 @@
+/* ADV ROS Web — Stage 2 authoritative visual foundation.
+   Loaded after styles.css to normalize historical density overrides. */
+:root{
+  --font-ui:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --font-mono:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",Menlo,monospace;
+  --fs-micro:clamp(.6875rem,.66rem + .10vw,.75rem);
+  --fs-xs:clamp(.75rem,.72rem + .10vw,.8125rem);
+  --fs-sm:clamp(.8125rem,.78rem + .12vw,.875rem);
+  --fs-body:clamp(.875rem,.83rem + .14vw,.9375rem);
+  --fs-section:clamp(1rem,.94rem + .20vw,1.125rem);
+  --fs-title:clamp(1.25rem,1.13rem + .38vw,1.5rem);
+  --fs-state:clamp(1.5rem,1.28rem + .70vw,2rem);
+  --lh-tight:1.25;--lh-ui:1.4;--lh-copy:1.58;
+  --space-1:clamp(.25rem,.20rem + .14vw,.375rem);
+  --space-2:clamp(.5rem,.43rem + .20vw,.625rem);
+  --space-3:clamp(.75rem,.65rem + .30vw,1rem);
+  --space-4:clamp(1rem,.82rem + .45vw,1.25rem);
+  --control-h:2.125rem;--control-h-compact:2rem;--touch-h:2.75rem;
+  --radius-control:.4rem;--radius-panel:.5rem;
+}

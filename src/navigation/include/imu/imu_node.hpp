@@ -83,7 +83,13 @@ private:
   // Hardware WIT frames do not expose an on-wire timestamp. We therefore anchor
   // steady_clock to ROS time once and timestamp each checksum-valid packet at
   // parse/reception time. This avoids re-stamping old gyro data at publish time.
-  double component_sync_max_gap_sec_ = 0.05;
+  double component_sync_max_gap_sec_ = 0.03;
+  // WIT packet scaling is only trustworthy when this configured FSR matches the
+  // physical device. range_configuration_verified remains false until that is
+  // demonstrated by readback/manual-specific evidence or metrology.
+  double accel_full_scale_g_ = 16.0;
+  double gyro_full_scale_dps_ = 2000.0;
+  bool range_configuration_verified_ = false;
   double timestamp_max_future_sec_ = 0.02;
   double timestamp_max_regression_sec_ = 0.002;
   double timing_status_rate_hz_ = 2.0;

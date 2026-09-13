@@ -31,7 +31,7 @@ for token in (
     'DeclareLaunchArgument("nav2_topic", default_value="/cmd_vel")',
     'DeclareLaunchArgument("teleop_topic", default_value="/cmd_vel/teleop")',
     'DeclareLaunchArgument("teleop_source_topic", default_value="/teleop/active_source")',
-    'DeclareLaunchArgument("transport_mode", default_value="stm32")',
+    'DeclareLaunchArgument("transport_mode", default_value="direct_vesc")',
     'DeclareLaunchArgument("serial_enabled", default_value="true")',
     '"nav2_topic": LaunchConfiguration("nav2_topic")',
     '"teleop_topic": LaunchConfiguration("teleop_topic")',
@@ -57,21 +57,15 @@ if abs(float(ack.get("drive_gear_ratio", 0.0)) - 1.0) > 1e-9:
     fail("native VESC drive gear ratio must be direct 1.0")
 if abs(float(ack.get("drive_erpm_per_mps", 0.0)) - 8000.0) > 1e-9:
     fail("commissioning drive baseline must be 8000 eRPM per m/s")
-# STM32 runtime transport is one 50-Hz batch per tick, not four ROS/USB callbacks.
+# Direct native VESC runtime is one physical USB-UART owner.
 for token in ("appendVescFrame", "appendVescSetPos", "appendVescSetRpm",
               "appendVescValuesRequest", "appendSteeringCalibrationRequest",
-              "batch.reserve(64U)", "publishStm32Bytes(batch)"):
+              "buildNativeRuntimeBatch", "drainDirectRx", "TIOCEXCL",
+              '"/esc/vesc/direct_rx"', '"/esc/vesc/direct_connected"'):
     if token not in source:
-        fail(f"STM32 VESC batch transport missing: {token}")
-tick = source[source.find("void stm32TransportTick"):source.find("void sendStm32SafeStop")]
-if tick.count("publishStm32Bytes(batch)") != 1:
-    fail("STM32 runtime tick must publish exactly one wire batch")
-if "sendVescSetPos(steering_deg)" in tick or "requestVescValues(false)" in tick:
-    fail("STM32 runtime tick reintroduced per-frame ROS publishing")
-for token in ("values_pair_mask_ = 0x01U", "values_pair_mask_ |= 0x02U",
-              "pair_skew_s <= 0.040", "if (pair_complete) publishFocTelemetry()"):
-    if token not in source:
-        fail(f"dual-motor coherent telemetry pair contract missing: {token}")
+        fail(f"direct native VESC transport missing: {token}")
+if 'transport_mode must be direct_vesc' not in source:
+    fail("legacy F411 ESC transport still accepted")
 
 for token in ("nativeDriveErpmPerMps", "rightCommandUnitsPerMps", "rightCommandLimit",
               "return drive_erpm_per_mps_",
@@ -81,12 +75,8 @@ for token in ("nativeDriveErpmPerMps", "rightCommandUnitsPerMps", "rightCommandL
               "(physical_deg + 30.0) * 6.0"):
     if token not in source:
         fail(f"native VESC eRPM conversion contract missing: {token}")
-if ack.get("stm32_tx_topic") != "/stmf4/vesc/runtime_tx" or ack.get("stm32_rx_topic") != "/stmf4/vesc/rx":
-    fail("ESC STM32F411 VESC transport topics are invalid")
-if ack.get("stm32_connected_topic") != "/stmf4/vesc/connected":
-    fail("ESC STM32F411 transport health topic is invalid")
 if "Prolific_Technology_Inc._USB-Serial_Controller" not in str(ack.get("serial_auto_id_contains", "")):
-    fail("direct-serial recovery selector must remain available")
+    fail("direct VESC serial selector missing")
 if str(ack.get("serial_auto_path_contains", "")).strip():
     fail("direct-serial recovery must not use topology-dependent physical by-path fallback")
 if 'declare_parameter<std::string>("serial_auto_path_contains", "")' not in source:
@@ -99,7 +89,7 @@ if "errno == EAGAIN || errno == EWOULDBLOCK" not in source or "would_block_retri
     fail("ESC nonblocking USB-UART TX must tolerate bounded transient EAGAIN")
 if "serial_active_path_" not in source or '<< " path="' not in source:
     fail("ESC status must report the active physical serial path")
-for token in ("TIOCEXCL", "safe_stop_requested_", "SAFE SHUTDOWN", "rclcpp::on_shutdown", "Never tcdrain()"):
+for token in ("TIOCEXCL", "safe_stop_requested_", "SAFE SHUTDOWN", "rclcpp::on_shutdown", "buildNativeSafeStopBatch"):
     if token not in source:
         fail(f"ESC Ctrl+C/USB safe-shutdown contract missing: {token}")
 if float(shared.get("speed_max", -1.0)) != float(ack.get("speed_max", -2.0)):
@@ -116,10 +106,11 @@ for token in (
     "age > command_watchdog_sec_",
     "crc16Ccitt",
     "makeVescFrame",
-    "sendVescSetPos",
-    "sendVescSetRpm",
+    "appendVescSetPos",
+    "appendVescSetRpm",
     "wrapRightMotor",
-    "requestVescValues",
+    "appendVescValuesRequest",
+    "buildNativeRuntimeBatch",
     "consumeVescRxBytes",
     "maintenance_mode_active_",
     "ack_fresh && left_ready && right_ready && !firmware_failsafe",
@@ -147,7 +138,8 @@ if source.count("::open(") != 1:
 tool_source = (ROOT / "src/vesc_tool_bridge.cpp").read_text()
 if "motor_teleop" not in launch or "ackermann_controller_server" not in launch or "vesc_tool_bridge" not in launch:
     fail("ESC launch must contain teleop, Ackermann runtime, and VESC maintenance bridge")
-for token in ("/stmf4/vesc/maintenance_tx", "/esc/vesc/maintenance_active", "/esc/vesc/maintenance_owner",
+for token in ("/esc/vesc/maintenance_tx", "/esc/vesc/direct_rx", "/esc/vesc/direct_connected",
+              "/esc/vesc/maintenance_active", "/esc/vesc/maintenance_owner",
               "MODE:MAINTENANCE", "COMM_GET_MCCONF", "COMM_DETECT_HALL_FOC", "COMM_DETECT_ENCODER",
               "COMM_TERMINAL_CMD", "127.0.0.1", "tcp_port", "python_tcp_port", "PYTHON_MAINTENANCE",
               "SOCK_NONBLOCK", "TCP_NODELAY", "tcp_client_fd_", "python_tcp_client_fd_",
@@ -160,6 +152,6 @@ print("PASS ESC runtime contract")
 print("priority: E_STOP > PYTHON_MAINTENANCE > VESC_TOOL > MANUAL(HMI/ROSWEB/TELEOP freshest) > PERCEPTION > gated NAV2 > IDLE")
 print("fusion authority: ESC longitudinal speed only; kinematic yaw is diagnostic")
 
-assert "maintenance_route_switch" in (ROOT / "src/vesc_tool_bridge.cpp").read_text()
+assert "maintenance_active" in (ROOT / "src/vesc_tool_bridge.cpp").read_text()
 
 assert "!tcp_probe_pending_" in (ROOT / "src/vesc_tool_bridge.cpp").read_text()

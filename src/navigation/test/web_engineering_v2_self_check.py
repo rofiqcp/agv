@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 from pathlib import Path
+from web_static_bundle import read_app_bundle
 
 ROOT = Path(__file__).resolve().parents[1]
 HTML = (ROOT / "web/static/index.html").read_text()
-APP = (ROOT / "web/static/app.js").read_text()
+APP = read_app_bundle(ROOT / "web/static")
 VESC = (ROOT / "web/static/vesc_workbench.js").read_text()
 REPLAY = (ROOT / "web/static/replay.js").read_text()
 CPP = (ROOT / "web/web_server.cpp").read_text()

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import sys
+from web_static_bundle import read_app_bundle
 
 root = Path(__file__).resolve().parents[1]
-app = (root/'web/static/app.js').read_text(encoding='utf-8')
+app = read_app_bundle(root/'web/static')
 vesc = (root/'web/static/vesc_workbench.js').read_text(encoding='utf-8')
 server = (root/'web/web_server.cpp').read_text(encoding='utf-8')
 

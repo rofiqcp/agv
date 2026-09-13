@@ -68,7 +68,7 @@ for token in [
     'gnss_yaw_rate_rps_','gnss_yaw_rate_variance_','gnss_yaw_rate_valid_',
     'course_enu - *last_gnss_velocity_course_enu_rad_',
     'imu_yaw_unavailable','have_local_motion_at_gnss_ = localStateAtUnlocked',
-    'No rejection: this is the expected state when ESC is disabled/offline',
+    'GNSS velocity must remain usable even when the ESC serial link is absent.',
     'gnss_velocity_fusion_pub_->publish','"/gnss/fusion_status"',
 ]:
     if token not in cpp: fail(f'C++ fusion contract missing: {token}')

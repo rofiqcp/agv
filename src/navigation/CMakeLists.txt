@@ -112,7 +112,7 @@ ament_target_dependencies(cmd_vel_router rclcpp std_msgs geometry_msgs)
 
 # Runtime ROS graph contract: exactly one publisher owns every canonical critical sensor topic.
 add_executable(sensor_contract_monitor src/sensor_contract_monitor.cpp)
-ament_target_dependencies(sensor_contract_monitor rclcpp std_msgs)
+ament_target_dependencies(sensor_contract_monitor rclcpp std_msgs sensor_msgs geometry_msgs nav_msgs builtin_interfaces)
 
 # NavigationCore hanya mengurus lifecycle/goal/autonomous routing.
 add_executable(navigation_core src/navigation_core.cpp)

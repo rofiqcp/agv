@@ -1,13 +1,14 @@
 const {test,expect}=require("@playwright/test");
 const fs=require("fs");
 const path=require("path"); const ROOT=process.env.AGV_ROOT||path.resolve(__dirname,".."); const OUT=path.join(ROOT,"data/playwright_rosweb"); fs.mkdirSync(OUT,{recursive:true});
+const base=(process.env.ROS_WEB_BASE_URL||'http://127.0.0.1:5000').replace(/\/+$/,'');
 
 test("ROS Web all tabs and subtabs",async({page})=>{
   const errs=[]; const badResp=[];
   page.on("pageerror",e=>errs.push("pageerror: "+e.message));
   page.on("console",m=>{if(m.type()==="error") errs.push("console: "+m.text())});
   page.on("response",r=>{if(r.status()>=400) badResp.push(`${r.status()} ${r.url()}`)});
-  await page.goto("http://127.0.0.1:5000",{waitUntil:"domcontentloaded"});
+  await page.goto(base,{waitUntil:"domcontentloaded"});
   await page.waitForTimeout(1200);
   await page.evaluate(()=>activatePage("overview",false));
   await expect(page.locator("#page-overview")).toHaveClass(/active/);

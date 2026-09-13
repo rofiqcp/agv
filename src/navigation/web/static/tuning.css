@@ -1,0 +1,69 @@
+/* ==============================================================
+   ADV Control Shell V4 — 4 primary domains + contextual sidebar
+   ============================================================== */
+:root{--sidebar:252px;--sidebar-collapsed:78px}
+body.sidebar-collapsed{--sidebar:var(--sidebar-collapsed)}
+.app-shell{transition:grid-template-columns .2s ease}
+.sidebar{transition:width .2s ease,transform .2s ease;padding:0 14px 18px}
+.brand{position:relative;height:82px;min-height:82px;padding:0 5px;display:flex;align-items:center;border-bottom:1px solid var(--border);margin-bottom:12px}
+.brand-copy{min-width:0;transition:opacity .15s ease}
+.brand-mark{border:0;outline:0;flex:0 0 auto}
+.sidebar-collapse{margin-left:auto;width:30px;height:30px;border:1px solid var(--border);border-radius:9px;background:#0b181b;color:var(--muted);cursor:pointer;font-size:20px;line-height:1;display:grid;place-items:center;flex:0 0 auto}
+.sidebar-collapse:hover{border-color:var(--border2);color:var(--green)}
+.sidebar-context-head{margin:0 5px 12px;padding:10px 10px 12px;border-bottom:1px solid var(--border)}
+.sidebar-context-head span{display:block;color:var(--green);font-size:8px;font-weight:850;letter-spacing:1.5px}
+.sidebar-context-head b{display:block;margin-top:3px;font-size:14px}
+#contextNav{gap:6px}
+#contextNav .nav-item{min-height:48px;border:1px solid transparent}
+#contextNav .nav-item.active{border-color:rgba(54,230,161,.16)}
+body.sidebar-collapsed{--sidebar:70px}
+body.sidebar-collapsed .sidebar{padding:0 14px 18px}
+body.sidebar-collapsed .brand{justify-content:center;padding:0;margin:0;border-bottom:1px solid var(--border)}
+body.sidebar-collapsed .brand-copy,
+body.sidebar-collapsed .sidebar-context-head,
+body.sidebar-collapsed #contextNav,
+body.sidebar-collapsed .sidebar-bottom,
+body.sidebar-collapsed .sidebar-collapse{display:none!important}
+body.sidebar-collapsed .brand-mark{width:42px;height:42px;cursor:pointer}
+body.sidebar-collapsed .brand-mark:hover{transform:translateY(-1px);box-shadow:0 0 34px rgba(54,230,161,.28)}
+body.sidebar-collapsed .brand-mark:focus-visible{box-shadow:0 0 0 2px #071011,0 0 0 4px var(--green)}
+
+.topbar{height:82px;min-height:82px;padding:0 24px;gap:18px}
+.page-heading{flex:0 0 190px;margin-right:0;min-width:0}
+.page-heading h1{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.top-domain-tabs{flex:1;min-width:340px;display:flex;justify-content:center;gap:6px;padding:5px;border:1px solid var(--border);background:rgba(8,18,20,.72);border-radius:13px}
+.top-domain{min-height:38px;min-width:92px;padding:0 14px;border:1px solid transparent;border-radius:9px;background:transparent;color:#7f979b;font-size:11px;font-weight:780;cursor:pointer;transition:.16s}
+.top-domain:hover{color:#cfe2df;background:rgba(255,255,255,.025)}
+.top-domain.active{color:var(--green);border-color:rgba(54,230,161,.28);background:linear-gradient(180deg,rgba(54,230,161,.12),rgba(49,168,255,.045));box-shadow:inset 0 0 0 1px rgba(54,230,161,.035)}
+.top-status{flex:0 0 auto}
+.runtime-pill{min-width:88px;justify-content:flex-start}
+
+/* Workbench is now simply Tuning, scoped by the active top domain. */
+.lab-hero{margin-bottom:14px}
+.chapter-group span{color:#b9d6d1}
+.chapter-list .experiment-item span{font-size:10px;min-width:38px;display:inline-block}
+.chapter-list .experiment-item b{font-weight:650;color:#dbeae7}
+
+/* Make HMI command-domain limits explicit. */
+.hmi-control-grid>button[data-hmi-control="LEFT"] small::after{content:"  −90°";color:var(--cyan)}
+.hmi-control-grid>button[data-hmi-control="RIGHT"] small::after{content:"  +90°";color:var(--cyan)}
+.hmi-control-grid>button[data-hmi-control="CENTER"] small::after{content:" command";color:var(--dim)}
+
+.light .sidebar-collapse,.light .top-domain-tabs{background:#f7fbfa}
+.light .top-domain.active{background:rgba(24,185,125,.10)}
+
+@media(max-width:1260px){
+  .topbar{gap:10px;padding-inline:16px}.page-heading{flex-basis:150px}.top-domain-tabs{min-width:300px}.top-domain{min-width:76px;padding-inline:10px}.runtime-pill{min-width:72px;padding-inline:8px}.runtime-pill span{display:none}
+}
+@media(max-width:980px){
+  .topbar{height:auto;min-height:78px;flex-wrap:wrap;padding-top:8px;padding-bottom:8px}.page-heading{flex:1 1 150px}.top-domain-tabs{order:3;flex:1 0 100%;min-width:0}.top-domain{flex:1;min-width:0}.top-status{margin-left:auto}
+}
+@media(max-width:820px){
+  body.sidebar-collapsed{--sidebar:230px}.sidebar-collapse{display:none}.sidebar-context-head{display:block!important}.brand-copy{display:block!important}.sidebar-bottom{display:block!important}.sidebar-bottom>*{display:flex!important}body.sidebar-collapsed #contextNav{display:flex!important}#contextNav .nav-item b{display:block!important}#contextNav .nav-item{justify-content:flex-start!important}
+  .topbar{position:sticky}.page-heading{display:none}.top-domain-tabs{order:2;flex:1 0 100%}.top-status{order:1}.mobile-only{order:0}
+}
+@media(max-width:560px){
+  .topbar{gap:7px}.top-domain-tabs{padding:4px;gap:3px}.top-domain{font-size:9px;min-height:36px;padding:0 6px}.runtime-pill{min-width:0}.top-status{gap:5px}.icon-button{width:32px;height:32px}
+}
+
+

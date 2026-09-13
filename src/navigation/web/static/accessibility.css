@@ -1,0 +1,30 @@
+/* Stage 3 — accessibility and component-responsive authority */
+:root{--focus-ring:#67d9ff;--focus-gap:2px}
+:where(button,a,input,select,textarea,summary,[tabindex]):focus-visible{outline:2px solid var(--focus-ring)!important;outline-offset:var(--focus-gap);box-shadow:0 0 0 1px rgba(0,0,0,.72)}
+.help-drawer:focus-visible,.config-diff-drawer:focus-visible,.modal:focus-visible{outline:none!important;box-shadow:none}
+[role="tab"][aria-selected="true"]{font-weight:750}
+[role="tabpanel"][hidden]{display:none!important}
+#mapStage:focus-visible,.perception-cal-overlay:focus-visible{outline:2px solid var(--focus-ring)!important;outline-offset:-3px}
+.panel,.nav-mission-rail,.vesc-card,.tuning-editor,.context-panel{container-type:inline-size}
+@container (max-width:520px){.metric-grid,.four-metrics,.qualification-summary,.context-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.button-row,.panel-actions{flex-wrap:wrap}}
+@container (max-width:360px){.metric-grid,.four-metrics,.qualification-summary,.context-metrics{grid-template-columns:1fr}.button-row>*{flex:1 1 auto}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
+
+
+/* Stage 2 hardening — WCAG AA contrast authority for engineering dark theme. */
+:root{
+  --muted:#bcc5c7;
+  --dim:#aab4b6;
+  --amber:#ffd166;
+  --red:#ff838b;
+}
+.version,.footer{color:var(--dim)!important}
+.help-trigger{color:#b9d9e4!important}
+
+.record-toggle.start{color:#d8ffe7!important}
+.record-toggle.stop{color:#ffd5d8!important}
+
+.nav-rail-section label small,
+.nav-kv span,
+.nav-status-strip span,
+.nav-inspector>summary b{color:var(--muted)!important}

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+from web_static_bundle import read_app_bundle
 
 ROOT = Path(__file__).resolve().parents[3]
 nav = ROOT / "src/navigation"
@@ -8,7 +9,7 @@ obs = (nav / "src/vehicle_dynamics_observer.cpp").read_text()
 ack = (esc / "src/ackermann_controller_server.cpp").read_text()
 launch = (nav / "launch/autonomous.launch.py").read_text()
 web = (nav / "web/web_server.cpp").read_text()
-app = (nav / "web/static/app.js").read_text()
+app = read_app_bundle(nav / "web/static")
 index = (nav / "web/static/index.html").read_text()
 
 def require(cond, message):

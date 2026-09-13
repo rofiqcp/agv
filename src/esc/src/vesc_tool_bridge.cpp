@@ -276,9 +276,9 @@ class VescToolBridge final : public rclcpp::Node {
     python_tcp_port_ = static_cast<int>(std::clamp<std::int64_t>(declare_parameter<int>("python_tcp_port", 65101), 1024, 65535));
     if (python_tcp_port_ == tcp_port_) throw std::runtime_error("python_tcp_port and tcp_port must differ");
 
-    tx_pub_ = create_publisher<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/maintenance_tx", rclcpp::QoS(100).reliable());
-    runtime_probe_pub_ = create_publisher<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/runtime_tx", rclcpp::QoS(rclcpp::KeepLast(8)).reliable());
-    mode_pub_ = create_publisher<std_msgs::msg::String>("/stmf4/vesc/mode", stateQos());
+    tx_pub_ = create_publisher<std_msgs::msg::UInt8MultiArray>("/esc/vesc/maintenance_tx", rclcpp::QoS(100).reliable());
+    runtime_probe_pub_ = create_publisher<std_msgs::msg::UInt8MultiArray>("/esc/vesc/runtime_tx", rclcpp::QoS(rclcpp::KeepLast(8)).reliable());
+    mode_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/mode", stateQos());
     active_pub_ = create_publisher<std_msgs::msg::Bool>("/esc/vesc/maintenance_active", stateQos());
     owner_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/maintenance_owner", stateQos());
     status_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/tool_status", stateQos());
@@ -295,11 +295,11 @@ class VescToolBridge final : public rclcpp::Node {
     command_state_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/command_state", stateQos());
     raw_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/raw_reply", rclcpp::QoS(20).reliable());
 
-    rx_sub_ = create_subscription<std_msgs::msg::UInt8MultiArray>("/stmf4/vesc/rx", rclcpp::QoS(rclcpp::KeepLast(16)).reliable(),
+    rx_sub_ = create_subscription<std_msgs::msg::UInt8MultiArray>("/esc/vesc/direct_rx", rclcpp::QoS(rclcpp::KeepLast(16)).reliable(),
       [this](std_msgs::msg::UInt8MultiArray::ConstSharedPtr m) { consume(m->data); });
-    gateway_sub_ = create_subscription<std_msgs::msg::Bool>("/hmi/connected", stateQos(),
+    gateway_sub_ = create_subscription<std_msgs::msg::Bool>("/esc/vesc/direct_connected", stateQos(),
       [this](std_msgs::msg::Bool::ConstSharedPtr m) { gateway_connected_ = m->data; publishStatus(); });
-    transport_sub_ = create_subscription<std_msgs::msg::Bool>("/stmf4/vesc/connected", stateQos(),
+    transport_sub_ = create_subscription<std_msgs::msg::Bool>("/esc/vesc/direct_connected", stateQos(),
       [this](std_msgs::msg::Bool::ConstSharedPtr m) { transport_connected_ = m->data; publishStatus(); });
     speed_sub_ = create_subscription<std_msgs::msg::Float64>("/esc/drive_actual_mps", 10,
       [this](std_msgs::msg::Float64::ConstSharedPtr m) { if (std::isfinite(m->data)) speed_mps_ = m->data; });
@@ -744,11 +744,10 @@ class VescToolBridge final : public rclcpp::Node {
   }
 
   bool safeToEnter() const {
-    // /stmf4/vesc/connected is intentionally freshness-based and becomes false
+    // /esc/vesc/direct_connected is intentionally freshness-based and becomes false
     // while no VESC requests are flowing. It must NOT force a probe round-trip
-    // before every TCP session. /hmi/connected proves the 1-Mbaud Mini-PC<->F411
-    // gateway is physically open; the buffered first VESC frame then proves the
-    // F411<->F103 link after the maintenance route is selected.
+    // before every TCP session. /hmi/connected proves the package-esc USB-UART owner is physically open. The buffered first VESC
+    // frame then proves the direct F103 link after maintenance ownership changes.
     return gateway_connected_ && vehicleIdleForMaintenance();
   }
 
@@ -756,7 +755,7 @@ class VescToolBridge final : public rclcpp::Node {
     if (maintenance_active_ || transition_ != Transition::NONE) return;
     if (!safeToEnter()) { publishStatus("maintenance_rejected_vehicle_not_idle"); return; }
     // Barrier order is strict: explicit VESC current=0 on RUNTIME, then publish
-    // maintenance_active so Ackermann also fail-closes, then switch F411 route.
+    // maintenance_active so Ackermann also fail-closes, then switch logical owner inside package esc.
     // Two short current-zero packets are <3 ms on the validated 115200 link;
     // 12 ms leaves ample ROS/USB scheduling margin without timing out a 60-ms
     // first VESC request.
@@ -772,7 +771,7 @@ class VescToolBridge final : public rclcpp::Node {
     if (!maintenance_active_ || transition_ != Transition::NONE) return;
     closePythonTcpClient();
     closeTcpClient();
-    // Stop both motors while F411 still routes MAINTENANCE, then restore RUNTIME.
+    // Stop both motors while direct transport is still in MAINTENANCE, then restore RUNTIME ownership.
     sendMaintenanceSafeStop();
     transition_ = Transition::EXIT_STOP;
     transition_at_ = std::chrono::steady_clock::now() + 100ms;

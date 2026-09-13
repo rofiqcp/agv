@@ -102,7 +102,13 @@ ImuNode::ImuNode(const rclcpp::NodeOptions & options)
   require_fresh_gyro_for_imu_publish_ =
     this->declare_parameter<bool>("require_fresh_gyro_for_imu_publish", true);
   component_sync_max_gap_sec_ = std::clamp(
-    this->declare_parameter<double>("component_sync_max_gap_sec", 0.05), 0.005, 0.50);
+    this->declare_parameter<double>("component_sync_max_gap_sec", 0.03), 0.005, 0.50);
+  accel_full_scale_g_ = std::clamp(
+    this->declare_parameter<double>("accel_full_scale_g", 16.0), 1.0, 32.0);
+  gyro_full_scale_dps_ = std::clamp(
+    this->declare_parameter<double>("gyro_full_scale_dps", 2000.0), 125.0, 4000.0);
+  range_configuration_verified_ =
+    this->declare_parameter<bool>("range_configuration_verified", false);
   timestamp_max_future_sec_ = std::clamp(
     this->declare_parameter<double>("timestamp_max_future_sec", 0.02), 0.0, 0.25);
   timestamp_max_regression_sec_ = std::clamp(
@@ -371,6 +377,9 @@ void ImuNode::publishProfileStatus(const std::string & state, const std::string 
     ";rrate=" + std::to_string(output_rate_code_) +
     ";rsw=" + std::to_string(output_content_mask_) +
     ";axis6=" + std::to_string(algorithm_mode_) +
+    ";accel_fsr_g=" + std::to_string(accel_full_scale_g_) +
+    ";gyro_fsr_dps=" + std::to_string(gyro_full_scale_dps_) +
+    ";range_verified=" + std::string(range_configuration_verified_ ? "true" : "false") +
     ";detail=" + detail;
   pub_profile_status_->publish(msg);
 }
@@ -908,9 +917,12 @@ bool ImuNode::parsePacket(const std::vector<uint8_t> & data)
     std::memcpy(&v0, &data[2], 2);
     std::memcpy(&v1, &data[4], 2);
     std::memcpy(&v2, &data[6], 2);
-    ax_ = (v0 / 32768.0) * 16.0 * 9.80665;
-    ay_ = (v1 / 32768.0) * 16.0 * 9.80665;
-    az_ = (v2 / 32768.0) * 16.0 * 9.80665;
+    // WIT 0x51 payload is normalized int16. The physical full-scale is an
+    // explicit contract rather than a hidden literal so a different sensor/range
+    // cannot silently rescale acceleration by 2x/4x.
+    ax_ = (v0 / 32768.0) * accel_full_scale_g_ * 9.80665;
+    ay_ = (v1 / 32768.0) * accel_full_scale_g_ * 9.80665;
+    az_ = (v2 / 32768.0) * accel_full_scale_g_ * 9.80665;
     has_acc_ = true;
     last_accel_packet_time_ = packet_steady_sec;
     last_accel_measurement_stamp_ = packet_stamp;
@@ -920,9 +932,9 @@ bool ImuNode::parsePacket(const std::vector<uint8_t> & data)
     std::memcpy(&v0, &data[2], 2);
     std::memcpy(&v1, &data[4], 2);
     std::memcpy(&v2, &data[6], 2);
-    gx_ = (v0 / 32768.0) * 2000.0;
-    gy_ = (v1 / 32768.0) * 2000.0;
-    gz_ = (v2 / 32768.0) * 2000.0;
+    gx_ = (v0 / 32768.0) * gyro_full_scale_dps_;
+    gy_ = (v1 / 32768.0) * gyro_full_scale_dps_;
+    gz_ = (v2 / 32768.0) * gyro_full_scale_dps_;
     has_gyro_ = true;
     if (last_gyro_packet_time_ > 0.0) {
       const double period = packet_steady_sec - last_gyro_packet_time_;

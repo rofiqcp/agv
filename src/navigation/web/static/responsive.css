@@ -1,0 +1,86 @@
+/* Responsive authority: never reduce operational text to miniature sizes. */
+@media(max-width:1180px){
+  :root{--fs-body:clamp(.875rem,.84rem + .18vw,.9375rem)}
+  .panel{padding:var(--space-2)!important}.content{padding:var(--space-2)!important}
+}
+@media(max-width:820px){
+  :root{--control-h:2.75rem;--control-h-compact:2.5rem}
+  body{font-size:var(--fs-body)!important}
+  button,.soft-btn,.primary-btn,.danger-btn,.warning-btn,.record-toggle,.param-save,.workspace-tab,.test-family-tab,.test-phase-tab{min-height:var(--touch-h)}
+  .icon-button,.sidebar-collapse,.help-trigger{min-width:var(--touch-h);width:var(--touch-h);height:var(--touch-h)}
+  .top-domain{min-height:2.5rem;font-size:var(--fs-xs)!important}
+  .content{padding:var(--space-2)!important}.panel{padding:var(--space-2)!important}
+  .nav-item{min-height:var(--touch-h)}
+  .mission-row-actions button,.event-timeline-head button,.chart-tool-btn,.vesc-preset-btn{min-height:2rem!important}
+}
+@media(max-width:560px){
+  body{font-size:var(--fs-body)!important;line-height:var(--lh-ui)}
+  input,select,textarea{font-size:1rem!important;min-height:var(--touch-h)}
+  button{font-size:var(--fs-sm)}
+  .page-heading h1{font-size:clamp(1.125rem,1rem + 1vw,1.375rem)!important}
+  .workspace-tab,.test-family-tab,.test-phase-tab{font-size:var(--fs-xs)!important;padding-inline:.65rem}
+  .rviz-layer-panel label{font-size:var(--fs-micro)!important}
+}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
+/* Legacy workspace selectors audited from computed styles. */
+.readiness-ring span,.readiness-copy p,.micro-row,.micro-row span,.micro-row b,.mission-state span,.footer,.footer span{font-size:var(--fs-micro)!important;line-height:var(--lh-ui)!important}
+.sidebar-tuning-group,.sidebar-report-group{font-size:var(--fs-micro)!important;line-height:var(--lh-ui)!important;padding-block:.35rem!important}
+.vesc-mini-status span,.vesc-mini-status b,.vesc-chart-head b,.vesc-chart-head span,.vesc-trace-checks label,.vesc-card-head b{font-size:var(--fs-micro)!important;line-height:var(--lh-ui)!important}
+.vesc-primary-readout span,.vesc-secondary-readout span,.vesc-secondary-readout b,.vesc-position-strip span{font-size:var(--fs-micro)!important;line-height:var(--lh-ui)!important}
+.vesc-all-vars,.vesc-reply{font-size:var(--fs-micro)!important;line-height:var(--lh-copy)!important}
+.vesc-trace-checks label{min-height:1.5rem;padding-block:.1rem}.vesc-preset-btn{min-height:var(--control-h-compact)!important;height:auto!important;font-size:var(--fs-micro)!important}
+.nav-status-strip span,.nav-status-strip b,.mission-draft-dock>summary,.mission-draft-dock>summary span,.mission-draft-dock>summary b,.mission-draft-dock>summary i,.mission-draft-toolbar span{font-size:var(--fs-micro)!important;line-height:var(--lh-ui)!important}
+.nav-inspector-module .json-pretty,.nav-inspector-pane>pre{font-size:var(--fs-micro)!important;line-height:var(--lh-copy)!important}
+.yolop-toggle-panel span{font-size:var(--fs-micro)!important}.layer-collapse,#mapLayerCollapseBtn{min-width:var(--control-h-compact)!important;width:var(--control-h-compact)!important;min-height:var(--control-h-compact)!important;height:var(--control-h-compact)!important}
+@media(max-width:820px){.layer-collapse,#mapLayerCollapseBtn{min-width:var(--touch-h)!important;width:var(--touch-h)!important;min-height:var(--touch-h)!important;height:var(--touch-h)!important}}
+/* Keep sticky offsets equal to the real two-row shell at intermediate widths. */
+@media(max-width:1100px) and (min-width:821px){
+  :root{--topbar-h:5.75rem}
+  .topbar{height:var(--topbar-h)!important;min-height:var(--topbar-h)!important;flex-wrap:wrap!important;align-content:center;padding-block:.35rem!important}
+  .top-domain-tabs{order:3;flex:1 0 100%;min-width:0}
+  .top-domain{flex:1;min-width:0}
+}
+@media(max-width:820px){
+  .workspace-tabs{position:relative!important;top:auto!important}
+  .tuning-modebar{position:relative!important;top:auto!important}
+}
+/* Off-canvas sidebar must be truly inactive when closed. */
+@media(max-width:820px){
+  .sidebar{visibility:hidden;pointer-events:none}
+  .sidebar.open{visibility:visible;pointer-events:auto}
+}
+
+
+/* Stage 7 certification fixes: mobile touch floor and ESC status readability. */
+#page-esc-status .esc-connection p,
+#page-esc-status .json-pretty,
+#page-esc-status .check-item i,
+#page-esc-status .check-item b,
+#page-esc-status .check-item span{font-size:var(--fs-micro)!important;line-height:var(--lh-ui)!important}
+@media(max-width:820px){
+  button,input:not([type="checkbox"]):not([type="radio"]),select,textarea,[role="button"]{min-height:var(--touch-h)!important}
+  .top-domain{min-height:var(--touch-h)!important}
+  .mission-row-actions button,.event-timeline-head button,.chart-tool-btn,.vesc-preset-btn{min-height:var(--touch-h)!important}
+}
+@media(max-width:820px){
+  .yolop-toggle-panel{align-items:stretch!important;flex-direction:column!important}
+  .yolop-toggle{width:100%!important;min-width:100%!important}
+}
+
+/* Stage 1 hardening: true full-width mobile shell down to 320 CSS px. */
+@media(max-width:820px){
+  .app-shell{display:block!important;grid-template-columns:none!important;width:100%!important}
+  .main-shell{grid-column:auto!important;width:100%!important;max-width:100%!important;min-width:0!important}
+  .content,.page,.camera-layout,#perceptionCameraSection,.yolop-toggle-panel{min-width:0!important;max-width:100%!important}
+  .yolop-toggle-panel{width:100%!important}
+}
+@media(max-width:820px){
+  .camera-layout{grid-template-columns:minmax(0,1fr)!important}
+  .camera-layout>.stack{display:flex!important;min-width:0!important}
+}
+/* Medium-width Navigation: toolbar scrolls inside its panel instead of widening the document. */
+@media(max-width:1100px){
+  .map-head{height:auto!important;min-height:0!important;display:block!important}
+  .map-toolbar{width:100%!important;max-width:100%!important;overflow-x:auto!important;overflow-y:hidden!important;justify-content:flex-start!important;flex-wrap:nowrap!important;padding-block:.2rem;overscroll-behavior-x:contain;scrollbar-width:thin}
+  .map-toolbar>*{flex:0 0 auto!important}
+}

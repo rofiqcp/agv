@@ -104,11 +104,8 @@ esc_ackermann:
     steering_center_bias_from_left_deg: 0.0
     steering_center_bias_from_right_deg: 0.0
     steering_calibration_apply_token: V8.2:1787392646867559142
-    # Runtime transport: F103 USART3 <-> F411 USART1 (PB10/PB11 <-> PB7/PB6) <-> USB CDC <-> ROS.
-    stm32_tx_topic: /stmf4/vesc/runtime_tx
-    stm32_rx_topic: /stmf4/vesc/rx
-    stm32_connected_topic: /stmf4/vesc/connected
-    # Direct USB serial selector is retained only as commissioning/recovery fallback.
+    # Production transport: F103 USART3 -> dedicated USB-UART -> package esc.
+    # F411/stmf4 is sensor/HMI-only and never carries actuator bytes.
     serial_auto_id_contains: Prolific_Technology_Inc._USB-Serial_Controller
     serial_auto_path_contains: ""
     serial_baud: 115200
@@ -117,6 +114,7 @@ esc_ackermann:
     serial_ack_timeout_sec: 0.6
     command_watchdog_sec: 0.25
     odom_topic: /esc/odom
+    odom_validation_topic: /esc/odom_validation
     odom_frame: odom
     base_frame: base_footprint
     odom_v_variance_base: 0.03

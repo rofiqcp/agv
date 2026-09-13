@@ -2,6 +2,7 @@
 """Dependency-light contract for the native C++ localhost web HMI."""
 from pathlib import Path
 import sys
+from web_static_bundle import read_app_bundle, read_css_bundle
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -11,15 +12,16 @@ def fail(msg):
 
 cpp = (ROOT / "web/web_server.cpp").read_text(encoding="utf-8")
 html = (ROOT / "web/static/index.html").read_text(encoding="utf-8")
-css = (ROOT / "web/static/styles.css").read_text(encoding="utf-8")
-js = (ROOT / "web/static/app.js").read_text(encoding="utf-8")
+STATIC = ROOT / "web/static"
+css = read_css_bundle(STATIC)
+js = read_app_bundle(STATIC)
 vesc_js = (ROOT / "web/static/vesc_workbench.js").read_text(encoding="utf-8")
 web_js = js + "\n" + vesc_js
 cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
 auto = (ROOT / "launch/autonomous.launch.py").read_text(encoding="utf-8")
 gui = (ROOT / "launch/gui.launch.py").read_text(encoding="utf-8")
 
-for path in (ROOT/"web/static/index.html", ROOT/"web/static/styles.css", ROOT/"web/static/app.js"):
+for path in (STATIC/"index.html", STATIC/"styles.css", STATIC/"core.js", STATIC/"navigation.js", STATIC/"tuning_catalog.js", STATIC/"config.js"):
     if not path.is_file() or path.stat().st_size < 1000:
         fail(f"web asset missing/too small: {path}")
 for token in ("add_executable(agv_web_gui", "Qt5::Network", "web/static", "agv_web_gui"):

@@ -25,6 +25,13 @@ if(BUILD_TESTING)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   add_test(NAME stmf4_gateway_self_check
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/stmf4_gateway_self_check.py)
+  add_test(NAME stmf4_stage1_safety_integrity_self_check
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/stage1_safety_integrity_self_check.py)
+  add_test(NAME stmf4_silent_open_escalation_self_check
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/silent_open_escalation_self_check.py)
+  add_test(NAME stmf4_manual_lease_runtime_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/manual_lease_runtime_test.py)
+  set_tests_properties(stmf4_manual_lease_runtime_test PROPERTIES TIMEOUT 15)
 endif()
 
 add_executable(stmf4_hmi_bridge src/stmf4_hmi_bridge.cpp)

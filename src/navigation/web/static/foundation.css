@@ -1,0 +1,8 @@
+/* Stage 6 compatibility aggregator; index.html loads modules directly in the same order. */
+@import url("/tokens.css?v=20260913-stage6-v1");
+@import url("/base.css?v=20260913-stage6-v1");
+@import url("/shell.css?v=20260913-stage6-v1");
+@import url("/components.css?v=20260913-stage6-v1");
+@import url("/responsive.css?v=20260913-stage6-v1");
+@import url("/accessibility.css?v=20260913-stage6-v1");
+@import url("/workspaces.css?v=20260913-stage6-v1");

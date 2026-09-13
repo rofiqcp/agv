@@ -38,6 +38,21 @@ using namespace std::chrono_literals;
 namespace
 {
 
+constexpr int kGnssSourceUbxDirect = 1;
+constexpr int kGnssSourceNmeaRaw = 2;
+constexpr int kGnssSourceNmeaValidatedFallback = 3;
+constexpr int kGnssSourceNeo3ProDroneCan = 4;
+
+bool isHighIntegrityGnssSource(int source)
+{
+  return source == kGnssSourceUbxDirect || source == kGnssSourceNeo3ProDroneCan;
+}
+
+bool isNeo3ProDroneCanSource(int source)
+{
+  return source == kGnssSourceNeo3ProDroneCan;
+}
+
 // Fungsi: Mengambil yaw dari quaternion ROS tanpa membuat dependensi konversi tf2 tambahan.
 double yawFromQuaternion(const geometry_msgs::msg::Quaternion & q)
 {
@@ -150,6 +165,17 @@ private:
     double vx_variance{1.0};
   };
 
+  // Raw wheel odometry is kept separate from /odometry/filtered. The latter may
+  // already contain GNSS velocity, so it must never be used as independent NIS evidence.
+  struct WheelMotionSample
+  {
+    rclcpp::Time stamp{0, 0, RCL_ROS_TIME};
+    double vx_mps{0.0};
+    double speed_mps{0.0};
+    double vx_variance{1.0e6};
+    bool covariance_valid{false};
+  };
+
   struct MapCalibrationPair
   {
     double raw_x{0.0};
@@ -176,6 +202,8 @@ private:
     double pvt_rate_hz{0.0};
     double measurement_age_sec{999.0};
     bool nav_cov_vel_valid{false};
+    int timestamp_source{0};
+    bool covariance_epoch_valid{false};
     bool gnss_fix_ok{false};
   };
 
@@ -385,6 +413,8 @@ private:
     declare_parameter<std::string>("quality_topic", "/gnss/quality");
     declare_parameter<std::string>("imu_topic", "/imu/data");
     declare_parameter<std::string>("local_odom_topic", "/odometry/filtered");
+    declare_parameter<std::string>("raw_wheel_odom_topic", "/esc/odom");
+    declare_parameter<bool>("require_independent_wheel_validation", true);
     declare_parameter<std::string>("global_odom_topic", "/odometry/filtered_map");
   }
 
@@ -617,6 +647,8 @@ private:
     quality_topic_ = get_parameter("quality_topic").as_string();
     imu_topic_ = get_parameter("imu_topic").as_string();
     local_odom_topic_ = get_parameter("local_odom_topic").as_string();
+    raw_wheel_odom_topic_ = get_parameter("raw_wheel_odom_topic").as_string();
+    require_independent_wheel_validation_ = get_parameter("require_independent_wheel_validation").as_bool();
     global_odom_topic_ = get_parameter("global_odom_topic").as_string();
   }
 
@@ -1021,6 +1053,38 @@ private:
     return false;
   }
 
+  bool wheelStateAtUnlocked(const rclcpp::Time & stamp, WheelMotionSample & out) const
+  {
+    if (wheel_motion_history_.empty()) return false;
+    if (wheel_motion_history_.size() == 1U) {
+      if (std::abs((stamp - wheel_motion_history_.front().stamp).seconds()) > gnss_sync_max_gap_sec_) return false;
+      out = wheel_motion_history_.front(); return true;
+    }
+    if (stamp <= wheel_motion_history_.front().stamp) {
+      if ((wheel_motion_history_.front().stamp - stamp).seconds() > gnss_sync_max_gap_sec_) return false;
+      out = wheel_motion_history_.front(); return true;
+    }
+    if (stamp >= wheel_motion_history_.back().stamp) {
+      if ((stamp - wheel_motion_history_.back().stamp).seconds() > gnss_sync_max_gap_sec_) return false;
+      out = wheel_motion_history_.back(); return true;
+    }
+    for (size_t i = 1; i < wheel_motion_history_.size(); ++i) {
+      const auto &b = wheel_motion_history_[i];
+      if (stamp > b.stamp) continue;
+      const auto &a = wheel_motion_history_[i - 1];
+      const double dt = (b.stamp - a.stamp).seconds();
+      if (dt <= 1.0e-9) { out = b; return true; }
+      const double u = std::clamp((stamp - a.stamp).seconds() / dt, 0.0, 1.0);
+      out.stamp = stamp;
+      out.vx_mps = a.vx_mps + u * (b.vx_mps - a.vx_mps);
+      out.speed_mps = a.speed_mps + u * (b.speed_mps - a.speed_mps);
+      out.vx_variance = std::max(innovation_min_variance_, a.vx_variance + u * (b.vx_variance - a.vx_variance));
+      out.covariance_valid = a.covariance_valid && b.covariance_valid;
+      return true;
+    }
+    return false;
+  }
+
   double mapHeadingForLocalStateUnlocked(const LocalMotionSample & local) const
   {
     if (anchor_valid_) {
@@ -1219,9 +1283,10 @@ private:
     const double antenna_speed = std::hypot(gnss_enu_ve_mps_, gnss_enu_vn_mps_);
     const double base_speed = std::hypot(gnss_base_vx_mps_, gnss_base_vy_mps_);
     const bool speed_active = antenna_speed >= gnss_velocity_min_validation_speed_mps_;
-    const bool quality_ok = quality_.source == 1 && qualityFreshUnlocked() &&
+    const bool quality_ok = isHighIntegrityGnssSource(quality_.source) && qualityFreshUnlocked() &&
+      highIntegrityMetadataPassesUnlocked() &&
       (correctionQualityPassesUnlocked() || degradedQualityPassesUnlocked()) &&
-      (quality_.nav_cov_vel_valid || gnss_last_velocity_covariance_valid_) &&
+      highIntegrityVelocityCovariancePassesUnlocked() &&
       std::isfinite(quality_.measurement_age_sec) && quality_.measurement_age_sec >= 0.0 &&
       quality_.measurement_age_sec <= gnss_max_measurement_age_sec_ &&
       std::isfinite(quality_.sacc_mps) && quality_.sacc_mps >= 0.0 &&
@@ -1247,10 +1312,11 @@ private:
       std::abs(cog_fit_residual) <= gnss_cog_fit_course_max_rad_;
 
     const bool lateral_ok = std::abs(gnss_base_vy_mps_) <= gnss_lateral_velocity_warn_mps_;
-    const double wheel_residual = local_forward_at_gnss_mps_ - gnss_base_vx_mps_;
+    const double wheel_residual = wheel_forward_at_gnss_mps_ - gnss_base_vx_mps_;
     const double wheel_innovation_variance = std::max(
-      innovation_min_variance_, local_forward_variance_at_gnss_ + gnss_base_vx_variance_);
-    const double wheel_nis = have_local_motion_at_gnss_ ?
+      innovation_min_variance_, wheel_forward_variance_at_gnss_ + gnss_base_vx_variance_);
+    const bool wheel_nis_valid = have_wheel_motion_at_gnss_ && wheel_covariance_valid_at_gnss_;
+    const double wheel_nis = wheel_nis_valid ?
       (wheel_residual * wheel_residual / wheel_innovation_variance) :
       std::numeric_limits<double>::quiet_NaN();
     const double cog_variance = std::max(
@@ -1260,16 +1326,17 @@ private:
     const double cog_nis = std::isfinite(cog_vel_residual) ?
       (cog_vel_residual * cog_vel_residual / cog_variance) :
       std::numeric_limits<double>::quiet_NaN();
-    const bool wheel_nis_gate_pass = !std::isfinite(wheel_nis) || wheel_nis <= wheel_gnss_nis_gate_;
+    const bool wheel_nis_gate_pass = wheel_nis_valid && std::isfinite(wheel_nis) && wheel_nis <= wheel_gnss_nis_gate_;
+    const bool independent_wheel_gate_pass = !require_independent_wheel_validation_ || wheel_nis_gate_pass;
     const bool cog_nis_gate_pass = !std::isfinite(cog_nis) || cog_nis <= cog_nis_gate_;
     wheel_gnss_residual_mps_ = wheel_residual;
-    wheel_slip_motion_detected_ = have_local_motion_at_gnss_ && vel_fresh && quality_ok &&
+    wheel_slip_motion_detected_ = wheel_nis_valid && vel_fresh && quality_ok &&
       std::abs(wheel_residual) >= wheel_gnss_slip_residual_mps_ &&
-      std::max(std::abs(local_forward_at_gnss_mps_), std::abs(gnss_base_vx_mps_)) >=
+      std::max(std::abs(wheel_forward_at_gnss_mps_), std::abs(gnss_base_vx_mps_)) >=
         slip_min_wheel_speed_mps_;
 
     gnss_velocity_qualified_ = vel_fresh && quality_ok && gnss_last_velocity_covariance_valid_ &&
-      vector_speed_ok && cog_vel_ok && cog_nis_gate_pass && wheel_nis_gate_pass && lateral_ok;
+      vector_speed_ok && cog_vel_ok && cog_nis_gate_pass && independent_wheel_gate_pass && lateral_ok;
     if (fit_fresh) gnss_velocity_qualified_ = gnss_velocity_qualified_ && fit_speed_ok;
 
     // COG heading qualification must NOT depend on the current map/body yaw projection.
@@ -1280,9 +1347,9 @@ private:
     // forward motion, straight local gyro, and mutually consistent GNSS Doppler/course.
     // Base-frame velocity fusion remains stricter below and will only qualify after
     // the heading has converged enough for lateral velocity/residual checks to pass.
-    const bool raw_cog_candidate = have_local_motion_at_gnss_ && vel_fresh && quality_ok &&
+    const bool raw_cog_candidate = have_wheel_motion_at_gnss_ && have_local_motion_at_gnss_ && vel_fresh && quality_ok &&
       speed_active && vector_speed_ok &&
-      local_forward_at_gnss_mps_ >= cog_min_forward_speed_mps_ &&
+      wheel_forward_at_gnss_mps_ >= cog_min_forward_speed_mps_ &&
       std::isfinite(quality_.course_enu_rad) &&
       std::isfinite(quality_.course_accuracy_rad) &&
       quality_.course_accuracy_rad <= cog_max_heading_accuracy_rad_ &&
@@ -1343,7 +1410,9 @@ private:
        << ",\"gnss_vyaw_rps\":" << gnss_yaw_rate_rps_
        << ",\"gnss_vyaw_valid\":" << (gnss_yaw_rate_valid_ ? "true" : "false")
        << ",\"local_motion_available\":" << (have_local_motion_at_gnss_ ? "true" : "false")
-       << ",\"wheel_vx_at_measurement_mps\":" << local_forward_at_gnss_mps_
+       << ",\"raw_wheel_available\":" << (have_wheel_motion_at_gnss_ ? "true" : "false")
+       << ",\"wheel_covariance_valid\":" << (wheel_covariance_valid_at_gnss_ ? "true" : "false")
+       << ",\"wheel_vx_at_measurement_mps\":" << wheel_forward_at_gnss_mps_
        << ",\"vel_e_mps\":" << gnss_enu_ve_mps_
        << ",\"vel_n_mps\":" << gnss_enu_vn_mps_
        << ",\"vel_map_x_mps\":" << gnss_map_vx_mps_
@@ -1414,18 +1483,20 @@ private:
 
     LocalMotionSample local;
     have_local_motion_at_gnss_ = localStateAtUnlocked(stamp, local);
-    if (have_local_motion_at_gnss_) {
-      gnss_last_sync_gap_sec_ = std::abs((stamp - local.stamp).seconds());
-      local_forward_at_gnss_mps_ = local.vx_mps;
-      local_yaw_rate_at_gnss_rps_ = local.yaw_rate_rps;
-      local_forward_variance_at_gnss_ = std::max(innovation_min_variance_, local.vx_variance);
+    local_yaw_rate_at_gnss_rps_ = have_local_motion_at_gnss_ ? local.yaw_rate_rps : 0.0;
+
+    WheelMotionSample wheel;
+    have_wheel_motion_at_gnss_ = wheelStateAtUnlocked(stamp, wheel);
+    if (have_wheel_motion_at_gnss_) {
+      gnss_last_sync_gap_sec_ = std::abs((stamp - wheel.stamp).seconds());
+      wheel_forward_at_gnss_mps_ = wheel.vx_mps;
+      wheel_forward_variance_at_gnss_ = wheel.vx_variance;
+      wheel_covariance_valid_at_gnss_ = wheel.covariance_valid;
     } else {
-      // No rejection: this is the expected state when ESC is disabled/offline
-      // before the local EKF has started publishing.
       gnss_last_sync_gap_sec_ = 999.0;
-      local_forward_at_gnss_mps_ = 0.0;
-      local_yaw_rate_at_gnss_rps_ = 0.0;
-      local_forward_variance_at_gnss_ = 1.0e6;
+      wheel_forward_at_gnss_mps_ = 0.0;
+      wheel_forward_variance_at_gnss_ = 1.0e6;
+      wheel_covariance_valid_at_gnss_ = false;
     }
 
     gnss_enu_ve_mps_ = ve;
@@ -1598,6 +1669,9 @@ private:
     mag_sub_ = create_subscription<sensor_msgs::msg::MagneticField>(
       "/imu/mag", sensor_qos,
       std::bind(&LocalizationCore::onMag, this, std::placeholders::_1));
+    raw_wheel_odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
+      raw_wheel_odom_topic_, sensor_qos,
+      std::bind(&LocalizationCore::onRawWheelOdom, this, std::placeholders::_1));
     odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
       local_odom_topic_, sensor_qos,
       std::bind(&LocalizationCore::onOdom, this, std::placeholders::_1));
@@ -1709,6 +1783,9 @@ private:
     quality_.nav_cov_vel_valid = msg->data.size() >= 22U && msg->data[21] > 0.5;
     quality_.pvt_rate_hz = msg->data.size() >= 23U ? msg->data[22] : 0.0;
     quality_.measurement_age_sec = msg->data.size() >= 24U ? msg->data[23] : 999.0;
+    quality_.timestamp_source = msg->data.size() >= 25U && std::isfinite(msg->data[24]) ?
+      static_cast<int>(std::lround(msg->data[24])) : 0;
+    quality_.covariance_epoch_valid = msg->data.size() >= 50U && std::isfinite(msg->data[49]) && msg->data[49] > 0.5;
     quality_.gnss_fix_ok = msg->data.size() >= 45U ? msg->data[44] > 0.5 : false;
     last_quality_time_ = now();
 
@@ -1836,6 +1913,26 @@ private:
     imu_mag_y_ut_ = std::isfinite(msg->magnetic_field.y) ? msg->magnetic_field.y * 1.0e6 : 0.0;
     imu_mag_z_ut_ = std::isfinite(msg->magnetic_field.z) ? msg->magnetic_field.z * 1.0e6 : 0.0;
     last_mag_time_ = now();
+  }
+
+  void onRawWheelOdom(const nav_msgs::msg::Odometry::SharedPtr msg)
+  {
+    const double vx = msg->twist.twist.linear.x;
+    const double vy = msg->twist.twist.linear.y;
+    if (!std::isfinite(vx) || !std::isfinite(vy)) return;
+    const double raw_var = msg->twist.covariance[0];
+    const bool cov_ok = std::isfinite(raw_var) && raw_var > 0.0 && raw_var < 1.0e6;
+    const rclcpp::Time measurement_stamp = stampOrNow(msg->header.stamp);
+    std::lock_guard<std::mutex> lock(mutex_);
+    raw_wheel_forward_speed_mps_ = vx;
+    raw_wheel_speed_mps_ = std::hypot(vx, vy);
+    last_raw_wheel_time_ = now();
+    wheel_motion_history_.push_back(WheelMotionSample{measurement_stamp, vx, std::hypot(vx, vy),
+      cov_ok ? std::max(innovation_min_variance_, raw_var) : 1.0e6, cov_ok});
+    while (!wheel_motion_history_.empty() &&
+      (measurement_stamp - wheel_motion_history_.front().stamp).seconds() > gnss_motion_history_sec_) {
+      wheel_motion_history_.pop_front();
+    }
   }
 
   // Local EKF follows GNSS longitudinal velocity/yaw-rate plus absolute IMU yaw.
@@ -2377,6 +2474,41 @@ private:
       anchor_map_odom_.yaw, startup_max_spread_m_);
   }
 
+  bool highIntegrityFixPassesUnlocked() const
+  {
+    if (!isHighIntegrityGnssSource(quality_.source)) return false;
+    if (!quality_.gnss_fix_ok || quality_.fix_metric < 3.0) return false;
+    if (isNeo3ProDroneCanSource(quality_.source)) {
+      // 3 = F411 measurement-time mapping, 4 = validated absolute DroneCAN GNSS UTC.
+      // Planning may continue with a valid 3D fix if covariance is temporarily absent,
+      // but unknown/receive-only timestamps are never accepted as a Pro fix contract.
+      if (quality_.timestamp_source != 3 && quality_.timestamp_source != 4) return false;
+    }
+    return true;
+  }
+
+  bool highIntegrityMetadataPassesUnlocked() const
+  {
+    if (!highIntegrityFixPassesUnlocked()) return false;
+    if (isNeo3ProDroneCanSource(quality_.source)) {
+      // Motion/fusion is stricter than display/planning: covariance must belong to
+      // exactly the same F411 measurement epoch.
+      if (!quality_.covariance_epoch_valid || !quality_.nav_cov_vel_valid) return false;
+    }
+    return true;
+  }
+
+  bool highIntegrityVelocityCovariancePassesUnlocked() const
+  {
+    if (!isHighIntegrityGnssSource(quality_.source)) return false;
+    if (isNeo3ProDroneCanSource(quality_.source)) {
+      return quality_.covariance_epoch_valid && quality_.nav_cov_vel_valid &&
+        gnss_last_velocity_covariance_valid_;
+    }
+    return (quality_.nav_cov_vel_valid || gnss_last_velocity_covariance_valid_) &&
+      gnss_last_velocity_covariance_valid_;
+  }
+
   // Very loose horizontal-position gate used only to make map x/y and TF visible
   // while the receiver is converging. NEVER used by the autonomous motion gate.
   bool provisionalQualityPassesUnlocked() const
@@ -2385,8 +2517,8 @@ private:
     if (quality_.satellites < provisional_min_satellites_) return false;
     if (!std::isfinite(quality_.dop) || quality_.dop <= 0.0 || quality_.dop > provisional_max_dop_) return false;
     if (!std::isfinite(quality_.hacc_m) || quality_.hacc_m <= 0.0 || quality_.hacc_m > provisional_max_hacc_m_) return false;
-    if (quality_.source == 1 && quality_.fix_metric < 2.0) return false;
-    if (quality_.source != 1 && quality_.fix_metric <= 0.0) return false;
+    if (isHighIntegrityGnssSource(quality_.source) && quality_.fix_metric < 2.0) return false;
+    if (!isHighIntegrityGnssSource(quality_.source) && quality_.fix_metric <= 0.0) return false;
     return true;
   }
 
@@ -2396,11 +2528,11 @@ private:
   {
     if (!allow_degraded_planning_ || !quality_.received) return false;
     if (quality_.satellites < degraded_min_satellites_) return false;
-    if (!std::isfinite(quality_.dop) || quality_.dop > degraded_max_dop_) return false;
+    if (!std::isfinite(quality_.dop) || quality_.dop <= 0.0 || quality_.dop > degraded_max_dop_) return false;
     if (!std::isfinite(quality_.hacc_m) || quality_.hacc_m <= 0.0 || quality_.hacc_m > degraded_max_hacc_m_) return false;
-    // UBX: fix type 3/4 = 3D/GNSS+DR. NMEA fallback: fix quality >0.
-    if (quality_.source == 1 && (!quality_.gnss_fix_ok || quality_.fix_metric < 3.0)) return false;
-    if (quality_.source != 1 && quality_.fix_metric <= 0.0) return false;
+    // High-integrity source requires a valid 3D solution; NMEA fallback uses fix quality >0.
+    if (isHighIntegrityGnssSource(quality_.source) && !highIntegrityFixPassesUnlocked()) return false;
+    if (!isHighIntegrityGnssSource(quality_.source) && quality_.fix_metric <= 0.0) return false;
     return true;
   }
 
@@ -2410,10 +2542,10 @@ private:
   {
     if (!quality_.received) return false;
     if (quality_.satellites < strict_min_satellites_) return false;
-    if (!std::isfinite(quality_.dop) || quality_.dop > strict_max_dop_) return false;
+    if (!std::isfinite(quality_.dop) || quality_.dop <= 0.0 || quality_.dop > strict_max_dop_) return false;
     if (!std::isfinite(quality_.hacc_m) || quality_.hacc_m <= 0.0 || quality_.hacc_m > strict_max_hacc_m_) return false;
-    if (quality_.source == 1 && (!quality_.gnss_fix_ok || quality_.fix_metric < 3.0)) return false;
-    if (quality_.source != 1 && quality_.fix_metric <= 0.0) return false;
+    if (isHighIntegrityGnssSource(quality_.source) && !highIntegrityMetadataPassesUnlocked()) return false;
+    if (!isHighIntegrityGnssSource(quality_.source) && quality_.fix_metric <= 0.0) return false;
     return true;
   }
 
@@ -2422,11 +2554,11 @@ private:
   {
     if (!quality_.received) return false;
     if (quality_.satellites < motion_hold_min_satellites_) return false;
-    if (!std::isfinite(quality_.dop) || quality_.dop > motion_hold_max_dop_) return false;
+    if (!std::isfinite(quality_.dop) || quality_.dop <= 0.0 || quality_.dop > motion_hold_max_dop_) return false;
     if (!std::isfinite(quality_.hacc_m) || quality_.hacc_m <= 0.0 ||
         quality_.hacc_m > motion_hold_max_hacc_m_) return false;
-    if (quality_.source == 1 && (!quality_.gnss_fix_ok || quality_.fix_metric < 3.0)) return false;
-    if (quality_.source != 1 && quality_.fix_metric <= 0.0) return false;
+    if (isHighIntegrityGnssSource(quality_.source) && !highIntegrityMetadataPassesUnlocked()) return false;
+    if (!isHighIntegrityGnssSource(quality_.source) && quality_.fix_metric <= 0.0) return false;
     return true;
   }
 
@@ -2434,11 +2566,11 @@ private:
   {
     if (!quality_.received) return true;
     if (quality_.satellites < motion_critical_min_satellites_) return true;
-    if (!std::isfinite(quality_.dop) || quality_.dop > motion_critical_max_dop_) return true;
+    if (!std::isfinite(quality_.dop) || quality_.dop <= 0.0 || quality_.dop > motion_critical_max_dop_) return true;
     if (!std::isfinite(quality_.hacc_m) || quality_.hacc_m <= 0.0 ||
         quality_.hacc_m > motion_critical_max_hacc_m_) return true;
-    if (quality_.source == 1 && (!quality_.gnss_fix_ok || quality_.fix_metric < 3.0)) return true;
-    if (quality_.source != 1 && quality_.fix_metric <= 0.0) return true;
+    if (isHighIntegrityGnssSource(quality_.source) && !highIntegrityMetadataPassesUnlocked()) return true;
+    if (!isHighIntegrityGnssSource(quality_.source) && quality_.fix_metric <= 0.0) return true;
     return false;
   }
 
@@ -2460,15 +2592,15 @@ private:
 
   bool gnssCourseYawUsableUnlocked() const
   {
-    if (!enable_gnss_course_yaw_correction_ || quality_.source != 1) return false;
+    if (!enable_gnss_course_yaw_correction_ || !isHighIntegrityGnssSource(quality_.source)) return false;
     if (!cog_motion_qualified_ || !gnssVelocityFreshUnlocked()) return false;
     if (!correctionQualityPassesUnlocked()) return false;
     if (!std::isfinite(quality_.course_enu_rad) ||
         !std::isfinite(quality_.course_accuracy_rad)) return false;
     if (!std::isfinite(quality_.ground_speed_mps) ||
         quality_.ground_speed_mps < cog_min_forward_speed_mps_) return false;
-    if (!std::isfinite(local_forward_at_gnss_mps_) ||
-        local_forward_at_gnss_mps_ < cog_min_forward_speed_mps_) return false;
+    if (!have_wheel_motion_at_gnss_ || !std::isfinite(wheel_forward_at_gnss_mps_) ||
+        wheel_forward_at_gnss_mps_ < cog_min_forward_speed_mps_) return false;
     if (!std::isfinite(quality_.sacc_mps) || quality_.sacc_mps < 0.0 ||
         quality_.sacc_mps > cog_max_sacc_mps_) return false;
     if (quality_.course_accuracy_rad > cog_max_heading_accuracy_rad_) return false;
@@ -2560,14 +2692,14 @@ private:
   bool wheelSlipDetectedUnlocked() const
   {
     if (!correctionQualityPassesUnlocked()) return false;
-    if (quality_.source != 1 || !std::isfinite(quality_.ground_speed_mps) ||
+    if (!isHighIntegrityGnssSource(quality_.source) || !std::isfinite(quality_.ground_speed_mps) ||
         quality_.ground_speed_mps < 0.0) return false;
 
     const double ground_speed = gnssVelocityFreshUnlocked() ?
       std::abs(gnss_base_vx_mps_) : quality_.ground_speed_mps;
     if (ground_speed > strict_stationary_speed_mps_) return false;
 
-    const double wheel_speed = std::abs(local_speed_mps_);
+    const double wheel_speed = std::abs(raw_wheel_speed_mps_);
     const double sacc =
       (std::isfinite(quality_.sacc_mps) && quality_.sacc_mps > 0.0)
       ? quality_.sacc_mps : 0.0;
@@ -2971,6 +3103,9 @@ private:
             << ";cog_acc=" << cog_acc
             << ";cog_yaw_gate=" << (cog_yaw_gate ? "true" : "false")
             << ";gnss_fix_ok=" << (quality_.gnss_fix_ok ? "true" : "false")
+            << ";gnss_high_integrity=" << (isHighIntegrityGnssSource(quality_.source) ? "true" : "false")
+            << ";gnss_timestamp_source=" << quality_.timestamp_source
+            << ";gnss_cov_epoch=" << (quality_.covariance_epoch_valid ? "true" : "false")
             << ";gnss_yaw=" << cog_enu
             << ";gnss_vyaw=" << gnss_yaw_rate_rps_
             << ";gnss_vyaw_valid=" << (gnss_yaw_rate_valid_ ? "true" : "false")
@@ -3184,12 +3319,15 @@ private:
   std::string quality_topic_;
   std::string imu_topic_;
   std::string local_odom_topic_;
+  std::string raw_wheel_odom_topic_;
+  bool require_independent_wheel_validation_{true};
   std::string global_odom_topic_;
 
   Quality quality_;
   navigation_math::Pose2D odom_base_;
   navigation_math::Pose2D anchor_map_odom_;
   std::deque<LocalMotionSample> local_motion_history_;
+  std::deque<WheelMotionSample> wheel_motion_history_;
   bool have_odom_{false};
   bool have_raw_fix_{false};
   bool anchor_valid_{false};
@@ -3214,6 +3352,8 @@ private:
   double imu_mag_z_ut_{0.0};
   double local_forward_speed_mps_{0.0};
   double local_speed_mps_{0.0};
+  double raw_wheel_forward_speed_mps_{0.0};
+  double raw_wheel_speed_mps_{0.0};
   double local_yaw_rate_rps_{0.0};
   double local_x_var_{0.0};
   double local_y_var_{0.0};
@@ -3226,8 +3366,9 @@ private:
   double gnss_base_vy_mps_{0.0};
   double gnss_fit_speed_mps_{0.0};
   double gnss_fit_course_enu_rad_{0.0};
-  double local_forward_at_gnss_mps_{0.0};
-  double local_forward_variance_at_gnss_{1.0e6};
+  double wheel_forward_at_gnss_mps_{0.0};
+  double wheel_forward_variance_at_gnss_{1.0e6};
+  bool wheel_covariance_valid_at_gnss_{false};
   double gnss_base_vx_variance_{1.0e6};
   double local_yaw_rate_at_gnss_rps_{0.0};
   double gnss_map_yaw_at_measurement_rad_{0.0};
@@ -3236,6 +3377,7 @@ private:
   bool gnss_yaw_rate_valid_{false};
   bool have_gnss_yaw_rate_filter_{false};
   bool have_local_motion_at_gnss_{false};
+  bool have_wheel_motion_at_gnss_{false};
   std::optional<double> last_gnss_velocity_course_enu_rad_;
   rclcpp::Time last_gnss_velocity_course_stamp_{0, 0, RCL_ROS_TIME};
   double gnss_last_sync_gap_sec_{999.0};
@@ -3292,6 +3434,7 @@ private:
   rclcpp::Time last_esc_kinematic_yaw_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_mag_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_odom_time_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time last_raw_wheel_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_global_odom_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time global_odom_ignore_until_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_log_time_{0, 0, RCL_ROS_TIME};
@@ -3305,6 +3448,7 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr esc_kinematic_yaw_sub_;
   rclcpp::Subscription<sensor_msgs::msg::MagneticField>::SharedPtr mag_sub_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr raw_wheel_odom_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr global_odom_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr initial_pose_sub_;

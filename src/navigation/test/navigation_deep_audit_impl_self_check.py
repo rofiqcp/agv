@@ -68,10 +68,15 @@ need('SENSOR_PROTOCOL_VERSION = 2U' in f4 and 'sensorCrc16Ccitt' in f4 and 'gnss
      'F411 GNSS v2 CRC/sequence contract missing')
 need('neo3_require_protocol_crc' in stm and 'validateNeo3Protocol' in stm and 'neo3_sequence_gaps_' in stm,
      'host GNSS v2 CRC/sequence validation missing')
-need('quality.data.assign(50, nan)' in stm and 'quality.data[20] = 0.0' in stm and
-     'quality.data[21] = 0.0' in stm and 'quality.data[24] = 3.0' in stm and
-     'quality.data[49] = velocity_valid ? 1.0 : 0.0' in stm,
-     'F411 /gnss/quality canonical 0..44 semantic parity / append-only extension missing')
+need('quality.data.assign(50, nan)' in stm and
+     'Canonical /gnss/quality indices 0..44 are transport invariant' in stm and
+     'quality.data[20] = pro_cov_match && neo3pro_gnss_meta_.pos_cov_valid ? 1.0 : 0.0' in stm and
+     'quality.data[21] = pro_cov_match && neo3pro_gnss_meta_.vel_cov_valid ? 1.0 : 0.0' in stm and
+     'quality.data[24] = pro_sample ? static_cast<double>(neo3pro_timestamp_source_code_) : 3.0' in stm and
+     'quality.data[44] = qualified_fix ? 1.0 : 0.0' in stm and
+     'quality.data[45] = static_cast<double>(neo3_protocol_version_)' in stm and
+     'quality.data[49] = pro_sample ?' in stm,
+     'F411 /gnss/quality canonical 0..44 parity / NEO3PRO append-only extension missing')
 need('Canonical transport-invariant append-only layout' in text('src/navigation/src/gnss_node.cpp'),
      'direct USB GNSS quality canonical-layout declaration missing')
 

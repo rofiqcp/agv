@@ -146,8 +146,14 @@ for token in (
 ):
     if token not in navigation_core:
         fail(f"final command ownership contract missing: {token}")
-if "estop_ || !esc_ready_ || !map_ready_" not in navigation_core:
-    fail("autonomous motion gate must require a fresh ready ESC link")
+for token in (
+    'esc_state_timeout_sec', 'last_esc_ready_time_', 'last_esc_feedback_valid_time_',
+    'const bool esc_ready_fresh = esc_ready_ && esc_feedback_valid_',
+    'esc_state_fresh(last_esc_ready_time_) && esc_state_fresh(last_esc_feedback_valid_time_)',
+    'const bool esc_gate_ok = esc_ready_fresh || bypass_fresh',
+):
+    if token not in navigation_core:
+        fail(f"autonomous motion gate fresh ESC contract missing: {token}")
 
 # ROS 2 Humble collision-monitor parses polygon vertices from a string and uses
 # max_points (newer Nav2 releases renamed this to min_points). A YAML numeric

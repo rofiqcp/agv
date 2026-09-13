@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <fcntl.h>
 #include <functional>
@@ -186,20 +187,20 @@ public:
       std::bind(&EscAckermann::onRuntimeParameters, this, std::placeholders::_1));
     createInterfaces();
 
-    if (serial_enabled_ && transport_mode_ == "serial") startSerialThread();
+    if (serial_enabled_ && transport_mode_ == "direct_vesc") startSerialThread();
 
     RCLCPP_INFO(get_logger(), "[ESC] Ackermann controller ready | calibrated CMD/FB topics + direct calibration jog enabled");
     RCLCPP_INFO(
       get_logger(),
       "ESC Ackermann integrated | priority TELEOP > NAV2 > IDLE | teleop=%s nav2=%s | transport=%s endpoint=%s",
       teleop_topic_.c_str(), nav2_topic_.c_str(), transport_mode_.c_str(),
-      transport_mode_ == "stm32" ? "/stmf4/vesc/runtime_tx" : (serial_device_.empty() ? "AUTO" : serial_device_.c_str()));
+      serial_device_.empty() ? "AUTO" : serial_device_.c_str());
     RCLCPP_INFO(
       get_logger(),
       "Drive scale: speed +/-%.3f m/s -> baseline VESC +/-%.1f ERPM (%.1f eRPM/(m/s), r=%.3fm, pp=%d, gear=%.3f); "
-      "legacy serial limit +/-%.1f units | steering +/-%.1f deg | teleop yaw +/-%.1f deg/s",
+      "native direct VESC | steering +/-%.1f deg | teleop yaw +/-%.1f deg/s",
       speed_max_mps_, speed_max_mps_ * nativeDriveErpmPerMps(), nativeDriveErpmPerMps(), drive_wheel_radius_m_,
-      drive_motor_pole_pairs_, drive_gear_ratio_, right_max_rpm_, steering_max_deg_, yaw_max_deg_s_);
+      drive_motor_pole_pairs_, drive_gear_ratio_, steering_max_deg_, yaw_max_deg_s_);
     RCLCPP_INFO(
       get_logger(),
       "Steering feedback calibration: %s | CMD L/C/R=%+.3f/%+.3f/%+.3f deg | FB L/C/R=%+.3f/%+.3f/%+.3f deg | "
@@ -230,7 +231,6 @@ public:
   ~EscAckermann() override
   {
     requestSafeShutdown();
-    if (transport_mode_ == "stm32") sendStm32SafeStop();
     stopSerialThread();
   }
 
@@ -300,9 +300,6 @@ private:
     declare_parameter<double>("speed_max", 0.5);
     declare_parameter<double>("yaw_max_deg_s", 80.0);
     declare_parameter<double>("serial_left_max_deg", 90.0);
-    // Legacy direct-serial command scale. Native VESC transport derives ERPM
-    // physically from wheel radius, gear ratio and motor pole-pairs below.
-    declare_parameter<double>("serial_right_max_rpm", 300.0);
     declare_parameter<double>("drive_wheel_radius_m", 0.145);
     declare_parameter<int>("drive_motor_pole_pairs", 15);
     declare_parameter<double>("drive_gear_ratio", 1.0);
@@ -407,15 +404,16 @@ private:
     declare_parameter<double>("steering_center_bias_from_left_deg", 0.0);
     declare_parameter<double>("steering_center_bias_from_right_deg", 0.0);
 
-    // Transport is normally the STM32F411 gateway. Direct PL2303 is retained only
-    // as a recovery/commissioning fallback so one process never competes for F103 UART.
-    declare_parameter<std::string>("transport_mode", "stm32");
-    declare_parameter<std::string>("stm32_tx_topic", "/stmf4/vesc/runtime_tx");
-    declare_parameter<std::string>("stm32_rx_topic", "/stmf4/vesc/rx");
-    declare_parameter<std::string>("stm32_connected_topic", "/stmf4/vesc/connected");
+    // Production architecture: package esc owns the F103 USB-UART directly. F411/stmf4
+    // is sensor/HMI-only and must never carry actuator bytes.
+    declare_parameter<std::string>("transport_mode", "direct_vesc");
     // Keep the ROS control/localization stack alive when the actuator transport is
     // intentionally disabled. Disabled never means READY; it only suppresses TX/open/retry.
     declare_parameter<bool>("serial_enabled", true);
+    // Explicit bench/integration mode for navigation qualification without an ESC.
+    // This mode hard-disables the physical UART and publishes a zero-motion odometry
+    // heartbeat. Physical /esc/ready and /esc/feedback_valid remain FALSE.
+    declare_parameter<bool>("integration_bypass", false);
     declare_parameter<std::string>("serial_device", "auto");
     declare_parameter<std::string>(
       "serial_auto_id_contains", "Prolific_Technology_Inc._USB-Serial_Controller");
@@ -429,6 +427,7 @@ private:
     declare_parameter<double>("command_watchdog_sec", 0.25);
 
     declare_parameter<std::string>("odom_topic", "/esc/odom");
+    declare_parameter<std::string>("odom_validation_topic", "/esc/odom_validation");
     declare_parameter<std::string>("odom_frame", "odom");
     declare_parameter<std::string>("base_frame", "base_footprint");
     // Covariance is a confidence signal to robot_localization, not decoration.
@@ -475,7 +474,6 @@ private:
     speed_max_mps_ = std::max(0.01, get_parameter("speed_max").as_double());
     yaw_max_deg_s_ = std::clamp(get_parameter("yaw_max_deg_s").as_double(), 1.0, 180.0);
     steering_max_deg_ = std::clamp(get_parameter("serial_left_max_deg").as_double(), 1.0, 90.0);
-    right_max_rpm_ = std::max(1.0, get_parameter("serial_right_max_rpm").as_double());
     drive_wheel_radius_m_ = std::clamp(get_parameter("drive_wheel_radius_m").as_double(), 0.01, 1.0);
     drive_motor_pole_pairs_ = std::clamp(static_cast<int>(get_parameter("drive_motor_pole_pairs").as_int()), 1, 100);
     drive_gear_ratio_ = std::clamp(get_parameter("drive_gear_ratio").as_double(), 0.01, 100.0);
@@ -655,13 +653,16 @@ private:
     transport_mode_ = get_parameter("transport_mode").as_string();
     std::transform(transport_mode_.begin(), transport_mode_.end(), transport_mode_.begin(),
       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    if (transport_mode_ != "stm32" && transport_mode_ != "serial") {
-      throw std::runtime_error("transport_mode must be stm32 or serial");
+    if (transport_mode_ == "serial") {
+      RCLCPP_WARN(get_logger(), "transport_mode=serial is deprecated; using direct_vesc native VESC protocol");
+      transport_mode_ = "direct_vesc";
     }
-    stm32_tx_topic_ = get_parameter("stm32_tx_topic").as_string();
-    stm32_rx_topic_ = get_parameter("stm32_rx_topic").as_string();
-    stm32_connected_topic_ = get_parameter("stm32_connected_topic").as_string();
+    if (transport_mode_ != "direct_vesc") {
+      throw std::runtime_error("transport_mode must be direct_vesc; F411/stmf4 is no longer an ESC transport");
+    }
     serial_enabled_ = get_parameter("serial_enabled").as_bool();
+    integration_bypass_ = get_parameter("integration_bypass").as_bool();
+    if (integration_bypass_) serial_enabled_ = false;
     serial_device_ = get_parameter("serial_device").as_string();
     serial_auto_id_contains_ = get_parameter("serial_auto_id_contains").as_string();
     serial_auto_path_contains_ = get_parameter("serial_auto_path_contains").as_string();
@@ -672,6 +673,7 @@ private:
     command_watchdog_sec_ = std::clamp(get_parameter("command_watchdog_sec").as_double(), 0.05, 2.0);
 
     odom_topic_ = get_parameter("odom_topic").as_string();
+    odom_validation_topic_ = get_parameter("odom_validation_topic").as_string();
     odom_frame_ = get_parameter("odom_frame").as_string();
     base_frame_ = get_parameter("base_frame").as_string();
     odom_v_variance_base_ = std::max(1.0e-6, get_parameter("odom_v_variance_base").as_double());
@@ -1108,6 +1110,8 @@ private:
     foc_telemetry_pub_ = create_publisher<std_msgs::msg::String>("/esc/foc/telemetry", stateQos());
     motor_current_abs_pub_ = create_publisher<std_msgs::msg::Float64>("/esc/motor_current_abs_a", 10);
     ready_pub_ = create_publisher<std_msgs::msg::Bool>("/esc/ready", stateQos());
+    integration_bypass_pub_ = create_publisher<std_msgs::msg::Bool>(
+      "/esc/integration_bypass_active", stateQos());
     armed_pub_ = create_publisher<std_msgs::msg::Bool>("/esc/armed", stateQos());
     feedback_valid_pub_ = create_publisher<std_msgs::msg::Bool>("/esc/feedback_valid", stateQos());
     drive_connected_pub_ = create_publisher<std_msgs::msg::Bool>("/esc/drive/connected", stateQos());
@@ -1118,6 +1122,8 @@ private:
       std_msgs::msg::Bool v;
       v.data = true;
       calibration_controller_ready_pub_->publish(v);
+      v.data = integration_bypass_;
+      integration_bypass_pub_->publish(v);
     }
     speed_pub_ = create_publisher<std_msgs::msg::Float64>("/esc/speed", 10);
     drive_target_pub_ = create_publisher<std_msgs::msg::Float64>("/esc/drive_target_mps", 10);
@@ -1155,6 +1161,7 @@ private:
     yaw_rate_feedback_status_pub_ =
       create_publisher<std_msgs::msg::String>("/esc/yaw_rate_feedback/status", stateQos());
     odom_pub_ = create_publisher<nav_msgs::msg::Odometry>(odom_topic_, 10);
+    odom_validation_pub_ = create_publisher<nav_msgs::msg::Odometry>(odom_validation_topic_, 10);
     wheel_slip_sub_ = create_subscription<std_msgs::msg::Bool>(
       wheel_slip_topic_, rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local(),
       [this](std_msgs::msg::Bool::SharedPtr msg) {
@@ -1162,39 +1169,29 @@ private:
         wheel_slip_received_ = now();
       });
 
-    // F411 owns the physical USB CDC. Ackermann exchanges the exact existing
-    // 14-byte actuator frames through ROS byte arrays; direct serial remains fallback.
-    stm32_tx_pub_ = create_publisher<std_msgs::msg::UInt8MultiArray>(stm32_tx_topic_, rclcpp::QoS(rclcpp::KeepLast(1)).reliable());
-    stm32_rx_sub_ = create_subscription<std_msgs::msg::UInt8MultiArray>(
-      stm32_rx_topic_, rclcpp::QoS(rclcpp::KeepLast(16)).reliable(),
-      [this](std_msgs::msg::UInt8MultiArray::ConstSharedPtr msg) {
-        if (transport_mode_ != "stm32") return;
-        consumeVescRxBytes(msg->data);
-      });
-    stm32_connected_sub_ = create_subscription<std_msgs::msg::Bool>(
-      stm32_connected_topic_, stateQos(),
-      [this](std_msgs::msg::Bool::ConstSharedPtr msg) {
-        if (transport_mode_ != "stm32") return;
-        serial_connected_.store(serial_enabled_ && msg->data);
-        std::lock_guard<std::mutex> lock(serial_state_mutex_);
-        serial_active_path_ = msg->data ? "stm32f411:PB6/PB7->f103:PB11/PB10" : "";
-      });
+    // Single physical owner: this node alone opens the F103 USB-UART. Maintenance
+    // clients exchange raw VESC frames through these internal package-esc topics;
+    // no second process ever opens the tty and F411/stmf4 is not in the path.
+    direct_rx_pub_ = create_publisher<std_msgs::msg::UInt8MultiArray>(
+      "/esc/vesc/direct_rx", rclcpp::QoS(rclcpp::KeepLast(64)).reliable());
+    direct_connected_pub_ = create_publisher<std_msgs::msg::Bool>(
+      "/esc/vesc/direct_connected", stateQos());
+    direct_runtime_tx_sub_ = create_subscription<std_msgs::msg::UInt8MultiArray>(
+      "/esc/vesc/runtime_tx", rclcpp::QoS(rclcpp::KeepLast(16)).reliable(),
+      [this](std_msgs::msg::UInt8MultiArray::ConstSharedPtr msg) { queueDirectExternalTx(msg->data, false); });
+    direct_maintenance_tx_sub_ = create_subscription<std_msgs::msg::UInt8MultiArray>(
+      "/esc/vesc/maintenance_tx", rclcpp::QoS(rclcpp::KeepLast(100)).reliable(),
+      [this](std_msgs::msg::UInt8MultiArray::ConstSharedPtr msg) { queueDirectExternalTx(msg->data, true); });
     maintenance_sub_ = create_subscription<std_msgs::msg::Bool>(
       "/esc/vesc/maintenance_active", stateQos(),
       [this](std_msgs::msg::Bool::ConstSharedPtr msg) {
-        bool entering = false;
-        {
-          std::lock_guard<std::mutex> lock(state_mutex_);
-          entering = msg->data && !maintenance_mode_active_;
-          maintenance_mode_active_ = msg->data;
-          if (!msg->data) maintenance_owner_ = "RUNTIME";
-        }
-        if (entering) sendStm32SafeStop();
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        const bool entering = msg->data && !maintenance_mode_active_.load();
+        maintenance_mode_active_ = msg->data;
+        if (entering) direct_enter_safe_stop_pending_.store(true);
+        if (!msg->data) maintenance_owner_ = "RUNTIME";
         if (msg->data) ack_timeout_.store(true);
       });
-    const auto transport_period = std::chrono::duration_cast<std::chrono::nanoseconds>(
-      std::chrono::duration<double>(1.0 / serial_tx_rate_hz_));
-    stm32_transport_timer_ = create_wall_timer(transport_period, std::bind(&EscAckermann::stm32TransportTick, this));
 
     const auto period = std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::duration<double>(1.0 / command_rate_hz_));
@@ -1747,20 +1744,17 @@ private:
   {
     // If measured ground speed is raw_model_speed * scale, command ERPM for a
     // requested ground speed must be divided by the same scale.
-    return transport_mode_ == "stm32" ?
-      (nativeDriveErpmPerMps() / drive_odometry_calibration_scale_) :
-      (right_max_rpm_ / speed_max_mps_);
+    return nativeDriveErpmPerMps() / drive_odometry_calibration_scale_;
   }
 
   double rawDriveMpsFromErpm(double erpm) const
   {
-    if (transport_mode_ != "stm32") return erpm / (right_max_rpm_ / speed_max_mps_);
     return erpm / nativeDriveErpmPerMps();
   }
 
   double rightCommandLimit() const
   {
-    return transport_mode_ == "stm32" ? speed_max_mps_ * rightCommandUnitsPerMps() : right_max_rpm_;
+    return speed_max_mps_ * rightCommandUnitsPerMps();
   }
 
   double rightRpmFor(const Selected & selected) const
@@ -1892,14 +1886,13 @@ private:
     // For STM32/VESC the externally useful protocol-domain value is the standard
     // VESC position 0..360 deg. Legacy transports retain their historical signed
     // command domain. Physical steering remains on /esc/steering_target_rad.
-    const double protocol_visible_deg = transport_mode_ == "stm32"
-      ? vescPositionDegFromPhysicalSteering(steering_deg) : protocol_cmd_deg;
+    const double protocol_visible_deg = vescPositionDegFromPhysicalSteering(steering_deg);
     steering_uncal_target.data = protocol_visible_deg * kPi / 180.0;
     steering_uncal_target_pub_->publish(steering_uncal_target);
     steering_protocol_command_pub_->publish(steering_uncal_target);
 
     SerialCommand serial_cmd;
-    const double transport_steering_deg = transport_mode_ == "stm32" ? steering_deg : steering_stm_deg;
+    const double transport_steering_deg = steering_deg;
     serial_cmd.left_cdeg = static_cast<std::int16_t>(std::lround(transport_steering_deg * 100.0));
     serial_cmd.stm32_right_erpm = right_rpm;
     const double legacy_right_x10 = std::clamp(right_rpm * 10.0, -32768.0, 32767.0);
@@ -2022,7 +2015,7 @@ private:
       ::cfmakeraw(&tty);
       speed_t baud = B115200;
       if (serial_baud_ != 115200) {
-        RCLCPP_WARN_ONCE(get_logger(), "F103 VESC protocol is fixed at standard 115200 baud; forcing 115200.");
+        RCLCPP_WARN_ONCE(get_logger(), "F103 native VESC protocol is fixed at 115200 baud; forcing 115200.");
       }
       ::cfsetispeed(&tty, baud);
       ::cfsetospeed(&tty, baud);
@@ -2059,6 +2052,88 @@ private:
     frame[11] = 0U;
     writeU16Le(&frame[12], crc16Ccitt(&frame[2], 10));
     return frame;
+  }
+
+  bool writeDirectBytes(int fd, const std::vector<std::uint8_t> &bytes)
+  {
+    if (fd < 0 || bytes.empty()) return false;
+    const std::uint8_t *p = bytes.data();
+    std::size_t remaining = bytes.size();
+    int would_block_retries = 0;
+    while (remaining > 0U) {
+      const ssize_t n = ::write(fd, p, remaining);
+      if (n > 0) { p += n; remaining -= static_cast<std::size_t>(n); would_block_retries = 0; continue; }
+      if (n < 0 && errno == EINTR) continue;
+      if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) && would_block_retries++ < 20) {
+        std::this_thread::sleep_for(100us); continue;
+      }
+      return false;
+    }
+    return true;
+  }
+
+  void publishDirectConnected(bool connected)
+  {
+    if (!direct_connected_pub_) return;
+    std_msgs::msg::Bool msg; msg.data = connected; direct_connected_pub_->publish(msg);
+  }
+
+  void queueDirectExternalTx(const std::vector<std::uint8_t> &bytes, bool maintenance)
+  {
+    if (bytes.empty() || bytes.size() > 4096U) return;
+    const bool active = maintenance_mode_active_.load();
+    if (maintenance != active) return;  // route ownership is fail-closed
+    std::lock_guard<std::mutex> lock(direct_tx_mutex_);
+    auto &q = maintenance ? direct_maintenance_tx_queue_ : direct_runtime_tx_queue_;
+    constexpr std::size_t kMaxQueued = 64U;
+    if (q.size() >= kMaxQueued) q.pop_front();
+    q.push_back(bytes);
+  }
+
+  bool popDirectExternalTx(bool maintenance, std::vector<std::uint8_t> &bytes)
+  {
+    std::lock_guard<std::mutex> lock(direct_tx_mutex_);
+    auto &q = maintenance ? direct_maintenance_tx_queue_ : direct_runtime_tx_queue_;
+    if (q.empty()) return false;
+    bytes = std::move(q.front()); q.pop_front(); return true;
+  }
+
+  bool drainDirectRx(int fd, bool maintenance)
+  {
+    std::uint8_t buffer[512];
+    for (;;) {
+      const ssize_t n = ::read(fd, buffer, sizeof(buffer));
+      if (n > 0) {
+        std::vector<std::uint8_t> bytes(buffer, buffer + n);
+        if (maintenance) {
+          if (direct_rx_pub_) { std_msgs::msg::UInt8MultiArray msg; msg.data = bytes; direct_rx_pub_->publish(msg); }
+        } else {
+          consumeVescRxBytes(bytes);
+        }
+        continue;
+      }
+      if (n == 0 || errno == EAGAIN || errno == EWOULDBLOCK) return true;
+      if (errno == EINTR) continue;
+      return false;
+    }
+  }
+
+  std::vector<std::uint8_t> buildNativeRuntimeBatch(const SerialCommand &cmd, bool include_calibration)
+  {
+    std::vector<std::uint8_t> batch; batch.reserve(96U);
+    appendVescSetPos(batch, static_cast<double>(cmd.left_cdeg) * 0.01);
+    appendVescSetRpm(batch, cmd.stm32_right_erpm);
+    appendVescValuesRequest(batch, false);
+    appendVescValuesRequest(batch, true);
+    if (include_calibration) appendSteeringCalibrationRequest(batch);
+    return batch;
+  }
+
+  std::vector<std::uint8_t> buildNativeSafeStopBatch(double steering_deg)
+  {
+    std::vector<std::uint8_t> batch; batch.reserve(72U);
+    for (int i=0; i<3; ++i) { appendVescSetRpm(batch, 0.0); appendVescSetPos(batch, steering_deg); }
+    return batch;
   }
 
   bool writeFrame(int fd, const std::array<std::uint8_t, kFrameSize> & frame)
@@ -2147,23 +2222,10 @@ private:
     feedback_updated_ = true;
   }
 
-  void publishStm32Bytes(const std::vector<std::uint8_t> &bytes)
-  {
-    if (!serial_enabled_ || transport_mode_ != "stm32" || !stm32_tx_pub_ || bytes.empty()) return;
-    std_msgs::msg::UInt8MultiArray msg;
-    msg.data = bytes;
-    stm32_tx_pub_->publish(msg);
-  }
-
   static void appendVescFrame(std::vector<std::uint8_t> &batch, const std::vector<std::uint8_t> &payload)
   {
     const auto frame = makeVescFrame(payload);
     batch.insert(batch.end(), frame.begin(), frame.end());
-  }
-
-  void sendVescPayload(const std::vector<std::uint8_t> &payload)
-  {
-    publishStm32Bytes(makeVescFrame(payload));
   }
 
   void appendVescSetPos(std::vector<std::uint8_t> &batch, double physical_deg)
@@ -2210,7 +2272,7 @@ private:
     if (!std::isfinite(age) || age > command_watchdog_sec_) {
       cmd = SerialCommand{};
       cmd.left_cdeg = static_cast<std::int16_t>(
-        std::lround((transport_mode_ == "stm32" ? 0.0 : stmSteeringCommandDeg(0.0)) * 100.0));
+        0);
     }
     return cmd;
   }
@@ -2224,42 +2286,6 @@ private:
     //   +30 deg physical = VESC POS 360 deg
     physical_deg = std::clamp(physical_deg, -30.0, 30.0);
     return std::clamp((physical_deg + 30.0) * 6.0, 0.0, 360.0);
-  }
-
-  void sendVescSetPos(double physical_deg)
-  {
-    /* Single steering wire contract:
-     *   ROS/Ackermann physical -30..0..+30 deg
-     *       -> VESC COMM_SET_POS 0..180..360 deg
-     * F103 maps the standard VESC 0..360 position back to the calibrated
-     * signed steering envelope. This keeps Nav2, commissioning and VESC Tool
-     * on one unambiguous position API. */
-    const double vesc_pos_deg = vescPositionDegFromPhysicalSteering(physical_deg);
-    std::vector<std::uint8_t> payload{kVescSetPos};
-    appendI32Be(payload, static_cast<std::int32_t>(std::lround(vesc_pos_deg * 1000000.0)));
-    sendVescPayload(payload);
-  }
-
-  void sendVescSetRpm(double rpm)
-  {
-    std::vector<std::uint8_t> inner{kVescSetRpm};
-    appendI32Be(inner, static_cast<std::int32_t>(std::lround(rpm)));
-    sendVescPayload(wrapRightMotor(inner));
-  }
-
-  void requestVescValues(bool second)
-  {
-    std::vector<std::uint8_t> payload{kVescGetValuesSelective};
-    appendI32Be(payload, static_cast<std::int32_t>(kRuntimeValuesMask));
-    if (second) payload = wrapRightMotor(payload);
-    sendVescPayload(payload);
-  }
-
-  void requestSteeringCalibration()
-  {
-    std::vector<std::uint8_t> payload{
-      kVescCustomAppData, kHbMagic0, kHbMagic1, kHbVersion, kHbGetSteeringCal};
-    sendVescPayload(payload);
   }
 
   static double signedPositionDeg(double vesc_position_deg)
@@ -2492,66 +2518,6 @@ private:
     }
   }
 
-  void stm32TransportTick()
-  {
-    if (transport_mode_ != "stm32" || !serial_enabled_ || maintenance_mode_active_) return;
-    const auto now_steady = std::chrono::steady_clock::now();
-    const SerialCommand cmd = currentSafeCommand(now_steady);
-    const double steering_deg = static_cast<double>(cmd.left_cdeg) * 0.01;
-    const double right_rpm = cmd.stm32_right_erpm;
-    // One ROS message contains the complete 50-Hz wire transaction. F411 and F103
-    // parse the concatenated standard VESC frames independently, so batching removes
-    // four ROS callbacks / four USB lines per cycle without changing VESC semantics.
-    // Latest-command-wins still applies because the whole batch belongs to one tick.
-    std::vector<std::uint8_t> batch;
-    batch.reserve(64U);
-    appendVescSetPos(batch, steering_deg);
-    appendVescSetRpm(batch, right_rpm);
-    appendVescValuesRequest(batch, false);
-    appendVescValuesRequest(batch, true);
-    // Project-specific steering calibration state stays at 10 Hz.
-    if (++steering_cal_tick_ >= 5U) {
-      steering_cal_tick_ = 0U;
-      appendSteeringCalibrationRequest(batch);
-    }
-    publishStm32Bytes(batch);
-
-    bool timed_out = true;
-    {
-      std::lock_guard<std::mutex> lock(feedback_mutex_);
-      if (left_values_seen_ && right_values_seen_) {
-        const bool left_fresh = std::chrono::duration<double>(now_steady - left_values_time_).count() <= serial_ack_timeout_sec_;
-        const bool right_fresh = std::chrono::duration<double>(now_steady - right_values_time_).count() <= serial_ack_timeout_sec_;
-        timed_out = !(left_fresh && right_fresh);
-      }
-    }
-    ack_timeout_.store(timed_out);
-  }
-
-  void sendStm32SafeStop()
-  {
-    if (transport_mode_ != "stm32" || !stm32_tx_pub_) return;
-    SerialCommand safe_cmd{};
-    bool command_seen = false;
-    {
-      std::lock_guard<std::mutex> lock(serial_command_mutex_);
-      safe_cmd.left_cdeg = serial_command_.left_cdeg;
-      command_seen = serial_command_stamp_.time_since_epoch().count() != 0;
-    }
-    if (!command_seen) {
-      safe_cmd.left_cdeg = static_cast<std::int16_t>(
-        std::lround(stmSteeringCommandDeg(0.0) * 100.0));
-    }
-    const double steering_deg = static_cast<double>(safe_cmd.left_cdeg) * 0.01;
-    std::vector<std::uint8_t> batch;
-    batch.reserve(72U);
-    for (int i = 0; i < 3; ++i) {
-      appendVescSetRpm(batch, 0.0);
-      appendVescSetPos(batch, steering_deg);
-    }
-    publishStm32Bytes(batch);
-  }
-
   void startSerialThread()
   {
     safe_stop_requested_.store(false);
@@ -2584,10 +2550,14 @@ private:
 
   void setSerialEnabled(bool enabled)
   {
+    if (integration_bypass_ && enabled) {
+      RCLCPP_ERROR(get_logger(),
+        "[ESC] rejected serial_enabled=true while integration_bypass is active");
+      return;
+    }
     if (enabled == serial_enabled_) return;
-    if (!enabled && transport_mode_ == "stm32") sendStm32SafeStop();
     serial_enabled_ = enabled;
-    if (transport_mode_ == "serial") {
+    if (transport_mode_ == "direct_vesc") {
       if (serial_enabled_) startSerialThread();
       else stopSerialThread();
     } else if (!serial_enabled_) {
@@ -2604,146 +2574,117 @@ private:
   {
     int fd = -1;
     std::string active_path;
-    std::uint16_t sequence = 0U;
     auto next_connect = std::chrono::steady_clock::now();
     auto next_tx = next_connect;
     const auto tx_period = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
       std::chrono::duration<double>(1.0 / serial_tx_rate_hz_));
+    bool previous_maintenance = false;
 
     while (serial_thread_running_.load()) {
       const auto t = std::chrono::steady_clock::now();
       if (fd < 0) {
-        if (t < next_connect) {
-          std::this_thread::sleep_for(5ms);
-          continue;
-        }
+        if (t < next_connect) { std::this_thread::sleep_for(5ms); continue; }
         fd = openSerial(active_path);
         if (fd < 0) {
-          serial_connected_.store(false);
+          serial_connected_.store(false); publishDirectConnected(false);
           next_connect = t + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
             std::chrono::duration<double>(serial_reconnect_sec_));
-          std::this_thread::sleep_for(10ms);
-          continue;
+          std::this_thread::sleep_for(10ms); continue;
         }
-        sequence = 0U;
-        rx_pos_ = 0U;
-        serial_connected_.store(true);
+        vesc_rx_stream_.clear();
+        serial_connected_.store(true); publishDirectConnected(true);
         {
-          std::lock_guard<std::mutex> lock(serial_state_mutex_);
-          serial_active_path_ = active_path;
+          std::lock_guard<std::mutex> lock(serial_state_mutex_); serial_active_path_ = active_path;
         }
         {
           std::lock_guard<std::mutex> lock(feedback_mutex_);
-          ack_seen_ = false;
-          feedback_updated_ = false;
-          last_ack_time_ = t;
-          feedback_status_ = 0U;
+          ack_seen_ = false; feedback_updated_ = false; feedback_status_ = 0U;
+          left_values_seen_ = false; right_values_seen_ = false; values_pair_mask_ = 0U;
         }
         next_tx = t;
-        RCLCPP_INFO(get_logger(), "SERIAL CONNECT %s @ 1000000 8N1", active_path.c_str());
+        previous_maintenance = maintenance_mode_active_.load();
+        RCLCPP_INFO(get_logger(), "DIRECT VESC CONNECT %s @ 115200 8N1", active_path.c_str());
       }
 
-      if (!drainRx(fd)) {
-        ::close(fd);
-        fd = -1;
-        serial_connected_.store(false);
-        {
-          std::lock_guard<std::mutex> lock(serial_state_mutex_);
-          serial_active_path_.clear();
+      const bool maintenance = maintenance_mode_active_.load();
+      if (maintenance != previous_maintenance) {
+        if (maintenance && direct_enter_safe_stop_pending_.exchange(false)) {
+          const SerialCommand safe = currentSafeCommand(std::chrono::steady_clock::now());
+          const auto stop = buildNativeSafeStopBatch(static_cast<double>(safe.left_cdeg) * 0.01);
+          if (!writeDirectBytes(fd, stop)) {
+            ::close(fd); fd = -1; serial_connected_.store(false); publishDirectConnected(false);
+            { std::lock_guard<std::mutex> lock(serial_state_mutex_); serial_active_path_.clear(); }
+            next_connect = std::chrono::steady_clock::now(); continue;
+          }
         }
-        next_connect = std::chrono::steady_clock::now();
-        continue;
+        {
+          std::lock_guard<std::mutex> qlock(direct_tx_mutex_);
+          if (maintenance) direct_runtime_tx_queue_.clear();
+          else direct_maintenance_tx_queue_.clear();
+        }
+        vesc_rx_stream_.clear();
+        previous_maintenance = maintenance;
       }
+
+      if (!drainDirectRx(fd, maintenance)) {
+        ::close(fd); fd = -1; serial_connected_.store(false); publishDirectConnected(false);
+        { std::lock_guard<std::mutex> lock(serial_state_mutex_); serial_active_path_.clear(); }
+        next_connect = std::chrono::steady_clock::now(); continue;
+      }
+
+      std::vector<std::uint8_t> external;
+      while (popDirectExternalTx(maintenance, external)) {
+        if (!writeDirectBytes(fd, external)) {
+          ::close(fd); fd=-1; serial_connected_.store(false); publishDirectConnected(false);
+          { std::lock_guard<std::mutex> lock(serial_state_mutex_); serial_active_path_.clear(); }
+          next_connect = std::chrono::steady_clock::now(); break;
+        }
+      }
+      if (fd < 0) continue;
 
       const auto now_steady = std::chrono::steady_clock::now();
-      if (now_steady >= next_tx) {
-        SerialCommand cmd;
-        std::chrono::steady_clock::time_point command_stamp;
-        {
-          std::lock_guard<std::mutex> lock(serial_command_mutex_);
-          cmd = serial_command_;
-          command_stamp = serial_command_stamp_;
+      if (!maintenance && now_steady >= next_tx) {
+        const SerialCommand cmd = currentSafeCommand(now_steady);
+        const bool request_cal = (++steering_cal_tick_ >= 5U);
+        if (request_cal) steering_cal_tick_ = 0U;
+        const auto batch = buildNativeRuntimeBatch(cmd, request_cal);
+        if (!writeDirectBytes(fd, batch)) {
+          ::close(fd); fd=-1; serial_connected_.store(false); publishDirectConnected(false);
+          { std::lock_guard<std::mutex> lock(serial_state_mutex_); serial_active_path_.clear(); }
+          next_connect = std::chrono::steady_clock::now(); continue;
         }
-        const double age = std::chrono::duration<double>(now_steady - command_stamp).count();
-        if (command_stamp.time_since_epoch().count() == 0 || age > command_watchdog_sec_) {
-          cmd = SerialCommand{};
-          // Zero vehicle steering must mean the SAVED physical center, not raw STM 0°.
-          cmd.left_cdeg = static_cast<std::int16_t>(
-            std::lround(stmSteeringCommandDeg(0.0) * 100.0));
-        }
-
-        ++sequence;
-        if (!writeFrame(fd, buildFrame(sequence, cmd))) {
-          ::close(fd);
-          fd = -1;
-          serial_connected_.store(false);
-          {
-            std::lock_guard<std::mutex> lock(serial_state_mutex_);
-            serial_active_path_.clear();
-          }
-          next_connect = std::chrono::steady_clock::now();
-          continue;
-        }
-
         next_tx += tx_period;
-        if (next_tx + tx_period < now_steady) next_tx = now_steady + tx_period;  // latest-command-wins
+        if (next_tx + tx_period < now_steady) next_tx = now_steady + tx_period;
       }
 
-      bool timed_out = false;
-      {
-        std::lock_guard<std::mutex> lock(feedback_mutex_);
-        if (ack_seen_) {
-          timed_out = std::chrono::duration<double>(
-            std::chrono::steady_clock::now() - last_ack_time_).count() > serial_ack_timeout_sec_;
+      if (!maintenance) {
+        bool timed_out = true;
+        {
+          std::lock_guard<std::mutex> lock(feedback_mutex_);
+          if (left_values_seen_ && right_values_seen_) {
+            const bool lf = std::chrono::duration<double>(now_steady-left_values_time_).count() <= serial_ack_timeout_sec_;
+            const bool rf = std::chrono::duration<double>(now_steady-right_values_time_).count() <= serial_ack_timeout_sec_;
+            timed_out = !(lf && rf);
+          }
         }
+        ack_timeout_.store(timed_out);
+      } else {
+        ack_timeout_.store(true);
       }
-      ack_timeout_.store(timed_out);
       std::this_thread::sleep_for(1ms);
     }
 
     if (fd >= 0) {
       if (safe_stop_requested_.load()) {
-        // Final bounded shutdown transaction: command propulsion=0 while
-        // preserving the latest steering command. Do NOT latch the firmware
-        // E-STOP on an ordinary ROS restart/shutdown: field validation showed
-        // that the actuator firmware can stop ACKing after that latch and then
-        // requires a hardware reset. Runtime E-STOP remains fail-closed through
-        // selected.estop above; loss of host frames is also covered by the MCU
-        // command watchdog.
-        SerialCommand safe_cmd{};
-        bool command_seen = false;
-        {
-          std::lock_guard<std::mutex> lock(serial_command_mutex_);
-          safe_cmd.left_cdeg = serial_command_.left_cdeg;
-          command_seen = serial_command_stamp_.time_since_epoch().count() != 0;
-        }
-        if (!command_seen) {
-          safe_cmd.left_cdeg = static_cast<std::int16_t>(
-            std::lround(stmSteeringCommandDeg(0.0) * 100.0));
-        }
-        safe_cmd.right_rpm_x10 = 0;
-        safe_cmd.flags = 0U;
-
-        bool stop_sent = false;
-        for (int attempt = 0; attempt < 3; ++attempt) {
-          ++sequence;
-          stop_sent = writeFrame(fd, buildFrame(sequence, safe_cmd));
-          if (!stop_sent) break;
-          std::this_thread::sleep_for(2ms);
-        }
-        RCLCPP_INFO(
-          get_logger(), "[ESC] SAFE SHUTDOWN: drive=0 (no persistent E-STOP latch) %s; closing %s",
-          stop_sent ? "sent" : "best-effort failed", active_path.c_str());
+        const SerialCommand safe = currentSafeCommand(std::chrono::steady_clock::now());
+        const auto stop = buildNativeSafeStopBatch(static_cast<double>(safe.left_cdeg) * 0.01);
+        (void)writeDirectBytes(fd, stop);
+        RCLCPP_INFO(get_logger(), "[ESC] SAFE SHUTDOWN native VESC drive=0; closing %s", active_path.c_str());
       }
-      // Never tcdrain() here: a disconnected USB-UART can block in the kernel.
-      // fd is O_NONBLOCK and all writes above have a bounded retry budget.
       ::close(fd);
     }
-    serial_connected_.store(false);
-    {
-      std::lock_guard<std::mutex> lock(serial_state_mutex_);
-      serial_active_path_.clear();
-    }
+    serial_connected_.store(false); publishDirectConnected(false);
+    { std::lock_guard<std::mutex> lock(serial_state_mutex_); serial_active_path_.clear(); }
   }
 
   double calibratedSteeringDeg(double measured_raw_deg) const
@@ -2751,7 +2692,7 @@ private:
     /* STM32/F103 already exposes signed, calibrated physical wheel degrees.
      * Do not apply the obsolete three-point STM protocol calibration again;
      * doing so moves a true 0-degree center away from ROS zero. */
-    if (transport_mode_ == "stm32") {
+    if (transport_mode_ == "direct_vesc") {
       const double physical_deg = clampPhysicalSteeringDeg(measured_raw_deg);
       return std::abs(physical_deg) <= steering_straight_deadband_deg_ ? 0.0 : physical_deg;
     }
@@ -2802,8 +2743,58 @@ private:
     return physical_deg;
   }
 
+  void publishIntegrationBypassState()
+  {
+    // Bench-only odometry heartbeat. It is intentionally stationary and carries
+    // conservative covariance. It exists so EKF/TF/Nav2 transport can be qualified
+    // while the ESC is physically absent; it is never advertised as real feedback.
+    std_msgs::msg::Bool b;
+    b.data = true; integration_bypass_pub_->publish(b);
+    b.data = false;
+    ready_pub_->publish(b); armed_pub_->publish(b); feedback_valid_pub_->publish(b);
+    drive_connected_pub_->publish(b); steer_connected_pub_->publish(b);
+
+    std_msgs::msg::Float64 scalar;
+    scalar.data = 0.0;
+    speed_pub_->publish(scalar); drive_actual_pub_->publish(scalar); drive_raw_pub_->publish(scalar);
+    steering_uncalibrated_pub_->publish(scalar); steering_feedback_raw_pub_->publish(scalar);
+    steering_actual_pub_->publish(scalar); yaw_rate_actual_pub_->publish(scalar);
+    yaw_rate_kinematic_pub_->publish(scalar); motor_current_abs_pub_->publish(scalar);
+
+    const auto stamp = now();
+    nav_msgs::msg::Odometry odom;
+    odom.header.stamp = stamp;
+    odom.header.frame_id = odom_frame_;
+    odom.child_frame_id = base_frame_;
+    odom.pose.pose.position.x = odom_x_;
+    odom.pose.pose.position.y = odom_y_;
+    odom.pose.pose.orientation.z = std::sin(odom_yaw_ * 0.5);
+    odom.pose.pose.orientation.w = std::cos(odom_yaw_ * 0.5);
+    odom.twist.twist.linear.x = 0.0;
+    odom.twist.twist.angular.z = 0.0;
+    odom.pose.covariance[0] = 0.25;
+    odom.pose.covariance[7] = 0.25;
+    odom.pose.covariance[35] = 0.50;
+    odom.twist.covariance[0] = 0.25;
+    odom.twist.covariance[35] = 0.25;
+    odom_pub_->publish(odom);
+    odom_validation_pub_->publish(odom);
+
+    std_msgs::msg::String status;
+    status.data = "controller=ackermann transport=direct_vesc mode=integration_bypass "
+                  "link=disabled physical_ready=false synthetic_odom=true";
+    status_pub_->publish(status);
+  }
+
   void publishLinkState()
   {
+    if (integration_bypass_) {
+      publishIntegrationBypassState();
+      return;
+    }
+    std_msgs::msg::Bool bypass;
+    bypass.data = false;
+    integration_bypass_pub_->publish(bypass);
     bool ack_seen = false;
     bool feedback_updated = false;
     double steering_deg = 0.0;
@@ -2850,8 +2841,7 @@ private:
     boolean.data = ack_fresh && left_ready;
     steer_connected_pub_->publish(boolean);
 
-    const double steering_uncalibrated_deg = transport_mode_ == "stm32" ?
-      steering_deg : steering_deg * (invert_steering_ ? -1.0 : 1.0);
+    const double steering_uncalibrated_deg = steering_deg;
     const double steering_calibrated_deg = calibratedSteeringDeg(steering_deg);
 
     const auto diag_now = std::chrono::steady_clock::now();
@@ -2888,7 +2878,7 @@ private:
         << " lut=" << ((steering_physical_lut_enabled_ && steering_physical_lut_valid_) ? "on" : "off")
         << " lut_n=" << steering_lut_physical_deg_.size()
         << " lut_dir=" << steering_lut_motion_direction_
-        << " right=" << rpm << (transport_mode_ == "stm32" ? "erpm" : "rpm")
+        << " right=" << rpm << "erpm"
         << " fw_status=0x" << std::hex << static_cast<unsigned>(status);
     status_msg.data = oss.str();
     status_pub_->publish(status_msg);
@@ -2958,8 +2948,9 @@ private:
     const bool slip_fresh = wheel_slip_active_ && wheel_slip_received_.nanoseconds() > 0 &&
       (stamp - wheel_slip_received_).seconds() >= 0.0 &&
       (stamp - wheel_slip_received_).seconds() <= wheel_slip_timeout_sec_;
-    double v_var = odom_v_variance_base_ +
+    const double intrinsic_v_var = odom_v_variance_base_ +
       odom_v_variance_rpm_error_gain_ * rpm_error_norm * rpm_error_norm;
+    double v_var = intrinsic_v_var;
     if (slip_fresh) v_var *= wheel_slip_covariance_multiplier_;
     const double yaw_var = odom_yaw_variance_base_ +
       odom_yaw_variance_steer_gain_ * steer_norm * steer_norm;
@@ -2969,6 +2960,16 @@ private:
     odom.twist.covariance[0] = v_var;
     odom.twist.covariance[35] = odom_yaw_rate_variance_base_ +
       odom_yaw_variance_steer_gain_ * steer_norm * steer_norm;
+
+    // Independent validation stream: identical wheel measurement/timestamp, but
+    // covariance is the intrinsic encoder/RPM model BEFORE localization's own
+    // wheel-slip feedback inflation. This prevents the slip detector from
+    // reducing its own NIS by enlarging the denominator after it fires.
+    auto odom_validation = odom;
+    odom_validation.pose.covariance[0] = std::max(0.05, intrinsic_v_var);
+    odom_validation.pose.covariance[7] = std::max(0.05, intrinsic_v_var + 0.5 * yaw_var);
+    odom_validation.twist.covariance[0] = intrinsic_v_var;
+    odom_validation_pub_->publish(odom_validation);
     odom_pub_->publish(odom);
 
     (void)ack_time;
@@ -2997,7 +2998,6 @@ private:
   double speed_max_mps_{0.5};
   double yaw_max_deg_s_{80.0};
   double steering_max_deg_{90.0};
-  double right_max_rpm_{300.0};  // direct-serial fallback scale only
   double drive_wheel_radius_m_{0.145};
   int drive_motor_pole_pairs_{15};
   double drive_gear_ratio_{1.0};
@@ -3083,12 +3083,12 @@ private:
   double yaw_rate_feedback_last_correction_deg_{0.0};
   bool yaw_rate_feedback_active_{false};
 
-  std::string transport_mode_{"stm32"};
-  std::string stm32_tx_topic_{"/stmf4/vesc/runtime_tx"};
-  std::string stm32_rx_topic_{"/stmf4/vesc/rx"};
-  std::string stm32_connected_topic_{"/stmf4/vesc/connected"};
-  std::uint16_t stm32_sequence_{0U};
+  std::string transport_mode_{"direct_vesc"};
   std::atomic<bool> maintenance_mode_active_{false};
+  std::atomic<bool> direct_enter_safe_stop_pending_{false};
+  std::mutex direct_tx_mutex_;
+  std::deque<std::vector<std::uint8_t>> direct_runtime_tx_queue_;
+  std::deque<std::vector<std::uint8_t>> direct_maintenance_tx_queue_;
   std::uint32_t steering_cal_tick_{0U};
   bool steering_calibrated_{false};
   bool steering_homed_{false};
@@ -3103,6 +3103,7 @@ private:
   std::mutex serial_state_mutex_;
   std::string serial_active_path_;
   bool serial_enabled_{true};
+  bool integration_bypass_{false};
   std::string serial_device_{"auto"};
   std::string serial_auto_id_contains_{"Prolific_Technology_Inc._USB-Serial_Controller"};
   std::string serial_auto_path_contains_{};
@@ -3112,6 +3113,7 @@ private:
   double serial_ack_timeout_sec_{0.60};
   double command_watchdog_sec_{0.25};
   std::string odom_topic_{"/esc/odom"};
+  std::string odom_validation_topic_{"/esc/odom_validation"};
   std::string odom_frame_{"odom"};
   std::string base_frame_{"base_footprint"};
   double odom_v_variance_base_{0.03};
@@ -3217,16 +3219,17 @@ private:
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr perception_state_sub_;
   rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr raw_commissioning_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr yaw_rate_feedback_imu_sub_;
-  rclcpp::Subscription<std_msgs::msg::UInt8MultiArray>::SharedPtr stm32_rx_sub_;
-  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr stm32_connected_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr maintenance_sub_;
-  rclcpp::Publisher<std_msgs::msg::UInt8MultiArray>::SharedPtr stm32_tx_pub_;
+  rclcpp::Publisher<std_msgs::msg::UInt8MultiArray>::SharedPtr direct_rx_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr direct_connected_pub_;
+  rclcpp::Subscription<std_msgs::msg::UInt8MultiArray>::SharedPtr direct_runtime_tx_sub_, direct_maintenance_tx_sub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr actuator_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr active_source_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr foc_telemetry_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr motor_current_abs_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr ready_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr integration_bypass_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr armed_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr feedback_valid_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr drive_connected_pub_;
@@ -3250,9 +3253,9 @@ private:
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr yaw_rate_feedback_correction_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr yaw_rate_feedback_active_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr yaw_rate_feedback_status_pub_;
-  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_, odom_validation_pub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr wheel_slip_sub_;
-  rclcpp::TimerBase::SharedPtr control_timer_, stm32_transport_timer_;
+  rclcpp::TimerBase::SharedPtr control_timer_;
 };
 
 int main(int argc, char ** argv)
