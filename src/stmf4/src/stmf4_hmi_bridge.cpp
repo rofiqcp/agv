@@ -2947,7 +2947,13 @@ private:
     };
 
     const uint32_t foc_age = steadyAgeMs(last_foc_telemetry_time_);
-    const bool foc_valid = foc_values_valid_ && foc_age != 0xFFFFFFFFU;
+    const uint32_t esc_fresh_limit_ms = static_cast<uint32_t>(
+      std::max(1.0, vesc_transport_timeout_sec_ * 1000.0));
+    // Transient-local FOC telemetry may retain the last physical sample after a
+    // USB-UART hot-unplug. Never present that latched sample as valid once its
+    // age exceeds the same transport freshness contract used by the ESC link.
+    const bool foc_valid = foc_values_valid_ && foc_age != 0xFFFFFFFFU &&
+      foc_age <= esc_fresh_limit_ms && esc_ready_ && esc_feedback_;
     const double vbus = (left_vbus_v_ > 0.1 && right_vbus_v_ > 0.1) ?
       0.5 * (left_vbus_v_ + right_vbus_v_) : std::max(left_vbus_v_, right_vbus_v_);
     {
@@ -2964,7 +2970,8 @@ private:
       send_ext("ESCX","MTR",++escx_motor_seq_,foc_age,p.str());
     }
     {
-      const bool enc_valid = steering_cal_ext_valid_ && foc_age != 0xFFFFFFFFU;
+      const bool enc_valid = steering_cal_ext_valid_ && foc_age != 0xFFFFFFFFU &&
+        foc_age <= esc_fresh_limit_ms && esc_ready_ && esc_feedback_;
       std::ostringstream p; p << flag(enc_valid) << ',' << steering_raw_count_ext_ << ',' << steering_span_ext_ << ',' << steering_raw_target_ext_ << ','
         << flag(steering_calibrated_ext_) << ',' << flag(steering_homed_ext_) << ',' << flag(steering_synced_ext_) << ",0," << fixed(finite(left_position_deg_),2);
       send_ext("ESCX","ENC",++escx_encoder_seq_,foc_age,p.str());
