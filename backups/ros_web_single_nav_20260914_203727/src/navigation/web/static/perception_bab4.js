@@ -14,14 +14,25 @@ function patchPerceptionBab4Catalog(){
   if((x=byId('F4.3')))Object.assign(x,{groupId:'FINAL-4.3',groupTitle:'FINAL BAB IV — 4.3 Pengujian Lane Safety',section:'FINAL 4.3 Lane Safety — Abu-abu / Hijau / Kuning / Merah • 20 percobaan/kondisi',reportMode:true,bab4Protocol:'lane',bab4ManualCapture:true,bab4NoTimeAxis:true,parameterFields:perBab4LaneFields(),tableColumns:[['Trial','Kondisi Acuan','Sisi Uji','Ulangan','Timestamp','Drivable/Mask Valid','Left Gap [px]','Right Gap [px]','Left Color','Right Color','Latch L','Latch R','Recommendation Aktual','Expected','Hasil'],['Kondisi Acuan','Percobaan','Benar','Salah','Success Rate [%]']],tableNames:['Raw Percobaan Lane Safety','Rekap Success Rate Lane Safety'],graphCaptions:[],graphs:[],liveSeries:{'Left gap':'lane_state.corridor.left_gap_px','Right gap':'lane_state.corridor.right_gap_px','Lane valid':'lane_state.valid','Drivable valid':'lane_state.drivable_valid'}});
   if((x=byId('F4.4')))Object.assign(x,{groupId:'FINAL-4.4',groupTitle:'FINAL BAB IV — 4.4 Pengujian Performa Real-Time',section:'FINAL 4.4 Performa CPU — 3 kondisi visual • 60 detik/kondisi',reportMode:true,bab4Protocol:'performance',bab4ManualCapture:true,bab4NoTimeAxis:true,parameterFields:perBab4PerfFields(),tableColumns:[['Kondisi','Durasi [s]','Frame selesai diterima','FPS hitung','Mean pipeline FPS EMA','Mean inference [ms]','Mean process total [ms]','Mean frame age [ms]','Mean subscriber latency [ms]','SSE gap','Backend','Status data']],tableNames:['Hasil Pengujian Performa Mini PC CPU'],graphCaptions:['Pipeline FPS selama 60 detik','Inference dan process total','Frame age dan subscriber latency'],graphs:[{type:'time_series',series:['Pipeline FPS'],xLabel:'Time [s]',yLabel:'FPS'},{type:'time_series',series:['Inference ms','Process total ms'],xLabel:'Time [s]',yLabel:'Time [ms]'},{type:'time_series',series:['Frame age ms','Subscriber latency ms'],xLabel:'Time [s]',yLabel:'Latency [ms]'}],liveSeries:{'Pipeline FPS':'perception_performance.pipeline_fps','Inference ms':'perception_performance.inference_ms','Process total ms':'perception_performance.pipeline_ms_per_frame','Frame age ms':'perception_performance.frame_age_ms','Subscriber latency ms':'derived.per_bab4_latency_ms','Processed event':'raw_detections.count'}});
 }
-function perBab4PatchWorkspace(){/* FINAL BAB IV now lives directly in the left sidebar with other perception tasks. */}
+function perBab4PatchWorkspace(){
+  const tabs=WORKSPACE_TABS?.perception;if(!tabs)return;
+  const i=tabs.findIndex(x=>x[0]==='tune');
+  if(i>=0)tabs[i][1]='Commissioning';
+  if(!tabs.some(x=>x[0]==='final'))tabs.splice(i>=0?i+1:tabs.length,0,['final','FINAL 4.1–4.4','page:experiments']);
+}
 const perBab4BaseEffectiveExperimentList=effectiveExperimentList;
-effectiveExperimentList=function(){return perBab4BaseEffectiveExperimentList()};
+effectiveExperimentList=function(){
+  const list=perBab4BaseEffectiveExperimentList();
+  if(currentExp!=='perception')return list;
+  const finalMode=activeDomain==='perception'&&activeWorkspaceTab?.perception==='final';
+  return finalMode?list.filter(x=>PER_BAB4_IDS.has(String(x.id))):list.filter(x=>!PER_BAB4_IDS.has(String(x.id)));
+};
 const perBab4BaseActivateWorkspaceTab=activateWorkspaceTab;
 activateWorkspaceTab=function(id){
   const r=perBab4BaseActivateWorkspaceTab(id);
-  document.body.classList.remove('per-bab4-final-mode');delete document.body.dataset.bab4;
-  if(activeDomain==='perception'&&id==='tune'){
+  const finalMode=activeDomain==='perception'&&id==='final';
+  document.body.classList.toggle('per-bab4-final-mode',finalMode);if(!finalMode)delete document.body.dataset.bab4;
+  if(activeDomain==='perception'&&(id==='final'||id==='tune')){
     currentExp='perception';renderExperimentList();const list=effectiveExperimentList();
     if(list.length&&!list.some(x=>x.id===selectedExperiment?.id))selectExperimentById(list[0].id);
     else if(selectedExperiment)renderSelectedExperiment();

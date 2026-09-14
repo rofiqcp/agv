@@ -1,0 +1,19 @@
+/* Unified navigation: one persistent left rail, no top workspace navigation. */
+#workspaceTabs{display:none!important}
+.topbar .top-status{margin-left:auto}
+.sidebar-domain-switch{display:grid;grid-template-columns:1fr;gap:4px;padding:8px 10px 9px;border-bottom:1px solid var(--border)}
+.sidebar-domain-switch .top-domain{width:100%;min-width:0;min-height:34px;display:grid;grid-template-columns:30px 1fr;align-items:center;gap:8px;padding:5px 9px;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--muted);text-align:left;box-shadow:none}
+.sidebar-domain-switch .top-domain span{font:800 8px ui-monospace;color:var(--dim)}
+.sidebar-domain-switch .top-domain b{font-size:10px;font-weight:760}
+.sidebar-domain-switch .top-domain:hover{background:rgba(255,255,255,.035);color:var(--text)}
+.sidebar-domain-switch .top-domain.active{color:var(--green);border-color:rgba(54,230,161,.22);background:linear-gradient(90deg,rgba(54,230,161,.12),rgba(49,168,255,.035));box-shadow:inset 2px 0 var(--green)}
+.tuning-unified-state{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:9px 12px}
+.tuning-unified-state>div:first-child>b,.tuning-unified-state>div:first-child>small{display:block}
+.tuning-unified-state>div:first-child>b{margin-top:2px;font-size:10px}
+.tuning-unified-state>div:first-child>small{margin-top:3px;font-size:8px;color:var(--dim)}
+.tuning-unified-state .tuning-mode-state{margin-left:auto}
+body.sidebar-collapsed .sidebar-domain-switch{display:none!important}
+.light .sidebar-domain-switch .top-domain.active{background:linear-gradient(90deg,rgba(24,185,125,.13),rgba(49,168,255,.025))}
+@media(max-width:820px){.sidebar-domain-switch{grid-template-columns:repeat(2,minmax(0,1fr))}.topbar .top-status{margin-left:0}.tuning-unified-state{align-items:flex-start;flex-direction:column}.tuning-unified-state .tuning-mode-state{margin-left:0;text-align:left}}
+#page-experiments[data-tuning-level="all"] .audit-ribbon details{display:block!important}
+#page-experiments[data-tuning-level="all"] .tuning-field code{display:block!important}

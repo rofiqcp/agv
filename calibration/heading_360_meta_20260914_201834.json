@@ -1,0 +1,17 @@
+{
+  "status": "RUNNING",
+  "stage1_only": true,
+  "runtime_yaml_written": false,
+  "north_reference": "operator_physical_North_0deg",
+  "expected_rotation": "CW",
+  "stop_count": 9,
+  "fit_stops": 8,
+  "closure_stop": 9,
+  "gyro_total_turn_deg": 0.0,
+  "gyro_expected_turn_deg": -360.0,
+  "transition_checks": [],
+  "segments": [],
+  "raw_csv": "calibration/heading_360_raw_20260914_201834.csv",
+  "segments_csv": "calibration/heading_360_segments_20260914_201834.csv",
+  "updated_at": "2026-09-14T20:18:50.552035+07:00"
+}

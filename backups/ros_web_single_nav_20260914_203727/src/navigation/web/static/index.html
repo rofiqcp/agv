@@ -15,7 +15,6 @@
   <link rel="stylesheet" href="/accessibility.css?v=20260913-stage6-v1">
   <link rel="stylesheet" href="/workspaces.css?v=20260913-stage6-v1">
   <link rel="stylesheet" href="/perception_bab4.css?v=20260914-bab4-v1">
-  <link rel="stylesheet" href="/single-navigation.css?v=20260914-single-nav-v1">
 </head>
 <body>
   <div class="app-shell">
@@ -25,12 +24,6 @@
         <div class="brand-copy"><strong>ADV Control</strong><span>ROS2 • Mini-PC</span></div>
         <button class="sidebar-collapse" id="sidebarCollapseBtn" aria-label="Minimize sidebar" title="Expand / minimize sidebar">‹</button>
       </div>
-      <nav class="sidebar-domain-switch" aria-label="Domain utama">
-        <button class="top-domain active" data-domain="overview"><span>0</span><b>Overview</b></button>
-        <button class="top-domain" data-domain="esc"><span>1</span><b>ESC</b></button>
-        <button class="top-domain" data-domain="navigation"><span>2</span><b>Navigasi</b></button>
-        <button class="top-domain" data-domain="perception"><span>3</span><b>Persepsi</b></button>
-      </nav>
       <div class="sidebar-context-head">
         <span id="contextDomainLabel">SYSTEM</span>
         <b id="contextDomainTitle">Overview</b>
@@ -47,6 +40,12 @@
       <header class="topbar">
         <button class="icon-button mobile-only" id="menuButton" aria-label="Buka menu">☰</button>
         <div class="page-heading"><span id="pageEyebrow">SYSTEM MONITOR</span><h1 id="pageTitle">Overview</h1></div>
+        <nav class="top-domain-tabs" aria-label="Domain utama">
+          <button class="top-domain active" data-domain="overview">Overview</button>
+          <button class="top-domain" data-domain="esc">1 • ESC</button>
+          <button class="top-domain" data-domain="navigation">2 • Navigasi</button>
+          <button class="top-domain" data-domain="perception">3 • Persepsi</button>
+        </nav>
         <div class="top-status">
           <div class="runtime-pill"><i id="rosDot"></i><span>ROS2</span><strong id="rosStatus">--</strong></div>
           <div class="runtime-pill"><i id="motionDot"></i><span>Motion</span><strong id="motionStatus">--</strong></div>
@@ -54,7 +53,7 @@
           <button class="icon-button" id="themeButton" aria-label="Ganti mode tampilan terang atau gelap" title="Mode tampilan">◐</button>
         </div>
       </header>
-      <nav class="workspace-tabs" id="workspaceTabs" hidden aria-hidden="true"></nav>
+      <nav class="workspace-tabs" id="workspaceTabs" aria-label="Engineering workspace tabs"></nav>
 
       <main class="content">
         <!-- OVERVIEW -->
@@ -578,12 +577,13 @@
             </div>
           </div>
 
-          <div class="tuning-unified-state panel" id="tuningModebar" aria-label="Tuning satu halaman">
-            <div><span class="eyebrow">SATU HALAMAN TUNING</span><b>Semua kontrol dan bukti tampil bersama</b><small>Prosedur • preflight • run • parameter • grafik • tabel • evidence • qualification</small></div>
+          <div class="tuning-modebar panel" id="tuningModebar" aria-label="Tuning workspace mode">
+            <div class="tuning-mode-group"><span>WORKFLOW</span><button class="tuning-mode-btn active" data-tuning-mode="task">TASK</button><button class="tuning-mode-btn" data-tuning-mode="tune">TUNE</button><button class="tuning-mode-btn" data-tuning-mode="analyze">ANALYZE</button></div>
+            <div class="tuning-mode-group"><span>COMPLEXITY</span><button class="tuning-level-btn active" data-tuning-level="basic">BASIC</button><button class="tuning-level-btn" data-tuning-level="advanced">ADVANCED</button><button class="tuning-level-btn" data-tuning-level="expert">EXPERT</button></div>
             <div class="tuning-mode-state"><b id="tuningDraftCount">0 DRAFT</b><small>Input hanya stage; write terjadi setelah Validate + Apply.</small></div>
           </div>
 
-          <div class="tuning-mode-guide" id="tuningModeGuide" aria-live="polite"><b id="tuningModeGuideTitle">SATU HALAMAN</b><span id="tuningModeGuideText">Pilih tuning dari menu kiri; seluruh workflow langsung tersedia tanpa mode atau tab tambahan.</span></div>
+          <div class="tuning-mode-guide" id="tuningModeGuide" aria-live="polite"><b id="tuningModeGuideTitle">TASK</b><span id="tuningModeGuideText">Pilih prosedur, preflight, evidence, lalu qualification sebelum berpindah tahap.</span></div>
 
           <article class="panel commissioning-roadmap" id="commissioningRoadmap">
             <div class="commissioning-step" data-phase="esc"><i>1</i><div><span>FIRST</span><b>ESC / FOC Total</b><small>Sensor motor → FOC current → outer loop → step → repeatability → load → final gate</small></div><em id="phaseEscState">REQUIRED</em></div>
@@ -818,7 +818,7 @@
       <p id="helpSummary">Pilih ikon ? pada parameter atau panel.</p>
       <dl class="help-grid"><div><dt>Unit</dt><dd id="helpUnit">—</dd></div><div><dt>Safe range</dt><dd id="helpRange">—</dd></div><div><dt>Baseline</dt><dd id="helpBaseline">—</dd></div><div><dt>YAML</dt><dd id="helpYaml">—</dd></div><div><dt>Draft</dt><dd id="helpDraft">—</dd></div><div><dt>Runtime</dt><dd id="helpRuntime">—</dd></div></dl>
       <section><h3>Jika dinaikkan</h3><p id="helpEffectUp">—</p></section><section><h3>Jika diturunkan</h3><p id="helpEffectDown">—</p></section><section><h3>Apply model</h3><p id="helpApplyMode">—</p></section><section><h3>Risk / guard</h3><p id="helpRisk">—</p></section><section><h3>Related</h3><p id="helpRelated">—</p></section>
-      <details class="help-expert"><summary>Source teknis</summary><code id="helpSource">—</code></details>
+      <details class="help-expert"><summary>Expert source</summary><code id="helpSource">—</code></details>
     </div>
   </aside>
   <button class="config-diff-backdrop" id="configDiffBackdrop" aria-label="Tutup diff konfigurasi" hidden></button>
@@ -836,21 +836,21 @@
   <script src="/camera_geometry.js?v=20260910-stage2-v1" defer></script>
   <script src="/analysis_session.js?v=20260910-stage2-v2" defer></script>
   <script src="/diagnostics.js?v=20260910-stage2-v1" defer></script>
-  <script src="/core.js?v=20260914-single-nav-v1" defer></script>
+  <script src="/core.js?v=20260914-r412-9dir-v1" defer></script>
   <script src="/navigation.js?v=20260913-stage6-v1" defer></script>
-  <script src="/perception.js?v=20260914-single-nav-v1" defer></script>
+  <script src="/perception.js?v=20260913-stage6-v1" defer></script>
   <script src="/sensors.js?v=20260913-stage6-v1" defer></script>
   <script src="/esc.js?v=20260913-stage6-v1" defer></script>
   <script src="/system_views.js?v=20260913-stage6-v1" defer></script>
-  <script src="/perception_calibration.js?v=20260914-single-nav-v1" defer></script>
+  <script src="/perception_calibration.js?v=20260914-obcal-v3" defer></script>
   <script src="/imu_calibration.js?v=20260913-stage6-v1" defer></script>
   <script src="/tuning_catalog.js?v=20260914-nav-flow-v4" defer></script>
-  <script src="/tuning_ui.js?v=20260914-single-nav-v1" defer></script>
+  <script src="/tuning_ui.js?v=20260914-r412-9dir-v1" defer></script>
   <script src="/tuning_charts.js?v=20260914-report-dual-v1" defer></script>
   <script src="/tuning_trials.js?v=20260913-stage6-v1" defer></script>
   <script src="/tuning_evidence.js?v=20260914-report-dual-v1" defer></script>
   <script src="/imu_heading_validation.js?v=20260914-r412-9dir-v3" defer></script>
-  <script src="/perception_bab4.js?v=20260914-single-nav-v1" defer></script>
+  <script src="/perception_bab4.js?v=20260914-bab4-v1" defer></script>
   <script src="/config.js?v=20260913-stage6-v1" defer></script>
   <script src="/export_tools.js?v=20260914-report-dual-v1" defer></script>
   <script src="/report_dual_export.js?v=20260914-report-dual-v1" defer></script>

@@ -222,6 +222,8 @@
 /home/sirobo/agv/install/navigation/share/navigation/web/static/perception_bab4.js
 /home/sirobo/agv/install/navigation/share/navigation/web/static/perception_calibration.js
 /home/sirobo/agv/install/navigation/share/navigation/web/static/replay.js
+/home/sirobo/agv/install/navigation/share/navigation/web/static/report-dual-export.css
+/home/sirobo/agv/install/navigation/share/navigation/web/static/report_dual_export.js
 /home/sirobo/agv/install/navigation/share/navigation/web/static/responsive.css
 /home/sirobo/agv/install/navigation/share/navigation/web/static/sensors.js
 /home/sirobo/agv/install/navigation/share/navigation/web/static/shared-calibration.css
