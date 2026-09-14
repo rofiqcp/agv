@@ -681,10 +681,20 @@ private:
       ";inertial_heading_deg=" + std::to_string(inertial_heading_rad_ * 180.0 / kPi) +
       ";consensus_error_deg=" + std::to_string(consensus_error_rad_ * 180.0 / kPi) +
       ";field_qualified=" + (field_qualification_valid_ ? "true" : "false") +
+      // Expose the exact calibration path that is active at runtime. The Web
+      // dashboard uses these flags to distinguish raw field telemetry from
+      // calibrated headings and must never label an uncalibrated source READY.
+      ";imu_planar=" + (imu_planar_calibration_enabled_ ? "true" : "false") +
+      ";imu_lut=" + (imu_heading_lut_enabled_ ? "true" : "false") +
+      ";imu_yaw_sign=" + std::to_string(imu_sign_) +
+      ";imu_yaw_offset_rad=" + std::to_string(imu_offset_) +
       ";neo3_cal_owner=" + neo_calibration_owner_ +
       ";neo3_cal_owner_verified=" + (neo_calibration_ownership_verified_ ? "true" : "false") +
       ";neo3_full3d=" + (neo_full_calibration_enabled_ ? "true" : "false") +
       ";neo3_planar=" + (neo_planar_calibration_enabled_ ? "true" : "false") +
+      ";neo3_lut=" + (neo_heading_lut_enabled_ ? "true" : "false") +
+      ";neo3_yaw_sign=" + std::to_string(neo_sign_) +
+      ";neo3_yaw_offset_rad=" + std::to_string(neo_offset_) +
       ";consensus_valid=" + (consensus_valid_ ? "true" : "false") +
       ";validated_heading_deg=" + std::to_string(validated_heading_rad_ * 180.0 / kPi) +
       ";gyro_bias_z_rps=" + std::to_string(gyro_bias_z_rps_) +

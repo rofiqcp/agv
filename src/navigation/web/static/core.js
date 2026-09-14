@@ -54,10 +54,14 @@ function renderHeadingEkfSummary(prefix){
   setText(prefix+'ImuMagField',magFieldText(imuMag,vector));setText(prefix+'ImuMagHeading',headingValueText(imuHeading));
   setText(prefix+'InertialHeading',headingValueText(inertial));setText(prefix+'ValidatedHeading',headingValueText(validated));
   setText(prefix+'HeadingConsensus',status.consensus_valid===true?`VALID • Δ ${fmt(status.consensus_error_deg,2)}°`:`WAIT • Δ ${fmt(status.consensus_error_deg,2)}°`);
+  const imuCal=status.imu_planar===true&&status.imu_lut===true;
+  const rmCal=status.neo3_cal_owner_verified===true&&(status.neo3_planar===true||status.neo3_full3d===true)&&status.neo3_lut===true;
+  const calActive=imuCal&&rmCal;
+  setText(prefix+'HeadingCalibration',calActive?'RM + IMU ACTIVE':`RM ${rmCal?'OK':'BLOCK'} / IMU ${imuCal?'OK':'BLOCK'}`);
   if(prefix==='overview')setText('overviewHeadingSources',`${status.consensus_source_mask??'--'} / ${status.validated_source_mask??'--'}`);
   if(prefix==='nav')setText('navMapYawOffset',Number.isFinite(+raw('map_yaw_from_enu'))?`${fmt(deg(raw('map_yaw_from_enu')),1)}°`:'--');
   const headingSourcesFresh=channelFresh(rmChannel,1.5)&&channelFresh('imu_mag',1.5)&&channelFresh('imu_inertial_heading',1.5);
-  setChip(prefix+'HeadingChip',headingSourcesFresh,status.consensus_valid===true?'FUSED':'SOURCES LIVE','WAIT');
+  setChip(prefix+'HeadingChip',headingSourcesFresh&&calActive,status.consensus_valid===true?'CAL + FUSED':'CAL SOURCES LIVE',calActive?'WAIT':'CAL BLOCKED');
   setText(prefix+'EkfLocalPose',ekfPoseText(local));setText(prefix+'EkfLocalTwist',ekfTwistText(local));setText(prefix+'EkfLocalCov',ekfSigmaText(local));setText(prefix+'EkfLocalHealth',streamHealthText('ekf_local'));
   setText(prefix+'EkfGlobalPose',ekfPoseText(global));setText(prefix+'EkfGlobalTwist',ekfTwistText(global));setText(prefix+'EkfGlobalCov',ekfSigmaText(global));setText(prefix+'EkfGlobalHealth',streamHealthText('ekf_global'));
   setChip(prefix+'EkfChip',channelFresh('ekf_local',1)&&channelFresh('ekf_global',1),'BOTH LIVE','WAIT');
