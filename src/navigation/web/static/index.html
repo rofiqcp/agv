@@ -89,6 +89,28 @@
             <article class="health-card" data-health="nav2"><div class="health-icon">N</div><div><span>NAV2</span><b id="healthNav2">WAIT</b><small id="healthNav2Detail">planner / controller</small></div><i class="health-led"></i></article>
           </div>
 
+          <div class="section-title" id="overviewEstimatorSection"><div><span class="eyebrow">HEADING & STATE ESTIMATION</span><h2>Magnetometer + EKF Live</h2></div><span class="muted">RM3100 • Yahboom MAG • inertial heading • EKF local/global</span></div>
+          <div class="two-col" id="overviewEstimatorGrid">
+            <article class="panel compact">
+              <div class="panel-head"><div><span class="eyebrow">ABSOLUTE / INERTIAL YAW</span><h2>Heading Sources</h2></div><span class="status-chip waiting" id="overviewHeadingChip">WAIT</span></div>
+              <div class="metric-grid">
+                <div><span>RM3100 field</span><b id="overviewRmField">--</b></div><div><span>RM3100 yaw</span><b id="overviewRmHeading">--</b></div>
+                <div><span>IMU MAG field</span><b id="overviewImuMagField">--</b></div><div><span>IMU MAG yaw</span><b id="overviewImuMagHeading">--</b></div>
+                <div><span>Inertial yaw</span><b id="overviewInertialHeading">--</b></div><div><span>Validated yaw</span><b id="overviewValidatedHeading">--</b></div>
+                <div><span>Consensus</span><b id="overviewHeadingConsensus">--</b></div><div><span>Source mask</span><b id="overviewHeadingSources">--</b></div>
+              </div>
+            </article>
+            <article class="panel compact">
+              <div class="panel-head"><div><span class="eyebrow">ROBOT_LOCALIZATION</span><h2>EKF Local / Global</h2></div><span class="status-chip waiting" id="overviewEkfChip">WAIT</span></div>
+              <div class="metric-grid">
+                <div><span>Local pose</span><b id="overviewEkfLocalPose">--</b></div><div><span>Local twist</span><b id="overviewEkfLocalTwist">--</b></div>
+                <div><span>Local σ XY/Yaw</span><b id="overviewEkfLocalCov">--</b></div><div><span>Local rate / age</span><b id="overviewEkfLocalHealth">--</b></div>
+                <div><span>Global pose</span><b id="overviewEkfGlobalPose">--</b></div><div><span>Global twist</span><b id="overviewEkfGlobalTwist">--</b></div>
+                <div><span>Global σ XY/Yaw</span><b id="overviewEkfGlobalCov">--</b></div><div><span>Global rate / age</span><b id="overviewEkfGlobalHealth">--</b></div>
+              </div>
+            </article>
+          </div>
+
           <div class="section-title" id="overviewDataHealthSection"><div><span class="eyebrow">TELEMETRY INTEGRITY</span><h2>Data Health</h2></div><div class="status-pair"><span class="status-chip" id="dataHealthSummary">WAIT</span><span class="muted" id="sseIntegritySummary">SSE --</span></div></div>
           <article class="panel data-health-panel">
             <div class="data-health-table-wrap"><table class="engineering-table data-health-table"><thead><tr><th>Channel</th><th>Rate</th><th>Age</th><th>Jitter</th><th>Missing (10s)</th><th>State</th></tr></thead><tbody id="dataHealthRows"><tr><td colspan="6" class="empty-state">Menunggu telemetry...</td></tr></tbody></table></div>
@@ -215,6 +237,26 @@
             <div><span>PATH</span><b id="navPathStrip">--</b></div>
             <div><span>MAP</span><b id="navMapStrip">--</b></div>
           </div>
+          <div class="two-col" id="navEstimatorLiveSection">
+            <article class="panel compact">
+              <div class="panel-head"><div><span class="eyebrow">LIVE HEADING SOURCES</span><h2>RM3100 + IMU MAG + Inertial</h2></div><span class="status-chip waiting" id="navHeadingChip">WAIT</span></div>
+              <div class="metric-grid">
+                <div><span>RM3100 XYZ / |B|</span><b id="navRmField">--</b></div><div><span>RM3100 yaw</span><b id="navRmHeading">--</b></div>
+                <div><span>IMU MAG XYZ / |B|</span><b id="navImuMagField">--</b></div><div><span>IMU MAG yaw</span><b id="navImuMagHeading">--</b></div>
+                <div><span>Inertial yaw</span><b id="navInertialHeading">--</b></div><div><span>Validated yaw</span><b id="navValidatedHeading">--</b></div>
+                <div><span>Consensus</span><b id="navHeadingConsensus">--</b></div><div><span>Map yaw offset</span><b id="navMapYawOffset">--</b></div>
+              </div>
+            </article>
+            <article class="panel compact">
+              <div class="panel-head"><div><span class="eyebrow">EKF LIVE STATE</span><h2>Local + Global</h2></div><span class="status-chip waiting" id="navEkfChip">WAIT</span></div>
+              <div class="metric-grid">
+                <div><span>Local XYZ / Yaw</span><b id="navEkfLocalPose">--</b></div><div><span>Local Vx / Vy / Wz</span><b id="navEkfLocalTwist">--</b></div>
+                <div><span>Local variance</span><b id="navEkfLocalCov">--</b></div><div><span>Local Hz / age</span><b id="navEkfLocalHealth">--</b></div>
+                <div><span>Global XYZ / Yaw</span><b id="navEkfGlobalPose">--</b></div><div><span>Global Vx / Vy / Wz</span><b id="navEkfGlobalTwist">--</b></div>
+                <div><span>Global variance</span><b id="navEkfGlobalCov">--</b></div><div><span>Global Hz / age</span><b id="navEkfGlobalHealth">--</b></div>
+              </div>
+            </article>
+          </div>
           <details class="mission-draft-dock" id="missionDraftDock">
             <summary><span>Mission Draft / Goal List</span><b id="missionDraftSummary">0 points • local draft</b><i>▾</i></summary>
             <div class="mission-draft-toolbar"><button class="soft-btn" id="missionAddGoalBtn">+ Add Current Goal</button><button class="soft-btn" id="missionClearBtn">Clear</button><button class="soft-btn" id="missionExportBtn">Export JSON</button><span>Draft only • Send Goal remains explicit.</span></div>
@@ -225,6 +267,7 @@
             <div class="nav-inspector-tabs" role="tablist">
               <button class="active" data-nav-inspector="dynamics">Dynamics</button>
               <button data-nav-inspector="ackermann">Ackermann</button>
+              <button data-nav-inspector="heading-mag">Heading / MAG</button>
               <button data-nav-inspector="ekf-local">EKF Local</button>
               <button data-nav-inspector="ekf-global">EKF Global</button>
               <button data-nav-inspector="planner">Planner</button>
@@ -249,6 +292,7 @@
                 </div>
               </section>
               <section class="nav-inspector-pane" data-nav-pane="ackermann"><pre class="json-pretty" id="navInspectorAckermann">Waiting...</pre></section>
+              <section class="nav-inspector-pane" data-nav-pane="heading-mag"><pre class="json-pretty" id="navInspectorHeadingMag">Waiting...</pre></section>
               <section class="nav-inspector-pane" data-nav-pane="ekf-local"><pre class="json-pretty" id="navInspectorEkfLocal">Waiting...</pre></section>
               <section class="nav-inspector-pane" data-nav-pane="ekf-global"><pre class="json-pretty" id="navInspectorEkfGlobal">Waiting...</pre></section>
               <section class="nav-inspector-pane" data-nav-pane="planner"><pre class="json-pretty" id="navInspectorPlanner">Waiting...</pre></section>
@@ -312,7 +356,7 @@
         <section class="page" id="page-sensors">
           <div class="sensor-hero neo3-sensor-grid">
             <article class="panel" id="sensorGnssSection"><div class="panel-head"><div><span class="eyebrow">CUAV NEO-3 • u-blox NEO-M9N • F411 UART</span><h2>NEO-3 GNSS M9N</h2></div><div class="status-pair"><span class="status-chip waiting" id="gnssChip">LINK WAIT</span><span class="status-chip waiting" id="gnssFixChip">FIX WAIT</span></div></div><div class="big-coordinates"><div><span>LATITUDE</span><b id="gnssLat">--</b></div><div><span>LONGITUDE</span><b id="gnssLon">--</b></div></div><div class="metric-grid"><div><span>Satellites</span><b id="gnssSat">--</b></div><div><span>hAcc</span><b id="gnssHacc">--</b></div><div><span>DOP</span><b id="gnssDop">--</b></div><div><span>NAV-PVT rate</span><b id="gnssRate">--</b></div><div><span>Speed</span><b id="gnssSpeed">--</b></div><div><span>COG</span><b id="gnssCog">--</b></div><div><span>Fix type</span><b id="gnssFix">--</b></div><div><span>Transport</span><b id="gnssTransport">F411 UART → CDC</b></div></div><p class="hint">CONNECTED berarti M9N aktif mengirim data ke F411. FIX hanya VALID bila solusi GNSS memenuhi gate receiver; indoor dapat CONNECTED tetapi NO FIX.</p></article>
-            <article class="panel" id="sensorNeo3MagSection"><div class="panel-head"><div><span class="eyebrow">CUAV NEO-3 • IST8310 • F411 I²C PB8/PB9</span><h2>NEO-3 Magnetometer IST8310</h2></div><span class="status-chip waiting" id="neo3MagChip">I2C WAIT</span></div><div class="metric-grid"><div><span>Mag X</span><b id="neo3MagX">--</b></div><div><span>Mag Y</span><b id="neo3MagY">--</b></div><div><span>Mag Z</span><b id="neo3MagZ">--</b></div><div><span>Field norm</span><b id="neo3MagNorm">--</b></div><div><span>Map heading</span><b id="neo3MagHeading">--</b></div><div><span>Heading gate</span><b id="neo3MagValid">WAIT</b></div></div><p class="hint">IST8310 dibaca F411 via I²C, dikonversi 0.30 µT/LSB, dicek range/field norm, dikompensasi roll-pitch IMU, lalu diterbitkan sebagai yaw absolut ke EKF global.</p></article>
+            <article class="panel" id="sensorNeo3MagSection"><div class="panel-head"><div><span class="eyebrow">CUAV NEO-3 PRO • RM3100 • DroneCAN/F411</span><h2>NEO-3 Pro Magnetometer RM3100</h2></div><span class="status-chip waiting" id="neo3MagChip">MAG WAIT</span></div><div class="metric-grid"><div><span>Mag X</span><b id="neo3MagX">--</b></div><div><span>Mag Y</span><b id="neo3MagY">--</b></div><div><span>Mag Z</span><b id="neo3MagZ">--</b></div><div><span>Field norm</span><b id="neo3MagNorm">--</b></div><div><span>Map heading</span><b id="neo3MagHeading">--</b></div><div><span>Heading gate</span><b id="neo3MagValid">WAIT</b></div></div><p class="hint">RM3100 diterima dari NEO-3 Pro melalui F411, diterbitkan pada /neo3pro/mag dan dimirror ke /neo3/mag untuk fusion. Field norm, tilt compensation, calibration gate, dan freshness diperiksa sebelum yaw absolut boleh ikut fusion global.</p></article>
           </div>
           <div class="two-col magnetic-health-grid">
             <article class="panel" id="sensorImuSection"><div class="panel-head"><div><span class="eyebrow">IMU CP2102</span><h2>Orientation & Motion</h2></div><span class="status-chip waiting" id="imuChip">WAIT</span></div><div class="orientation-display"><div class="compass"><div class="needle" id="imuNeedle"></div><span>N</span></div><div class="orientation-values"><div><span>Roll</span><b id="imuRoll">--</b></div><div><span>Pitch</span><b id="imuPitch">--</b></div><div><span>Yaw</span><b id="imuYaw">--</b></div></div></div><div class="metric-grid"><div><span>Gyro X</span><b id="imuGx">--</b></div><div><span>Gyro Y</span><b id="imuGy">--</b></div><div><span>Gyro Z</span><b id="imuGz">--</b></div><div><span>Accel X</span><b id="imuAx">--</b></div><div><span>Accel Y</span><b id="imuAy">--</b></div><div><span>Accel Z</span><b id="imuAz">--</b></div><div><span>IMU mag norm</span><b id="imuMagNorm">--</b></div><div><span>IMU mag gate</span><b id="imuMagValid">WAIT</b></div></div></article>
@@ -836,10 +880,10 @@
   <script src="/camera_geometry.js?v=20260910-stage2-v1" defer></script>
   <script src="/analysis_session.js?v=20260910-stage2-v2" defer></script>
   <script src="/diagnostics.js?v=20260910-stage2-v1" defer></script>
-  <script src="/core.js?v=20260914-single-nav-v1" defer></script>
-  <script src="/navigation.js?v=20260913-stage6-v1" defer></script>
+  <script src="/core.js?v=20260914-mag-ekf-v1" defer></script>
+  <script src="/navigation.js?v=20260914-mag-ekf-v1" defer></script>
   <script src="/perception.js?v=20260914-single-nav-v1" defer></script>
-  <script src="/sensors.js?v=20260913-stage6-v1" defer></script>
+  <script src="/sensors.js?v=20260914-mag-ekf-v1" defer></script>
   <script src="/esc.js?v=20260913-stage6-v1" defer></script>
   <script src="/system_views.js?v=20260913-stage6-v1" defer></script>
   <script src="/perception_calibration.js?v=20260914-single-nav-v1" defer></script>

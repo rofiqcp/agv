@@ -1638,7 +1638,12 @@ class WebRosBridge {
 
     const std::vector<std::pair<const char *, const char *>> bools = {
         {"/gnss/connected", "connected.gnss"}, {"/imu/connected", "connected.imu"},
-        {"/neo3/ist8310_connected", "connected.neo3_mag"},
+        // /neo3/mag_connected is the canonical magnetic-link health for both
+        // legacy IST8310 and NEO3 Pro RM3100. Keep the sensor-specific flags
+        // separately so the Web UI can identify which hardware is live.
+        {"/neo3/mag_connected", "connected.neo3_mag"},
+        {"/neo3/ist8310_connected", "connected.ist8310"},
+        {"/neo3pro/rm3100_connected", "connected.rm3100"},
         {"/neo3/mag_heading_valid", "neo3_mag_heading_valid"},
         {"/imu/mag_heading_valid", "imu_mag_heading_valid"},
         {"/neo3/safety_switch", "neo3_safety_switch"},
@@ -1826,7 +1831,11 @@ class WebRosBridge {
                                    {"measurement_stamp_sec", double(msg->header.stamp.sec) + msg->header.stamp.nanosec * 1e-9}});
           });
     };
+    // Canonical fusion stays on /neo3/mag; NEO3 Pro additionally exposes the
+    // unambiguous RM3100 stream on /neo3pro/mag. The F411 bridge mirrors Pro
+    // samples to both topics, so legacy configurations remain compatible.
     magSubscribe("/neo3/mag", "neo3_mag");
+    magSubscribe("/neo3pro/mag", "rm3100_mag");
     magSubscribe("/imu/mag", "imu_mag");
 
     const auto magneticHeadingSubscribe = [this, sensorQos](const char *topic, const char *channel) {
@@ -1842,6 +1851,12 @@ class WebRosBridge {
     };
     magneticHeadingSubscribe("/neo3/mag_heading_fusion", "neo3_mag_heading");
     magneticHeadingSubscribe("/imu/mag_heading_fusion", "imu_mag_heading");
+    magneticHeadingSubscribe("/imu/inertial_heading", "imu_inertial_heading");
+    magneticHeadingSubscribe("/heading/validated_fusion", "validated_heading");
+    subscribe<std_msgs::msg::Float64>("/localization/map_yaw_from_enu", stateQos,
+      [this](std_msgs::msg::Float64::ConstSharedPtr msg) {
+        update("map_yaw_from_enu", msg->data);
+      });
 
     subscribe<std_msgs::msg::Float64MultiArray>("/imu/raw_sensor_vectors", sensorQos,
       [this](std_msgs::msg::Float64MultiArray::ConstSharedPtr msg) {
@@ -1884,12 +1899,34 @@ class WebRosBridge {
       subscribe<nav_msgs::msg::Odometry>(topic, sensorQos, [this, ch](nav_msgs::msg::Odometry::ConstSharedPtr msg) {
         const auto &p = msg->pose.pose.position;
         const auto &q = msg->pose.pose.orientation;
-        update(ch, QJsonObject{{"x", p.x}, {"y", p.y}, {"yaw", yawFromQuat(q.x, q.y, q.z, q.w)},
-                               {"v", msg->twist.twist.linear.x}, {"w", msg->twist.twist.angular.z},
-                               {"var_x", msg->pose.covariance[0]}, {"var_y", msg->pose.covariance[7]},
-                               {"var_yaw", msg->pose.covariance[35]},
-                               {"var_v", msg->twist.covariance[0]}, {"var_w", msg->twist.covariance[35]},
-                               {"measurement_stamp_sec", double(msg->header.stamp.sec) + msg->header.stamp.nanosec * 1e-9}});
+        const auto &lv = msg->twist.twist.linear;
+        const auto &av = msg->twist.twist.angular;
+        const double sinr = 2.0 * (q.w * q.x + q.y * q.z);
+        const double cosr = 1.0 - 2.0 * (q.x * q.x + q.y * q.y);
+        const double roll = std::atan2(sinr, cosr);
+        const double sinp = 2.0 * (q.w * q.y - q.z * q.x);
+        const double pitch = std::abs(sinp) >= 1.0 ? std::copysign(kPi / 2.0, sinp) : std::asin(sinp);
+        const double yaw = yawFromQuat(q.x, q.y, q.z, q.w);
+        QJsonArray poseCovariance, twistCovariance;
+        for (const double value : msg->pose.covariance) poseCovariance.append(value);
+        for (const double value : msg->twist.covariance) twistCovariance.append(value);
+        update(ch, QJsonObject{
+          // Flat aliases are retained for map/render code and existing exports.
+          {"x", p.x}, {"y", p.y}, {"z", p.z}, {"roll", roll}, {"pitch", pitch}, {"yaw", yaw},
+          {"v", lv.x}, {"w", av.z},
+          {"vx", lv.x}, {"vy", lv.y}, {"vz", lv.z}, {"wx", av.x}, {"wy", av.y}, {"wz", av.z},
+          {"var_x", msg->pose.covariance[0]}, {"var_y", msg->pose.covariance[7]}, {"var_z", msg->pose.covariance[14]},
+          {"var_roll", msg->pose.covariance[21]}, {"var_pitch", msg->pose.covariance[28]}, {"var_yaw", msg->pose.covariance[35]},
+          {"var_v", msg->twist.covariance[0]}, {"var_w", msg->twist.covariance[35]},
+          {"frame_id", QString::fromStdString(msg->header.frame_id)},
+          {"child_frame_id", QString::fromStdString(msg->child_frame_id)},
+          {"position", QJsonObject{{"x", p.x}, {"y", p.y}, {"z", p.z}}},
+          {"orientation", QJsonObject{{"x", q.x}, {"y", q.y}, {"z", q.z}, {"w", q.w},
+                                      {"roll_rad", roll}, {"pitch_rad", pitch}, {"yaw_rad", yaw}}},
+          {"linear_velocity", QJsonObject{{"x", lv.x}, {"y", lv.y}, {"z", lv.z}}},
+          {"angular_velocity", QJsonObject{{"x", av.x}, {"y", av.y}, {"z", av.z}}},
+          {"pose_covariance", poseCovariance}, {"twist_covariance", twistCovariance},
+          {"measurement_stamp_sec", double(msg->header.stamp.sec) + msg->header.stamp.nanosec * 1e-9}});
       });
     };
     odomSubscribe("/esc/odom", "esc_odom");

@@ -526,6 +526,7 @@ private:
     if (!field_qualification_valid_ || (!imu_fresh && !neo_fresh)) {
       consensus_since_ = rclcpp::Time(0,0,RCL_ROS_TIME);
       consensus_source_mask_ = 0u;
+      validated_source_mask_ = 0u;
       if (consensus_valid_) {
         consensus_valid_ = false;
         std_msgs::msg::Bool b; b.data=false; consensus_valid_pub_->publish(b);
@@ -541,6 +542,7 @@ private:
           std::abs(normalizeAngle(imu_state_.heading_rad - neo_state_.heading_rad)) > consensus_max_error_rad_) {
         consensus_since_ = rclcpp::Time(0,0,RCL_ROS_TIME);
         consensus_source_mask_ = 0u;
+      validated_source_mask_ = 0u;
         if (consensus_valid_) {
           consensus_valid_ = false;
           std_msgs::msg::Bool b; b.data=false; consensus_valid_pub_->publish(b);
@@ -563,6 +565,7 @@ private:
       last_correction_time_=t;
       consensus_since_=rclcpp::Time(0,0,RCL_ROS_TIME);
       consensus_source_mask_=0u;
+      validated_source_mask_=0u;
       return;
     }
 
@@ -599,6 +602,7 @@ private:
     if (source_mask==0u || sw_abs<=0.0) {
       consensus_since_=rclcpp::Time(0,0,RCL_ROS_TIME);
       consensus_source_mask_=0u;
+      validated_source_mask_=0u;
       consensus_error_rad_=std::min(imu_err,neo_err);
       if (consensus_valid_) {
         consensus_valid_=false;
@@ -611,6 +615,7 @@ private:
     // a newly-recovered sensor never inherits the previous source's validation.
     if (source_mask != consensus_source_mask_) {
       consensus_source_mask_=source_mask;
+      validated_source_mask_=0u;
       consensus_since_=t;
       if (consensus_valid_) {
         consensus_valid_=false;

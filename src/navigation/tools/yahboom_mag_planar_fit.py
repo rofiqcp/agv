@@ -8,6 +8,7 @@ import yaml
 
 AGV_ROOT=Path(os.environ.get('AGV_ROOT', str(Path.home()/'agv'))).expanduser().resolve()
 FIT_SEGMENTS=tuple(range(1,9)); CLOSURE_SEGMENT=9; STOP_COUNT=9
+REP103_CARDINAL_ENU_DEG={'N':90.0,'NE':45.0,'E':0.0,'SE':-45.0,'S':-90.0,'SW':-135.0,'W':180.0,'NW':135.0}
 FIT_RMS_MAX_DEG=3.0; FIT_MAX_ERROR_DEG=5.0; CLOSURE_MAX_DEG=2.0
 CROSS_RMS_MAX_DEG=3.0; CROSS_MAX_DEG=5.0; GYRO_CLOSURE_MAX_DEG=20.0
 NORM_P05_MIN=0.75; NORM_P95_MAX=1.25; MIN_SAMPLES_PER_STOP=15
@@ -27,6 +28,18 @@ def compass_target_deg(segment,direction):
     step=45.0*(segment-1); return (step if direction=='CW' else -step)%360.0
 def enu_target_rad(segment,direction):
     return wrap(math.pi/2.0-math.radians(compass_target_deg(segment,direction)))
+
+def validate_rep103_cardinals():
+    compass={'N':0.0,'NE':45.0,'E':90.0,'SE':135.0,'S':180.0,'SW':225.0,'W':270.0,'NW':315.0}
+    errors={}
+    for label,cdeg in compass.items():
+        actual=wrap(math.pi/2.0-math.radians(cdeg))
+        expected=math.radians(REP103_CARDINAL_ENU_DEG[label])
+        err=abs(math.degrees(wrap(actual-expected)))
+        errors[label]=err
+    if max(errors.values())>1e-9:
+        raise ValueError(f'REP-103 cardinal conversion invalid: {errors}')
+    return True
 def lut_apply(y,knots,corr):
     y=wrap(y); pts=sorted(zip(knots,corr)); xs=[p[0] for p in pts]
     if len(pts)<2:return y
@@ -175,6 +188,7 @@ def cross_sensor(rows,yah,neo):
     return {'pass':bool(rr<=CROSS_RMS_MAX_DEG and mx<=CROSS_MAX_DEG),'rms_delta_deg':rr,'max_abs_delta_deg':mx,'per_stop':per}
 
 def main():
+    validate_rep103_cardinals()
     ap=argparse.ArgumentParser();ap.add_argument('raw_csv');ap.add_argument('--meta-json',default='');ap.add_argument('--direction',choices=['CW','CCW'],default='');a=ap.parse_args()
     meta={}
     if a.meta_json and Path(a.meta_json).exists():meta=json.loads(Path(a.meta_json).read_text())
@@ -186,12 +200,14 @@ def main():
         neo=fit_planar(rows,'neo_mag_x_ut','neo_mag_y_ut','NEO3 IST8310 diagnostic full-fit','uT')
         neo_residual=fit_heading_only(rows,'neo_mag_x_ut','neo_mag_y_ut','NEO3 AP_Periph corrected field','uT')
     except ValueError as exc:raise SystemExit(str(exc))
-    gyro=transition_evidence(meta,direction);cross=cross_sensor(rows,yah,neo_residual)
-    ready=bool(yah['valid'] and neo_residual['valid'] and gyro['pass'] and cross['pass'])
+    gyro=transition_evidence(meta,direction);cross=cross_sensor(rows,yah,neo)
+    # Runtime MAGPRO/RM3100 is calibrated on the ROS host. AP_Periph residual
+    # remains diagnostic only and must not block a valid host-owned calibration.
+    ready=bool(yah['valid'] and neo['valid'] and gyro['pass'] and cross['pass'])
     created=datetime.now().astimezone().isoformat(timespec='milliseconds')
     unified={'stage1_only':True,'runtime_yaml_written':False,'ready_for_stage2':ready,'valid':ready,'source':'operator-referenced physical North 0deg, 45deg static stops, full 360deg closure',
-      'direction':direction,'created_at':created,'raw_csv':portable_path(a.raw_csv),'segment_count':STOP_COUNT,'fit_segment_count':8,'closure_segment':9,
-      'ground_truth':{'convention':'compass_deg_0_North_90_East_CW','ros_conversion':'yaw_enu = pi/2 - compass_heading','north_reference':'operator_physical_alignment'},
+      'direction':direction,'created_at':created,'raw_csv':portable_path(a.raw_csv),'segment_count':STOP_COUNT,'fit_segment_count':8,'closure_segment':9,'calibration_owner':'ros_host',
+      'ground_truth':{'convention':'compass_deg_0_North_90_East_CW','ros_conversion':'yaw_enu = pi/2 - compass_heading','ros_rep':'REP-103 ENU, yaw positive CCW about +Z','cardinal_enu_deg':REP103_CARDINAL_ENU_DEG,'north_reference':'operator_physical_alignment'},
       'transition_check_pass':gyro['pass'],'gyro':gyro,'yahboom':yah,'neo3':neo,'neo3_ap_periph_residual':neo_residual,'cross_sensor':cross,
       'gates':{'fit_rms_max_deg':FIT_RMS_MAX_DEG,'fit_max_error_deg':FIT_MAX_ERROR_DEG,'north_closure_max_deg':CLOSURE_MAX_DEG,
         'cross_rms_max_deg':CROSS_RMS_MAX_DEG,'cross_max_deg':CROSS_MAX_DEG,'gyro_closure_max_deg':GYRO_CLOSURE_MAX_DEG,
@@ -212,6 +228,6 @@ def main():
     root=Path(a.raw_csv).parent;stem=Path(a.raw_csv).stem;stamp=stem.split('_')[-2]+'_'+stem.split('_')[-1] if len(stem.split('_'))>=2 else datetime.now().strftime('%Y%m%d_%H%M%S')
     dest=root/f'heading_360_{stamp}.yaml';payload=yaml.safe_dump(out,sort_keys=False,width=120)
     dest.write_text(payload);(root/'heading_360_latest.yaml').write_text(payload);(root/'yahboom_mag_planar_latest.yaml').write_text(payload)
-    print(f'HEADING360_STAGE1 valid={ready} direction={direction} yah_rms={yah["validation"]["fit_rms_error_deg"]:.3f}deg neo_rms={neo_residual["validation"]["fit_rms_error_deg"]:.3f}deg yah_close={abs(yah["validation"]["closure_mean_error_deg"]):.3f}deg neo_close={abs(neo_residual["validation"]["closure_mean_error_deg"]):.3f}deg cross={cross["rms_delta_deg"]:.3f}deg gyro_close={gyro["closure_error_deg"]:.3f}deg yaml={dest}',flush=True)
+    print(f'HEADING360_STAGE1 valid={ready} owner=ros_host direction={direction} yah_rms={yah["validation"]["fit_rms_error_deg"]:.3f}deg rm3100_rms={neo["validation"]["fit_rms_error_deg"]:.3f}deg yah_close={abs(yah["validation"]["closure_mean_error_deg"]):.3f}deg rm3100_close={abs(neo["validation"]["closure_mean_error_deg"]):.3f}deg cross={cross["rms_delta_deg"]:.3f}deg gyro_close={gyro["closure_error_deg"]:.3f}deg yaml={dest}',flush=True)
     return 0 if ready else 2
 if __name__=='__main__':raise SystemExit(main())

@@ -38,6 +38,7 @@
 /home/sirobo/agv/install/navigation/share/navigation/config/gnss.yaml.web.baseline
 /home/sirobo/agv/install/navigation/share/navigation/config/gui_calibration.yaml
 /home/sirobo/agv/install/navigation/share/navigation/config/gui_calibration.yaml.web.baseline
+/home/sirobo/agv/install/navigation/share/navigation/config/heading_360_calibration.yaml
 /home/sirobo/agv/install/navigation/share/navigation/config/heading_8dir_calibration.yaml
 /home/sirobo/agv/install/navigation/share/navigation/config/imu.yaml
 /home/sirobo/agv/install/navigation/share/navigation/config/imu.yaml.web.baseline
@@ -228,6 +229,7 @@
 /home/sirobo/agv/install/navigation/share/navigation/web/static/sensors.js
 /home/sirobo/agv/install/navigation/share/navigation/web/static/shared-calibration.css
 /home/sirobo/agv/install/navigation/share/navigation/web/static/shell.css
+/home/sirobo/agv/install/navigation/share/navigation/web/static/single-navigation.css
 /home/sirobo/agv/install/navigation/share/navigation/web/static/styles.css
 /home/sirobo/agv/install/navigation/share/navigation/web/static/system_views.js
 /home/sirobo/agv/install/navigation/share/navigation/web/static/tokens.css

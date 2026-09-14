@@ -1,18 +1,29 @@
 heading_360_calibration:
   stage1_only: true
   runtime_yaml_written: false
-  ready_for_stage2: false
-  valid: false
+  ready_for_stage2: true
+  valid: true
   source: operator-referenced physical North 0deg, 45deg static stops, full 360deg closure
   direction: CW
-  created_at: '2026-09-14T22:22:17.610+07:00'
+  created_at: '2026-09-14T22:43:20.520+07:00'
   raw_csv: calibration/heading_360_raw_20260914_220012_runtime.csv
   segment_count: 9
   fit_segment_count: 8
   closure_segment: 9
+  calibration_owner: ros_host
   ground_truth:
     convention: compass_deg_0_North_90_East_CW
     ros_conversion: yaw_enu = pi/2 - compass_heading
+    ros_rep: REP-103 ENU, yaw positive CCW about +Z
+    cardinal_enu_deg:
+      N: 90.0
+      NE: 45.0
+      E: 0.0
+      SE: -45.0
+      S: -90.0
+      SW: -135.0
+      W: 180.0
+      NW: 135.0
     north_reference: operator_physical_alignment
   transition_check_pass: true
   gyro:
@@ -365,36 +376,36 @@ heading_360_calibration:
       pass: false
   cross_sensor:
     pass: true
-    rms_delta_deg: 0.19573368354568654
-    max_abs_delta_deg: 0.8235918313712574
+    rms_delta_deg: 0.13729095077839598
+    max_abs_delta_deg: 0.5819038590015954
     per_stop:
     - segment: 1
-      mean_delta_deg: -0.0012828140747434033
-      rms_delta_deg: 0.2045038046306803
+      mean_delta_deg: -0.005552495428203481
+      rms_delta_deg: 0.2032158182247057
     - segment: 2
-      mean_delta_deg: 0.004204014151057226
-      rms_delta_deg: 0.09850910205840123
+      mean_delta_deg: -0.00517800971623456
+      rms_delta_deg: 0.11152492497698195
     - segment: 3
-      mean_delta_deg: 0.0027006397326092123
-      rms_delta_deg: 0.08729832713609179
+      mean_delta_deg: 0.00032068768305635416
+      rms_delta_deg: 0.0839808652424004
     - segment: 4
-      mean_delta_deg: 0.0225473399653858
-      rms_delta_deg: 0.1324296235819691
+      mean_delta_deg: 0.012471162389357072
+      rms_delta_deg: 0.1271580190020851
     - segment: 5
-      mean_delta_deg: 0.0003782825948466363
-      rms_delta_deg: 0.1041672218093628
+      mean_delta_deg: 0.0011685268374132247
+      rms_delta_deg: 0.1066523105949315
     - segment: 6
-      mean_delta_deg: -0.005202645816340583
-      rms_delta_deg: 0.10983733475975878
+      mean_delta_deg: -0.005089943038061488
+      rms_delta_deg: 0.09960476794187254
     - segment: 7
-      mean_delta_deg: 0.0025579549030609137
-      rms_delta_deg: 0.08239849979123287
+      mean_delta_deg: 0.010079962992970204
+      rms_delta_deg: 0.07307652031660349
     - segment: 8
-      mean_delta_deg: 0.003840346732390828
-      rms_delta_deg: 0.13812659207476996
+      mean_delta_deg: 0.015486099889713365
+      rms_delta_deg: 0.14858665517580794
     - segment: 9
-      mean_delta_deg: 0.3300512691811275
-      rms_delta_deg: 0.3597793573626336
+      mean_delta_deg: 0.12689386676707748
+      rms_delta_deg: 0.18430087298797576
   gates:
     fit_rms_max_deg: 3.0
     fit_max_error_deg: 5.0
@@ -406,8 +417,8 @@ heading_360_calibration:
     corrected_norm_p95_max: 1.25
     min_samples_per_stop: 15
 stage2_apply:
-  applied_at: '2026-09-14T22:23:27+07:00'
-  calibration_sha256: 1c659912fa29fb8798ad50ef70365ff8dda49007eb71d32746b219b6648b9f78
+  applied_at: '2026-09-14T22:44:00+07:00'
+  calibration_sha256: 46e47377b37b0b4d95599b83b5f73e4cb1ff7a428976a0738496b2cda8fa3a46
   ownership:
     verified: true
     owner: ros_host

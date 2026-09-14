@@ -1,7 +1,7 @@
 'use strict';
 const $=id=>document.getElementById(id); const q=(s,r=document)=>r.querySelector(s); const qa=(s,r=document)=>[...r.querySelectorAll(s)];
 const state={}; let updated={}; let vescTelemetryByMotor={1:{},2:{}}; let serverDelta=0; let sse=null; let lastHmiPage=''; let experiments={}; let configs={}; let uiConfigSchema={version:2,parameters:{}}; let configStateSnapshot={}; let configValidation=null; let currentExp='navigation'; let mapImage=null,globalCostmapImage=null,localCostmapImage=null; let costmapImageAt={global:0,local:0}; let mapView={zoom:1,panX:0,panY:0,tool:'goal',drag:null,draft:null,initialDraft:null,follow:false,measure:{a:null,b:null,preview:null},trail:[],gnssTrail:[],trailMax:1500}; let missionDraft=(()=>{try{return JSON.parse(localStorage.getItem('adv-mission-draft')||'[]')}catch(_){return[]}})(),selectedMissionDraft=-1; const history=[],eventLog=[],eventLast=new Map(); const channelTiming=new Map(), ekfGrowthState=new Map(), scatterOrigins=new Map(), reportDerivedCache=new Map(); let chartEpochMs=Date.now(); let pendingPlanGoalAtMs=0,lastPlanningLatencyMs=NaN; let reportCostmapMetricCache={key:'',minClearance:NaN,valid:NaN};
-const STICKY_STREAMS=new Set(['foc_telemetry','vesc_tool_telemetry','vesc_left_values','vesc_right_values','imu','gnss_fix','gnss_quality','gnss_vel','ekf_local','ekf_global','esc_odom']);
+const STICKY_STREAMS=new Set(['foc_telemetry','vesc_tool_telemetry','vesc_left_values','vesc_right_values','imu','imu_mag','rm3100_mag','neo3_mag','neo3_mag_heading','imu_mag_heading','imu_inertial_heading','validated_heading','gnss_fix','gnss_quality','gnss_vel','ekf_local','ekf_global','esc_odom']);
 let renderQueued=false,lastRenderAt=0,mapDrawQueued=false,mapDrawRaf=0,lastMapDrawAt=0,lastOverviewHealthAt=0;
 const PAGE_RENDER_MS={overview:200,navigation:67,perception:100,sensors:200,esc:100,'esc-status':125,'esc-ackermann':200,calibration:200,tuning:125,reports:500,diagnostics:250,experiments:125,configuration:500,replay:250};
 const uiPerf={renders:0,mapDraws:0,labFast:0,labSlow:0,pageRenders:{}};window.__AGV_UI_PERF=uiPerf;
@@ -11,6 +11,10 @@ const CHANNEL_REGISTRY={
   foc_telemetry:{label:'ESC FOC',expectedHz:50,staleMs:250},
   esc_odom:{label:'ESC Odometry',expectedHz:50,staleMs:250},
   imu:{label:'Yahboom IMU',expectedHz:50,staleMs:250},
+  imu_mag:{label:'Yahboom MAG',expectedHz:20,staleMs:500},
+  rm3100_mag:{label:'RM3100 MAG',expectedHz:20,staleMs:500},
+  imu_inertial_heading:{label:'Yaw Inertial',expectedHz:20,staleMs:500},
+  validated_heading:{label:'Yaw Validated',expectedHz:10,staleMs:750},
   gnss_fix:{label:'GNSS Fix',expectedHz:10,staleMs:500},
   gnss_quality:{label:'GNSS Quality',expectedHz:10,staleMs:500},
   ekf_local:{label:'EKF Local',expectedHz:10,staleMs:300},
@@ -35,6 +39,29 @@ function channelFresh(k,sec=3){return age(k)<sec}
 function healthCard(name,status,detail){const el=q(`[data-health="${name}"]`);if(!el)return;el.classList.remove('ok','warn','bad');el.classList.add(status);const b=q('b',el),small=q('small',el);if(b)b.textContent=status==='ok'?'ONLINE':status==='warn'?'WAIT':'OFFLINE';if(small&&detail)small.textContent=detail}
 function getPath(o,...keys){for(const k of keys){if(o&&o[k]!=null)return o[k]}return null}
 function statusRaw(k){const o=obj(k);return o.raw||textish(o)}
+function preferredRmMag(){const rm=obj('rm3100_mag');return Object.keys(rm).length?rm:obj('neo3_mag')}
+function preferredRmChannel(){return Object.keys(obj('rm3100_mag')).length?'rm3100_mag':'neo3_mag'}
+function headingValueText(o){return Number.isFinite(+o?.yaw_rad)?`${fmt(deg(o.yaw_rad),1)}°`:'--'}
+function magFieldText(o,vector=false){if(!o||!Number.isFinite(+o.norm_ut))return'--';return vector?`${fmt(o.x_ut,1)}, ${fmt(o.y_ut,1)}, ${fmt(o.z_ut,1)} µT | ${fmt(o.norm_ut,1)} µT`:`${fmt(o.norm_ut,1)} µT`}
+function ekfPoseText(o){if(!o||!Number.isFinite(+o.x))return'--';return `${fmt(o.x,2)}, ${fmt(o.y,2)}, ${fmt(o.z,2)} m | ${fmt(deg(o.yaw),1)}°`}
+function ekfTwistText(o){if(!o||!Number.isFinite(+(o.vx??o.v)))return'--';return `${fmt(o.vx??o.v,2)}, ${fmt(o.vy,2)}, ${fmt(o.wz??o.w,3)}`}
+function ekfSigmaText(o){if(!o)return'--';const sx=Number.isFinite(+o.var_x)&&+o.var_x>=0?Math.sqrt(+o.var_x):NaN,sy=Number.isFinite(+o.var_y)&&+o.var_y>=0?Math.sqrt(+o.var_y):NaN,syaw=Number.isFinite(+o.var_yaw)&&+o.var_yaw>=0?deg(Math.sqrt(+o.var_yaw)):NaN;if(![sx,sy,syaw].some(Number.isFinite))return'--';return `${fmt(sx,3)} / ${fmt(sy,3)} m / ${fmt(syaw,2)}°`}
+function streamHealthText(k){const r=channelRate(k),a=age(k);return `${Number.isFinite(r)?r.toFixed(1)+' Hz':'--'} / ${Number.isFinite(a)?(a*1000).toFixed(0)+' ms':'--'}`}
+function renderHeadingEkfSummary(prefix){
+  const rm=preferredRmMag(),imuMag=obj('imu_mag'),rmHeading=obj('neo3_mag_heading'),imuHeading=obj('imu_mag_heading'),inertial=obj('imu_inertial_heading'),validated=obj('validated_heading'),status=obj('magnetic_heading_status'),local=obj('ekf_local'),global=obj('ekf_global'),rmChannel=preferredRmChannel();
+  const vector=prefix==='nav';
+  setText(prefix+'RmField',magFieldText(rm,vector));setText(prefix+'RmHeading',headingValueText(rmHeading));
+  setText(prefix+'ImuMagField',magFieldText(imuMag,vector));setText(prefix+'ImuMagHeading',headingValueText(imuHeading));
+  setText(prefix+'InertialHeading',headingValueText(inertial));setText(prefix+'ValidatedHeading',headingValueText(validated));
+  setText(prefix+'HeadingConsensus',status.consensus_valid===true?`VALID • Δ ${fmt(status.consensus_error_deg,2)}°`:`WAIT • Δ ${fmt(status.consensus_error_deg,2)}°`);
+  if(prefix==='overview')setText('overviewHeadingSources',`${status.consensus_source_mask??'--'} / ${status.validated_source_mask??'--'}`);
+  if(prefix==='nav')setText('navMapYawOffset',Number.isFinite(+raw('map_yaw_from_enu'))?`${fmt(deg(raw('map_yaw_from_enu')),1)}°`:'--');
+  const headingSourcesFresh=channelFresh(rmChannel,1.5)&&channelFresh('imu_mag',1.5)&&channelFresh('imu_inertial_heading',1.5);
+  setChip(prefix+'HeadingChip',headingSourcesFresh,status.consensus_valid===true?'FUSED':'SOURCES LIVE','WAIT');
+  setText(prefix+'EkfLocalPose',ekfPoseText(local));setText(prefix+'EkfLocalTwist',ekfTwistText(local));setText(prefix+'EkfLocalCov',ekfSigmaText(local));setText(prefix+'EkfLocalHealth',streamHealthText('ekf_local'));
+  setText(prefix+'EkfGlobalPose',ekfPoseText(global));setText(prefix+'EkfGlobalTwist',ekfTwistText(global));setText(prefix+'EkfGlobalCov',ekfSigmaText(global));setText(prefix+'EkfGlobalHealth',streamHealthText('ekf_global'));
+  setChip(prefix+'EkfChip',channelFresh('ekf_local',1)&&channelFresh('ekf_global',1),'BOTH LIVE','WAIT');
+}
 function pageName(p){return {overview:['SYSTEM MONITOR','Overview'],replay:['LOG ANALYSIS','Replay'],navigation:['NAV2 WORKSPACE','Map & Mission'],perception:['VISION SYSTEM','Perception Live'],sensors:['LOCALIZATION INPUT','GNSS & IMU'],esc:['ACTUATION','ESC Motor Workbench'],'esc-status':['ACTUATION STATUS','ESC Status'],'esc-ackermann':['ACTUATION','Ackermann Scaling'],calibration:['COMMISSIONING','Calibration'],tuning:['CONTROL LOOP','Live Control'],experiments:['CONTROL ENGINEERING','Tuning & Control'],reports:['EVIDENCE','Reports & Export'],diagnostics:['ENGINEERING','Diagnostics'],configuration:['SYSTEM SOURCE','Configuration']}[p]||['SYSTEM','Dashboard']}
 const GLOBAL_TOOLS=[['configuration','Configuration','☷'],['diagnostics','Diagnostics','⌁'],['replay','Replay / Log Analysis','▶'],['reports','Reports & Export','⇩']];
 const DOMAIN_MENU={
@@ -181,6 +208,7 @@ function setPriorityStatus(id,value,state='wait',detail=''){const el=$(id);if(!e
 function renderAuthority(){const key=authorityKey(),tool=obj('vesc_tool_status'),mux=getPath(obj('esc_mux'),'raw')||getPath(obj('nav_cmd_mux'),'raw')||'IDLE';qa('[data-authority]').forEach(e=>e.classList.toggle('active',e.dataset.authority===key));const chip=$('authorityChip');if(chip){chip.textContent=key.toUpperCase();chip.className='status-chip '+(key==='estop'?'bad':key==='idle'?'waiting':'')}setText('authoritySource',String(mux));setText('authorityMotion',bool(raw('system.motion_ready'))?'OPEN':'FAIL-CLOSED');setText('authorityEscOwner',tool.owner||tool.mode||'--')}
 function renderOverview(){
   const now=performance.now();
+  renderHeadingEkfSummary('overview');
   const gn=healthFromConnected('connected.gnss','gnss_fix',2),im=healthFromConnected('connected.imu','imu',2),ca=healthFromConnected('connected.camera','camera_frame',4),es=bool(raw('connected.esc_feedback'))?'ok':(bool(raw('connected.esc_ready'))?'warn':'bad'),loc=bool(raw('system.motion_ready'))?'ok':(channelFresh('localization_state',5)?'warn':'bad'),nv=bool(raw('system.nav2_ready'))?'ok':(channelFresh('system.nav2_ready',5)?'warn':'bad'),hm=bool(raw('connected.hmi'))?'ok':'bad';
   const states=[gn,im,ca,es,hm,loc,nv],score=Math.round(states.reduce((a,x)=>a+(x==='ok'?1:x==='warn'?.5:0),0)/states.length*100),motion=bool(raw('system.motion_ready')),auth=authorityKey(),safetyBad=bool(raw('system.estop'))||bool(raw('perception_emergency'));
   setPriorityStatus('priorityMotion',motion?'READY':'FAIL-CLOSED',motion?'ok':'bad',`readiness ${score}%`);setPriorityStatus('priorityAuthority',auth.toUpperCase(),auth==='estop'?'bad':(auth==='idle'||auth==='manual')?'warn':'ok',String(getPath(obj('esc_mux'),'raw')||'IDLE'));setPriorityStatus('priorityLocalization',loc==='ok'?'READY':loc==='warn'?'DEGRADED':'NOT READY',loc,textish(obj('localization_state').state||obj('localization_state').raw||'waiting'));setPriorityStatus('priorityEsc',es==='ok'?'FEEDBACK OK':es==='warn'?'GATEWAY ONLY':'OFFLINE',es,bool(raw('connected.esc_feedback'))?'fresh feedback':'waiting feedback');setPriorityStatus('priorityPerception',ca==='ok'?'HEALTHY':ca==='warn'?'DEGRADED':'OFFLINE',ca,obj('camera_frame').source||'camera');setPriorityStatus('prioritySafety',safetyBad?'BLOCKED':motion?'CLEAR':'GUARDED',safetyBad?'bad':motion?'ok':'warn',`E-stop ${bool(raw('system.estop'))?'ACTIVE':'clear'} • perception ${bool(raw('perception_emergency'))?'EMERGENCY':'clear'}`);

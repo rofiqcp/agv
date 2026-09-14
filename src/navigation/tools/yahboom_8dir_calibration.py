@@ -13,6 +13,7 @@ G=9.80665; STOP_COUNT=9; MIN_SENSOR_SAMPLES=15
 AGV_ROOT=Path(os.environ.get('AGV_ROOT',str(Path.home()/'agv'))).expanduser().resolve()
 CARDINAL_CW=('N','NE','E','SE','S','SW','W','NW','N')
 CARDINAL_CCW=('N','NW','W','SW','S','SE','E','NE','N')
+REP103_CARDINAL_ENU_DEG={'N':90.0,'NE':45.0,'E':0.0,'SE':-45.0,'S':-90.0,'SW':-135.0,'W':180.0,'NW':135.0}
 
 def portable_path(path):
     resolved=Path(path).expanduser().resolve()
@@ -22,6 +23,13 @@ def wrap(a):return math.atan2(math.sin(a),math.cos(a))
 def qdeg(a):return math.degrees(wrap(a))
 def yaw_q(q):return math.atan2(2*(q.w*q.z+q.x*q.y),1-2*(q.y*q.y+q.z*q.z))
 def cmean(v):return math.atan2(sum(math.sin(x) for x in v),sum(math.cos(x) for x in v)) if v else float('nan')
+def validate_rep103_cardinals():
+    compass={'N':0.0,'NE':45.0,'E':90.0,'SE':135.0,'S':180.0,'SW':225.0,'W':270.0,'NW':315.0}
+    for label,cdeg in compass.items():
+        actual=wrap(math.pi/2.0-math.radians(cdeg)); expected=math.radians(REP103_CARDINAL_ENU_DEG[label])
+        if abs(math.degrees(wrap(actual-expected)))>1e-9:
+            raise RuntimeError(f'REP-103 cardinal conversion invalid for {label}')
+    return True
 def mounting_state(raw):
     if not raw or len(raw)<9:return ('WAIT',False,'raw sensor belum fresh')
     ax,ay,az=raw[:3];an=math.sqrt(ax*ax+ay*ay+az*az)
@@ -169,6 +177,7 @@ class Cal(Node):
         self.write_state('RUNNING',instr)
 
 def main():
+    validate_rep103_cardinals()
     ap=argparse.ArgumentParser();ap.add_argument('--direction',choices=['CW','CCW'],required=True);ap.add_argument('--root',default=str(Path(os.environ.get('AGV_ROOT',str(Path.home()/'agv')))/'calibration'));ap.add_argument('--fit-script',default='');a=ap.parse_args()
     lock=open('/tmp/agv_yahboom_8dir_calibration.lock','w')
     try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
