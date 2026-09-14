@@ -1712,7 +1712,8 @@ class WebRosBridge {
         {"/esc/vesc/tuning_state", "vesc_tuning_state"}, {"/esc/vesc/position_state", "vesc_position_state"},
         {"/esc/vesc/steering_state", "vesc_steering_state"}, {"/esc/vesc/rotor_state", "vesc_rotor_state"},
         {"/esc/vesc/left_rotor_state", "vesc_left_rotor_state"}, {"/esc/vesc/right_rotor_state", "vesc_right_rotor_state"},
-        {"/esc/vesc/command_state", "vesc_command_state"}, {"/esc/vesc/raw_reply", "vesc_raw_reply"}};
+        {"/esc/vesc/command_state", "vesc_command_state"}, {"/esc/vesc/detect_state", "vesc_detect_state"},
+        {"/esc/vesc/raw_reply", "vesc_raw_reply"}};
     for (const auto &entry : strings) {
       const QString channel = QString::fromLatin1(entry.second);
       const QString topic = QString::fromLatin1(entry.first);
@@ -2655,6 +2656,7 @@ class LocalHttpServer : public QObject {
   QString lastXlsxPath_;
   QString lastXlsxName_;
   QStringList lastGraphPaths_;
+  QStringList lastGraphTitles_;
   QMap<QString, QJsonObject> validationSnapshots_;
   QMap<QString, QJsonObject> configProposals_;
 
@@ -2698,7 +2700,7 @@ class LocalHttpServer : public QObject {
     imuCalibrationProcess_.setWorkingDirectory(agvRootPath());
     imuCalibrationProcess_.start();
     if (!imuCalibrationProcess_.waitForStarted(1200)) { if(message)*message="Gagal start backend kalibrasi"; return false; }
-    if(message)*message=QStringLiteral("Wizard Yahboom 8 arah %1 dimulai; ikuti target animasi dan tahan diam tiap posisi.").arg(d);
+    if(message)*message=QStringLiteral("Wizard heading 360 9-stop %1 dimulai; mulai dari Utara 0°, ikuti target 45° sampai kembali ke Utara.").arg(d);
     return true;
   }
 
@@ -2725,10 +2727,17 @@ class LocalHttpServer : public QObject {
     if(proc.exitCode()!=0 || !r.value("ok").toBool(false)){if(result)*result=r;if(message)*message=r.value("message").toString("Fit tidak lolos gate");return false;}
     const QJsonArray proposalItems=r.value("proposal_items").toArray();
     if(proposalItems.isEmpty()){if(message)*message="Calibration proposal kosong";return false;}
+    if(r.value("stage1_only").toBool(false)) {
+      r["proposal_registered"]=false; r["apply_locked"]=true;
+      r["runtime_write"]=false; r["yaml_write"]=false;
+      if (result) *result = r;
+      if (message) *message = "Stage-1 heading 360 PASS → preview proposal tersedia; Apply/YAML dikunci sampai Tahap 2";
+      return true;
+    }
     const QJsonObject proposal=registerConfigProposal(QStringLiteral("imu:yahboom"),proposalItems,r.value("evidence").toObject());
     r["proposal"]=proposal;r["proposal_only"]=true;r["runtime_write"]=false;r["yaml_write"]=false;
     if (result) *result = r;
-    if (message) *message = "Yahboom PASS → server proposal dibuat; review Diff sebelum config transaction";
+    if (message) *message = "Legacy Yahboom PASS → server proposal dibuat; review Diff sebelum config transaction";
     return true;
   }
 
@@ -3256,8 +3265,17 @@ class LocalHttpServer : public QObject {
       if (message) *message = QStringLiteral("subsystem/id recording tidak valid");
       return false;
     }
-    if (subsystem == QStringLiteral("navigation") && !taskQualified(QStringLiteral("steering"), QStringLiteral("4.9"))) {
-      if (message) *message = QStringLiteral("Commissioning gate: selesaikan ESC 4.9 Final Gate sebelum recording Navigasi");
+    const QString sourceExperimentId = json.value("source_experiment_id").toString().trimmed().isEmpty() ? id : json.value("source_experiment_id").toString().trimmed();
+    const auto navigationRequiresMotionQualification = [](const QString &taskId) {
+      return taskId == QStringLiteral("N2.1") || taskId == QStringLiteral("N3.1") || taskId == QStringLiteral("N3.2") ||
+             taskId.startsWith(QStringLiteral("N12.")) || taskId.startsWith(QStringLiteral("N13.")) ||
+             taskId.startsWith(QStringLiteral("N14.")) || taskId.startsWith(QStringLiteral("N15.")) ||
+             taskId.startsWith(QStringLiteral("N16.")) || taskId.startsWith(QStringLiteral("N17.")) ||
+             taskId == QStringLiteral("R4.1.3");
+    };
+    if (subsystem == QStringLiteral("navigation") && navigationRequiresMotionQualification(sourceExperimentId) &&
+        !taskQualified(QStringLiteral("steering"), QStringLiteral("4.9"))) {
+      if (message) *message = QStringLiteral("Commissioning gate: motion task memerlukan ESC 4.9 Final Gate sebelum recording Navigasi");
       return false;
     }
     if (subsystem == QStringLiteral("perception")) {
@@ -3561,7 +3579,7 @@ class LocalHttpServer : public QObject {
     double m=0.0; for(const auto&p:pts)m=std::max(m,std::abs(dy*(p.first-x0)-dx*(p.second-y0))/n); return m;
   }
 
-  QJsonObject buildTrialSummary(int trialNo) const {
+  QJsonObject buildTrialSummary(int trialNo,const QJsonObject &clientAnalysis=QJsonObject()) const {
     QJsonObject o{{"trial_no",trialNo},{"trial_id",QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz")},
       {"subsystem",recordingSubsystem_},{"experiment_id",recordingSourceExperimentId_},{"candidate",recordingCandidate_},{"variation",recordingVariation_},
       {"condition",recordingCondition_},{"started_at",recordingStartedIso_},{"stopped_at",QDateTime::currentDateTime().toString(Qt::ISODateWithMs)},
@@ -3602,13 +3620,18 @@ class LocalHttpServer : public QObject {
         if(std::abs(*st)>0.5*kPi/180.0 && std::isfinite(required)) o["steering_scale_candidate"]=required/std::abs(*st);
       }
     }
+    const QJsonObject seriesMeans=clientAnalysis.value("series_means").toObject(),seriesStats=clientAnalysis.value("series_stats").toObject();
+    if(!seriesMeans.isEmpty()) o["series_means"] = seriesMeans;
+    if(!seriesStats.isEmpty()) o["series_stats"] = seriesStats;
+    if(clientAnalysis.value("duration_s").isDouble())o["analysis_duration_s"]=clientAnalysis.value("duration_s");
+    o["chart_capture_hz"]=clientAnalysis.value("chart_capture_hz").toDouble(5.0);o["table_capture_hz"]=clientAnalysis.value("table_capture_hz").toDouble(1.0);
     return o;
   }
 
-  bool appendCurrentTrial(QJsonObject *summary,QJsonArray *trials,QString *message) {
+  bool appendCurrentTrial(const QJsonObject &clientAnalysis,QJsonObject *summary,QJsonArray *trials,QString *message) {
     QJsonObject store=loadTrialStore(); QJsonObject domain=store.value(recordingSubsystem_).toObject();
     QJsonArray list=domain.value(recordingSourceExperimentId_).toArray();
-    QJsonObject one=buildTrialSummary(list.size()+1); list.append(one);
+    QJsonObject one=buildTrialSummary(list.size()+1,clientAnalysis); list.append(one);
     domain[recordingSourceExperimentId_]=list; store[recordingSubsystem_]=domain;
     store["updated_at"]=QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
     if(!saveTrialStore(store,message))return false;
@@ -3716,8 +3739,10 @@ class LocalHttpServer : public QObject {
     const QByteArray out=proc.readAllStandardOutput(),err=proc.readAllStandardError();QFile::remove(tmpSummary);QFile::remove(tmpTrials);QFile::remove(tmpSpec);
     if(!done||proc.exitStatus()!=QProcess::NormalExit||proc.exitCode()!=0){if(message)*message=QStringLiteral("Exporter gagal: ")+QString::fromUtf8(err).left(600);return false;}
     QJsonParseError pe{};const auto doc=QJsonDocument::fromJson(out.trimmed(),&pe);if(pe.error!=QJsonParseError::NoError||!doc.isObject()){if(message)*message="Output exporter tidak valid";return false;}
-    const auto artifacts=doc.object();lastXlsxPath_=artifacts.value("xlsx").toString();lastXlsxName_=QFileInfo(lastXlsxPath_).fileName();lastGraphPaths_.clear();
+    const auto artifacts=doc.object();lastXlsxPath_=artifacts.value("xlsx").toString();lastXlsxName_=QFileInfo(lastXlsxPath_).fileName();lastGraphPaths_.clear();lastGraphTitles_.clear();
     for(const auto&v:artifacts.value("pngs").toArray())if(QFileInfo::exists(v.toString()))lastGraphPaths_<<v.toString();
+    for(const auto&v:artifacts.value("png_titles").toArray())lastGraphTitles_<<v.toString();
+    while(lastGraphTitles_.size()<lastGraphPaths_.size())lastGraphTitles_<<QStringLiteral("Grafik %1").arg(lastGraphTitles_.size()+1);
     int browserPngCount = 0;
     const auto browserPngs = clientArtifacts.value("browser_graph_pngs").toArray();
     for (const auto &v : browserPngs) {
@@ -3733,7 +3758,7 @@ class LocalHttpServer : public QObject {
       const int pos = idx - 1; if (pos < lastGraphPaths_.size()) lastGraphPaths_[pos] = path; else if (QFileInfo::exists(path)) lastGraphPaths_ << path;
       ++browserPngCount;
     }
-    if(result){(*result)["xlsx_path"]=lastXlsxPath_;(*result)["xlsx_download_url"]="/api/experiment/record/last.xlsx";(*result)["table_sheet_count"]=tableSheetCount;(*result)["browser_graph_png_count"]=browserPngCount;QJsonArray urls,paths;for(int i=0;i<lastGraphPaths_.size();++i){urls.append(QString("/api/experiment/record/last-graph-%1.png").arg(i+1));paths.append(lastGraphPaths_[i]);}(*result)["graph_download_urls"]=urls;(*result)["graph_png_paths"]=paths;}
+    if(result){(*result)["xlsx_path"]=lastXlsxPath_;(*result)["xlsx_download_url"]="/api/experiment/record/last.xlsx";(*result)["table_sheet_count"]=tableSheetCount;(*result)["browser_graph_png_count"]=browserPngCount;QJsonArray urls,paths;for(int i=0;i<lastGraphPaths_.size();++i){urls.append(QString("/api/experiment/record/last-graph-%1.png").arg(i+1));paths.append(lastGraphPaths_[i]);}(*result)["graph_download_urls"]=urls;(*result)["graph_png_paths"]=paths;QJsonArray titles;for(const auto&t:lastGraphTitles_)titles.append(t);(*result)["graph_png_titles"]=titles;}
     if (message) *message = QStringLiteral("XLSX + %1 sheet tabel + %2 PNG browser (%3 fallback PNG) berhasil dibuat").arg(tableSheetCount).arg(browserPngCount).arg(lastGraphPaths_.size()-browserPngCount);
     return true;
   }
@@ -3834,7 +3859,7 @@ class LocalHttpServer : public QObject {
     QString csvMessage;
     const bool csvSaved = saveRecordingFiles(result, &csvMessage);
     QJsonObject summary; QJsonArray trials; QString trialMessage;
-    const bool trialSaved = appendCurrentTrial(&summary, &trials, &trialMessage);
+    const bool trialSaved = appendCurrentTrial(clientArtifacts.value("analysis_summary").toObject(),&summary, &trials, &trialMessage);
     bool artifactsSaved = false; QString artifactMessage;
     bool manifestSaved = false; QString manifestMessage;
     if (csvSaved && result) {
@@ -3944,7 +3969,7 @@ class LocalHttpServer : public QObject {
     headers += "Connection: close\r\n";
     headers += "X-Content-Type-Options: nosniff\r\n";
     headers += "Referrer-Policy: no-referrer\r\n";
-    headers += "Content-Security-Policy: default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'\r\n";
+    headers += "Content-Security-Policy: default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; connect-src 'self'\r\n";
     for (auto it = extra.cbegin(); it != extra.cend(); ++it) headers += it.key() + ": " + it.value() + "\r\n";
     headers += "\r\n";
     socket->write(headers);

@@ -54,7 +54,7 @@ def style_sheet(ws):
         ws.column_dimensions[get_column_letter(idx)].width = width
 
 
-def write_workbook(rows, columns, summary, trials, output, table_csv_paths=None):
+def write_workbook(rows, columns, summary, trials, output, table_csv_paths=None, spec=None):
     wb = Workbook()
     ws = wb.active
     ws.title = "Raw Data"
@@ -97,6 +97,38 @@ def write_workbook(rows, columns, summary, trials, output, table_csv_paths=None)
         else:
             tws.append(["No table rows"])
         style_sheet(tws)
+
+    # Extra analysis tables are export-only. They do not alter the main GUI tables.
+    spec = spec or {}
+    minute_rows = build_per_minute_summary(rows, spec)
+    mws = wb.create_sheet("Per-Minute Mean")
+    mws.append(["Graph", "Window", "Series", "Mean", "Std", "N", "Source", "Method"])
+    for r in minute_rows:
+        mws.append([r[k] for k in ("graph", "window", "series", "mean", "std", "n", "source", "method")])
+    if not minute_rows:
+        mws.append(["No numeric time-series samples"])
+    style_sheet(mws)
+
+    tws = wb.create_sheet("Trial Mean")
+    tws.append(["Series", "Mean", "Std", "Min", "Max", "P95", "N", "Scope"])
+    trial_stats = summary.get("series_stats", {}) if isinstance(summary, dict) else {}
+    if isinstance(trial_stats, dict) and trial_stats:
+        for label, st in trial_stats.items():
+            if not isinstance(st, dict):
+                continue
+            tws.append([label, st.get("mean", ""), st.get("std", ""), st.get("min", ""), st.get("max", ""), st.get("p95", ""), st.get("n", ""), "whole trial"])
+    else:
+        tws.append(["No client trial statistics"])
+    style_sheet(tws)
+
+    rws = wb.create_sheet("Repeat Mean")
+    rws.append(["Series", "Repeat Mean", "Repeat Std", "N Trials", "Scope"])
+    repeat = build_repeat_summary(trials)
+    for label, st in repeat.items():
+        rws.append([label, st["mean"], st["std"], st["n"], "same experiment/task"])
+    if not repeat:
+        rws.append(["Need >=2 compatible trials with series_means"])
+    style_sheet(rws)
     wb.save(output)
 
 
@@ -135,6 +167,135 @@ def _localize_lon_lat(xs, ys):
     east = [(lon - lon0) * math.pi / 180.0 * radius * math.cos(lat0_rad) for lon in xs]
     north = [(lat - lat0) * math.pi / 180.0 * radius for lat in ys]
     return east, north
+
+
+def _mean_std(values):
+    vals = [v for v in values if v is not None and math.isfinite(v)]
+    if not vals:
+        return None
+    mean = sum(vals) / len(vals)
+    var = sum((v - mean) ** 2 for v in vals) / len(vals)
+    ordered = sorted(vals)
+    p95 = ordered[min(len(ordered) - 1, int((len(ordered) - 1) * 0.95))]
+    return {"mean": mean, "std": math.sqrt(var), "min": ordered[0], "max": ordered[-1], "p95": p95, "n": len(vals)}
+
+
+def build_per_minute_summary(rows, spec):
+    live = spec.get("live_series", {}) if isinstance(spec, dict) else {}
+    out = []
+    for gi, graph in enumerate(spec.get("graphs", []) if isinstance(spec, dict) else [], 1):
+        if graph.get("type", "time_series") != "time_series":
+            continue
+        title = graph.get("title") or f"Graph {gi}"
+        for label in graph.get("series", []):
+            key = live.get(label, label)
+            buckets = {}
+            for row in rows:
+                t, y = to_float(row.get("elapsed_s")), to_float(row.get(key))
+                if t is None or y is None:
+                    continue
+                minute = max(0, int(t // 60.0))
+                buckets.setdefault(minute, []).append(y)
+            for minute in sorted(buckets):
+                st = _mean_std(buckets[minute])
+                if not st:
+                    continue
+                out.append({"graph": title, "window": f"{minute*60}-{(minute+1)*60} s", "series": label,
+                            "mean": st["mean"], "std": st["std"], "n": st["n"], "source": key,
+                            "method": "arithmetic mean per fixed 60 s window"})
+    return out
+
+
+def build_repeat_summary(trials):
+    grouped = {}
+    for trial in trials if isinstance(trials, list) else []:
+        means = trial.get("series_means", {}) if isinstance(trial, dict) else {}
+        if not isinstance(means, dict):
+            continue
+        for label, value in means.items():
+            v = to_float(value)
+            if v is not None:
+                grouped.setdefault(label, []).append(v)
+    out = {}
+    for label, values in grouped.items():
+        if len(values) < 2:
+            continue
+        st = _mean_std(values)
+        if st:
+            out[label] = st
+    return out
+
+
+def save_summary_graphs(rows, spec, trials, output_prefix):
+    live = spec.get("live_series", {}) if isinstance(spec, dict) else {}
+    paths, titles = [], []
+    repeat = build_repeat_summary(trials)
+    for gi, graph in enumerate(spec.get("graphs", []) if isinstance(spec, dict) else [], 1):
+        if graph.get("type", "time_series") != "time_series":
+            continue
+        labels = list(graph.get("series", []))
+        if not labels:
+            continue
+        base_title = graph.get("title") or f"Graph {gi}"
+
+        # Per-minute mean: 60-second fixed windows.
+        fig, ax = plt.subplots(figsize=(8.0, 4.8), facecolor="white")
+        plotted = False
+        for label in labels:
+            key = live.get(label, label)
+            buckets = {}
+            for row in rows:
+                t, y = to_float(row.get("elapsed_s")), to_float(row.get(key))
+                if t is None or y is None:
+                    continue
+                m = max(0, int(t // 60.0)); buckets.setdefault(m, []).append(y)
+            xs, ys = [], []
+            for m in sorted(buckets):
+                st = _mean_std(buckets[m])
+                if st:
+                    xs.append(m + 1); ys.append(st["mean"])
+            if xs:
+                ax.plot(xs, ys, marker="o", linewidth=1.5, label=label); plotted = True
+        if plotted:
+            title = f"{base_title} — Per-minute mean (60 s window)"
+            ax.set_title(title); ax.set_xlabel("Minute window [-]"); ax.set_ylabel(graph.get("yLabel") or "Mean value")
+            ax.grid(True, alpha=0.25); ax.legend(loc="best"); fig.tight_layout()
+            path = f"{output_prefix}_G{gi:02d}_PER_MINUTE.png"; fig.savefig(path, dpi=180, facecolor="white", bbox_inches="tight")
+            paths.append(path); titles.append(title)
+        plt.close(fig)
+
+        # Trial mean: mean over the complete current run.
+        trial_labels, trial_means = [], []
+        for label in labels:
+            key = live.get(label, label)
+            st = _mean_std([to_float(r.get(key)) for r in rows])
+            if st:
+                trial_labels.append(label); trial_means.append(st["mean"])
+        if trial_means:
+            fig, ax = plt.subplots(figsize=(8.0, 4.8), facecolor="white")
+            ax.bar(range(len(trial_means)), trial_means); ax.set_xticks(range(len(trial_labels)), trial_labels, rotation=20, ha="right")
+            title = f"{base_title} — Trial mean (whole run)"
+            ax.set_title(title); ax.set_ylabel(graph.get("yLabel") or "Mean value"); ax.grid(True, axis="y", alpha=0.25); fig.tight_layout()
+            path = f"{output_prefix}_G{gi:02d}_TRIAL_MEAN.png"; fig.savefig(path, dpi=180, facecolor="white", bbox_inches="tight"); plt.close(fig)
+            paths.append(path); titles.append(title)
+
+        # Repeat mean: aggregate trial means from the same experiment/task.
+        rep_labels, rep_means, rep_std, rep_n = [], [], [], []
+        for label in labels:
+            st = repeat.get(label)
+            if not st:
+                continue
+            rep_labels.append(label); rep_means.append(st["mean"]); rep_std.append(st["std"]); rep_n.append(st["n"])
+        if rep_means:
+            fig, ax = plt.subplots(figsize=(8.0, 4.8), facecolor="white")
+            ax.bar(range(len(rep_means)), rep_means, yerr=rep_std, capsize=4); ax.set_xticks(range(len(rep_labels)), rep_labels, rotation=20, ha="right")
+            nmin, nmax = min(rep_n), max(rep_n)
+            scope = f"{nmin} repeat" if nmin == nmax else f"{nmin}-{nmax} repeat"
+            title = f"{base_title} — Repeat mean ({scope})"
+            ax.set_title(title); ax.set_ylabel(graph.get("yLabel") or "Mean of trial means"); ax.grid(True, axis="y", alpha=0.25); fig.tight_layout()
+            path = f"{output_prefix}_G{gi:02d}_REPEAT_MEAN.png"; fig.savefig(path, dpi=180, facecolor="white", bbox_inches="tight"); plt.close(fig)
+            paths.append(path); titles.append(title)
+    return paths, titles
 
 
 def save_graphs(rows, spec, output_prefix):
@@ -221,9 +382,12 @@ def main():
     summary = load_json(args.summary, {})
     trials = load_json(args.trials, [])
     spec = load_json(args.spec, {})
-    write_workbook(rows, columns, summary, trials, args.xlsx, args.table_csv)
+    write_workbook(rows, columns, summary, trials, args.xlsx, args.table_csv, spec)
     pngs = save_graphs(rows, spec, args.png_prefix)
-    print(json.dumps({"xlsx": args.xlsx, "pngs": pngs}, ensure_ascii=False))
+    base_titles = [(g.get("title") or f"Trial Graph {i}") for i, g in enumerate(spec.get("graphs", []), 1)]
+    extra_pngs, extra_titles = save_summary_graphs(rows, spec, trials, args.png_prefix)
+    pngs.extend(extra_pngs)
+    print(json.dumps({"xlsx": args.xlsx, "pngs": pngs, "png_titles": base_titles + extra_titles}, ensure_ascii=False))
 
 
 if __name__ == "__main__":

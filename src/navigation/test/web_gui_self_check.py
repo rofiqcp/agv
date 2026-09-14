@@ -136,10 +136,10 @@ for token in ("loadCostmapImage", "zoomMap", "screenToWorld", "pointerdown", "po
     if token not in js: fail(f"RViz-like/autosave frontend behavior missing {token}")
 
 
-# ESC/VESC gateway UI must expose real F411 transport, safe maintenance and desktop VESC Tool TCP.
+# ESC/VESC UI must expose truthful direct transport, safe maintenance and desktop VESC Tool TCP.
 if 'src="/vesc_workbench.js' not in html:
     fail("ESC workbench JS module is not loaded")
-for token in ("ESC Motor Workbench", 'id="page-esc-status"', "F411 GATEWAY",
+for token in ("ESC Motor Workbench", 'id="page-esc-status"', "DIRECT ESC TRANSPORT",
               "vescEnterMaintenance", "vescExitMaintenance",
               "vescLeftRawEncoder", "vescRightRpm", "vescDualTuning", "vescDualLimits",
               "vescChartLeft", "vescChartRight", "vescLeftSetDuty", "vescRightSetDuty",

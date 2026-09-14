@@ -36,20 +36,17 @@ function derivedMetricDependencies(path){
   if(/path_endpoint|path_heading|global_path/.test(p))deps.push('nav_path');
   return [...new Set(deps)];
 }
-const GRAPH_EVENT_ROOTS=new Set(['nav_path','local_path','goal_pose','global_costmap_meta','local_costmap_meta','map_meta']);
-function metricRootIsLive(root){return !!root&&!GRAPH_EVENT_ROOTS.has(root)&&(!!CHANNEL_REGISTRY[root]||/^(imu|gnss|ekf|esc|cmd|vesc|trajectory_safety|localization|neo3)/.test(root))}
-function metricRootFreshness(root){const a=age(root),reg=CHANNEL_REGISTRY[root],limit=reg?Math.max(.5,(reg.staleMs||1000)/1000*2):2;return {fresh:Number.isFinite(a)&&a<=limit,age:a,limit}}
-function metricDependencyDiagnostic(path){const info=metricStatePathInfo(path),v=baseMetric(path),rootValue=baseMetric(info.root);if(rootValue===undefined||rootValue===null)return {ready:false,reason:`source ${info.root||path} belum publish ke GUI`};if(v===undefined||v===null)return {ready:false,reason:info.tail?`payload ${info.root} ada, field ${info.tail} belum tersedia`:`source ${info.root} belum memiliki nilai`};if(metricRootIsLive(info.root)){const f=metricRootFreshness(info.root);if(!f.fresh)return {ready:false,reason:`source ${info.root} stale (age ${Number.isFinite(f.age)?f.age.toFixed(2):'--'} s > ${f.limit.toFixed(2)} s)`}}return {ready:true,reason:'READY'}}
 function metricSourceDiagnostic(path,{numeric=true}={}){
-  const text=String(path||'');
+  const text=String(path||''),value=resolveMetricPath(text);
+  if(value!==undefined&&value!==null&&(!numeric||Number.isFinite(+value)))return {path:text,ready:true,reason:'READY',value};
   if(text.startsWith('derived.')){
-    const deps=derivedMetricDependencies(text),bad=deps.map(d=>({d,...metricDependencyDiagnostic(d)})).filter(x=>!x.ready),hist=metricHistory.get(text)||[];
-    if(!bad.length&&hist.some(x=>Number.isFinite(+x.v)))return {path:text,ready:true,reason:'READY',value:hist.at(-1)?.v};
-    if(/^derived\.(gnss_available|ekf_(local|global)_fresh|age_)/.test(text)){const value=resolveMetricPath(text);if(value!==undefined&&value!==null&&(!numeric||Number.isFinite(+value)))return {path:text,ready:true,reason:'READY',value}}
-    return {path:text,ready:false,reason:bad.length?`prasyarat bermasalah: ${bad.map(x=>`${x.d} (${x.reason})`).join(', ')}`:(deps.length?'prasyarat siap; menunggu sample derived valid':'derived metric belum dapat dihitung dari telemetry saat ini')};
+    const deps=derivedMetricDependencies(text),missing=deps.filter(d=>{const v=baseMetric(d);return v===undefined||v===null});
+    return {path:text,ready:false,reason:missing.length?`prasyarat belum ada: ${missing.join(', ')}`:(deps.length?'prasyarat ada tetapi derived metric belum valid/numerik':'derived metric belum dapat dihitung dari telemetry saat ini')};
   }
-  const info=metricStatePathInfo(text),direct=baseMetric(text),dep=metricDependencyDiagnostic(text);
-  if(!dep.ready)return {path:text,ready:false,reason:dep.reason};
+  const info=metricStatePathInfo(text),rootValue=baseMetric(info.root);
+  if(rootValue===undefined||rootValue===null)return {path:text,ready:false,reason:`source ${info.root||text} belum publish ke GUI`};
+  const direct=baseMetric(text);
+  if(direct===undefined||direct===null)return {path:text,ready:false,reason:info.tail?`payload ${info.root} ada, field ${info.tail} belum tersedia`:`source ${info.root} belum memiliki nilai`};
   if(numeric&&!Number.isFinite(+direct))return {path:text,ready:false,reason:`field tersedia tetapi nilai belum numerik (${typeof direct})`};
   return {path:text,ready:true,reason:'READY',value:direct};
 }

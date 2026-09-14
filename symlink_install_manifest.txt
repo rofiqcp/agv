@@ -206,7 +206,9 @@
 /home/sirobo/agv/install/navigation/share/navigation/web/static/foundation.css
 /home/sirobo/agv/install/navigation/share/navigation/web/static/hmi.css
 /home/sirobo/agv/install/navigation/share/navigation/web/static/imu-calibration.css
+/home/sirobo/agv/install/navigation/share/navigation/web/static/imu-heading-validation.css
 /home/sirobo/agv/install/navigation/share/navigation/web/static/imu_calibration.js
+/home/sirobo/agv/install/navigation/share/navigation/web/static/imu_heading_validation.js
 /home/sirobo/agv/install/navigation/share/navigation/web/static/index.html
 /home/sirobo/agv/install/navigation/share/navigation/web/static/legacy-core.css
 /home/sirobo/agv/install/navigation/share/navigation/web/static/legacy-final-authority.css
@@ -216,6 +218,8 @@
 /home/sirobo/agv/install/navigation/share/navigation/web/static/perception-calibration.css
 /home/sirobo/agv/install/navigation/share/navigation/web/static/perception.css
 /home/sirobo/agv/install/navigation/share/navigation/web/static/perception.js
+/home/sirobo/agv/install/navigation/share/navigation/web/static/perception_bab4.css
+/home/sirobo/agv/install/navigation/share/navigation/web/static/perception_bab4.js
 /home/sirobo/agv/install/navigation/share/navigation/web/static/perception_calibration.js
 /home/sirobo/agv/install/navigation/share/navigation/web/static/replay.js
 /home/sirobo/agv/install/navigation/share/navigation/web/static/responsive.css
@@ -255,6 +259,7 @@
 /home/sirobo/agv/install/navigation/lib/navigation/stage3_commissioning_check.py
 /home/sirobo/agv/install/navigation/lib/navigation/stage3_nav2_csv_analyzer.py
 /home/sirobo/agv/install/navigation/lib/navigation/stage3_certify.py
+/home/sirobo/agv/install/navigation/lib/navigation/data_common.py
 /home/sirobo/agv/install/navigation/share/navigation/gui/assets/undip_logo.png
 /home/sirobo/agv/install/navigation/share/ament_index/resource_index/package_run_dependencies/navigation
 /home/sirobo/agv/install/navigation/share/ament_index/resource_index/parent_prefix_path/navigation

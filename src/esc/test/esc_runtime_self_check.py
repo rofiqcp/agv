@@ -37,7 +37,9 @@ for token in (
     '"teleop_topic": LaunchConfiguration("teleop_topic")',
     '"teleop_source_topic": LaunchConfiguration("teleop_source_topic")',
     '"transport_mode": LaunchConfiguration("transport_mode")',
-    '"serial_enabled": ParameterValue(LaunchConfiguration("serial_enabled"), value_type=bool)',
+    'DeclareLaunchArgument("integration_bypass", default_value="false")',
+    '"serial_enabled": ParameterValue(PythonExpression([',
+    'LaunchConfiguration("integration_bypass")',
 ):
     if token not in launch:
         fail(f"ESC launch runtime-routing contract missing: {token}")
@@ -144,7 +146,10 @@ for token in ("/esc/vesc/maintenance_tx", "/esc/vesc/direct_rx", "/esc/vesc/dire
               "COMM_TERMINAL_CMD", "127.0.0.1", "tcp_port", "python_tcp_port", "PYTHON_MAINTENANCE",
               "SOCK_NONBLOCK", "TCP_NODELAY", "tcp_client_fd_", "python_tcp_client_fd_",
               "sendMaintenanceSafeStop", "command_rejected_python_has_priority",
-              "command_rejected_tcp_client_owns_maintenance"):
+              "command_rejected_tcp_client_owns_maintenance", "SAFE_STOP:BOTH", "KEEPALIVE:WEB",
+              "webLeaseTick", "cancelWebDetectionIfActive", "/esc/vesc/detect_state",
+              "COMM_DETECT_MOTOR_R_L", "COMM_DETECT_MOTOR_FLUX_LINKAGE_OPENLOOP",
+              "COMM_DETECT_APPLY_ALL_FOC"):
     if token not in tool_source:
         fail(f"VESC maintenance feature missing: {token}")
 

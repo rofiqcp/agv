@@ -56,3 +56,17 @@
 
 
 /* MERGED_VESC_MP_THEME_20260910 */
+
+/* ESC workbench 2026-09-14: scope-first control and VESC-standard commissioning. */
+#vescGraphSection + #vescControlSection{border-color:rgba(54,230,161,.28);box-shadow:inset 0 1px rgba(54,230,161,.05)}
+.vesc-motor-setup{border-color:rgba(49,168,255,.25)}
+.vesc-setup-warning{margin:0 0 10px;padding:8px 10px;border-left:3px solid var(--amber);background:rgba(255,189,89,.06);color:var(--muted);font-size:8.5px;line-height:1.45}
+.vesc-setup-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:10px}
+.vesc-detect-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-bottom:8px}
+.vesc-detect-result{margin-top:9px;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:#050d0f;color:var(--muted);font:8.5px ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
+.vesc-detect-result.pass{border-color:rgba(54,230,161,.34);color:var(--green)}.vesc-detect-result.fail{border-color:rgba(255,104,104,.4);color:var(--red)}.vesc-detect-result.running{border-color:rgba(255,189,89,.4);color:var(--amber)}
+@media(max-width:1100px){.vesc-setup-grid{grid-template-columns:1fr}}
+@media(max-width:700px){.vesc-detect-actions{grid-template-columns:1fr}}
+.vesc-control-envelope{margin-top:8px;padding:7px 9px;border:1px solid rgba(54,230,161,.2);border-radius:8px;background:rgba(54,230,161,.04);color:var(--muted);font:8px ui-monospace,SFMono-Regular,Consolas,monospace}
+.vesc-integrity-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.vesc-integrity-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}.vesc-integrity-metrics>div{padding:7px;border:1px solid var(--border);border-radius:7px;background:#071214}.vesc-integrity-metrics span{display:block;color:var(--dim);font-size:7px}.vesc-integrity-metrics b{display:block;margin-top:2px;font:850 9px ui-monospace}.vesc-integrity-footer{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;padding:7px 9px;border-top:1px solid var(--border);font-size:8px}.vesc-integrity-footer span{color:var(--dim)}.vesc-integrity-footer b{font-family:ui-monospace}.vesc-integrity-footer b.pass{color:var(--green)}.vesc-integrity-footer b.warn{color:var(--amber)}.vesc-integrity-footer b.fail{color:var(--red)}
+@media(max-width:900px){.vesc-integrity-grid{grid-template-columns:1fr}}@media(max-width:560px){.vesc-integrity-metrics{grid-template-columns:repeat(2,1fr)}}

@@ -11,6 +11,8 @@ APP_MODULES = (
 FOUNDATION_MODULES = (
     "tokens.css", "base.css", "shell.css", "components.css",
     "responsive.css", "accessibility.css", "workspaces.css",
+    # Workbench-specific responsive contracts are part of the browser bundle too.
+    "experiments.css", "evidence.css",
 )
 
 def read_app_bundle(static_root, encoding="utf-8"):

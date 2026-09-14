@@ -173,11 +173,13 @@ if(BUILD_TESTING)
     gnss_provisional_tf_self_check
     gnss_ubx_fixture_self_check
     full_stack_reaudit_self_check
+    heading_360_stage1_self_check
     gui_cpp_migration_self_check
     gui_floating_menu_self_check
     gui_qt_signal_slot_self_check
     gui_nav2_embed_self_check
     web_gui_self_check
+    web_vesc_robustness_self_check
     web_config_stage1_self_check
     web_stage2_ui_self_check
     launch_dependency_self_check

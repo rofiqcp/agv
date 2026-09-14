@@ -168,18 +168,6 @@ function resolveMetricPath(path){if(!path)return undefined;if(path==='derived.ct
   'derived.dt_gnss_s':['dt','gnss_fix'],'derived.dt_imu_s':['dt','imu'],'derived.dt_esc_s':['dt','esc_odom'],
   'derived.age_gnss_s':['age','gnss_fix'],'derived.age_imu_s':['age','imu'],'derived.age_esc_s':['age','esc_odom'],'derived.age_ekf_local_s':['age','ekf_local'],'derived.age_ekf_global_s':['age','ekf_global']};
   if(timing[path]){const [kind,k]=timing[path];return kind==='rate'?channelRate(k):kind==='dt'?channelDt(k):age(k)}if(path.startsWith('derived.ekf_'))return ekfDiagnosticMetric(path);return baseMetric(path)}
-function metricPathCaptureAllowed(path){
-  const p=String(path||'');
-  if(p.startsWith('derived.')){
-    if(/^derived\.(age_|gnss_available|ekf_(local|global)_fresh)/.test(p))return true;
-    const deps=typeof derivedMetricDependencies==='function'?derivedMetricDependencies(p):[];
-    if(!deps.length)return true;
-    return deps.every(d=>{const v=baseMetric(d);if(v===undefined||v===null)return false;const info=typeof metricStatePathInfo==='function'?metricStatePathInfo(d):{root:String(d).split('.')[0]};if(typeof metricRootIsLive==='function'&&metricRootIsLive(info.root)){const f=metricRootFreshness(info.root);if(!f.fresh)return false}return true});
-  }
-  const info=typeof metricStatePathInfo==='function'?metricStatePathInfo(p):{root:p.split('.')[0]};
-  if(typeof metricRootIsLive==='function'&&metricRootIsLive(info.root)){const f=metricRootFreshness(info.root);if(!f.fresh)return false}
-  return true;
-}
 function currentPose(){const g=obj('ekf_global');if(Number.isFinite(+g.x))return g;const l=obj('ekf_local');return Number.isFinite(+l.x)?l:null}
 function nearestPathInfo(){const pose=currentPose(),pts=obj('local_path').points||obj('nav_path').points||[];if(!pose||!pts.length)return null;let best=null;for(const p of pts){const d=Math.hypot((+p[0])-pose.x,(+p[1])-pose.y);if(!best||d<best.d)best={d,p}}return best}
 function derivedCte(){return nearestPathInfo()?.d}
@@ -205,8 +193,8 @@ function captureLabTelemetry(){
   window.analysisSession?.syncLive(s);
   const paths=new Set(Object.values(selectedExperiment.liveSeries||{}));
   ['esc_drive_target','esc_drive_actual','esc_steer_target','esc_steer_actual','imu.gx','imu.gy','imu.gz','imu.ax','imu.ay','imu.az','imu.roll_rad','imu.pitch_rad','imu.yaw_rad','imu.var_yaw','imu.var_gx','imu.var_gy','imu.var_gz','gnss_quality.hacc_m','gnss_quality.dop','gnss_quality.hdop','gnss_quality.vdop','gnss_quality.gdop','gnss_quality.sat','gnss_fix.lat','gnss_fix.lon','perception_performance.fps','foc_telemetry.iq_a','foc_telemetry.id_a'].forEach(p=>paths.add(p));
-  for(const path of paths){if(!metricPathCaptureAllowed(path))continue;const v=resolveMetricPath(path);if(typeof v!=='number'||!Number.isFinite(v))continue;const a=metricHistory.get(path)||[];a.push({s,t:origin+s*1000,v});while(a.length>7200)a.shift();metricHistory.set(path,a)}
-  (selectedExperiment.graphs||[]).forEach((g,gi)=>{const addPoint=(key,xPath,yPath,convertGeo=false)=>{if(!metricPathCaptureAllowed(xPath)||!metricPathCaptureAllowed(yPath))return;let xv=resolveMetricPath(xPath),yv=resolveMetricPath(yPath);if(!Number.isFinite(+xv)||!Number.isFinite(+yv))return;xv=+xv;yv=+yv;if(convertGeo){let o=scatterOrigins.get(key);if(!o){o={lon:xv,lat:yv};scatterOrigins.set(key,o)}const R=6378137,lat0=o.lat*Math.PI/180;xv=(xv-o.lon)*Math.PI/180*R*Math.cos(lat0);yv=(yv-o.lat)*Math.PI/180*R}const a=scatterHistory.get(key)||[];a.push({s,x:xv,y:yv});while(a.length>7200)a.shift();scatterHistory.set(key,a)};if(g?.type==='scatter')addPoint(`${currentExp}:${selectedExperiment.id}:${gi}`,g.xSeries,g.ySeries,g.xSeries==='gnss_fix.lon'&&g.ySeries==='gnss_fix.lat');else if(g?.type==='multi_scatter')(g.pairs||[]).forEach((pair,pi)=>{const xp=selectedExperiment.liveSeries?.[pair[0]]||pair[0],yp=selectedExperiment.liveSeries?.[pair[1]]||pair[1];addPoint(`${currentExp}:${selectedExperiment.id}:${gi}:${pi}`,xp,yp,false)})});
+  for(const path of paths){const v=resolveMetricPath(path);if(typeof v!=='number'||!Number.isFinite(v))continue;const a=metricHistory.get(path)||[];a.push({s,t:origin+s*1000,v});while(a.length>7200)a.shift();metricHistory.set(path,a)}
+  (selectedExperiment.graphs||[]).forEach((g,gi)=>{const addPoint=(key,xPath,yPath,convertGeo=false)=>{let xv=resolveMetricPath(xPath),yv=resolveMetricPath(yPath);if(!Number.isFinite(+xv)||!Number.isFinite(+yv))return;xv=+xv;yv=+yv;if(convertGeo){let o=scatterOrigins.get(key);if(!o){o={lon:xv,lat:yv};scatterOrigins.set(key,o)}const R=6378137,lat0=o.lat*Math.PI/180;xv=(xv-o.lon)*Math.PI/180*R*Math.cos(lat0);yv=(yv-o.lat)*Math.PI/180*R}const a=scatterHistory.get(key)||[];a.push({s,x:xv,y:yv});while(a.length>7200)a.shift();scatterHistory.set(key,a)};if(g?.type==='scatter')addPoint(`${currentExp}:${selectedExperiment.id}:${gi}`,g.xSeries,g.ySeries,g.xSeries==='gnss_fix.lon'&&g.ySeries==='gnss_fix.lat');else if(g?.type==='multi_scatter')(g.pairs||[]).forEach((pair,pi)=>{const xp=selectedExperiment.liveSeries?.[pair[0]]||pair[0],yp=selectedExperiment.liveSeries?.[pair[1]]||pair[1];addPoint(`${currentExp}:${selectedExperiment.id}:${gi}:${pi}`,xp,yp,false)})});
   const sec=Math.floor(s+1e-9);if(recordStartedMs&&sec!==lastLabSecond){lastLabSecond=sec;captureTemplateRows(sec)}
 }
 function visitedKey(){return `adv-visited-${currentExp}`}

@@ -42,8 +42,12 @@ constexpr std::uint8_t COMM_GET_APPCONF = 17;
 constexpr std::uint8_t COMM_GET_APPCONF_DEFAULT = 18;
 constexpr std::uint8_t COMM_SET_APPCONF = 16;
 constexpr std::uint8_t COMM_TERMINAL_CMD = 20;
+constexpr std::uint8_t COMM_DETECT_MOTOR_R_L = 25;
+constexpr std::uint8_t COMM_DETECT_MOTOR_FLUX_LINKAGE = 26;
 constexpr std::uint8_t COMM_DETECT_ENCODER = 27;
 constexpr std::uint8_t COMM_DETECT_HALL_FOC = 28;
+constexpr std::uint8_t COMM_DETECT_MOTOR_FLUX_LINKAGE_OPENLOOP = 57;
+constexpr std::uint8_t COMM_DETECT_APPLY_ALL_FOC = 58;
 constexpr std::uint8_t COMM_REBOOT = 29;
 constexpr std::uint8_t COMM_ALIVE = 30;
 constexpr std::uint8_t COMM_FORWARD_CAN = 34;
@@ -270,6 +274,8 @@ class VescToolBridge final : public rclcpp::Node {
     max_abs_duty_ = std::clamp(declare_parameter<double>("max_abs_duty", 0.95), 0.01, 0.99);
     max_abs_current_a_ = std::clamp(declare_parameter<double>("max_abs_current_a", 20.0), 0.1, 100.0);
     max_abs_rpm_ = std::clamp(declare_parameter<double>("max_abs_rpm", 10000.0), 10.0, 200000.0);
+    web_lease_timeout_ms_ = static_cast<int>(std::clamp<std::int64_t>(
+      declare_parameter<int>("web_lease_timeout_ms", 1200), 500, 5000));
     tcp_enabled_ = declare_parameter<bool>("tcp_enabled", true);
     tcp_port_ = static_cast<int>(std::clamp<std::int64_t>(declare_parameter<int>("tcp_port", 65102), 1024, 65535));
     python_tcp_enabled_ = declare_parameter<bool>("python_tcp_enabled", true);
@@ -293,6 +299,7 @@ class VescToolBridge final : public rclcpp::Node {
     left_rotor_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/left_rotor_state", stateQos());
     right_rotor_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/right_rotor_state", stateQos());
     command_state_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/command_state", stateQos());
+    detect_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/detect_state", stateQos());
     raw_pub_ = create_publisher<std_msgs::msg::String>("/esc/vesc/raw_reply", rclcpp::QoS(20).reliable());
 
     rx_sub_ = create_subscription<std_msgs::msg::UInt8MultiArray>("/esc/vesc/direct_rx", rclcpp::QoS(rclcpp::KeepLast(16)).reliable(),
@@ -312,7 +319,7 @@ class VescToolBridge final : public rclcpp::Node {
     command_sub_ = create_subscription<std_msgs::msg::String>("/esc/vesc/tool_command", 20,
       [this](std_msgs::msg::String::ConstSharedPtr m) { command(m->data); });
 
-    transition_timer_ = create_wall_timer(2ms, [this]() { transitionTick(); });
+    transition_timer_ = create_wall_timer(2ms, [this]() { transitionTick(); webLeaseTick(); });
     poll_timer_ = create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::duration<double>(1.0 / poll_hz_)), [this]() { pollTick(); });
     tcp_timer_ = create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -685,6 +692,7 @@ class VescToolBridge final : public rclcpp::Node {
           // Highest-priority Python client preempts VESC Tool/API. Drop all
           // lower-priority bytes and put a zero-current barrier in front of it.
           tcp_pending_rx_.clear(); tcp_pending_tx_.clear();
+          web_lease_active_ = false;
           sendMaintenanceSafeStop();
           publishOwner();
           publishStatus("python_valid_frame_preempted_lower_maintenance");
@@ -725,6 +733,9 @@ class VescToolBridge final : public rclcpp::Node {
 
   void publishStatus(const std::string &event = "") {
     std_msgs::msg::String m; std::ostringstream o;
+    const auto now = std::chrono::steady_clock::now();
+    const auto lease_ms = web_lease_active_ && web_lease_deadline_ > now
+      ? std::chrono::duration_cast<std::chrono::milliseconds>(web_lease_deadline_ - now).count() : 0LL;
     o << "{\"mode\":\"" << (maintenance_active_ ? "maintenance" : "runtime")
       << "\",\"gateway_connected\":" << (gateway_connected_ ? "true" : "false")
       << ",\"transport_connected\":" << (transport_connected_ ? "true" : "false")
@@ -737,10 +748,37 @@ class VescToolBridge final : public rclcpp::Node {
       << ",\"tcp_port\":" << tcp_port_ << ",\"tcp_client\":" << (tcp_client_fd_ >= 0 ? "true" : "false")
       << ",\"tcp_armed\":" << (tcp_client_armed_ ? "true" : "false")
       << ",\"tcp_role\":\"OWNER_PRIORITY_90\""
+      << ",\"web_lease_active\":" << (web_lease_active_ ? "true" : "false")
+      << ",\"web_lease_remaining_ms\":" << lease_ms
+      << ",\"max_abs_duty\":" << max_abs_duty_ << ",\"max_abs_current_a\":" << max_abs_current_a_
+      << ",\"max_abs_rpm\":" << max_abs_rpm_
       << ",\"rx_crc_errors\":" << crc_errors_ << ",\"rx_format_errors\":" << format_errors_
       << ",\"last_request_motor\":" << last_request_motor_;
     if (!event.empty()) o << ",\"event\":\"" << event << "\"";
     o << "}"; m.data = o.str(); status_pub_->publish(m);
+  }
+
+  void cancelWebDetectionIfActive() {
+    if (!web_detection_active_ || !maintenance_active_ || transition_ != Transition::NONE) return;
+    std::vector<std::uint8_t> p{COMM_TERMINAL_CMD};
+    static constexpr char kCancel[] = "detect cancel";
+    p.insert(p.end(), kCancel, kCancel + sizeof(kCancel) - 1U);
+    sendPayload(1, std::move(p));
+    web_detection_active_ = false;
+    publishJson(detect_pub_, "{\"kind\":\"web_detect\",\"state\":\"CANCELLED\",\"motor\":0,\"applied\":false,\"eeprom_verified\":false}");
+  }
+
+  void webLeaseTick() {
+    if (!web_lease_active_) return;
+    if (python_tcp_client_armed_ || tcp_client_armed_) { web_lease_active_ = false; return; }
+    if (std::chrono::steady_clock::now() <= web_lease_deadline_) return;
+    if (transition_ != Transition::NONE) return;
+    web_lease_active_ = false;
+    if (maintenance_active_) {
+      cancelWebDetectionIfActive();
+      publishStatus("web_lease_expired_safe_stop");
+      beginExit();
+    }
   }
 
   bool safeToEnter() const {
@@ -769,6 +807,7 @@ class VescToolBridge final : public rclcpp::Node {
 
   void beginExit() {
     if (!maintenance_active_ || transition_ != Transition::NONE) return;
+    web_lease_active_ = false;
     closePythonTcpClient();
     closeTcpClient();
     // Stop both motors while direct transport is still in MAINTENANCE, then restore RUNTIME ownership.
@@ -846,8 +885,23 @@ class VescToolBridge final : public rclcpp::Node {
 
   void command(const std::string &raw) {
     const auto parts = split(raw, ':');
-    if (raw == "MODE:MAINTENANCE") { beginEnter(); return; }
-    if (raw == "MODE:RUNTIME" || raw == "MODE:NORMAL") { beginExit(); return; }
+    if (raw == "MODE:MAINTENANCE") {
+      if (python_tcp_client_armed_ || tcp_client_armed_) { publishStatus("web_maintenance_rejected_external_owner"); return; }
+      web_lease_active_ = true;
+      web_lease_deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(web_lease_timeout_ms_);
+      beginEnter();
+      if (!maintenance_active_ && transition_ == Transition::NONE) web_lease_active_ = false;
+      return;
+    }
+    if (raw == "KEEPALIVE:WEB") {
+      if (!web_lease_active_ || python_tcp_client_armed_ || tcp_client_armed_) { publishStatus("web_keepalive_rejected_no_lease"); return; }
+      web_lease_deadline_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(web_lease_timeout_ms_);
+      return;
+    }
+    if (raw == "MODE:RUNTIME" || raw == "MODE:NORMAL") {
+      if (python_tcp_client_armed_ || tcp_client_armed_) { publishStatus("web_runtime_rejected_external_owner"); return; }
+      web_lease_active_ = false; cancelWebDetectionIfActive(); beginExit(); return;
+    }
     if (!maintenance_active_ || transition_ != Transition::NONE) { publishStatus("command_rejected_not_maintenance"); return; }
     if (python_tcp_client_armed_) { publishStatus("command_rejected_python_has_priority"); return; }
     if (tcp_client_armed_) { publishStatus("command_rejected_tcp_client_owns_maintenance"); return; }
@@ -918,6 +972,13 @@ class VescToolBridge final : public rclcpp::Node {
     if (parts.size() == 2 && parts[0] == "STEERING" && parts[1] == "CENTER") { sendCustom(1, HB_STEERING_SET_CENTER); return; }
     if (parts.size() == 2 && parts[0] == "STEERING" && parts[1] == "CAL") { sendCustom(1, HB_GET_STEERING_CAL); return; }
     if (parts.size() == 2 && parts[0] == "STEERING" && parts[1] == "ENCDEBUG") { sendCustom(1, HB_ENCODER_DEBUG); return; }
+    if (raw == "SAFE_STOP:BOTH") {
+      sendMaintenanceSafeStop();
+      std_msgs::msg::String cm; cm.data = "{\"motor\":0,\"mode\":\"SAFE_STOP_BOTH\",\"value\":0}";
+      command_state_pub_->publish(cm);
+      publishStatus("web_atomic_safe_stop");
+      return;
+    }
     if (parts.size() == 4 && parts[0] == "SET" && parseMotor(parts[2], &motor) && parseDouble(parts[3], &value)) {
       std::uint8_t id = 255U; double scale = 1.0, limit = std::numeric_limits<double>::infinity();
       if (parts[1] == "DUTY") { id = COMM_SET_DUTY; scale = 1e5; limit = max_abs_duty_; }
@@ -930,11 +991,50 @@ class VescToolBridge final : public rclcpp::Node {
       { std_msgs::msg::String cm; std::ostringstream co; co << "{\"motor\":" << motor << ",\"mode\":\"" << parts[1] << "\",\"value\":" << std::setprecision(9) << value << "}"; cm.data=co.str(); command_state_pub_->publish(cm); }
       std::vector<std::uint8_t> p{id}; appendI32(p, static_cast<std::int32_t>(std::lround(value * scale))); sendPayload(motor, std::move(p)); return;
     }
+    if (parts.size() == 3 && parts[0] == "DETECT" && parts[1] == "RL" && parseMotor(parts[2], &motor)) {
+      explicit_request_hold_until_ = std::chrono::steady_clock::now() + 15s;
+      web_detection_active_ = true;
+      { std::ostringstream o; o << "{\"kind\":\"rl\",\"state\":\"RUNNING\",\"motor\":" << motor << "}"; publishJson(detect_pub_, o.str()); }
+      sendPayload(motor, {COMM_DETECT_MOTOR_R_L}); return;
+    }
+    if (parts.size() == 8 && parts[0] == "DETECT" && parts[1] == "FLUX_OPEN" && parseMotor(parts[2], &motor)) {
+      double current=0.0, ramp=0.0, duty=0.0, resistance=0.0, inductance=0.0;
+      if (!parseDouble(parts[3],&current) || !parseDouble(parts[4],&ramp) || !parseDouble(parts[5],&duty) ||
+          !parseDouble(parts[6],&resistance) || !parseDouble(parts[7],&inductance) ||
+          current<=0.0 || current>max_abs_current_a_ || ramp<50.0 || ramp>5000.0 || duty<=0.0 || duty>0.5 ||
+          resistance<=0.0 || resistance>5.0 || inductance<=0.0 || inductance>0.1) { publishStatus("detect_flux_rejected_range"); return; }
+      std::vector<std::uint8_t> p{COMM_DETECT_MOTOR_FLUX_LINKAGE_OPENLOOP};
+      appendI32(p, static_cast<std::int32_t>(std::lround(current*1000.0)));
+      appendI32(p, static_cast<std::int32_t>(std::lround(ramp*1000.0)));
+      appendI32(p, static_cast<std::int32_t>(std::lround(duty*1000.0)));
+      appendI32(p, static_cast<std::int32_t>(std::lround(resistance*1000000.0)));
+      appendI32(p, static_cast<std::int32_t>(std::lround(inductance*100000000.0)));
+      explicit_request_hold_until_ = std::chrono::steady_clock::now() + 20s;
+      web_detection_active_ = true;
+      { std::ostringstream o; o << "{\"kind\":\"flux_open\",\"state\":\"RUNNING\",\"motor\":" << motor << "}"; publishJson(detect_pub_, o.str()); }
+      sendPayload(motor, std::move(p)); return;
+    }
+    if (parts.size() == 7 && parts[0] == "DETECT" && parts[1] == "ALL") {
+      double power=0.0, imin=0.0, imax=0.0, openloop=0.0, sl=0.0;
+      if (!parseDouble(parts[2],&power) || !parseDouble(parts[3],&imin) || !parseDouble(parts[4],&imax) ||
+          !parseDouble(parts[5],&openloop) || !parseDouble(parts[6],&sl) || power<5.0 || power>500.0 ||
+          imin < -max_abs_current_a_ || imin>0.0 || imax<0.0 || imax>max_abs_current_a_ || openloop<50.0 || openloop>3000.0 || sl<100.0 || sl>10000.0) {
+        publishStatus("detect_all_rejected_range"); return;
+      }
+      std::vector<std::uint8_t> p{COMM_DETECT_APPLY_ALL_FOC, 1U};
+      for (double x : {power, imin, imax, openloop, sl}) appendI32(p, static_cast<std::int32_t>(std::lround(x*1000.0)));
+      explicit_request_hold_until_ = std::chrono::steady_clock::now() + 180s;
+      web_detection_active_ = true;
+      publishJson(detect_pub_, "{\"kind\":\"detect_all\",\"state\":\"RUNNING\",\"motor\":0}");
+      sendPayload(1, std::move(p)); return;
+    }
     if (parts.size() == 4 && parts[0] == "DETECT" && parseMotor(parts[2], &motor) && parseDouble(parts[3], &value)) {
       if (value <= 0.0 || value > std::min(5.0, max_abs_current_a_)) { publishStatus("detect_current_rejected"); return; }
       std::uint8_t id = parts[1] == "ENCODER" ? COMM_DETECT_ENCODER : (parts[1] == "HALL" ? COMM_DETECT_HALL_FOC : 255U);
       if (id == 255U) { publishStatus("bad_detect_command"); return; }
       explicit_request_hold_until_ = std::chrono::steady_clock::now() + 30s;
+      web_detection_active_ = true;
+      { std::ostringstream o; o << "{\"kind\":\"" << (parts[1] == "ENCODER" ? "encoder" : "hall") << "\",\"state\":\"RUNNING\",\"motor\":" << motor << "}"; publishJson(detect_pub_, o.str()); }
       std::vector<std::uint8_t> p{id}; appendI32(p, static_cast<std::int32_t>(std::lround(value * 1000.0))); sendPayload(motor, std::move(p)); return;
     }
     if (parts.size() == 2 && parts[0] == "ALIVE" && parseMotor(parts[1], &motor)) { sendPayload(motor, {COMM_ALIVE}); return; }
@@ -1145,6 +1245,35 @@ class VescToolBridge final : public rclcpp::Node {
     } else if (p[0] == COMM_FW_VERSION && p.size() >= 4U) {
       std::string hw(reinterpret_cast<const char *>(&p[3])); publishStatus(std::string("fw_") + std::to_string(p[1]) + "." + std::to_string(p[2]) + "_" + hw);
       std::ostringstream o; o<<"{\"motor\":"<<motor<<",\"kind\":\"firmware\",\"event\":\"reply\",\"fw\":\""<<unsigned(p[1])<<"."<<unsigned(p[2])<<"\",\"hw\":\""<<hw<<"\"}"; publishJson(config_pub_,o.str());
+    } else if (p[0] == COMM_DETECT_MOTOR_R_L && p.size() >= 13U) {
+      web_detection_active_ = false;
+      std::ostringstream o; o<<std::setprecision(9)<<"{\"kind\":\"rl\",\"state\":\"PASS\",\"motor\":"<<motor
+        <<",\"resistance_ohm\":"<<double(i32(&p[1]))/1e6<<",\"inductance_uH\":"<<double(i32(&p[5]))/1e3
+        <<",\"ld_lq_uH\":"<<double(i32(&p[9]))/1e3<<",\"applied\":false,\"eeprom_verified\":false}"; publishJson(detect_pub_,o.str());
+    } else if (p[0] == COMM_DETECT_MOTOR_FLUX_LINKAGE && p.size() >= 5U) {
+      web_detection_active_ = false;
+      std::ostringstream o; o<<std::setprecision(9)<<"{\"kind\":\"flux\",\"state\":\"PASS\",\"motor\":"<<motor
+        <<",\"flux_linkage_wb\":"<<double(i32(&p[1]))/1e7<<",\"applied\":false,\"eeprom_verified\":false}"; publishJson(detect_pub_,o.str());
+    } else if (p[0] == COMM_DETECT_MOTOR_FLUX_LINKAGE_OPENLOOP && p.size() >= 14U) {
+      web_detection_active_ = false;
+      const double flux=double(i32(&p[1]))/1e7;
+      std::ostringstream o; o<<std::setprecision(9)<<"{\"kind\":\"flux_open\",\"state\":\""<<(flux>0.0?"PASS":"FAIL")<<"\",\"motor\":"<<motor
+        <<",\"flux_linkage_wb\":"<<flux<<",\"encoder_offset\":"<<double(i32(&p[5]))/1e6<<",\"encoder_ratio\":"<<double(i32(&p[9]))/1e6
+        <<",\"encoder_inverted\":"<<(p[13]?"true":"false")<<",\"applied\":false,\"eeprom_verified\":false}"; publishJson(detect_pub_,o.str());
+    } else if (p[0] == COMM_DETECT_ENCODER && p.size() >= 10U) {
+      web_detection_active_ = false;
+      const double off=double(i32(&p[1]))/1e6, ratio=double(i32(&p[5]))/1e6;
+      std::ostringstream o; o<<std::setprecision(9)<<"{\"kind\":\"encoder\",\"state\":\""<<((off<=1000.0&&ratio>0.0)?"PASS":"FAIL")<<"\",\"motor\":"<<motor
+        <<",\"offset_deg\":"<<off<<",\"ratio\":"<<ratio<<",\"inverted\":"<<(p[9]?"true":"false")<<",\"applied\":false,\"eeprom_verified\":false}"; publishJson(detect_pub_,o.str());
+    } else if (p[0] == COMM_DETECT_HALL_FOC && p.size() >= 10U) {
+      web_detection_active_ = false;
+      std::ostringstream o; o<<"{\"kind\":\"hall\",\"state\":\""<<(p[9]==0U?"PASS":"FAIL")<<"\",\"motor\":"<<motor<<",\"table\":[";
+      for(int z=1;z<=8;++z){if(z>1)o<<',';o<<unsigned(p[z]);} o<<"],\"applied\":false,\"eeprom_verified\":false}"; publishJson(detect_pub_,o.str());
+    } else if (p[0] == COMM_DETECT_APPLY_ALL_FOC && p.size() >= 3U) {
+      web_detection_active_ = false;
+      const auto result=i16(&p[1]); const bool ok=result>=0;
+      std::ostringstream o; o<<"{\"kind\":\"detect_all\",\"state\":\""<<(ok?"PASS":"FAIL")<<"\",\"motor\":0,\"result\":"<<result
+        <<",\"applied\":"<<(ok?"true":"false")<<",\"store_result\":"<<(ok?"true":"false")<<",\"eeprom_verified\":false}"; publishJson(detect_pub_,o.str());
     } else if (p[0] == COMM_GET_MCCONF || p[0] == COMM_GET_MCCONF_DEFAULT) {
       auto data=std::vector<std::uint8_t>(p.begin()+1,p.end()); const bool def=p[0]==COMM_GET_MCCONF_DEFAULT; if(def)mc_default_[idx]=data; else mc_active_[idx]=data;
       bool verified=false; if(!def&&!pending_mc_verify_[idx].empty()){verified=data==pending_mc_verify_[idx];pending_mc_verify_[idx].clear();}
@@ -1171,7 +1300,10 @@ class VescToolBridge final : public rclcpp::Node {
 
   double poll_hz_{50.0}, tcp_service_hz_{1000.0};
   double max_abs_duty_{0.95}, max_abs_current_a_{20.0}, max_abs_rpm_{10000.0};
+  int web_lease_timeout_ms_{1200};
   bool maintenance_active_{false}, gateway_connected_{false}, transport_connected_{false}, tcp_enabled_{true}, python_tcp_enabled_{true};
+  bool web_lease_active_{false}, web_detection_active_{false};
+  std::chrono::steady_clock::time_point web_lease_deadline_{};
   bool tcp_probe_pending_{false}, python_probe_pending_{false};
   bool tcp_client_armed_{false}, python_tcp_client_armed_{false};
   int tcp_port_{65102}, tcp_server_fd_{-1}, tcp_client_fd_{-1};
@@ -1194,7 +1326,7 @@ class VescToolBridge final : public rclcpp::Node {
   std::uint64_t crc_errors_{0}, format_errors_{0};
 
   rclcpp::Publisher<std_msgs::msg::UInt8MultiArray>::SharedPtr tx_pub_, runtime_probe_pub_;
-  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr mode_pub_, owner_pub_, status_pub_, telemetry_pub_, left_values_pub_, right_values_pub_, config_pub_, tuning_pub_, position_pub_, steering_pub_, rotor_pub_, left_rotor_pub_, right_rotor_pub_, command_state_pub_, raw_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr mode_pub_, owner_pub_, status_pub_, telemetry_pub_, left_values_pub_, right_values_pub_, config_pub_, tuning_pub_, position_pub_, steering_pub_, rotor_pub_, left_rotor_pub_, right_rotor_pub_, command_state_pub_, detect_pub_, raw_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr active_pub_;
   rclcpp::Subscription<std_msgs::msg::UInt8MultiArray>::SharedPtr rx_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr gateway_sub_, transport_sub_;
