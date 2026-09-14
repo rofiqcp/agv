@@ -7,6 +7,8 @@ import serial
 
 AGV_ROOT = Path(os.environ.get('AGV_ROOT', str(Path.home() / 'agv'))).expanduser().resolve()
 OUT_DEFAULT = AGV_ROOT / 'data/navigasi/IMU_MAG_CAL'
+F411_DEFAULT = os.environ.get('AGV_F411_PORT', '/dev/serial/by-id/usb-STMicroelectronics_BLACKPILL_F411CE_CDC_in_FS_Mode_338133833134-if00')
+IMU_DEFAULT = os.environ.get('AGV_IMU_PORT', '/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0')
 G = 9.80665
 
 def wrap360(v): return float(v) % 360.0
@@ -211,8 +213,8 @@ class YawLogger:
 
 def main():
     ap=argparse.ArgumentParser(description='Exclusive standalone RM3100/Yahboom yaw monitor and raw CSV logger')
-    ap.add_argument('--neo-port',default='/dev/ttyACM0'); ap.add_argument('--neo-baud',type=int,default=1000000)
-    ap.add_argument('--imu-port',default='/dev/ttyUSB0'); ap.add_argument('--imu-baud',type=int,default=921600)
+    ap.add_argument('--neo-port',default=F411_DEFAULT); ap.add_argument('--neo-baud',type=int,default=1000000)
+    ap.add_argument('--imu-port',default=IMU_DEFAULT); ap.add_argument('--imu-baud',type=int,default=921600)
     ap.add_argument('--output-dir',default=str(OUT_DEFAULT)); ap.add_argument('--display-hz',type=float,default=10.0)
     ap.add_argument('--accel-fsr-g',type=float,default=16.0); ap.add_argument('--gyro-fsr-dps',type=float,default=2000.0)
     a=ap.parse_args()

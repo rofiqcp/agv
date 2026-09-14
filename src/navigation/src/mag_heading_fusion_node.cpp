@@ -503,57 +503,155 @@ private:
     state.reject_reason.clear();
     ++state.accepted;
     setValid(source, true);
-    if (source == Source::NEO3 && !have_inertial_heading_) {
-      inertial_heading_rad_ = yaw_map;
-      have_inertial_heading_ = true;
-      last_inertial_time_ = t;
-      last_correction_time_ = t;
-    }
+    // Bootstrap inertia is centralized so RM and Yahboom MAG are compared first.
     publishConsensusIfValid();
   }
 
   void publishConsensusIfValid() {
     const auto t = now();
-    if (!field_qualification_valid_ || !neo_calibration_ownership_verified_) {
+    const auto fresh = [&](const HeadingState &state) {
+      if (!state.valid || state.stamp.nanoseconds() == 0) return false;
+      const double age = (t - state.stamp).seconds();
+      return age >= 0.0 && age <= consensus_timeout_sec_;
+    };
+    const bool imu_fresh = enable_imu_ && fresh(imu_state_);
+    const bool neo_fresh = enable_neo_ && neo_calibration_ownership_verified_ && fresh(neo_state_);
+    const bool inertial_fresh = have_inertial_heading_ && last_inertial_time_.nanoseconds() != 0 &&
+      (t - last_inertial_time_).seconds() >= 0.0 &&
+      (t - last_inertial_time_).seconds() <= consensus_timeout_sec_;
+
+    // No absolute magnetic heading may reach the global EKF until the field
+    // campaign is explicitly certified. A stale source is treated exactly like
+    // a missing source: it contributes neither angle nor weight.
+    if (!field_qualification_valid_ || (!imu_fresh && !neo_fresh)) {
       consensus_since_ = rclcpp::Time(0,0,RCL_ROS_TIME);
+      consensus_source_mask_ = 0u;
       if (consensus_valid_) {
-        consensus_valid_ = false; std_msgs::msg::Bool b; b.data=false; consensus_valid_pub_->publish(b);
+        consensus_valid_ = false;
+        std_msgs::msg::Bool b; b.data=false; consensus_valid_pub_->publish(b);
       }
       return;
     }
-    const bool inertial_fresh = have_inertial_heading_ && (t - last_inertial_time_).seconds() >= 0.0 && (t - last_inertial_time_).seconds() <= consensus_timeout_sec_;
-    const bool neo_fresh = neo_state_.valid && neo_state_.stamp.nanoseconds() != 0 && (t - neo_state_.stamp).seconds() >= 0.0 && (t - neo_state_.stamp).seconds() <= consensus_timeout_sec_;
-    const double err = (inertial_fresh && neo_fresh) ? std::abs(normalizeAngle(inertial_heading_rad_ - neo_state_.heading_rad)) : kPi;
-    const bool pair_ok = inertial_fresh && neo_fresh && err <= consensus_max_error_rad_;
-    if (!pair_ok) {
-      consensus_since_ = rclcpp::Time(0,0,RCL_ROS_TIME);
-      if (consensus_valid_) { consensus_valid_ = false; std_msgs::msg::Bool b; b.data=false; consensus_valid_pub_->publish(b); }
-      consensus_error_rad_ = err;
+
+    // Bootstrap inertial yaw only from absolute sensors that are currently
+    // fresh. If both magnetometers are present they must already agree; never
+    // average two contradictory headings into a plausible-looking seed.
+    if (!inertial_fresh) {
+      if (imu_fresh && neo_fresh &&
+          std::abs(normalizeAngle(imu_state_.heading_rad - neo_state_.heading_rad)) > consensus_max_error_rad_) {
+        consensus_since_ = rclcpp::Time(0,0,RCL_ROS_TIME);
+        consensus_source_mask_ = 0u;
+        if (consensus_valid_) {
+          consensus_valid_ = false;
+          std_msgs::msg::Bool b; b.data=false; consensus_valid_pub_->publish(b);
+        }
+        return;
+      }
+      double sx=0.0, sy=0.0, sw=0.0;
+      if (imu_fresh) {
+        const double w=1.0/std::max(imu_variance_,1.0e-4);
+        sx+=w*std::cos(imu_state_.heading_rad); sy+=w*std::sin(imu_state_.heading_rad); sw+=w;
+      }
+      if (neo_fresh) {
+        const double w=1.0/std::max(neo_variance_,1.0e-4);
+        sx+=w*std::cos(neo_state_.heading_rad); sy+=w*std::sin(neo_state_.heading_rad); sw+=w;
+      }
+      if (sw <= 0.0) return;
+      inertial_heading_rad_=std::atan2(sy,sx);
+      have_inertial_heading_=true;
+      last_inertial_time_=t;
+      last_correction_time_=t;
+      consensus_since_=rclcpp::Time(0,0,RCL_ROS_TIME);
+      consensus_source_mask_=0u;
       return;
     }
-    if (consensus_since_.nanoseconds() == 0) consensus_since_ = t;
-    consensus_error_rad_ = err;
-    if ((t - consensus_since_).seconds() < consensus_hold_sec_) return;
-    if (last_correction_time_.nanoseconds() == 0) last_correction_time_ = t;
-    const double corr_dt = std::clamp((t - last_correction_time_).seconds(), 0.0, 0.25);
-    const double correction = normalizeAngle(neo_state_.heading_rad - inertial_heading_rad_);
-    const double max_step = 0.01745329252 * corr_dt; // maksimum 1 deg/s, tanpa heading jump
-    inertial_heading_rad_ = normalizeAngle(inertial_heading_rad_ + std::clamp(correction, -max_step, max_step));
-    last_correction_time_ = t;
-    const double w_neo = 1.0 / std::max(neo_variance_, 1.0e-4);
-    const double w_imu = 1.0 / 0.05;
-    const double sx = w_neo*std::cos(neo_state_.heading_rad) + w_imu*std::cos(inertial_heading_rad_);
-    const double sy = w_neo*std::sin(neo_state_.heading_rad) + w_imu*std::sin(inertial_heading_rad_);
-    const double yaw = std::atan2(sy, sx);
+
+    const double imu_err = imu_fresh ?
+      std::abs(normalizeAngle(imu_state_.heading_rad - inertial_heading_rad_)) : kPi;
+    const double neo_err = neo_fresh ?
+      std::abs(normalizeAngle(neo_state_.heading_rad - inertial_heading_rad_)) : kPi;
+    bool imu_inlier = imu_fresh && imu_err <= consensus_max_error_rad_;
+    bool neo_inlier = neo_fresh && neo_err <= consensus_max_error_rad_;
+
+    // When both absolute sensors individually look plausible but disagree with
+    // each other, keep only the one closest to the short-term inertial predictor.
+    // This prevents one EMI-disturbed magnetometer from dragging the consensus.
+    if (imu_inlier && neo_inlier &&
+        std::abs(normalizeAngle(imu_state_.heading_rad - neo_state_.heading_rad)) > consensus_max_error_rad_) {
+      if (imu_err < neo_err) neo_inlier=false;
+      else if (neo_err < imu_err) imu_inlier=false;
+      else { imu_inlier=false; neo_inlier=false; }
+    }
+
+    uint8_t source_mask=0u;
+    double sx_abs=0.0, sy_abs=0.0, sw_abs=0.0;
+    double max_err=0.0;
+    if (imu_inlier) {
+      const double w=1.0/std::max(imu_variance_,1.0e-4);
+      sx_abs+=w*std::cos(imu_state_.heading_rad); sy_abs+=w*std::sin(imu_state_.heading_rad); sw_abs+=w;
+      max_err=std::max(max_err,imu_err); source_mask|=0x01u;
+    }
+    if (neo_inlier) {
+      const double w=1.0/std::max(neo_variance_,1.0e-4);
+      sx_abs+=w*std::cos(neo_state_.heading_rad); sy_abs+=w*std::sin(neo_state_.heading_rad); sw_abs+=w;
+      max_err=std::max(max_err,neo_err); source_mask|=0x02u;
+    }
+    if (source_mask==0u || sw_abs<=0.0) {
+      consensus_since_=rclcpp::Time(0,0,RCL_ROS_TIME);
+      consensus_source_mask_=0u;
+      consensus_error_rad_=std::min(imu_err,neo_err);
+      if (consensus_valid_) {
+        consensus_valid_=false;
+        std_msgs::msg::Bool b; b.data=false; consensus_valid_pub_->publish(b);
+      }
+      return;
+    }
+
+    // Switching from RM to Yahboom (or vice versa) must earn a fresh hold time;
+    // a newly-recovered sensor never inherits the previous source's validation.
+    if (source_mask != consensus_source_mask_) {
+      consensus_source_mask_=source_mask;
+      consensus_since_=t;
+      if (consensus_valid_) {
+        consensus_valid_=false;
+        std_msgs::msg::Bool b; b.data=false; consensus_valid_pub_->publish(b);
+      }
+    } else if (consensus_since_.nanoseconds()==0) {
+      consensus_since_=t;
+    }
+    consensus_error_rad_=max_err;
+    if ((t-consensus_since_).seconds() < consensus_hold_sec_) return;
+
+    const double absolute_heading=std::atan2(sy_abs, sx_abs);
+    if (last_correction_time_.nanoseconds()==0) last_correction_time_=t;
+    const double corr_dt=std::clamp((t-last_correction_time_).seconds(),0.0,0.25);
+    const double correction=normalizeAngle(absolute_heading-inertial_heading_rad_);
+    const double max_step=0.01745329252*corr_dt; // maksimum 1 deg/s, tanpa heading jump
+    inertial_heading_rad_=normalizeAngle(
+      inertial_heading_rad_+std::clamp(correction,-max_step,max_step));
+    last_correction_time_=t;
+
+    // Inertia is a predictor/bridge, not another independent absolute sensor.
+    // The global EKF still receives raw gyro-Z separately, so keep this weight
+    // deliberately softer than the qualified absolute magnetic measurements.
+    const double w_inertial=1.0/0.05;
+    const double sx=sx_abs+w_inertial*std::cos(inertial_heading_rad_);
+    const double sy=sy_abs+w_inertial*std::sin(inertial_heading_rad_);
+    const double yaw=std::atan2(sy,sx);
+
     geometry_msgs::msg::PoseWithCovarianceStamped pose;
-    pose.header.stamp = t; pose.header.frame_id = output_frame_;
-    pose.pose.pose.orientation = yawQuaternion(yaw);
+    pose.header.stamp=t; pose.header.frame_id=output_frame_;
+    pose.pose.pose.orientation=yawQuaternion(yaw);
     pose.pose.covariance.fill(0.0);
     pose.pose.covariance[0]=pose.pose.covariance[7]=pose.pose.covariance[14]=pose.pose.covariance[21]=pose.pose.covariance[28]=1.0e6;
-    pose.pose.covariance[35] = std::max(validated_variance_, err*err);
+    pose.pose.covariance[35]=std::max(validated_variance_,max_err*max_err);
     validated_heading_pub_->publish(pose);
-    validated_heading_rad_ = yaw;
-    if (!consensus_valid_) { consensus_valid_=true; std_msgs::msg::Bool b; b.data=true; consensus_valid_pub_->publish(b); }
+    validated_heading_rad_=yaw;
+    validated_source_mask_=source_mask;
+    if (!consensus_valid_) {
+      consensus_valid_=true;
+      std_msgs::msg::Bool b; b.data=true; consensus_valid_pub_->publish(b);
+    }
   }
 
   void publishStatus() {
@@ -568,6 +666,11 @@ private:
       ";neo3_norm_ut=" + std::to_string(neo_state_.norm_ut) +
       ";imu_reject=" + imu_state_.reject_reason +
       ";neo3_reject=" + neo_state_.reject_reason +
+      ";imu_mag_age_sec=" + std::to_string(imu_state_.stamp.nanoseconds() == 0 ? 999.0 : (t - imu_state_.stamp).seconds()) +
+      ";neo3_mag_age_sec=" + std::to_string(neo_state_.stamp.nanoseconds() == 0 ? 999.0 : (t - neo_state_.stamp).seconds()) +
+      ";inertial_age_sec=" + std::to_string(last_inertial_time_.nanoseconds() == 0 ? 999.0 : (t - last_inertial_time_).seconds()) +
+      ";consensus_source_mask=" + std::to_string(static_cast<unsigned>(consensus_source_mask_)) +
+      ";validated_source_mask=" + std::to_string(static_cast<unsigned>(validated_source_mask_)) +
       ";tilt_age_sec=" + std::to_string(tilt_age) +
       ";map_yaw_age_sec=" + std::to_string(map_age) +
       ";inertial_heading_deg=" + std::to_string(inertial_heading_rad_ * 180.0 / kPi) +
@@ -616,6 +719,7 @@ private:
   double current_emi_gate_threshold_a_{1.0e6}, current_emi_gate_timeout_sec_{0.35};
   double motor_current_abs_a_{0.0};
   bool have_tilt_{false}, have_map_yaw_{false}, have_inertial_heading_{false}, consensus_valid_{false};
+  uint8_t consensus_source_mask_{0u}, validated_source_mask_{0u};
   double roll_rad_{0.0}, pitch_rad_{0.0}, map_yaw_from_enu_{0.0};
   rclcpp::Time last_tilt_time_{0, 0, RCL_ROS_TIME}, last_map_yaw_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_motor_current_time_{0, 0, RCL_ROS_TIME};

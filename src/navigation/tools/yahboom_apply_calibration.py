@@ -43,6 +43,48 @@ def validate_stage1(data:dict,state:Path)->dict:
  state_ok(state)
  return h
 
+def validate_host_stage1(data:dict,state:Path)->dict:
+ h=data.get('heading_360_calibration') or {}
+ ready=(h.get('stage1_only') is True and
+        (h.get('yahboom') or {}).get('valid') is True and
+        (h.get('neo3') or {}).get('valid') is True and
+        (h.get('gyro') or {}).get('pass') is True and
+        (h.get('cross_sensor') or {}).get('pass') is True)
+ if not ready:raise ValueError('Host Stage-1 9-stop/360 belum PASS Yahboom + RM3100 planar + gyro + cross-sensor')
+ state_ok(state)
+ return h
+
+def host_stage2_values(h:dict)->dict:
+ yah=h['yahboom'];neo=h['neo3']
+ v={dst:yah[src] for dst,src in YAH_FIELDS.items()}
+ v.update({
+  'neo3_mag_yaw_sign':neo['yaw_sign'],'neo3_mag_yaw_offset_rad':neo['yaw_offset_rad'],
+  'neo3_mag_bias_xy_ut':neo['bias'],'neo3_mag_matrix_xy':neo['matrix'],
+  'neo3_heading_lut_input_rad':neo['heading_lut_input_rad'],'neo3_heading_lut_correction_rad':neo['heading_lut_correction_rad'],
+  'imu_planar_calibration_enabled':True,'imu_heading_lut_enabled':True,'enable_imu_mag_heading':True,
+  'neo3_calibration_owner':'ros_host','neo3_calibration_ownership_verified':True,
+  'neo3_planar_calibration_enabled':True,'neo3_full_calibration_enabled':False,
+  'neo3_mag_bias_xyz_ut':[0.0,0.0,0.0],
+  'neo3_mag_matrix_3x3':[1.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,1.0],
+  'neo3_heading_lut_enabled':True,'enable_neo3_mag_heading':True,
+  'field_qualification_valid':False,'field_qualification_saved_at':'','field_qualification_evidence_sha256':'',
+ })
+ return v
+
+def apply_host_stage2(ws:Path,data:dict,cal:Path,state:Path)->dict:
+ h=validate_host_stage1(data,state);values=host_stage2_values(h)
+ mag=ws/'src/navigation/config/mag_heading.yaml';model=yaml.safe_load(mag.read_text()) or {}
+ ros=(model.setdefault('mag_heading_fusion',{})).setdefault('ros__parameters',{})
+ for k,v in values.items():ros[k]=v
+ atomic_yaml(mag,model)
+ ev={'heading_360_calibration':h,'stage2_apply':{'applied_at':datetime.datetime.now().astimezone().isoformat(timespec='seconds'),
+     'calibration_sha256':sha256_file(cal),'ownership':{'verified':True,'owner':'ros_host','sensor_stream':'MAGPRO/RM3100'},
+     'field_qualification_valid':False}}
+ evpath=ws/'src/navigation/config/heading_360_calibration.yaml';atomic_yaml(evpath,ev)
+ return {'ok':True,'message':'Host Stage-2 calibration ditulis atomik; Yahboom + RM3100 planar aktif; field qualification tetap fail-closed',
+         'mag_heading_yaml':str(mag),'evidence_yaml':str(evpath),'values':values,
+         'field_qualification_valid':False,'localization_heading_enabled':False,'owner':'ros_host'}
+
 def verify_owner_contract(ws:Path,h:dict)->dict:
  f4=ws/'F4gateway/src/Neo3ProSensors.cpp'; fusion=ws/'src/navigation/src/mag_heading_fusion_node.cpp'
  if not f4.is_file() or not fusion.is_file():raise ValueError('source contract ownership NEO3 tidak ditemukan')
@@ -120,7 +162,7 @@ def legacy_preview(data:dict)->dict:
 
 def main()->int:
  ap=argparse.ArgumentParser();ap.add_argument('--workspace',default=os.environ.get('AGV_ROOT',str(Path.home()/'agv')))
- ap.add_argument('--calibration',default='');ap.add_argument('--state',default='');ap.add_argument('--propose',action='store_true');ap.add_argument('--stage2-propose',action='store_true');ap.add_argument('--apply-stage2',action='store_true')
+ ap.add_argument('--calibration',default='');ap.add_argument('--state',default='');ap.add_argument('--propose',action='store_true');ap.add_argument('--stage2-propose',action='store_true');ap.add_argument('--apply-stage2',action='store_true');ap.add_argument('--apply-host-stage2',action='store_true')
  a=ap.parse_args();ws=Path(a.workspace).expanduser().resolve();cal=Path(a.calibration) if a.calibration else ws/'calibration/heading_360_latest.yaml'
  if not cal.is_file():
   legacy=ws/'calibration/yahboom_mag_planar_latest.yaml';cal=legacy if legacy.is_file() else cal
@@ -128,6 +170,8 @@ def main()->int:
  try:
   data=yaml.safe_load(cal.read_text()) or {}
   if data.get('heading_360_calibration'):
+   if a.apply_host_stage2:
+    print(json.dumps(apply_host_stage2(ws,data,cal,state)));return 0
    h=validate_stage1(data,state)
    if not (a.apply_stage2 or a.stage2_propose):
     if a.propose:
@@ -139,7 +183,7 @@ def main()->int:
    print(json.dumps({'ok':True,'message':'Stage-2 calibration proposal PASS; field qualification tetap false sampai EMI campaign PASS',
     'stage2':True,'apply_locked':False,'proposal_only':True,'runtime_write':False,'yaml_write':False,
     'proposal_items':proposal_items(values),'evidence':ev,'field_qualification_required':True}));return 0
-  if a.apply_stage2:raise ValueError('Stage-2 apply membutuhkan heading_360_calibration, legacy fit ditolak')
+  if a.apply_stage2 or a.apply_host_stage2:raise ValueError('Stage-2 apply membutuhkan heading_360_calibration, legacy fit ditolak')
   print(json.dumps(legacy_preview(data)));return 0
  except (ValueError,OSError,json.JSONDecodeError,KeyError,TypeError) as exc:
   print(json.dumps({'ok':False,'message':str(exc),'stage2':bool(a.apply_stage2 or a.propose)}));return 2
