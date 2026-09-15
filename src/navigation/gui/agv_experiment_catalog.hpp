@@ -1424,7 +1424,7 @@ inline QVector<ExperimentSpec> buildExperimentCatalog(const QString &subsystem) 
       {{"Tahap","Motor / fungsi","Prasyarat PASS","Parameter yang boleh diubah","Parameter yang dikunci","Keluaran / handoff"}}, {}, {});
 
   add("steering", QStringLiteral("4.2"), QStringLiteral("4.2 Kalibrasi Dasar dan Validasi Sensor Motor"), "4.2.1",
-      QStringLiteral("4.2.1 Verifikasi Link F411, FW VESC LEFT/RIGHT, dan Snapshot Konfigurasi"), {},
+      QStringLiteral("4.2.1 Verifikasi Direct USB–F103, FW VESC LEFT/RIGHT, dan Snapshot Konfigurasi"), {},
       {{"Variasi","LEFT Vbus","LEFT Fault","RIGHT Vbus","RIGHT Fault","LEFT Reply","RIGHT Reply"}},
       {{"LEFT Vbus","vesc_left_values.vbus_v"},{"LEFT Fault","vesc_left_values.fault"},{"RIGHT Vbus","vesc_right_values.vbus_v"},{"RIGHT Fault","vesc_right_values.fault"}}, {});
 

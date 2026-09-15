@@ -46,3 +46,47 @@
   .vesc-trace-checks{grid-template-columns:repeat(2,minmax(0,1fr))}
   .vesc-scope-tools{width:100%;justify-content:flex-start}
 }
+/* Health-card metadata may use the full remaining card width; legacy 130px cap clipped valid transport text. */
+.health-card>div:nth-child(2){min-width:0;flex:1}
+.health-card small{max-width:100%!important}
+
+/* Full visual QA pass: keep long page titles inside the shell instead of under status pills. */
+@media(min-width:1101px){
+  :root{--topbar-h:68px}
+  .topbar{height:var(--topbar-h)!important;min-height:var(--topbar-h)!important;align-items:center!important;padding-block:5px!important}
+  .page-heading{flex:1 1 0!important;min-width:0!important;padding-right:12px}
+  .page-heading h1{white-space:normal!important;overflow:hidden!important;text-overflow:clip!important;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-height:1.08!important;font-size:clamp(17px,1.45vw,22px)!important}
+  .top-status{align-self:center}
+}
+@media(min-width:821px) and (max-width:1100px){
+  .page-heading h1{white-space:normal!important;overflow:hidden!important;text-overflow:clip!important;overflow-wrap:anywhere;line-height:1.1!important}
+}
+/* Expanded sidebar: two readable lines are preferable to single-line ellipsis. */
+@media(min-width:821px){
+  body:not(.sidebar-collapsed) .nav-item.tuning-nav,body:not(.sidebar-collapsed) .nav-item.report-nav{min-height:40px!important;align-items:center!important}
+  body:not(.sidebar-collapsed) .nav-item.tuning-nav b,body:not(.sidebar-collapsed) .nav-item.report-nav b{white-space:normal!important;text-overflow:clip!important;display:-webkit-box!important;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-height:1.18!important;max-height:2.36em}
+}
+/* Dense status cards: preserve the complete short diagnostic sentence. */
+.operator-priority-item small{white-space:normal!important;overflow:visible!important;text-overflow:clip!important;line-height:1.2!important;min-height:2.4em}
+.health-card small{white-space:normal!important;overflow:hidden!important;text-overflow:clip!important;display:-webkit-box!important;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-height:1.2!important}
+/* ESC scope selectors: no scroll and no clipped trace names. */
+.vesc-trace-checks{grid-template-columns:repeat(auto-fit,minmax(128px,1fr))!important}
+.vesc-trace-checks label{white-space:nowrap!important;overflow:visible!important;text-overflow:clip!important;min-height:30px!important}
+/* Navigation toolbar buttons should vertically center their icon + label. */
+.map-toolbar .soft-btn{display:inline-flex!important;align-items:center!important;justify-content:center!important;white-space:nowrap!important;line-height:1.1!important}
+@media(min-width:1101px){.map-toolbar .soft-btn{min-height:30px!important;height:30px!important}.map-head h2{font-size:17px!important;white-space:nowrap}}
+/* Obstacle progress matrix: all four orientations visible at once. */
+.obcal-progress{overflow:visible!important}
+.obcal-matrix-head,.obcal-matrix-row{grid-template-columns:58px repeat(4,minmax(46px,1fr))!important;min-width:0!important;gap:4px!important}
+.obcal-matrix-head span{white-space:normal!important;line-height:1.1!important;padding:3px 1px!important}
+.obcal-matrix-cell{min-width:0;flex-direction:column;justify-content:center!important;gap:1px!important;padding:5px 2px!important;text-align:center}
+.obcal-matrix-cell span{white-space:normal!important;line-height:1.05!important}.obcal-matrix-cell b{font-size:7px!important}
+@media(max-width:700px){
+  .vesc-trace-checks{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+  .vesc-trace-checks label{white-space:normal!important;overflow:hidden!important;line-height:1.15!important}
+  .nav-inspector>summary{height:auto!important;min-height:44px!important;grid-template-columns:minmax(0,1fr) auto!important;gap:2px 8px!important;padding-block:7px!important}
+  .nav-inspector>summary span{min-width:0}
+  .nav-inspector>summary b{grid-column:1/-1;white-space:normal!important;overflow:visible!important;text-overflow:clip!important;line-height:1.2!important}
+  .operator-priority-item{min-height:74px}
+  .health-card{align-items:flex-start}
+}

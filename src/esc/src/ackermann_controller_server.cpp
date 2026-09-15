@@ -420,7 +420,7 @@ private:
     // Current ESC UART is the verified QinHeng CH340 (1a86:7523). Unique by-id is the
     // primary selector; physical topology is only a deterministic fallback.
     declare_parameter<std::string>("serial_auto_path_contains", "");
-    declare_parameter<int>("serial_baud", 115200);
+    declare_parameter<int>("serial_baud", 921600);
     declare_parameter<double>("serial_tx_rate_hz", 50.0);
     declare_parameter<double>("serial_reconnect_sec", 0.25);
     declare_parameter<double>("serial_ack_timeout_sec", 0.60);
@@ -2013,9 +2013,9 @@ private:
         continue;
       }
       ::cfmakeraw(&tty);
-      speed_t baud = B115200;
-      if (serial_baud_ != 115200) {
-        RCLCPP_WARN_ONCE(get_logger(), "F103 native VESC protocol is fixed at 115200 baud; forcing 115200.");
+      speed_t baud = B921600;
+      if (serial_baud_ != 921600) {
+        RCLCPP_WARN_ONCE(get_logger(), "F103 native VESC runtime is fixed at 921600 baud; forcing 921600.");
       }
       ::cfsetispeed(&tty, baud);
       ::cfsetospeed(&tty, baud);
@@ -2622,7 +2622,7 @@ private:
         }
         next_tx = t;
         previous_maintenance = maintenance_mode_active_.load();
-        RCLCPP_INFO(get_logger(), "DIRECT VESC CONNECT %s @ 115200 8N1", active_path.c_str());
+        RCLCPP_INFO(get_logger(), "DIRECT VESC CONNECT %s @ 921600 8N1", active_path.c_str());
       }
 
       const bool maintenance = maintenance_mode_active_.load();
@@ -3126,7 +3126,7 @@ private:
   std::string serial_device_{"auto"};
   std::string serial_auto_id_contains_{"1a86_USB_Serial"};
   std::string serial_auto_path_contains_{};
-  int serial_baud_{115200};
+  int serial_baud_{921600};
   double serial_tx_rate_hz_{50.0};
   double serial_reconnect_sec_{0.25};
   double serial_ack_timeout_sec_{0.60};

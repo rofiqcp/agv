@@ -49,8 +49,8 @@ if float(ack.get("command_watchdog_sec", 99.0)) >= float(ack.get("nav2_timeout_s
     fail("serial command watchdog must be tighter than Nav2 source timeout")
 if float(ack.get("serial_tx_rate_hz", 0.0)) != float(ack.get("command_rate_hz", 0.0)):
     fail("ROS command and STM transmit rates must match")
-if int(ack.get("serial_baud", 0)) != 115200:
-    fail("direct ESC USB-UART must remain 115200 baud")
+if int(ack.get("serial_baud", 0)) != 921600:
+    fail("direct ESC USB-UART must remain 921600 baud")
 if abs(float(ack.get("drive_wheel_radius_m", 0.0)) - 0.145) > 1e-9:
     fail("native VESC drive wheel radius must match vehicle radius 0.145 m")
 if int(ack.get("drive_motor_pole_pairs", 0)) != 15:

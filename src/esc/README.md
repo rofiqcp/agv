@@ -49,7 +49,7 @@ Manual steering preserves the previous teleop behavior: full A/D at the current 
 
 This ROS package expects the robust hoverboard protocol already integrated previously:
 
-- 115200 8N1
+- 921600 8N1
 - fixed 14-byte frame
 - SOF `A5 5A`
 - sequence number

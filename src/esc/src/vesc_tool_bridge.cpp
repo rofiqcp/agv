@@ -515,7 +515,7 @@ class VescToolBridge final : public rclcpp::Node {
     std::uint8_t buf[1024];
     // Bound socket work per 1-ms service tick. A peer that continuously writes
     // must not monopolize the single-threaded ROS executor and delay safety/route
-    // callbacks. 32 KiB/tick is far above the 115200-baud downstream capacity.
+    // callbacks. 32 KiB/tick is far above the 921600-baud downstream capacity.
     for (std::size_t rx_budget = 0U; rx_budget < 32U; ++rx_budget) {
       const ssize_t n = ::recv(tcp_client_fd_, buf, sizeof(buf), 0);
       if (n > 0) {
@@ -794,7 +794,7 @@ class VescToolBridge final : public rclcpp::Node {
     if (!safeToEnter()) { publishStatus("maintenance_rejected_vehicle_not_idle"); return; }
     // Barrier order is strict: explicit VESC current=0 on RUNTIME, then publish
     // maintenance_active so Ackermann also fail-closes, then switch logical owner inside package esc.
-    // Two short current-zero packets are <3 ms on the validated 115200 link;
+    // Two short current-zero packets are <3 ms on the validated 921600 link;
     // 12 ms leaves ample ROS/USB scheduling margin without timing out a 60-ms
     // first VESC request.
     sendRuntimeSafeStop();
@@ -866,7 +866,7 @@ class VescToolBridge final : public rclcpp::Node {
     sendPayload(2, fast);
     // Stock COMM_ROTOR_POSITION can expose only one DISP_POS_MODE at a time.
     // Essential GET_VALUES remains 50 Hz per motor. The larger diagnostic rotor
-    // snapshot is deliberately 25 Hz so the 115200 F103->F411 wire keeps enough
+    // snapshot is deliberately 25 Hz so the 921600 F103 runtime link keeps enough
     // headroom for config replies, TCP bursts and recovery traffic.
     if ((fast_diag_divider_++ & 1U) == 0U) {
       sendCustom(1, HB_GET_ROTOR_SNAPSHOT);
