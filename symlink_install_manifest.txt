@@ -240,6 +240,7 @@
 /home/sirobo/agv/install/navigation/share/navigation/web/static/tuning_evidence.js
 /home/sirobo/agv/install/navigation/share/navigation/web/static/tuning_trials.js
 /home/sirobo/agv/install/navigation/share/navigation/web/static/tuning_ui.js
+/home/sirobo/agv/install/navigation/share/navigation/web/static/ui-polish.css
 /home/sirobo/agv/install/navigation/share/navigation/web/static/vesc_workbench.js
 /home/sirobo/agv/install/navigation/share/navigation/web/static/workspace-tabs.css
 /home/sirobo/agv/install/navigation/share/navigation/web/static/workspaces.css

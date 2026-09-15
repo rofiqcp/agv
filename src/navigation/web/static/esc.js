@@ -5,7 +5,7 @@ function renderEsc(){
   setChip('escChip',ready,armed?'ARMED':'READY',ack?'VESC DATA / NOT READY':'OFFLINE');
   $('escOrb').classList.toggle('ok',ack);
   setText('escConnectionTitle',ack?(ready?'VESC LINK + READY':'VESC telemetry received, controller not ready'):'No VESC telemetry');
-  setText('escConnectionDetail',ack?'F103 VESC protocol is passing through STM32F411 PB6/PB7 and USB CDC.':'Expected route: F103 USART3 PB10/PB11 ↔ F411 USART1 PB7/PB6 ↔ stable F411 by-id. CP2102 IMU also uses stable by-id.');
+  setText('escConnectionDetail',ack?'Direct USB-UART ↔ STM32F103 native VESC protocol • ACK fresh.':'Expected route: dedicated USB-UART ↔ STM32F103 USART3 native VESC • waiting fresh ACK.');
   setText('escDriveTarget',fmt(raw('esc_drive_target'),3)+' m/s');setText('escDriveActual',fmt(raw('esc_drive_actual'),3)+' m/s');
   setText('escSteerTarget',fmt(deg(raw('esc_steer_protocol_cmd')),2)+'°');setText('escSteerActual',fmt(deg(raw('esc_steer_feedback_raw')),2)+'°');
   setText('escYawRate',fmt(raw('esc_yaw_rate'),3)+' rad/s');setText('escMuxSource',getPath(obj('esc_mux'),'raw')||'--');

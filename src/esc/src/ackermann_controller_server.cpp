@@ -2372,12 +2372,20 @@ private:
       const double pair_skew_s = (left_values_seen_ && right_values_seen_)
         ? std::abs(std::chrono::duration<double>(right_values_time_ - left_values_time_).count())
         : std::numeric_limits<double>::infinity();
-      pair_complete = values_pair_mask_ == 0x03U && pair_skew_s <= 0.040;
-      if (pair_complete) {
+      const bool pair_candidate = values_pair_mask_ == 0x03U;
+      if (pair_candidate) {
+        last_values_pair_skew_s_ = pair_skew_s;
+        max_values_pair_skew_s_ = std::max(max_values_pair_skew_s_, pair_skew_s);
+        pair_complete = pair_skew_s <= 0.040;
         values_pair_mask_ = 0U;
-        ack_seen_ = true;
-        last_ack_time_ = t;
-        feedback_updated_ = true;
+        if (pair_complete) {
+          ++values_pair_complete_count_;
+          ack_seen_ = true;
+          last_ack_time_ = t;
+          feedback_updated_ = true;
+        } else {
+          ++values_pair_reject_count_;
+        }
       }
       feedback_status_ = 0U;
       if (left_fault_code_ == 0U) feedback_status_ |= 0x01U | 0x04U;
@@ -2482,6 +2490,11 @@ private:
   {
     if (!foc_telemetry_pub_) return;
     std::lock_guard<std::mutex> lock(feedback_mutex_);
+    const auto diag_now = std::chrono::steady_clock::now();
+    const double left_age_ms = left_values_seen_
+      ? 1000.0 * std::chrono::duration<double>(diag_now - left_values_time_).count() : -1.0;
+    const double right_age_ms = right_values_seen_
+      ? 1000.0 * std::chrono::duration<double>(diag_now - right_values_time_).count() : -1.0;
     std_msgs::msg::String msg;
     std::ostringstream o;
     o << "{\"transport\":\"" << transport_mode_ << "\","
@@ -2508,7 +2521,13 @@ private:
       << ",\"physical_min_deg\":-30,\"physical_center_deg\":0,\"physical_max_deg\":30},"
       << "\"rx_crc_errors\":" << vesc_rx_crc_error_count_
       << ",\"rx_format_errors\":" << vesc_rx_format_error_count_
-      << ",\"rx_overflows\":" << vesc_rx_overflow_count_ << "}";
+      << ",\"rx_overflows\":" << vesc_rx_overflow_count_
+      << ",\"pair_skew_ms\":" << (1000.0 * last_values_pair_skew_s_)
+      << ",\"pair_max_skew_ms\":" << (1000.0 * max_values_pair_skew_s_)
+      << ",\"pair_complete_count\":" << values_pair_complete_count_
+      << ",\"pair_reject_count\":" << values_pair_reject_count_
+      << ",\"left_age_ms\":" << left_age_ms
+      << ",\"right_age_ms\":" << right_age_ms << "}";
     msg.data = o.str();
     foc_telemetry_pub_->publish(msg);
     if (motor_current_abs_pub_) {
@@ -3188,6 +3207,10 @@ private:
   bool left_values_seen_{false}, right_values_seen_{false};
   std::uint8_t values_pair_mask_{0U};
   std::chrono::steady_clock::time_point left_values_time_{}, right_values_time_{};
+  double last_values_pair_skew_s_{0.0};
+  double max_values_pair_skew_s_{0.0};
+  std::uint64_t values_pair_complete_count_{0U};
+  std::uint64_t values_pair_reject_count_{0U};
   std::uint8_t left_fault_code_{0U}, right_fault_code_{0U};
   double left_temp_mos_c_{0.0}, right_temp_mos_c_{0.0};
   double left_current_motor_a_{0.0}, right_current_motor_a_{0.0};

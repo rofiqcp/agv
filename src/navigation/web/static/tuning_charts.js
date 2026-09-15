@@ -195,7 +195,7 @@ function trialGuideFor(x){
 }
 
 const ESC_TRIAL_GUIDES={
-'4.1':{v:'Tidak ada variasi aktuator; verifikasi urutan dan safety gate.',c:'Semua tahap 4.2→4.9 harus PASS berurutan sebelum handoff.',s:['Pastikan E-stop, roda aman, F411/F103 online dan VESC Tool TCP tidak sedang mengambil authority.','Gunakan 4.1 sebagai checklist urutan; jangan mengubah tuning outer-loop sebelum sensor dan FOC inner-loop PASS.']},
+'4.1':{v:'Tidak ada variasi aktuator; verifikasi urutan dan safety gate.',c:'Semua tahap 4.2→4.9 harus PASS berurutan sebelum handoff.',s:['Pastikan E-stop, roda aman, direct USB↔F103 online dan VESC Tool TCP tidak sedang mengambil authority.','Gunakan 4.1 sebagai checklist urutan; jangan mengubah tuning outer-loop sebelum sensor dan FOC inner-loop PASS.']},
 '4.2.1':{v:'3 kali snapshot FW + GET_VALUES, jarak antar snapshot ≥2 s.',c:'LEFT dan RIGHT reply fresh, fault=0, FW/config identity konsisten.',s:['Kendaraan diam dan output current/RPM = 0.','Ambil tiga snapshot LEFT/RIGHT; bandingkan Vbus, fault, firmware dan persistence.']},
 '4.2.2':{v:'3 run stationary × 10–20 s.',c:'Current zero stabil di sekitar nol, Vbus kedua motor konsisten, fault=0.',s:['Motor tidak diberi command dan steering tidak ditekan mekanik.','Rekam current motor/input dan Vbus; outlier besar harus diselesaikan sebelum FOC tuning.']},
 '4.2.3':{v:'Home + LEFT/CENTER/RIGHT, ulang center ≥5 kali.',c:'Encoder synced, span valid, center repeatable, tidak ada fault/current trip.',s:['Gunakan routine HOME bounded; jangan menahan hard-stop lebih lama dari kebutuhan deteksi.','Catat raw TIM4 di kiri, center, kanan dan setelah kembali center.']},

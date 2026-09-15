@@ -36,6 +36,7 @@
 #include <QJsonParseError>
 #include <QJsonValue>
 #include <QList>
+#include <QLockFile>
 #include <QMap>
 #include <QPointer>
 #include <QProcess>
@@ -1675,7 +1676,9 @@ class WebRosBridge {
       update("system.estop", msg->data);
     });
 
-    subscribe<std_msgs::msg::Bool>("/stmf4/vesc/connected", latchedQos, [this](std_msgs::msg::Bool::ConstSharedPtr msg) {
+    subscribe<std_msgs::msg::Bool>("/esc/feedback_valid", latchedQos, [this](std_msgs::msg::Bool::ConstSharedPtr msg) {
+      // Canonical production transport is the dedicated USB-UART owned by package esc.
+      // A fresh F103 ACK proves the direct native-VESC transport; F411 is not in this path.
       update("connected.vesc_transport", msg->data);
     });
     subscribe<std_msgs::msg::Bool>("/esc/vesc/maintenance_active", latchedQos, [this](std_msgs::msg::Bool::ConstSharedPtr msg) {
@@ -1712,7 +1715,7 @@ class WebRosBridge {
         {"/teleop/joystick_status", "joystick_status"},
         {"/navigation/cmd_mux/source", "nav_cmd_mux"},
         {"/esc/foc/telemetry", "foc_telemetry"}, {"/esc/mux/active_source", "esc_mux"},
-        {"/stmf4/vesc/status", "vesc_transport_status"}, {"/stmf4/vesc/error", "vesc_transport_error"}, {"/esc/vesc/tool_status", "vesc_tool_status"},
+        {"/esc/status", "vesc_transport_status"}, {"/esc/vesc/tool_status", "vesc_tool_status"},
         {"/esc/vesc/tool_telemetry", "vesc_tool_telemetry"}, {"/esc/vesc/left_values", "vesc_left_values"}, {"/esc/vesc/right_values", "vesc_right_values"}, {"/esc/vesc/config_state", "vesc_config_state"},
         {"/esc/vesc/tuning_state", "vesc_tuning_state"}, {"/esc/vesc/position_state", "vesc_position_state"},
         {"/esc/vesc/steering_state", "vesc_steering_state"}, {"/esc/vesc/rotor_state", "vesc_rotor_state"},
@@ -4020,6 +4023,22 @@ int main(int argc, char **argv) {
   QCoreApplication app(argc, argv);
   QCoreApplication::setApplicationName("AGV Web GUI");
   QCoreApplication::setApplicationVersion("1.0");
+
+  QLockFile instanceLock(QDir::temp().filePath(QStringLiteral("agv_web_gui.lock")));
+  instanceLock.setStaleLockTime(5000);
+  if (!instanceLock.tryLock(0)) {
+    qint64 ownerPid = 0;
+    QString ownerHost;
+    QString ownerApp;
+    instanceLock.getLockInfo(&ownerPid, &ownerHost, &ownerApp);
+    RCLCPP_FATAL(
+      rclcpp::get_logger("agv_web_gui"),
+      "Web GUI instance kedua ditolak; lock aktif pid=%lld host=%s app=%s",
+      static_cast<long long>(ownerPid), ownerHost.toUtf8().constData(), ownerApp.toUtf8().constData());
+    if (rclcpp::ok()) rclcpp::shutdown();
+    return 3;
+  }
+
   int result = 1;
   try {
     WebRosBridge bridge;

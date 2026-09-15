@@ -11,8 +11,9 @@
 #page-navigation.active{display:flex;flex-direction:column}
 #page-navigation .nav-status-strip{order:0;margin-top:0!important}
 #page-navigation .mp-navigation-workspace{order:1}
-#page-navigation .mission-draft-dock{order:2}
-#page-navigation .nav-inspector{order:3}
+#page-navigation #navEstimatorLiveSection{order:2}
+#page-navigation .mission-draft-dock{order:3}
+#page-navigation .nav-inspector{order:4}
 #page-navigation .rviz-panel{box-shadow:0 0 0 1px rgba(49,168,255,.08),var(--shadow)}
 #page-navigation .nav-mission-rail{align-self:start}
 #perceptionCalibrationSection:not([hidden]){border-color:rgba(255,189,89,.55)!important;box-shadow:inset 3px 0 rgba(255,189,89,.75),var(--shadow)}
