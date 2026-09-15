@@ -2,11 +2,10 @@
 """Read-only serial preflight for the production F411 ROS architecture.
 
 Production routing:
-  * STM32F411 USB CDC (0483:5740) is the shared hardware gateway for
-    CUAV NEO-3 GNSS + IST8310 and the STM32F103 VESC UART transport.
+  * STM32F411 USB CDC (0483:5740) owns HMI + NEO-3/NEO3PRO GNSS/MAG.
+  * STM32F103/VESC is direct on the dedicated CH340 USB-UART (1a86:7523).
   * Yahboom IMU remains a direct CP2102 serial device.
-  * Legacy direct CH340 GNSS / PL2303 ESC selectors are recovery-only and
-    intentionally have no physical by-path fallback, preventing topology swaps.
+  * Direct GNSS USB recovery requires an explicit non-ESC port.
 
 No serial device is opened and no command is transmitted.
 """
@@ -21,6 +20,7 @@ import yaml
 
 EXPECTED = {
     "F411": ("0483", "5740"),
+    "ESC": ("1a86", "7523"),
     "IMU": ("10c4", "ea60"),
 }
 
@@ -89,38 +89,44 @@ def main() -> int:
 
     failures: list[str] = []
     if str(hmi.get("serial_device", "")).lower() != "auto":
-        failures.append("F411 HMI/GNSS/VESC gateway selector must default to auto")
+        failures.append("F411 HMI/GNSS selector must default to auto")
     if "DeclareLaunchArgument('gnss_source', default_value='stm32'" not in launch:
         failures.append("production GNSS launch source is not stm32")
-    if "DeclareLaunchArgument('esc_transport_mode', default_value='stm32'" not in launch:
-        failures.append("production ESC transport is not stm32")
+    if "DeclareLaunchArgument('esc_transport_mode', default_value='direct_vesc'" not in launch:
+        failures.append("production ESC transport is not direct_vesc")
     if str(gnss_legacy.get("auto_port_path_contains", "")).strip():
-        failures.append("legacy GNSS direct serial must not use physical by-path fallback")
+        failures.append("GNSS explicit USB recovery must not use physical by-path fallback")
     if str(esc_legacy.get("serial_auto_path_contains", "")).strip():
-        failures.append("legacy ESC direct serial must not use physical by-path fallback")
+        failures.append("ESC direct serial must not use physical by-path fallback")
     if str(imu.get("auto_port_path_contains", "")).strip():
         failures.append("IMU must not use topology-dependent physical by-path fallback")
 
-    print("SERIAL PREFLIGHT — PRODUCTION F411 ARCHITECTURE — READ ONLY")
-    print("route: NEO-3 GNSS + IST8310 -> F411 CDC -> ROS; ROS VESC -> F411 -> F103; IMU -> CP2102")
+    print("SERIAL PREFLIGHT — DIRECT ESC + F411 GNSS/HMI — READ ONLY")
+    print("route: GNSS/HMI -> F411 CDC | ESC/F103 -> CH340 direct | IMU -> CP2102")
     f411 = by_id_matches(lambda n: "STMICROELECTRONICS" in n and "F411" in n and "CDC" in n)
+    esc_sel = str(esc_legacy.get("serial_auto_id_contains", "")).upper()
     imu_sel = str(imu.get("auto_port_id_contains", "")).upper()
+    esc_matches = by_id_matches(lambda n: bool(esc_sel) and esc_sel in n)
     imu_matches = by_id_matches(lambda n: bool(imu_sel) and imu_sel in n)
     f411_dev = resolve_one("F411", f411, EXPECTED["F411"], failures)
+    esc_dev = resolve_one("ESC", esc_matches, EXPECTED["ESC"], failures)
     imu_dev = resolve_one("IMU", imu_matches, EXPECTED["IMU"], failures)
-    if f411_dev is not None and imu_dev is not None and f411_dev == imu_dev:
-        failures.append("F411 gateway and IMU resolve to the same tty")
+    resolved = [d for d in (f411_dev, esc_dev, imu_dev) if d is not None]
+    if len(set(resolved)) != len(resolved):
+        failures.append("F411, ESC, and IMU must resolve to distinct tty devices")
 
-    print("RECOVERY-ONLY selectors:")
-    print(f"  GNSS direct by-id={gnss_legacy.get('auto_port_id_contains','')!r} by-path=DISABLED")
+    if str(gnss_legacy.get('auto_port_id_contains','')) != 'EXPLICIT_GNSS_USB_PORT_REQUIRED':
+        failures.append("GNSS USB auto-selector must be disabled because CH340 belongs to ESC")
+    print("ROUTING selectors:")
     print(f"  ESC  direct by-id={esc_legacy.get('serial_auto_id_contains','')!r} by-path=DISABLED")
+    print("  GNSS direct USB: explicit port required; auto discovery disabled")
 
     if failures:
         print("RESULT: FAIL")
         for item in failures:
             print(f"  - {item}")
         return 2
-    print("RESULT: PASS — production F411/IMU identities are unambiguous and topology-safe")
+    print("RESULT: PASS — F411, direct ESC, and IMU identities are distinct and topology-safe")
     return 0
 
 

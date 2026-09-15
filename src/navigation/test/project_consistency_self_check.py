@@ -37,15 +37,15 @@ if str(hmi.get('serial_device','')).lower() != 'auto': fail('F411 gateway must d
 if "DeclareLaunchArgument('gnss_source', default_value='stm32'" not in launch: fail('GNSS production source must be F411/stm32')
 if "DeclareLaunchArgument('esc_transport_mode', default_value='direct_vesc'" not in launch: fail('ESC production transport must be dedicated direct_vesc')
 expected_ids = {
-    'ESC_RECOVERY': (esc['serial_auto_id_contains'], 'Prolific_Technology_Inc._USB-Serial_Controller'),
-    'GNSS_RECOVERY': (gnss['auto_port_id_contains'], '1a86_USB_Serial'),
+    'ESC': (esc['serial_auto_id_contains'], '1a86_USB_Serial'),
+    'GNSS_USB': (gnss['auto_port_id_contains'], 'EXPLICIT_GNSS_USB_PORT_REQUIRED'),
     'IMU': (imu['auto_port_id_contains'], 'Silicon_Labs_CP2102'),
 }
 for name, (actual, wanted) in expected_ids.items():
     if wanted not in str(actual): fail(f'{name} serial id selector {actual!r} does not contain {wanted!r}')
 expected_paths = {
-    'ESC_RECOVERY': str(esc['serial_auto_path_contains']),
-    'GNSS_RECOVERY': str(gnss['auto_port_path_contains']),
+    'ESC': str(esc['serial_auto_path_contains']),
+    'GNSS_USB': str(gnss['auto_port_path_contains']),
     'IMU': str(imu['auto_port_path_contains']),
 }
 if any(value.strip() for value in expected_paths.values()):
@@ -66,9 +66,9 @@ gnss_cpp = (ROOT/'src/gnss_node.cpp').read_text()
 imu_cpp = (ROOT/'src/imu_node.cpp').read_text()
 esc_cpp = (WS/'esc/src/ackermann_controller_server.cpp').read_text()
 for text, token, name in [
-    (gnss_cpp, '"auto_port_id_contains", "1a86_USB_Serial"', 'GNSS recovery'),
+    (gnss_cpp, '"auto_port_id_contains", "EXPLICIT_GNSS_USB_PORT_REQUIRED"', 'GNSS explicit USB recovery'),
     (imu_cpp, '"auto_port_id_contains", "Silicon_Labs_CP2102"', 'IMU'),
-    (esc_cpp, '"serial_auto_id_contains", "Prolific_Technology_Inc._USB-Serial_Controller"', 'ESC recovery'),
+    (esc_cpp, '"serial_auto_id_contains", "1a86_USB_Serial"', 'ESC direct'),
     (gnss_cpp, '"auto_port_path_contains", ""', 'GNSS no by-path'),
     (imu_cpp, '"auto_port_path_contains", ""', 'IMU no by-path'),
     (esc_cpp, '"serial_auto_path_contains", ""', 'ESC no by-path'),
@@ -138,5 +138,5 @@ for token in [
     if token not in gui: fail(f'GUI steering authority propagation missing {token}')
 
 print('PASS project_consistency_self_check')
-print('serial route: F411 CDC=GNSS/HMI | VESC=dedicated PL2303 direct_vesc | IMU=CP2102 | physical by-path DISABLED')
+print('serial route: F411 CDC=GNSS/HMI | VESC=CH340 direct_vesc | IMU=CP2102 | GNSS USB recovery requires explicit port')
 print(f'uncalibrated geometry: Rmin={rmin:.6f} m | vehicle yaw cap={vehicle["max_yaw_rate_rps"]:.6f} rad/s | autonomous yaw cap={nav_yaw_cap:.6f} rad/s')

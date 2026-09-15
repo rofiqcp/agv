@@ -26,7 +26,7 @@ order = [launch.find(token, return_idx) for token in
           "precision_localization_monitor", "mag_heading_fusion", "imu_speed_diagnostic")]
 req(all(i >= 0 for i in order) and order == sorted(order),
     "localization/safety/magnetic actions are not ordered deterministically in LaunchDescription")
-req("'gnss_source'" in launch and "stm32=NEO3 via HMI USB CDC" in launch, "STM32 NEO3 launch contract missing")
+req("'gnss_source'" in launch and "stm32=NEO3/NEO3PRO via F411 USB CDC" in launch, "STM32 NEO3 launch contract missing")
 mp = mag['mag_heading_fusion']['ros__parameters']
 req(mp['neo3_mag_topic'] == '/neo3/mag', 'NEO3 magnetometer topic mismatch')
 req(mp['imu_mag_topic'] == '/imu/mag', 'IMU magnetometer topic mismatch')

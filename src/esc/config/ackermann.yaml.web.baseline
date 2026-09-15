@@ -106,7 +106,7 @@ esc_ackermann:
     steering_calibration_apply_token: V8.2:1787392646867559142
     # Production transport: F103 USART3 -> dedicated USB-UART -> package esc.
     # F411/stmf4 is sensor/HMI-only and never carries actuator bytes.
-    serial_auto_id_contains: Prolific_Technology_Inc._USB-Serial_Controller
+    serial_auto_id_contains: 1a86_USB_Serial
     serial_auto_path_contains: ""
     serial_baud: 115200
     serial_tx_rate_hz: 50.0

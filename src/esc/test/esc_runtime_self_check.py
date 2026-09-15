@@ -50,7 +50,7 @@ if float(ack.get("command_watchdog_sec", 99.0)) >= float(ack.get("nav2_timeout_s
 if float(ack.get("serial_tx_rate_hz", 0.0)) != float(ack.get("command_rate_hz", 0.0)):
     fail("ROS command and STM transmit rates must match")
 if int(ack.get("serial_baud", 0)) != 115200:
-    fail("F411<->F103 VESC UART must remain 115200 baud")
+    fail("direct ESC USB-UART must remain 115200 baud")
 if abs(float(ack.get("drive_wheel_radius_m", 0.0)) - 0.145) > 1e-9:
     fail("native VESC drive wheel radius must match vehicle radius 0.145 m")
 if int(ack.get("drive_motor_pole_pairs", 0)) != 15:
@@ -77,7 +77,7 @@ for token in ("nativeDriveErpmPerMps", "rightCommandUnitsPerMps", "rightCommandL
               "(physical_deg + 30.0) * 6.0"):
     if token not in source:
         fail(f"native VESC eRPM conversion contract missing: {token}")
-if "Prolific_Technology_Inc._USB-Serial_Controller" not in str(ack.get("serial_auto_id_contains", "")):
+if "1a86_USB_Serial" not in str(ack.get("serial_auto_id_contains", "")):
     fail("direct VESC serial selector missing")
 if str(ack.get("serial_auto_path_contains", "")).strip():
     fail("direct-serial recovery must not use topology-dependent physical by-path fallback")

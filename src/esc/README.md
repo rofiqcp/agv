@@ -72,8 +72,8 @@ source install/setup.bash
 Standalone ESC runtime:
 
 ```bash
-# Default runtime: Mini-PC -> STM32F411 native USB CDC -> USART1 PB6/PB7 ->
-# STM32F103 USART3 PB11/PB10. Direct USB-UART/PL2303 remains recovery-only.
+# Default runtime: Mini-PC -> dedicated CH340 USB-UART -> STM32F103/VESC directly.
+# F411 remains HMI/GNSS only and never transports actuator bytes.
 # VESC Tool desktop connects to localhost TCP 127.0.0.1:65102 through
 # vesc_tool_bridge; Web and desktop tooling share the same maintenance authority.
 # Nomor /dev/ttyUSBx tidak pernah menjadi authority otomatis.

@@ -113,7 +113,7 @@ GnssNode::GnssNode(const rclcpp::NodeOptions & options)
 {
   port_ = this->declare_parameter<std::string>("port", "auto");
   auto_port_id_contains_ = this->declare_parameter<std::string>(
-    "auto_port_id_contains", "1a86_USB_Serial");
+    "auto_port_id_contains", "EXPLICIT_GNSS_USB_PORT_REQUIRED");
   // CUAV NEO-3 pada deployment ini memakai CH340 1a86:7523. USB by-id adalah
   // selector utama karena stabil terhadap renumber ttyUSB dan perpindahan slot.
   // by-path dipertahankan hanya sebagai fallback fail-closed bila by-id hilang

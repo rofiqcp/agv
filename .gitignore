@@ -29,6 +29,7 @@ compile_commands.json
 *.swp
 
 data/
+referensi/
 referensi/esc/
 referensi/UI/
 referensi/navigasi/

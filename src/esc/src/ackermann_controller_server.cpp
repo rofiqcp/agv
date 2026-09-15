@@ -293,7 +293,7 @@ private:
     declare_parameter<bool>("raw_commissioning_enabled", false);
     declare_parameter<std::string>("raw_commissioning_topic", "/esc/commissioning/raw_actuator");
     declare_parameter<double>("raw_commissioning_timeout_sec", 0.25);
-    declare_parameter<double>("raw_commissioning_max_erpm", 10000.0);
+    declare_parameter<double>("raw_commissioning_max_erpm", 8000.0);
     declare_parameter<double>("raw_commissioning_max_steering_deg", 30.0);
 
     // Injected by esc.launch.py from the single esc/config/teleop.yaml source of truth.
@@ -416,8 +416,8 @@ private:
     declare_parameter<bool>("integration_bypass", false);
     declare_parameter<std::string>("serial_device", "auto");
     declare_parameter<std::string>(
-      "serial_auto_id_contains", "Prolific_Technology_Inc._USB-Serial_Controller");
-    // Current ESC UART is a Prolific PL2303 (067b:2303). Unique by-id is the
+      "serial_auto_id_contains", "1a86_USB_Serial");
+    // Current ESC UART is the verified QinHeng CH340 (1a86:7523). Unique by-id is the
     // primary selector; physical topology is only a deterministic fallback.
     declare_parameter<std::string>("serial_auto_path_contains", "");
     declare_parameter<int>("serial_baud", 115200);
@@ -1934,7 +1934,7 @@ private:
     std::error_code ec;
 
     // 1) Stable USB identity is authoritative when unique. The deployed ESC
-    // adapter is Prolific PL2303 (067b:2303), distinct from GNSS CH340 and IMU
+    // adapter is QinHeng CH340 (1a86:7523); GNSS production is F411 and IMU
     // CP2102, so this remains correct across ttyUSB renumbering and port moves.
     if (!serial_auto_id_contains_.empty() && fs::exists("/dev/serial/by-id", ec)) {
       std::vector<std::string> matches;
@@ -1999,7 +1999,7 @@ private:
 
       // Prevent a stale/second autonomous launch from becoming another owner
       // of the same USB-UART. TIOCEXCL is released automatically on last close.
-      // This is especially important for PL2303 adapters after interrupted runs.
+      // This is especially important for USB-UART adapters after interrupted runs.
       if (::ioctl(fd, TIOCEXCL) != 0) {
         last_error = errno;
         ::close(fd);
@@ -3105,7 +3105,7 @@ private:
   bool serial_enabled_{true};
   bool integration_bypass_{false};
   std::string serial_device_{"auto"};
-  std::string serial_auto_id_contains_{"Prolific_Technology_Inc._USB-Serial_Controller"};
+  std::string serial_auto_id_contains_{"1a86_USB_Serial"};
   std::string serial_auto_path_contains_{};
   int serial_baud_{115200};
   double serial_tx_rate_hz_{50.0};
@@ -3137,7 +3137,7 @@ private:
   bool raw_commissioning_enabled_{false};
   std::string raw_commissioning_topic_{"/esc/commissioning/raw_actuator"};
   double raw_commissioning_timeout_sec_{0.25};
-  double raw_commissioning_max_erpm_{10000.0};
+  double raw_commissioning_max_erpm_{8000.0};
   double raw_commissioning_max_steering_deg_{30.0};
   std::mutex raw_commissioning_mutex_;
   double raw_commissioning_erpm_{0.0};

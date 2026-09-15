@@ -81,7 +81,7 @@ def main() -> int:
     parser.add_argument("--require-hardware", action="store_true",
                         help="require production F411 gateway + IMU identities")
     parser.add_argument("--require-esc", action="store_true",
-                        help="require the F411 gateway used by the VESC transport")
+                        help="require the F411 HMI/GNSS gateway (ESC remains direct USB)")
     parser.add_argument("--expect-esc-node", action="store_true",
                         help="when --runtime, require /esc_ackermann node")
     args = parser.parse_args()

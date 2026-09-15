@@ -273,7 +273,7 @@ class VescToolBridge final : public rclcpp::Node {
     tcp_service_hz_ = std::clamp(declare_parameter<double>("tcp_service_hz", 1000.0), 100.0, 2000.0);
     max_abs_duty_ = std::clamp(declare_parameter<double>("max_abs_duty", 0.95), 0.01, 0.99);
     max_abs_current_a_ = std::clamp(declare_parameter<double>("max_abs_current_a", 20.0), 0.1, 100.0);
-    max_abs_rpm_ = std::clamp(declare_parameter<double>("max_abs_rpm", 10000.0), 10.0, 200000.0);
+    max_abs_rpm_ = std::clamp(declare_parameter<double>("max_abs_rpm", 8000.0), 10.0, 200000.0);
     web_lease_timeout_ms_ = static_cast<int>(std::clamp<std::int64_t>(
       declare_parameter<int>("web_lease_timeout_ms", 1200), 500, 5000));
     tcp_enabled_ = declare_parameter<bool>("tcp_enabled", true);
@@ -1299,7 +1299,7 @@ class VescToolBridge final : public rclcpp::Node {
   }
 
   double poll_hz_{50.0}, tcp_service_hz_{1000.0};
-  double max_abs_duty_{0.95}, max_abs_current_a_{20.0}, max_abs_rpm_{10000.0};
+  double max_abs_duty_{0.95}, max_abs_current_a_{20.0}, max_abs_rpm_{8000.0};
   int web_lease_timeout_ms_{1200};
   bool maintenance_active_{false}, gateway_connected_{false}, transport_connected_{false}, tcp_enabled_{true}, python_tcp_enabled_{true};
   bool web_lease_active_{false}, web_detection_active_{false};

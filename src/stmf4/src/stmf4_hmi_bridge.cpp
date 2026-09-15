@@ -1283,10 +1283,8 @@ private:
         // Ignore every pre-session byte, including stale CDC backlog.
         continue;
       }
-      // P1/P0 lines bypass the best-effort queue. In particular every VESC:RX
-      // packet is published before any queued GNSS/MAG/HMI text processing.
-      const bool urgent = line.rfind("VESC:", 0) == 0 ||
-                          line.rfind("SENS:SW:", 0) == 0 ||
+      // Safety and direct operator commands bypass best-effort telemetry queues.
+      const bool urgent = line.rfind("SENS:SW:", 0) == 0 ||
                           line.rfind("CMD:DRIVE:", 0) == 0 ||
                           line.rfind("CMD:STEER:", 0) == 0 ||
                           line == "CMD:NAV:STOP";
@@ -2146,154 +2144,6 @@ private:
     publishNeo3SafetyState(v[2] > 0.5);
   }
 
-  static int vescHexNibble(char c) {
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return -1;
-  }
-
-  static std::string bytesToHex(const std::uint8_t *data, size_t size) {
-    static constexpr char kHex[] = "0123456789ABCDEF";
-    std::string out;
-    out.resize(size * 2U);
-    for (size_t i = 0; i < size; ++i) {
-      out[i * 2U] = kHex[data[i] >> 4U];
-      out[i * 2U + 1U] = kHex[data[i] & 0x0FU];
-    }
-    return out;
-  }
-
-  static bool hexToBytes(const std::string &hex, std::vector<std::uint8_t> *out) {
-    if (out == nullptr || hex.empty() || (hex.size() & 1U) != 0U || hex.size() > 8192U) return false;
-    out->clear();
-    out->reserve(hex.size() / 2U);
-    for (size_t i = 0; i < hex.size(); i += 2U) {
-      const int hi = vescHexNibble(hex[i]);
-      const int lo = vescHexNibble(hex[i + 1U]);
-      if (hi < 0 || lo < 0) { out->clear(); return false; }
-      out->push_back(static_cast<std::uint8_t>((hi << 4) | lo));
-    }
-    return true;
-  }
-
-  bool sendVescBytes(const std::vector<std::uint8_t> &bytes, char source) {
-    if (bytes.empty() || bytes.size() > 4096U || (source != 'R' && source != 'M')) return false;
-    // Startup/hot-plug gap is expected and fail-closed. Drop stale refreshes.
-    if (fd_ < 0) {
-      if (source == 'R') ++vesc_runtime_tx_rejected_;
-      else ++vesc_maintenance_tx_rejected_;
-      return false;
-    }
-
-    std::lock_guard<std::mutex> wire_lock(vesc_wire_tx_mutex_);
-    /* /stmf4/vesc/mode is the ONLY ownership authority. Runtime batches are
-     * latest-value traffic and are dropped on route mismatch; maintenance is
-     * never interleaved with runtime bytes. */
-    const bool maintenance = source == 'M';
-    if (maintenance != vesc_maintenance_mode_) {
-      if (maintenance) ++vesc_maintenance_tx_rejected_;
-      else ++vesc_runtime_tx_rejected_;
-      return false;
-    }
-
-    // USB CDC is much faster than USART1 and the F411 now owns a non-blocking
-    // interrupt-driven UART TX ring. Do NOT sleep here to emulate USART timing:
-    // blocking this ROS callback also delays serialTick(), which is the receive
-    // path for F103 replies, GNSS and HMI. Backpressure belongs at the F411 ring.
-    constexpr size_t kChunk = 240U;  // fits the F411 640-byte line parser as hex
-    for (size_t offset = 0; offset < bytes.size(); offset += kChunk) {
-      const size_t count = std::min(kChunk, bytes.size() - offset);
-      const std::string line = std::string("VESC:TX:") + source + ":" +
-        bytesToHex(bytes.data() + offset, count);
-      const int max_attempts = source == 'R' ? 1 : 8;
-      bool sent = false;
-      for (int attempt = 0; attempt < max_attempts && fd_ >= 0; ++attempt) {
-        if (sendLine(line, source == 'R' ? 0 : 1)) { sent = true; break; }
-        if (attempt + 1 < max_attempts) std::this_thread::yield();
-      }
-      if (!sent) {
-        if (source == 'R') ++vesc_runtime_tx_rejected_;
-        else ++vesc_maintenance_tx_rejected_;
-        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
-          "VESC USB batch dropped while F411 CDC is unavailable/backpressured");
-        return false;
-      }
-    }
-    return true;
-  }
-
-  void publishVescConnected(bool connected) {
-    if (vesc_connected_initialized_ && connected == vesc_connected_state_) return;
-    vesc_connected_initialized_ = true;
-    vesc_connected_state_ = connected;
-    std_msgs::msg::Bool msg;
-    msg.data = connected;
-    vesc_connected_pub_->publish(msg);
-  }
-
-  void handleVescLine(const std::string &line) {
-    last_vesc_line_time_ = std::chrono::steady_clock::now();
-    if (line.rfind("VESC:RX:", 0) == 0) {
-      std::vector<std::uint8_t> bytes;
-      if (!hexToBytes(line.substr(8), &bytes)) {
-        ++vesc_parse_errors_;
-        return;
-      }
-      std_msgs::msg::UInt8MultiArray msg;
-      msg.data = std::move(bytes);
-      vesc_rx_pub_->publish(msg);
-      last_vesc_rx_time_ = last_vesc_line_time_;
-      publishVescConnected(true);
-      return;
-    }
-    if (line.rfind("VESC:STAT:", 0) == 0) {
-      std_msgs::msg::String msg;
-      msg.data = line.substr(10);
-      vesc_status_pub_->publish(msg);
-      std_msgs::msg::String clear_error; clear_error.data.clear(); vesc_error_pub_->publish(clear_error);
-      const std::string payload = line.substr(10);
-      const auto baud_pos = payload.find("baud=");
-      if (baud_pos != std::string::npos) {
-        char *baud_end = nullptr;
-        const unsigned long reported = std::strtoul(payload.c_str() + baud_pos + 5, &baud_end, 10);
-        if (baud_end != payload.c_str() + baud_pos + 5 && reported >= 9600UL && reported <= 2000000UL) {
-          const auto previous = vesc_uart_baud_active_.exchange(static_cast<std::uint32_t>(reported));
-          if (previous != reported) {
-            RCLCPP_INFO(get_logger(), "F411<->F103 VESC UART baud synchronized from gateway: %lu", reported);
-          }
-          if (reported != vesc_uart_baud_expected_) {
-            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000,
-              "F411<->F103 baud=%lu differs from expected=%u; adaptive pacing active; Mini-PC<->F411 remains 1000000",
-              reported, vesc_uart_baud_expected_);
-          }
-        }
-      }
-      const auto age_pos = payload.find("age_ms=");
-      const auto rx_pos = payload.find("rx=");
-      if (age_pos != std::string::npos && rx_pos != std::string::npos) {
-        char *age_end = nullptr;
-        char *rx_end = nullptr;
-        const unsigned long age_ms = std::strtoul(payload.c_str() + age_pos + 7, &age_end, 10);
-        const unsigned long rx_count = std::strtoul(payload.c_str() + rx_pos + 3, &rx_end, 10);
-        if (age_end != payload.c_str() + age_pos + 7 && rx_end != payload.c_str() + rx_pos + 3 &&
-            rx_count > 0UL && age_ms <= static_cast<unsigned long>(vesc_transport_timeout_sec_ * 1000.0)) {
-          publishVescConnected(true);
-        }
-      }
-      return;
-    }
-    if (line.rfind("VESC:LINE:", 0) == 0 || line.rfind("VESC:BAUD:", 0) == 0) {
-      std_msgs::msg::String msg; msg.data = line.substr(5); vesc_status_pub_->publish(msg); return;
-    }
-    if (line.rfind("VESC:MODE:", 0) == 0) {
-      std_msgs::msg::String msg; msg.data = line.substr(5); vesc_status_pub_->publish(msg); return;
-    }
-    if (line.rfind("VESC:ERR:", 0) == 0) {
-      std_msgs::msg::String msg; msg.data = line.substr(9); vesc_error_pub_->publish(msg); return;
-    }
-  }
-
   void sensorWatchdogTick() {
     const auto t = std::chrono::steady_clock::now();
     if (publish_stm32_gnss_ && last_neo3_gnss_time_.time_since_epoch().count() != 0 &&
@@ -2672,11 +2522,6 @@ private:
       std_msgs::msg::String msg; msg.data = line; usb_status_pub_->publish(msg);
       return;
     }
-    if (line.rfind("VESC:", 0) == 0) {
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000,
-        "Ignoring obsolete VESC frame from F411; ESC is owned directly by package esc");
-      return;
-    }
     if (line.rfind("SENS:GNSSPRO:", 0) == 0) { handleNeo3ProGnssMeta(line.substr(sizeof("SENS:GNSSPRO:") - 1U)); return; }
     if (line.rfind("SENS:GNSSCOV:", 0) == 0) { handleNeo3ProGnssCov(line.substr(sizeof("SENS:GNSSCOV:") - 1U)); return; }
     if (line.rfind("SENS:ECEF:", 0) == 0) { handleNeo3ProEcef(line.substr(sizeof("SENS:ECEF:") - 1U)); return; }
@@ -2947,8 +2792,8 @@ private:
     };
 
     const uint32_t foc_age = steadyAgeMs(last_foc_telemetry_time_);
-    const uint32_t esc_fresh_limit_ms = static_cast<uint32_t>(
-      std::max(1.0, vesc_transport_timeout_sec_ * 1000.0));
+    static constexpr uint32_t kEscTelemetryFreshLimitMs = 2000U;
+    const uint32_t esc_fresh_limit_ms = kEscTelemetryFreshLimitMs;
     // Transient-local FOC telemetry may retain the last physical sample after a
     // USB-UART hot-unplug. Never present that latched sample as valid once its
     // age exceeds the same transport freshness contract used by the ESC link.
@@ -3197,9 +3042,6 @@ private:
   double waypoint_pose_timeout_sec_{2.5};
   double neo3_sensor_timeout_sec_{2.0}, neo3_mag_sigma_ut_{3.0};
   std::uint16_t neo3pro_navsat_service_mask_{sensor_msgs::msg::NavSatStatus::SERVICE_GPS};
-  double vesc_transport_timeout_sec_{2.0};
-  std::uint32_t vesc_uart_baud_expected_{115200U};
-  std::atomic<std::uint32_t> vesc_uart_baud_active_{115200U};
   bool publish_stm32_gnss_{true};
   bool neo3_require_protocol_crc_{true};
   bool neo3_sequence_initialized_{false};
@@ -3221,7 +3063,6 @@ private:
   std::string rx_, page_{"SPLASH"}, mode_{"AUTO"}, drive_{"STOP"}, steer_{"NONE"}, control_origin_{"NONE"}, last_rejection_;
   std::deque<std::string> best_effort_lines_;
   std::uint64_t serial_rx_backlog_drops_{0}, serial_best_effort_drops_{0};
-  std::string vesc_desired_mode_{"RUNTIME"};
   std::string navigation_state_{"IDLE"}, active_target_{"NONE"};
   std::string navigation_origin_{"NONE"}, last_goal_state_{"IDLE"};
   double steering_hmi_target_deg_{0.0};
@@ -3270,8 +3111,6 @@ private:
   bool neo3pro_baro_connected_state_{false}, neo3pro_baro_connected_initialized_{false};
   bool neo3pro_node_connected_state_{false}, neo3pro_gnss_status_connected_state_{false};
   int neo3pro_timestamp_source_code_{3};
-  uint64_t vesc_parse_errors_{0};
-  bool vesc_connected_state_{false}, vesc_connected_initialized_{false};
   std::chrono::steady_clock::time_point last_neo3_gnss_time_{}, last_neo3_mag_time_{};
   // Konversi epoch millis F411 ke ROS time memakai offset minimum yang diamati;
   // ini mempertahankan waktu pengukuran alih-alih waktu paket selesai diparse.
@@ -3280,7 +3119,6 @@ private:
   std::uint64_t mcu_unwrapped_ms_{0};
   std::int64_t mcu_clock_offset_ns_{0};
   std::int64_t last_mcu_stamp_ns_{0};
-  std::chrono::steady_clock::time_point last_vesc_line_time_{}, last_vesc_rx_time_{};
   std::string nearest_object_{"NONE"};
   double nearest_distance_m_{0.0}, nearest_conf_pct_{0.0}, camera_fps_{0.0};
   // Extended HMI telemetry mirrors authoritative ROS sources; no duplicate control ownership.
@@ -3327,9 +3165,7 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::TwistWithCovarianceStamped>::SharedPtr neo3_vel_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr neo3_quality_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr neo3_gnss_state_pub_, neo3_status_pub_;
-  rclcpp::Publisher<std_msgs::msg::UInt8MultiArray>::SharedPtr vesc_rx_pub_;
-  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr vesc_status_pub_, vesc_error_pub_, usb_status_pub_;
-  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr vesc_connected_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr usb_status_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr neo3_gnss_connected_pub_, neo3_ist_connected_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr neo3_mag_connected_pub_, neo3pro_rm3100_connected_pub_, neo3pro_baro_connected_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr neo3pro_node_connected_pub_, neo3pro_gnss_status_connected_pub_;
@@ -3346,11 +3182,6 @@ private:
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr request_sub_, neo3_command_sub_, esc_status_sub_, obstacle_sub_, drivable_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr foc_telemetry_sub_, lane_metrics_sub_, mppi_status_sub_, trajectory_state_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr camera_connected_sub_, camera_healthy_sub_;
-  rclcpp::Subscription<std_msgs::msg::UInt8MultiArray>::SharedPtr vesc_runtime_tx_sub_, vesc_maintenance_tx_sub_;
-  bool vesc_maintenance_mode_{false};
-  std::uint64_t vesc_runtime_tx_rejected_{0}, vesc_maintenance_tx_rejected_{0};
-  std::mutex vesc_wire_tx_mutex_;
-  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr vesc_mode_sub_, vesc_diagnostic_command_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr performance_sub_, nav_goal_state_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr map_pose_sub_, local_odom_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr costmap_sub_;

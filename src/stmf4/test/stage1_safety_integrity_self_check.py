@@ -3,7 +3,7 @@ from pathlib import Path
 WS=Path(__file__).resolve().parents[3]
 bridge=(WS/'src/stmf4/src/stmf4_hmi_bridge.cpp').read_text()
 f4=(WS/'F4gateway/src/main.cpp').read_text()
-web=(WS/'src/navigation/web/static/app.js').read_text()
+web='\n'.join((WS/'src/navigation/web/static'/name).read_text() for name in ('esc.js','boot.js'))
 def need(token, corpus, message=None):
     if token not in corpus:
         raise AssertionError(message or token)

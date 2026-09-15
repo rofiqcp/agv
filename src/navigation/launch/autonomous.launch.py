@@ -443,7 +443,8 @@ def _materialize_nav2_vehicle_ssot(base_path: str, vehicle_path: str, precision:
         # Keep a ~3 s horizon while increasing update rate; avoids a 60-step CPU spike.
         follow['time_steps'] = max(30, int(round(3.0 / model_dt)))
         goal['xy_goal_tolerance'] = float(vehicle.get('precision_xy_goal_tolerance_m', 0.08))
-        smoother['smoothing_frequency'] = max(30.0, 2.0 * controller_hz)
+        smoother['smoothing_frequency'] = max(
+            float(smoother.get('smoothing_frequency', 30.0)), 2.0 * controller_hz)
         resolution = float(vehicle.get('precision_costmap_resolution_m', 0.05))
         for key in ('local_costmap', 'global_costmap'):
             params = _nav2_costmap_params(data, key)
@@ -621,6 +622,10 @@ def _validate_gnss_source(context):
     source = LaunchConfiguration('gnss_source').perform(context).strip().lower()
     if source not in {'stm32', 'usb'}:
         raise RuntimeError("gnss_source wajib tepat salah satu: stm32 atau usb")
+    if source == 'usb':
+        port = LaunchConfiguration('gnss_port').perform(context).strip()
+        if not port or port.lower() == 'auto':
+            raise RuntimeError("GNSS USB requires an explicit port; CH340 auto identity is reserved for direct ESC")
     return []
 
 
@@ -860,16 +865,11 @@ def generate_launch_description() -> LaunchDescription:
                 "'", LaunchConfiguration('enable_keyboard'), "' == 'true' or '",
                 LaunchConfiguration('enable_joystick'), "' == 'true'"]),
             'start_ackermann': LaunchConfiguration('start_esc_ackermann'),
-            'start_vesc_tool_bridge': PythonExpression([
-                "'", LaunchConfiguration('start_vesc_tool_bridge'), "' == 'true' and '",
-                LaunchConfiguration('esc_integration_bypass'), "' != 'true'"
-            ]),
+            # esc.launch.py is the single authority that applies integration_bypass.
+            'start_vesc_tool_bridge': LaunchConfiguration('start_vesc_tool_bridge'),
             'transport_mode': LaunchConfiguration('esc_transport_mode'),
             'serial_device': LaunchConfiguration('esc_port'),
-            'serial_enabled': PythonExpression([
-                "'", LaunchConfiguration('esc_serial_enabled'), "' == 'true' and '",
-                LaunchConfiguration('esc_integration_bypass'), "' != 'true'"
-            ]),
+            'serial_enabled': LaunchConfiguration('esc_serial_enabled'),
             'integration_bypass': LaunchConfiguration('esc_integration_bypass'),
             # Main runtime has ONE command chain for both joystick and autonomy:
             # motor_teleop -> cmd_vel_router -> velocity_smoother -> /cmd_vel -> Ackermann.
@@ -1303,7 +1303,7 @@ def generate_launch_description() -> LaunchDescription:
                   perception_cpu_executable_available, perception_gpu_executable_available]),
         LogInfo(msg=['[AGV] autonomous stack | mode=', LaunchConfiguration('mode'),
                      ' | velocity smoother + measured steering calibration + safety gates enabled']),
-        LogInfo(msg=['[AGV] GNSS source=', LaunchConfiguration('gnss_source'), ' | precision_mode=', LaunchConfiguration('precision_mode'), ' | stm32=NEO3/NEO3PRO via F411 USB CDC; usb=legacy direct receiver']),
+        LogInfo(msg=['[AGV] GNSS source=', LaunchConfiguration('gnss_source'), ' | precision_mode=', LaunchConfiguration('precision_mode'), ' | stm32=NEO3/NEO3PRO via F411 USB CDC; usb=explicit-port recovery only']),
         LogInfo(
             condition=IfCondition(LaunchConfiguration('esc_integration_bypass')),
             msg='[AGV] ESC INTEGRATION BYPASS ACTIVE: UART/physical actuation hard-disabled; stationary synthetic odom is for bench Nav2 qualification only.'),

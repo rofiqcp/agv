@@ -20,7 +20,7 @@ need(app,'screenToImage(e.clientX,e.clientY)'); assert 'naturalWidth-displayX' n
 need(app,'function drawObstacleCalibrationOverlay()'); need(app,'normalizedToScreen')
 need(css,'#obcalOverlay{transform:none}'); assert '#obcalImage,#obcalOverlay{transform:scaleX(-1)' not in css
 # Direct perception calibration panel must be real, not dead markup.
-for cid in ['perceptionCalLaneMode','perceptionCalObjectMode','perceptionCalSave','perceptionCalReload','perceptionCalReset','perceptionCalOverlay']:
+for cid in ['perceptionCalLaneMode','perceptionCalSave','perceptionCalReload','perceptionCalReset','perceptionCalOverlay','perceptionObstacleCalTab','perceptionLaneCalTab','perceptionObstacleCalHost','laneSafetyCalibrationCard']:
     need(html,f'id="{cid}"'); need(app,cid)
 for fn in ['bindPerceptionDirectCalibration','directCalPointerDown','directCalPointerMove','stagePerceptionDirectCalibration','captureHomographyPoint']:
     need(app,f'function {fn}')
@@ -34,7 +34,7 @@ for ident in ['perception:perception.ros__parameters.nav2_obstacle_roi_points','
 # N2.1 and Yahboom are proposal-only at Web boundary.
 need(app,"writeRequest('/api/experiment/trial/optimal-scale',{apply:false})"); assert "writeRequest('/api/experiment/trial/optimal-scale',{apply:true})" not in app
 need(cpp,'USE_CONFIG_TRANSACTION'); need(cpp,'/api/imu/calibration/proposal'); need(cpp,'navigation:N2.1'); need(cpp,'imu:yahboom')
-need(imu,"add_argument('--propose'"); need(imu,"if args.propose")
+need(imu,"add_argument('--propose'"); need(imu,"if a.propose:")
 for legacy in ['/api/config/set','/api/config/reset','/api/config/reset-batch']:
     assert legacy not in app and legacy not in (STATIC/'vesc_workbench.js').read_text(), legacy
 # Evidence existence must not unlock phase; only effective qualification can.

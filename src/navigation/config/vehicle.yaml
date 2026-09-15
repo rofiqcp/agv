@@ -50,9 +50,9 @@ vehicle:
     control_field_calibration_valid: false
     control_field_calibration_saved_at: ''
     control_field_evidence_sha256: ''
-    max_accel_mps2: 0.75
-    max_decel_mps2: -1.0
-    max_yaw_accel_rps2: 2.5
+    max_accel_mps2: 1.50
+    max_decel_mps2: -2.50
+    max_yaw_accel_rps2: 4.0
     standard_xy_goal_tolerance_m: 0.35
     precision_xy_goal_tolerance_m: 0.08
     precision_controller_frequency_hz: 15.0

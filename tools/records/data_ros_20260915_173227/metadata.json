@@ -1,5 +1,5 @@
 {
-  "f4gateway_git_head": "470d24111da82122d9ecd0b519248fce5868e344",
+  "f4gateway_git_head": "604008729eb28d9d634a546003a40c8d828d553e",
   "hostname": "sirobo",
   "raw_contract": "raw.jsonl stores every dynamically discovered ROS message below configured prefixes",
   "raw_prefixes": [
@@ -14,16 +14,16 @@
   "ros_domain_id": "42",
   "schema": "agv-data-unified-v2",
   "snapshot_sha256": {
-    "firmware.identity.json": "87b72ff02f70512d0462abb3fd06ef2c8b9513e929d649a4cfa99966d0609390",
+    "firmware.identity.json": "3358db04850b5255becb40a70ef587f2bf701c5899e5a262d536a5cf9039ccc0",
     "imu.yaml": "c28401732463d075ef764203b6680ffc49841b0c84415cf9b1a325b86c36ae37",
-    "mag_heading.yaml": "8b569d827fbf828cd8f167380504c833fc91d2b6b878f10a70d2e29f607273ee",
+    "mag_heading.yaml": "b1dfc94b754c463d8091a218ef03efa1c24f331a111b04d7a6a55d588a3d580f",
     "yahboom_mag_calibration.yaml": "e130823a35c98a34bbb2fc66db8390583a4d365deebc0d24f3c6f33acdf5a65b"
   },
   "source_mode": "ROS_TOPICS",
-  "start_utc_iso8601": "2026-09-13T15:45:40.327110+00:00",
-  "start_wall_utc_ns": 1789314340327110422,
+  "start_utc_iso8601": "2026-09-15T10:32:27.802734+00:00",
+  "start_wall_utc_ns": 1789468347802733648,
   "started": false,
-  "stop_wall_utc_ns": 1789314348227198617,
+  "stop_wall_utc_ns": 1789468352836081615,
   "summary_fields": [
     "source_mode",
     "sample_seq",
@@ -126,6 +126,6 @@
     "raw_reference"
   ],
   "timestamp_contract": "exact ROS header stamp retained; /neo3pro/gnss/meta retains F411 mcu_ms + DroneCAN network_us/gnss_us/time_standard",
-  "workspace_git_head": "7b4fc3cb59efb86d5fffc2a7bdc481acda8a048c",
+  "workspace_git_head": "1a9c1e8d74f8bde8cb90d14314a7babd9e0af37f",
   "xy_contract": "prefer /odometry/filtered_map, then /odometry/gnss_map, else WGS84 local ENU from first valid fix"
 }

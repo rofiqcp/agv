@@ -12,9 +12,9 @@ data_cuav_node:
     port: auto
     baudrate: 38400
     # Primary selector: stable USB identity (CH340 1a86:7523).
-    auto_port_id_contains: 1a86_USB_Serial
+    auto_port_id_contains: EXPLICIT_GNSS_USB_PORT_REQUIRED
     auto_port_path_contains: ""
-    auto_baud: false
+    auto_baud: true
     frame_id: gnss_link
     velocity_frame_id: enu
     publish_raw: false

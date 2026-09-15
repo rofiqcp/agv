@@ -19,7 +19,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPo
 from rosidl_runtime_py.convert import message_to_ordereddict
 from rosidl_runtime_py.utilities import get_message
 
-AGV_ROOT = Path(os.environ.get("AGV_ROOT", "/home/sirobo/agv")).expanduser().resolve()
+AGV_ROOT = Path(os.environ.get("AGV_ROOT", str(Path(__file__).resolve().parents[1]))).expanduser().resolve()
 sys.path.insert(0, str(AGV_ROOT / "tools"))
 from data_common import (  # noqa: E402
     UNIFIED_FIELDS, NAN, apply_lut, deg, enu_from_origin, finite,
@@ -250,9 +250,40 @@ class RosRecorder(Node):
         try:self.raw_f.close();self.sum_f.close()
         except Exception:pass
 
+def _sensor_serial_owned()->bool:
+    devices=(
+        "/dev/serial/by-id/usb-STMicroelectronics_BLACKPILL_F411CE_CDC_in_FS_Mode_338133833134-if00",
+        "/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0",
+    )
+    for dev in devices:
+        if not Path(dev).exists():continue
+        try:
+            cp=subprocess.run(["fuser",dev],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,timeout=.5)
+            if cp.returncode==0 and cp.stdout.strip():return True
+        except Exception:pass
+    return False
+
+def _exec_direct(a:argparse.Namespace)->int:
+    direct=AGV_ROOT/"F4gateway/tools/data.py"
+    if not direct.exists():raise SystemExit(f"Direct logger not found: {direct}")
+    argv=[sys.executable,str(direct),"--rate",str(a.rate)]
+    if a.duration>0:argv += ["--duration",str(a.duration)]
+    if a.output_dir:argv += ["--output-dir",a.output_dir]
+    print(f"[AGV DATA] source=DIRECT_SERIAL ({direct})",flush=True)
+    os.execv(sys.executable,argv)
+    return 0
+
 def main()->int:
-    ap=argparse.ArgumentParser(description="ROS unified AGV NEO3PRO/Yahboom/Nav2 data logger");ap.add_argument("--output-dir",default="");ap.add_argument("--rate",type=float,default=10.0);ap.add_argument("--duration",type=float,default=0.0);a=ap.parse_args()
-    rclpy.init();node=RosRecorder(a);deadline=time.monotonic()+a.duration if a.duration>0 else None
+    ap=argparse.ArgumentParser(description="AGV 3-yaw realtime logger (auto ROS/direct serial)")
+    ap.add_argument("--output-dir",default="");ap.add_argument("--rate",type=float,default=10.0);ap.add_argument("--duration",type=float,default=0.0)
+    ap.add_argument("--source",choices=("direct","ros","auto"),default="direct",help="direct (default): read F411+Yahboom hardware; ros: subscribe ROS topics; auto: direct when ports are free, otherwise ROS")
+    a=ap.parse_args()
+    if a.source=="direct":return _exec_direct(a)
+    if a.source=="auto" and not _sensor_serial_owned():
+        print("[AGV DATA] sensor serial ports are free -> direct realtime 3-yaw mode",flush=True)
+        return _exec_direct(a)
+    rclpy.init()
+    node=RosRecorder(a);deadline=time.monotonic()+a.duration if a.duration>0 else None
     try:
         while rclpy.ok() and (deadline is None or time.monotonic()<deadline):rclpy.spin_once(node,timeout_sec=.05)
     except KeyboardInterrupt:pass

@@ -32,14 +32,14 @@ hmi = load_params(ROOT / "stmf4/config/hmi.yaml", "stmf4_hmi_bridge")
 launch_text = (NAV / "launch/autonomous.launch.py").read_text(encoding="utf-8")
 
 # 1) Production routing: F411 CDC owns NEO-3/NEO3PRO + HMI; F103 VESC uses
-# its dedicated PL2303 USB-UART; IMU remains direct CP2102. All are by-id only.
+# its dedicated CH340 USB-UART; IMU remains direct CP2102. GNSS USB recovery is explicit-port only.
 identities = {
     "ESC": esc["serial_auto_id_contains"],
     "GNSS": gnss["auto_port_id_contains"],
     "IMU": imu["auto_port_id_contains"],
 }
-require(identities["ESC"] == "Prolific_Technology_Inc._USB-Serial_Controller", "ESC PL2303 identity changed")
-require(identities["GNSS"] == "1a86_USB_Serial", "GNSS CH340 identity changed")
+require(identities["ESC"] == "1a86_USB_Serial", "ESC CH340 identity changed")
+require(identities["GNSS"] == "EXPLICIT_GNSS_USB_PORT_REQUIRED", "GNSS USB must not auto-claim the ESC CH340")
 require(identities["IMU"] == "Silicon_Labs_CP2102", "IMU CP2102 identity changed")
 require(len(set(identities.values())) == len(identities), "serial by-id selectors overlap")
 selectors = {
@@ -148,6 +148,6 @@ for bad in (
 require("bool reload(){" in gui, "YamlStore::reload must report parse success/failure")
 
 print("STAGE1 FOUNDATION SELF-CHECK: PASS")
-print("serial route: F411 CDC GNSS/HMI | VESC dedicated PL2303 direct_vesc | IMU CP2102 | physical by-path disabled")
+print("serial route: F411 CDC GNSS/HMI | VESC CH340 direct_vesc | IMU CP2102 | GNSS USB explicit-port only")
 print(f"safe fallback steering: +/-{op:.3f} deg")
 print(f"safe fallback turning radius: {actual_r:.6f} m")

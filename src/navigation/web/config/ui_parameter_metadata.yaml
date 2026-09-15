@@ -3730,6 +3730,25 @@ parameters:
     related: []
     source_of_constraint: source YAML type + reviewed ROS Web authority mapping
     step: 1
+  nav2:planner_server.ros__parameters.GridBased.tolerance:
+    identity: nav2:planner_server.ros__parameters.GridBased.tolerance
+    file_key: nav2
+    yaml_path: planner_server.ros__parameters.GridBased.tolerance
+    label: Planner tolerance
+    group: NAV2
+    level: advanced
+    type: number
+    risk: caution
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Tolerance endpoint Smac Hybrid-A*; uji OFAT dan validasi endpoint error sebelum memilih nilai final.
+    effect_up: Mengizinkan solusi endpoint lebih longgar; validasi endpoint error dan success rate wajib dilakukan.
+    effect_down: Memperketat endpoint planner dan dapat menurunkan success rate bila goal tepat tidak tersedia.
+    related: []
+    source_of_constraint: nav2_ackermann.yaml + BAB IV planner tolerance validation
+    step: 0.001
   nav2:planner_server.ros__parameters.GridBased.cost_penalty:
     identity: nav2:planner_server.ros__parameters.GridBased.cost_penalty
     file_key: nav2

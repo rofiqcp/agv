@@ -1,6 +1,16 @@
-# Stable AGV serial aliases and USB policy
-SUBSYSTEM=="tty", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5740", ATTRS{serial}=="338133833134", SYMLINK+="agv_f411", ENV{ID_MM_DEVICE_IGNORE}="1"
-SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", ATTRS{serial}=="0001", SYMLINK+="agv_imu", ENV{ID_MM_DEVICE_IGNORE}="1"
+# Stable AGV serial aliases and USB policy. Never depend on ttyUSB numbering.
+# F411 USB CDC gateway
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5740", ATTRS{serial}=="338133833134", GROUP:="dialout", MODE:="0660", SYMLINK+="agv_f411", ENV{ID_MM_DEVICE_IGNORE}="1"
+# Yahboom IMU: Silicon Labs CP2102, unique serial 0001
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", ATTRS{serial}=="0001", GROUP:="dialout", MODE:="0660", SYMLINK+="agv_imu", ENV{ID_MM_DEVICE_IGNORE}="1"
+# CUAV/serial GNSS: QinHeng CH340
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", GROUP:="dialout", MODE:="0660", SYMLINK+="agv_gnss", SYMLINK+="agv_ch340", ENV{ID_MM_DEVICE_IGNORE}="1"
+# Ignore modem probing at the USB parent as well.
+ACTION=="add|change", SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="5740", ENV{ID_MM_DEVICE_IGNORE}="1"
+ACTION=="add|change", SUBSYSTEM=="usb", ATTR{idVendor}=="10c4", ATTR{idProduct}=="ea60", ENV{ID_MM_DEVICE_IGNORE}="1"
+ACTION=="add|change", SUBSYSTEM=="usb", ATTR{idVendor}=="1a86", ATTR{idProduct}=="7523", ENV{ID_MM_DEVICE_IGNORE}="1"
+# Keep AGV USB serial links and their hub awake.
 ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="5740", TEST=="power/control", ATTR{power/control}="on"
 ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="10c4", ATTR{idProduct}=="ea60", TEST=="power/control", ATTR{power/control}="on"
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="1a86", ATTR{idProduct}=="7523", TEST=="power/control", ATTR{power/control}="on"
 ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="05e3", ATTR{idProduct}=="0608", TEST=="power/control", ATTR{power/control}="on"

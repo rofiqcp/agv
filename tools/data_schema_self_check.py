@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import ast
-root=Path('/home/sirobo/agv')
+root=Path(__file__).resolve().parents[1]
 for p in (root/'tools/data.py', root/'F4gateway/tools/data.py', root/'tools/data_common.py'):
     ast.parse(p.read_text(), filename=str(p))
 common=(root/'tools/data_common.py').read_text()
@@ -15,5 +15,6 @@ assert 'DIRECT_SERIAL' in direct and '/dev/ttyACM0' in direct and '/dev/ttyUSB0'
 assert 'ROS_TOPICS' in ros and 'get_topic_names_and_types' in ros
 cm=(root/'src/navigation/CMakeLists.txt').read_text()
 assert '../../tools/data.py' in cm and 'RENAME data' in cm
-assert not (root/'tools/imu_mag_yaw_logger.py').exists()
+cal_logger=(root/'tools/imu_mag_yaw_logger.py').read_text()
+assert 'IMU_MAG_CAL' in cal_logger and '/dev/serial/by-id/' in cal_logger and 'exclusive=True' in cal_logger
 print('AGV_UNIFIED_DATA_SCHEMA_SELF_CHECK_PASS')

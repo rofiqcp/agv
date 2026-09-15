@@ -90,8 +90,8 @@ def generate_launch_description():
                 # integration_bypass always hard-disables the physical UART even if
                 # serial_enabled=true was supplied accidentally on the CLI.
                 "serial_enabled": ParameterValue(PythonExpression([
-                    "'", LaunchConfiguration("serial_enabled"), "' == 'true' and '",
-                    LaunchConfiguration("integration_bypass"), "' != 'true'"
+                    "'", LaunchConfiguration("serial_enabled"), "'.lower() == 'true' and '",
+                    LaunchConfiguration("integration_bypass"), "'.lower() != 'true'"
                 ]), value_type=bool),
                 "integration_bypass": ParameterValue(
                     LaunchConfiguration("integration_bypass"), value_type=bool),
@@ -122,7 +122,10 @@ def generate_launch_description():
         name="vesc_tool_bridge",
         output="screen",
         respawn=True, respawn_delay=2.0,
-        condition=IfCondition(LaunchConfiguration("start_vesc_tool_bridge")),
+        condition=IfCondition(PythonExpression([
+            "'", LaunchConfiguration("start_vesc_tool_bridge"), "'.lower() == 'true' and '",
+            LaunchConfiguration("integration_bypass"), "'.lower() != 'true'"
+        ])),
         parameters=[vesc_tool_params, {"use_sim_time": ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)}],
     )
 

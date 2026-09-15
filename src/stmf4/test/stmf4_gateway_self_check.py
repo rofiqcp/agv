@@ -13,7 +13,10 @@ board=(F4/'src/BoardSupport.cpp').read_text()
 hmi=(yaml.safe_load((ROOT/'config/hmi.yaml').read_text()) or {})['stmf4_hmi_bridge']['ros__parameters']
 def req(v,m):
     if not v: raise AssertionError(m)
-req('F4_ESC_GATEWAY=0' in pio or '-DF4_ESC_GATEWAY=0' in pio,'production F4 must not own ESC')
+req('F4_ESC_GATEWAY' not in pio+main+board,'legacy F4 ESC feature switch removed')
+req(not (F4/'src/VescGateway.cpp').exists() and not (F4/'src/VescGateway.h').exists(),'legacy F4 VESC gateway sources removed')
+for t in ('/esc/vesc/runtime_tx','/esc/vesc/maintenance_tx','sendVescBytes','handleVescLine'):
+    req(t not in bridge,t+' must not exist in stmf4 bridge')
 req(int(hmi['serial_baud'])==1000000,'NUC<->F411 CDC must remain 1 Mbaud')
 req(str(hmi.get('serial_device','')).lower()=='auto','serial selector must use identity discovery')
 for t in ('HOST:HELLO:', 'ACK:HOST:SESSION:', 'NEO:STATUS', 'USB:STATUS'):

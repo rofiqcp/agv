@@ -4,7 +4,7 @@ import re, yaml
 ROOT=Path(__file__).resolve().parents[3]
 urdf=(ROOT/'src/navigation/urdf/dimensions.xacro').read_text()
 src=(ROOT/'src/perception/src/astra_yolop_cpu_pt_node.cpp').read_text()
-app=(ROOT/'src/navigation/web/static/app.js').read_text()
+app='\n'.join((ROOT/'src/navigation/web/static'/name).read_text() for name in ('app.js','tuning_catalog.js'))
 with open(ROOT/'src/perception/config/astra_yolop_gpu.yaml') as f:
     cfg=yaml.safe_load(f)['perception']['ros__parameters']
 def val(name):
