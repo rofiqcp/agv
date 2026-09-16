@@ -49,11 +49,7 @@ def generate_launch_description():
         DeclareLaunchArgument("vehicle_speed_max_mps", default_value="1.0"),
         DeclareLaunchArgument("vehicle_wheelbase_m", default_value="0.70"),
         DeclareLaunchArgument("vehicle_track_width_m", default_value="0.48"),
-        DeclareLaunchArgument("vehicle_wheel_radius_m", default_value="0.145"),
         DeclareLaunchArgument("vehicle_drive_erpm_per_mps", default_value="8000.0"),
-        DeclareLaunchArgument("vehicle_drive_odometry_scale", default_value="1.0"),
-        DeclareLaunchArgument("vehicle_drive_motor_pole_pairs", default_value="15"),
-        DeclareLaunchArgument("vehicle_drive_gear_ratio", default_value="1.0"),
     ]
 
 
@@ -104,13 +100,7 @@ def generate_launch_description():
                 "speed_max": ParameterValue(LaunchConfiguration("vehicle_speed_max_mps"), value_type=float),
                 "wheelbase_m": ParameterValue(LaunchConfiguration("vehicle_wheelbase_m"), value_type=float),
                 "track_width_m": ParameterValue(LaunchConfiguration("vehicle_track_width_m"), value_type=float),
-                "drive_wheel_radius_m": ParameterValue(LaunchConfiguration("vehicle_wheel_radius_m"), value_type=float),
                 "drive_erpm_per_mps": ParameterValue(LaunchConfiguration("vehicle_drive_erpm_per_mps"), value_type=float),
-                "drive_odometry_calibration_scale": ParameterValue(
-                    LaunchConfiguration("vehicle_drive_odometry_scale"), value_type=float),
-                "drive_motor_pole_pairs": ParameterValue(
-                    LaunchConfiguration("vehicle_drive_motor_pole_pairs"), value_type=int),
-                "drive_gear_ratio": ParameterValue(LaunchConfiguration("vehicle_drive_gear_ratio"), value_type=float),
                 "use_sim_time": ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool),
             },
         ],

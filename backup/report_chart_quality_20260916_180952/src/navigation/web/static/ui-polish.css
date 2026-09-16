@@ -1,0 +1,92 @@
+/* Final UI layout authority: shell, navigation and dense workbench containment. */
+@media(min-width:821px){
+  body.sidebar-collapsed{--sidebar:72px}
+  body.sidebar-collapsed .app-shell{display:grid;grid-template-columns:var(--sidebar) minmax(0,1fr)}
+  body.sidebar-collapsed .main-shell{grid-column:2;min-width:0}
+  body.sidebar-collapsed .sidebar{inset:0 auto 0 0;width:var(--sidebar);height:auto;padding:0 6px 8px;overflow:hidden;border-right:1px solid var(--border);border-bottom:0;background:var(--bg);z-index:40}
+  body.sidebar-collapsed .brand{width:100%;height:54px;min-height:54px;margin:0 0 5px;padding:0;display:grid;place-items:center;border-bottom:1px solid var(--border)}
+  body.sidebar-collapsed .brand-mark{width:36px;height:36px;border-radius:6px}
+  body.sidebar-collapsed .brand-copy,body.sidebar-collapsed .sidebar-collapse,body.sidebar-collapsed .sidebar-context-head,body.sidebar-collapsed .sidebar-bottom{display:none!important}
+  body.sidebar-collapsed .sidebar-domain-switch{display:grid!important;grid-template-columns:1fr;gap:3px;padding:5px 3px 7px}
+  body.sidebar-collapsed .sidebar-domain-switch .top-domain{display:grid;grid-template-columns:1fr;width:100%;min-height:42px;padding:4px;text-align:center;border-radius:4px}
+  body.sidebar-collapsed .sidebar-domain-switch .top-domain span{width:auto;font-size:10px}
+  body.sidebar-collapsed .sidebar-domain-switch .top-domain b{display:none}
+  body.sidebar-collapsed #contextNav{display:flex!important;min-height:0;overflow-y:auto;overflow-x:hidden;padding:4px 2px;gap:2px}
+  body.sidebar-collapsed #contextNav .nav-item:not(.tuning-nav):not(.report-nav){display:grid;place-items:center;width:100%;min-height:40px;padding:4px;border-radius:4px}
+  body.sidebar-collapsed #contextNav .nav-item:not(.tuning-nav):not(.report-nav)>span{width:auto;margin:0;font-size:12px;text-align:center}
+  body.sidebar-collapsed #contextNav .nav-item:not(.tuning-nav):not(.report-nav)>b{display:none!important}
+  body.sidebar-collapsed #contextNav .tuning-nav,body.sidebar-collapsed #contextNav .report-nav,body.sidebar-collapsed .sidebar-tuning-head,body.sidebar-collapsed .sidebar-tuning-group,body.sidebar-collapsed .sidebar-report-head,body.sidebar-collapsed .sidebar-report-group{display:none!important}
+  body.sidebar-collapsed .topbar{padding-left:12px}
+}
+.page-heading{flex:1 1 auto;max-width:none;min-width:0}
+.page-heading h1{max-width:100%;white-space:nowrap;overflow:visible;text-overflow:clip}
+.top-status{flex:0 0 auto;margin-left:auto}
+/* VESC realtime scope: every preset/trace stays visible; no clipped nested scroller. */
+.vesc-chart-head{display:grid;grid-template-columns:minmax(112px,.32fr) minmax(0,1fr);grid-template-areas:"title presets" "traces traces";gap:6px 10px;align-items:start}
+.vesc-chart-head>div:first-child{grid-area:title;min-width:0}
+.vesc-chart-presets{grid-area:presets;display:flex;justify-content:flex-end;align-items:center;gap:4px;flex-wrap:wrap;min-width:0;margin:0}
+.vesc-preset-btn{min-height:28px;height:auto;padding:4px 8px;white-space:nowrap}
+.vesc-trace-checks{grid-area:traces;display:grid;grid-template-columns:repeat(auto-fit,minmax(82px,1fr));gap:4px;width:100%;max-width:none;max-height:none;overflow:visible}
+.vesc-trace-checks label{display:flex;justify-content:flex-start;min-width:0;min-height:28px;padding:4px 6px;border-radius:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.vesc-chart-card,.vesc-chart-grid,#vescGraphSection{min-width:0;max-width:100%}
+.vesc-scope-section-head{align-items:center;flex-wrap:wrap}
+.vesc-scope-tools{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:4px}
+/* Navigation controls should wrap within the panel instead of hiding off-screen. */
+@media(max-width:1100px){
+  .map-toolbar{display:flex!important;width:100%!important;max-width:100%!important;overflow:visible!important;flex-wrap:wrap!important;justify-content:flex-start!important;gap:4px!important}
+  .map-toolbar>*{flex:0 0 auto!important}
+  .nav-inspector-tabs{display:grid;grid-template-columns:repeat(auto-fit,minmax(92px,1fr));gap:2px;overflow:visible;white-space:normal}
+  .nav-inspector-tabs button{min-width:0;white-space:normal;text-align:center}
+}
+.data-health-table-wrap,.table-scroll,.obcal-progress{max-width:100%;overscroll-behavior-inline:contain}
+.obcal-progress{overflow-x:auto;overflow-y:hidden}
+@media(max-width:700px){
+  .vesc-chart-head{grid-template-columns:1fr;grid-template-areas:"title" "presets" "traces"}
+  .vesc-chart-presets{justify-content:flex-start}
+  .vesc-trace-checks{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .vesc-scope-tools{width:100%;justify-content:flex-start}
+}
+/* Health-card metadata may use the full remaining card width; legacy 130px cap clipped valid transport text. */
+.health-card>div:nth-child(2){min-width:0;flex:1}
+.health-card small{max-width:100%!important}
+
+/* Full visual QA pass: keep long page titles inside the shell instead of under status pills. */
+@media(min-width:1101px){
+  :root{--topbar-h:68px}
+  .topbar{height:var(--topbar-h)!important;min-height:var(--topbar-h)!important;align-items:center!important;padding-block:5px!important}
+  .page-heading{flex:1 1 0!important;min-width:0!important;padding-right:12px}
+  .page-heading h1{white-space:normal!important;overflow:hidden!important;text-overflow:clip!important;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-height:1.08!important;font-size:clamp(17px,1.45vw,22px)!important}
+  .top-status{align-self:center}
+}
+@media(min-width:821px) and (max-width:1100px){
+  .page-heading h1{white-space:normal!important;overflow:hidden!important;text-overflow:clip!important;overflow-wrap:anywhere;line-height:1.1!important}
+}
+/* Expanded sidebar: two readable lines are preferable to single-line ellipsis. */
+@media(min-width:821px){
+  body:not(.sidebar-collapsed) .nav-item.tuning-nav,body:not(.sidebar-collapsed) .nav-item.report-nav{min-height:40px!important;align-items:center!important}
+  body:not(.sidebar-collapsed) .nav-item.tuning-nav b,body:not(.sidebar-collapsed) .nav-item.report-nav b{white-space:normal!important;text-overflow:clip!important;display:-webkit-box!important;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-height:1.18!important;max-height:2.36em}
+}
+/* Dense status cards: preserve the complete short diagnostic sentence. */
+.operator-priority-item small{white-space:normal!important;overflow:visible!important;text-overflow:clip!important;line-height:1.2!important;min-height:2.4em}
+.health-card small{white-space:normal!important;overflow:hidden!important;text-overflow:clip!important;display:-webkit-box!important;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-height:1.2!important}
+/* ESC scope selectors: no scroll and no clipped trace names. */
+.vesc-trace-checks{grid-template-columns:repeat(auto-fit,minmax(128px,1fr))!important}
+.vesc-trace-checks label{white-space:nowrap!important;overflow:visible!important;text-overflow:clip!important;min-height:30px!important}
+/* Navigation toolbar buttons should vertically center their icon + label. */
+.map-toolbar .soft-btn{display:inline-flex!important;align-items:center!important;justify-content:center!important;white-space:nowrap!important;line-height:1.1!important}
+@media(min-width:1101px){.map-toolbar .soft-btn{min-height:30px!important;height:30px!important}.map-head h2{font-size:17px!important;white-space:nowrap}}
+/* Obstacle progress matrix: all four orientations visible at once. */
+.obcal-progress{overflow:visible!important}
+.obcal-matrix-head,.obcal-matrix-row{grid-template-columns:58px repeat(4,minmax(46px,1fr))!important;min-width:0!important;gap:4px!important}
+.obcal-matrix-head span{white-space:normal!important;line-height:1.1!important;padding:3px 1px!important}
+.obcal-matrix-cell{min-width:0;flex-direction:column;justify-content:center!important;gap:1px!important;padding:5px 2px!important;text-align:center}
+.obcal-matrix-cell span{white-space:normal!important;line-height:1.05!important}.obcal-matrix-cell b{font-size:7px!important}
+@media(max-width:700px){
+  .vesc-trace-checks{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+  .vesc-trace-checks label{white-space:normal!important;overflow:hidden!important;line-height:1.15!important}
+  .nav-inspector>summary{height:auto!important;min-height:44px!important;grid-template-columns:minmax(0,1fr) auto!important;gap:2px 8px!important;padding-block:7px!important}
+  .nav-inspector>summary span{min-width:0}
+  .nav-inspector>summary b{grid-column:1/-1;white-space:normal!important;overflow:visible!important;text-overflow:clip!important;line-height:1.2!important}
+  .operator-priority-item{min-height:74px}
+  .health-card{align-items:flex-start}
+}

@@ -52,3 +52,46 @@ navigation_core:
     stage3_production_certified: false
     stage3_commissioning_mode: false
     stage3_commissioning_speed_cap_mps: 1.0
+
+    keyboard_available: false
+
+# Command routing settings are YAML-owned so ROS Web can inspect/change them.
+cmd_vel_router:
+  ros__parameters:
+    teleop_topic: /cmd_vel/teleop
+    teleop_source_topic: /teleop/active_source
+    teleop_estop_topic: /teleop/emergency_stop_latched
+    autonomy_topic: /cmd_vel/autonomy_pre_smoother
+    autonomy_gate_topic: /system/autonomy_motion_allowed
+    global_estop_topic: /safety/estop
+    output_topic: /cmd_vel/pre_smoother
+    source_topic: /navigation/cmd_mux/source
+    rate_hz: 50.0
+    teleop_timeout_sec: 0.30
+    autonomy_timeout_sec: 0.60
+    manual_release_hold_sec: 0.50
+
+sensor_contract_monitor:
+  ros__parameters:
+    required_single_publisher_topics: [/imu/data, /gnss/fix_raw, /gnss/vel, /esc/odom]
+    check_rate_hz: 5.0
+    imu_timeout_sec: 0.75
+    gnss_fix_timeout_sec: 2.5
+    gnss_velocity_timeout_sec: 0.8
+    gnss_quality_timeout_sec: 0.8
+    esc_odom_timeout_sec: 0.75
+    max_future_stamp_sec: 0.20
+    max_message_stamp_age_sec: 3.0
+
+joint_state_visualizer:
+  ros__parameters:
+    publish_rate_hz: 20.0
+    feedback_timeout_sec: 0.75
+    max_visual_steering_rad: 0.523598775598
+
+agv_web_gui:
+  ros__parameters:
+    bind_address: 127.0.0.1
+    port: 5000
+    read_only: false
+    camera_jpeg_fps: 5.0

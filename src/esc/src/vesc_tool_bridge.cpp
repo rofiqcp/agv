@@ -32,7 +32,7 @@ constexpr std::uint8_t COMM_GET_VALUES_SELECTIVE = 50;
 constexpr std::uint8_t COMM_SET_DUTY = 5;
 constexpr std::uint8_t COMM_SET_CURRENT = 6;
 constexpr std::uint8_t COMM_SET_CURRENT_BRAKE = 7;
-constexpr std::uint8_t COMM_SET_RPM = 8;
+constexpr std::uint8_t COMM_SET_ERPM = 8;
 constexpr std::uint8_t COMM_SET_POS = 9;
 constexpr std::uint8_t COMM_SET_HANDBRAKE = 10;
 constexpr std::uint8_t COMM_SET_MCCONF = 13;
@@ -273,7 +273,7 @@ class VescToolBridge final : public rclcpp::Node {
     tcp_service_hz_ = std::clamp(declare_parameter<double>("tcp_service_hz", 1000.0), 100.0, 2000.0);
     max_abs_duty_ = std::clamp(declare_parameter<double>("max_abs_duty", 0.95), 0.01, 0.99);
     max_abs_current_a_ = std::clamp(declare_parameter<double>("max_abs_current_a", 20.0), 0.1, 100.0);
-    max_abs_rpm_ = std::clamp(declare_parameter<double>("max_abs_rpm", 8000.0), 10.0, 200000.0);
+    max_abs_erpm_ = std::clamp(declare_parameter<double>("max_abs_erpm", 8000.0), 10.0, 200000.0);
     web_lease_timeout_ms_ = static_cast<int>(std::clamp<std::int64_t>(
       declare_parameter<int>("web_lease_timeout_ms", 1200), 500, 5000));
     tcp_enabled_ = declare_parameter<bool>("tcp_enabled", true);
@@ -693,6 +693,7 @@ class VescToolBridge final : public rclcpp::Node {
           // lower-priority bytes and put a zero-current barrier in front of it.
           tcp_pending_rx_.clear(); tcp_pending_tx_.clear();
           web_lease_active_ = false;
+          clearWebMotorHeartbeat();
           sendMaintenanceSafeStop();
           publishOwner();
           publishStatus("python_valid_frame_preempted_lower_maintenance");
@@ -751,7 +752,7 @@ class VescToolBridge final : public rclcpp::Node {
       << ",\"web_lease_active\":" << (web_lease_active_ ? "true" : "false")
       << ",\"web_lease_remaining_ms\":" << lease_ms
       << ",\"max_abs_duty\":" << max_abs_duty_ << ",\"max_abs_current_a\":" << max_abs_current_a_
-      << ",\"max_abs_rpm\":" << max_abs_rpm_
+      << ",\"max_abs_erpm\":" << max_abs_erpm_
       << ",\"rx_crc_errors\":" << crc_errors_ << ",\"rx_format_errors\":" << format_errors_
       << ",\"last_request_motor\":" << last_request_motor_;
     if (!event.empty()) o << ",\"event\":\"" << event << "\"";
@@ -768,9 +769,30 @@ class VescToolBridge final : public rclcpp::Node {
     publishJson(detect_pub_, "{\"kind\":\"web_detect\",\"state\":\"CANCELLED\",\"motor\":0,\"applied\":false,\"eeprom_verified\":false}");
   }
 
+  void clearWebMotorHeartbeat() {
+    web_motor_heartbeat_[0] = false;
+    web_motor_heartbeat_[1] = false;
+  }
+
+  void webMotorHeartbeatTick() {
+    // A Web SET_* command is intentionally one-shot, exactly like VESC Tool.
+    // Keep the F103 actuator watchdog alive with standard COMM_ALIVE while the
+    // browser still owns a valid maintenance lease. Never refresh a motor that
+    // Web has not explicitly commanded in this maintenance session.
+    if (!web_lease_active_ || !maintenance_active_ || transition_ != Transition::NONE ||
+        python_tcp_client_armed_ || tcp_client_armed_) return;
+    for (int motor = 1; motor <= 2; ++motor) {
+      if (web_motor_heartbeat_[motor - 1]) sendPayload(motor, {COMM_ALIVE});
+    }
+  }
+
   void webLeaseTick() {
     if (!web_lease_active_) return;
-    if (python_tcp_client_armed_ || tcp_client_armed_) { web_lease_active_ = false; return; }
+    if (python_tcp_client_armed_ || tcp_client_armed_) {
+      web_lease_active_ = false;
+      clearWebMotorHeartbeat();
+      return;
+    }
     if (std::chrono::steady_clock::now() <= web_lease_deadline_) return;
     if (transition_ != Transition::NONE) return;
     web_lease_active_ = false;
@@ -792,6 +814,7 @@ class VescToolBridge final : public rclcpp::Node {
   void beginEnter() {
     if (maintenance_active_ || transition_ != Transition::NONE) return;
     if (!safeToEnter()) { publishStatus("maintenance_rejected_vehicle_not_idle"); return; }
+    clearWebMotorHeartbeat();
     // Barrier order is strict: explicit VESC current=0 on RUNTIME, then publish
     // maintenance_active so Ackermann also fail-closes, then switch logical owner inside package esc.
     // Two short current-zero packets are <3 ms on the validated 921600 link;
@@ -807,6 +830,7 @@ class VescToolBridge final : public rclcpp::Node {
 
   void beginExit() {
     if (!maintenance_active_ || transition_ != Transition::NONE) return;
+    clearWebMotorHeartbeat();
     web_lease_active_ = false;
     closePythonTcpClient();
     closeTcpClient();
@@ -855,6 +879,10 @@ class VescToolBridge final : public rclcpp::Node {
 
   void pollTick() {
     if (!maintenance_active_ || transition_ != Transition::NONE || tcp_client_armed_ || python_tcp_client_armed_) return;
+    // Heartbeat must run before explicit_request_hold_until_. SET_* deliberately
+    // suppresses diagnostic polling for 500 ms, longer than the F103 300-ms
+    // actuator watchdog, so placing ALIVE below this guard recreates the bug.
+    webMotorHeartbeatTick();
     if (std::chrono::steady_clock::now() < explicit_request_hold_until_) return;
     // Internal Web/maintenance application view: essential electrical/motor
     // telemetry is 50 Hz per motor using a selective mask. Slow energy/tacho
@@ -973,6 +1001,7 @@ class VescToolBridge final : public rclcpp::Node {
     if (parts.size() == 2 && parts[0] == "STEERING" && parts[1] == "CAL") { sendCustom(1, HB_GET_STEERING_CAL); return; }
     if (parts.size() == 2 && parts[0] == "STEERING" && parts[1] == "ENCDEBUG") { sendCustom(1, HB_ENCODER_DEBUG); return; }
     if (raw == "SAFE_STOP:BOTH") {
+      clearWebMotorHeartbeat();
       sendMaintenanceSafeStop();
       std_msgs::msg::String cm; cm.data = "{\"motor\":0,\"mode\":\"SAFE_STOP_BOTH\",\"value\":0}";
       command_state_pub_->publish(cm);
@@ -985,10 +1014,13 @@ class VescToolBridge final : public rclcpp::Node {
       else if (parts[1] == "CURRENT") { id = COMM_SET_CURRENT; scale = 1e3; limit = max_abs_current_a_; }
       else if (parts[1] == "BRAKE") { id = COMM_SET_CURRENT_BRAKE; scale = 1e3; limit = max_abs_current_a_; }
       else if (parts[1] == "HANDBRAKE") { id = COMM_SET_HANDBRAKE; scale = 1e3; limit = max_abs_current_a_; }
-      else if (parts[1] == "RPM") { id = COMM_SET_RPM; scale = 1.0; limit = max_abs_rpm_; }
+      else if (parts[1] == "ERPM") { id = COMM_SET_ERPM; scale = 1.0; limit = max_abs_erpm_; }
       else if (parts[1] == "POS") { id = COMM_SET_POS; scale = 1e6; limit = 360.0; }
       if (id == 255U || std::abs(value) > limit) { publishStatus("setpoint_rejected_limit"); return; }
       { std_msgs::msg::String cm; std::ostringstream co; co << "{\"motor\":" << motor << ",\"mode\":\"" << parts[1] << "\",\"value\":" << std::setprecision(9) << value << "}"; cm.data=co.str(); command_state_pub_->publish(cm); }
+      // Mark only the explicitly commanded endpoint for standard VESC ALIVE
+      // refresh. The browser lease is the outer deadman; SAFE_STOP/exit clears it.
+      web_motor_heartbeat_[motor - 1] = true;
       std::vector<std::uint8_t> p{id}; appendI32(p, static_cast<std::int32_t>(std::lround(value * scale))); sendPayload(motor, std::move(p)); return;
     }
     if (parts.size() == 3 && parts[0] == "DETECT" && parts[1] == "RL" && parseMotor(parts[2], &motor)) {
@@ -1215,7 +1247,7 @@ class VescToolBridge final : public rclcpp::Node {
       o << "{\"motor\":" << unsigned(p[58]) << ",\"temp_mos_c\":" << double(i16(&p[1])) / 10.0
         << ",\"temp_motor_c\":" << double(i16(&p[3])) / 10.0 << ",\"current_motor_a\":" << double(i32(&p[5])) / 100.0
         << ",\"current_in_a\":" << double(i32(&p[9])) / 100.0 << ",\"id_a\":" << double(i32(&p[13])) / 100.0 << ",\"iq_a\":" << double(i32(&p[17])) / 100.0
-        << ",\"duty\":" << double(i16(&p[21])) / 1000.0 << ",\"rpm\":" << i32(&p[23]) << ",\"vbus_v\":" << double(i16(&p[27])) / 10.0
+        << ",\"duty\":" << double(i16(&p[21])) / 1000.0 << ",\"erpm\":" << i32(&p[23]) << ",\"vbus_v\":" << double(i16(&p[27])) / 10.0
         << ",\"amp_hours\":"<<double(i32(&p[29]))/10000.0<<",\"amp_hours_charged\":"<<double(i32(&p[33]))/10000.0
         << ",\"watt_hours\":"<<double(i32(&p[37]))/10000.0<<",\"watt_hours_charged\":"<<double(i32(&p[41]))/10000.0
         << ",\"tachometer\":"<<i32(&p[45])<<",\"tachometer_abs\":"<<i32(&p[49])<<",\"fault\":" << static_cast<unsigned>(p[53])
@@ -1232,7 +1264,7 @@ class VescToolBridge final : public rclcpp::Node {
       o << "{\"motor\":" << id << ",\"temp_mos_c\":" << double(i16(&p[5])) / 10.0
         << ",\"temp_motor_c\":" << double(i16(&p[7])) / 10.0 << ",\"current_motor_a\":" << double(i32(&p[9])) / 100.0
         << ",\"current_in_a\":" << double(i32(&p[13])) / 100.0 << ",\"id_a\":" << double(i32(&p[17])) / 100.0 << ",\"iq_a\":" << double(i32(&p[21])) / 100.0
-        << ",\"duty\":" << double(i16(&p[25])) / 1000.0 << ",\"rpm\":" << i32(&p[27]) << ",\"vbus_v\":" << double(i16(&p[31])) / 10.0
+        << ",\"duty\":" << double(i16(&p[25])) / 1000.0 << ",\"erpm\":" << i32(&p[27]) << ",\"vbus_v\":" << double(i16(&p[31])) / 10.0
         << ",\"amp_hours\":" << slow_amp_hours_[idx] << ",\"amp_hours_charged\":" << slow_amp_hours_charged_[idx]
         << ",\"watt_hours\":" << slow_watt_hours_[idx] << ",\"watt_hours_charged\":" << slow_watt_hours_charged_[idx]
         << ",\"tachometer\":" << slow_tachometer_[idx] << ",\"tachometer_abs\":" << slow_tachometer_abs_[idx]
@@ -1299,10 +1331,11 @@ class VescToolBridge final : public rclcpp::Node {
   }
 
   double poll_hz_{50.0}, tcp_service_hz_{1000.0};
-  double max_abs_duty_{0.95}, max_abs_current_a_{20.0}, max_abs_rpm_{8000.0};
+  double max_abs_duty_{0.95}, max_abs_current_a_{20.0}, max_abs_erpm_{8000.0};
   int web_lease_timeout_ms_{1200};
   bool maintenance_active_{false}, gateway_connected_{false}, transport_connected_{false}, tcp_enabled_{true}, python_tcp_enabled_{true};
   bool web_lease_active_{false}, web_detection_active_{false};
+  bool web_motor_heartbeat_[2]{false, false};
   std::chrono::steady_clock::time_point web_lease_deadline_{};
   bool tcp_probe_pending_{false}, python_probe_pending_{false};
   bool tcp_client_armed_{false}, python_tcp_client_armed_{false};

@@ -13,11 +13,8 @@ vehicle:
     # Electrical-to-ground-speed baseline belongs to the same vehicle SSOT.
     # Physical certification still requires drive_odometry_calibration_valid=true.
     drive_erpm_per_mps: 8000.0
-    drive_motor_pole_pairs: 15
-    drive_gear_ratio: 1.0
-    # Linear odometry scale is certified by measured straight-run trials in GUI.
+    # N2.1 certifies drive_erpm_per_mps directly from measured straight-run trials.
     drive_odometry_calibration_valid: false
-    drive_odometry_calibration_scale: 1.0
     drive_odometry_calibration_saved_at: ''
     # Safe fallback until Part 1/2 physical calibration is measured.
     measured_left_steering_limit_rad: -0.523598775598

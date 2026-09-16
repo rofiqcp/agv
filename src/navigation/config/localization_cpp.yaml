@@ -158,3 +158,4 @@ localization_core:
     gnss_yaw_rate_min_variance: 0.0025
     gnss_yaw_rate_max_variance: 4.0
     anchor_init_requires_strict: false
+    validated_heading_timeout_sec: 0.75

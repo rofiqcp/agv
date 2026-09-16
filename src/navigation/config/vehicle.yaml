@@ -13,11 +13,8 @@ vehicle:
     # Electrical-to-ground-speed baseline belongs to the same vehicle SSOT.
     # Physical certification still requires drive_odometry_calibration_valid=true.
     drive_erpm_per_mps: 8000.0
-    drive_motor_pole_pairs: 15
-    drive_gear_ratio: 1.0
-    # Linear odometry scale is certified by measured straight-run trials in GUI.
+    # N2.1 certifies drive_erpm_per_mps directly from measured straight-run trials.
     drive_odometry_calibration_valid: false
-    drive_odometry_calibration_scale: 1.0
     drive_odometry_calibration_saved_at: ''
     # Safe fallback until Part 1/2 physical calibration is measured.
     measured_left_steering_limit_rad: -0.523598775598
@@ -50,9 +47,11 @@ vehicle:
     control_field_calibration_valid: false
     control_field_calibration_saved_at: ''
     control_field_evidence_sha256: ''
-    max_accel_mps2: 1.50
-    max_decel_mps2: -2.50
-    max_yaw_accel_rps2: 4.0
+    # Responsive but bounded velocity-smoother profile. At the configured
+    # 1.0 m/s envelope this is about 0.40 s to full speed and 0.25 s to stop.
+    max_accel_mps2: 2.50
+    max_decel_mps2: -4.00
+    max_yaw_accel_rps2: 6.0
     standard_xy_goal_tolerance_m: 0.35
     precision_xy_goal_tolerance_m: 0.08
     precision_controller_frequency_hz: 15.0

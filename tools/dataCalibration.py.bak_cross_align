@@ -1,0 +1,249 @@
+#!/usr/bin/env python3
+"""Live yaw calibration viewer for NEO3, Yahboom and inertial yaw.
+
+Shows three representations per source:
+  RAW      : sensor-native/uncompensated angle
+  COMPASS  : calibrated 0..360 deg, North=0, clockwise positive
+  ROS      : calibrated REP-103 ENU yaw, East=0, North=+90, CCW positive
+
+Calibration source is intentionally explicit and printed at runtime.
+"""
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import math
+import os
+import signal
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+AGV_ROOT = Path(os.environ.get("AGV_ROOT", str(Path(__file__).resolve().parents[1]))).expanduser().resolve()
+CAL_YAML = AGV_ROOT / "src/navigation/config/data_heading_calibration.yaml"
+DIRECT_LOGGER = AGV_ROOT / "F4gateway/tools/data.py"
+ROS_LOGGER = AGV_ROOT / "tools/data.py"
+
+
+def _load_module(path: Path, name: str):
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {path}")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def wrap360(deg: float) -> float:
+    return deg % 360.0 if math.isfinite(deg) else float("nan")
+
+
+def wrap180(deg: float) -> float:
+    if not math.isfinite(deg):
+        return float("nan")
+    return (deg + 180.0) % 360.0 - 180.0
+
+
+def raw_xy_angle_deg(x: Any, y: Any) -> float:
+    try:
+        x = float(x); y = float(y)
+        if not (math.isfinite(x) and math.isfinite(y)) or math.hypot(x, y) < 1e-12:
+            return float("nan")
+        return wrap360(math.degrees(math.atan2(y, x)))
+    except Exception:
+        return float("nan")
+
+
+def ros_to_compass_deg(ros_deg: float) -> float:
+    return wrap360(90.0 - ros_deg)
+
+
+def cardinal(compass_deg: float) -> str:
+    if not math.isfinite(compass_deg):
+        return "--"
+    labels = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
+    return labels[int((wrap360(compass_deg) + 22.5) // 45.0) % 8]
+
+
+def fmt(v: Any, n: int = 3) -> str:
+    try:
+        x = float(v)
+        return f"{x:.{n}f}" if math.isfinite(x) else "--"
+    except Exception:
+        return "--"
+
+
+def load_calibration(path: Path) -> dict:
+    root = yaml.safe_load(path.read_text())
+    cal = root.get("data_heading_calibration", {}) if isinstance(root, dict) else {}
+    for key in ("neo3", "yahboom", "inertia_angle"):
+        if key not in cal:
+            raise RuntimeError(f"calibration YAML missing {key}: {path}")
+    return cal
+
+
+def flatten_mag_config(base: dict, cal: dict) -> dict:
+    out = dict(base)
+    neo = cal["neo3"]; yah = cal["yahboom"]
+    out.update({
+        "neo3_mag_bias_xy_ut": neo["bias"], "neo3_mag_matrix_xy": neo["matrix"],
+        "neo3_mag_yaw_sign": neo["yaw_sign"], "neo3_mag_yaw_offset_rad": neo["yaw_offset_rad"],
+        "neo3_heading_lut_enabled": True, "neo3_heading_lut_input_rad": neo["heading_lut_input_rad"],
+        "neo3_heading_lut_correction_rad": neo["heading_lut_correction_rad"],
+        "imu_mag_bias_xy_lsb": yah["bias"], "imu_mag_matrix_xy_per_lsb": yah["matrix"],
+        "imu_mag_yaw_sign": yah["yaw_sign"], "imu_mag_yaw_offset_rad": yah["yaw_offset_rad"],
+        "imu_heading_lut_enabled": True, "imu_heading_lut_input_rad": yah["heading_lut_input_rad"],
+        "imu_heading_lut_correction_rad": yah["heading_lut_correction_rad"],
+        "neo3_planar_calibration_enabled": True, "neo3_full_calibration_enabled": False,
+    })
+    return out
+
+
+_direct = _load_module(DIRECT_LOGGER, "agv_direct_data")
+_ros = _load_module(ROS_LOGGER, "agv_ros_data")
+
+
+class CalibrationRecorder(_direct.DirectRecorder):
+    def __init__(self, args: argparse.Namespace, calibration_yaml: Path):
+        self.calibration_yaml = calibration_yaml.resolve()
+        self.calibration = load_calibration(self.calibration_yaml)
+        super().__init__(args)
+        # dataCalibration.py is pinned to this YAML, independent of stale snapshots.
+        self.mag_cfg = flatten_mag_config(self.mag_cfg, self.calibration)
+        self.inertia_angle_model = self.calibration["inertia_angle"]
+
+    def _wit_raw_to_ros(self, raw_deg: float) -> float:
+        if not math.isfinite(raw_deg):
+            return float("nan")
+        m = self.inertia_angle_model
+        return wrap180(float(m["yaw_sign"]) * raw_deg + math.degrees(float(m["yaw_offset_rad"])))
+
+    def dashboard(self, r: dict[str, Any]) -> None:
+        now = __import__("time").monotonic()
+        if not sys.stdout.isatty() and now - self.last_display < 1.0:
+            return
+        self.last_display = now
+        if sys.stdout.isatty():
+            print("\033[2J\033[H", end="")
+        neo_raw = raw_xy_angle_deg(r["neo3_mag_x_ut"], r["neo3_mag_y_ut"])
+        yah_raw = raw_xy_angle_deg(r["yah_mag_raw_x_lsb"], r["yah_mag_raw_y_lsb"])
+        wit_raw = wrap360(float(r["imu_accgyro_yaw_deg"])) if str(r["imu_accgyro_yaw_deg"]) else float("nan")
+
+        neo_ros = float(r["yaw_neo3_deg"]) if str(r["yaw_neo3_deg"]) else float("nan")
+        yah_ros = float(r["yaw_yahboom_deg"]) if str(r["yaw_yahboom_deg"]) else float("nan")
+        inert_ros = float(r["yaw_inertial_deg"]) if str(r["yaw_inertial_deg"]) else float("nan")
+        wit_ros = self._wit_raw_to_ros(wit_raw)
+        rows = (
+            ("NEO3 MAG", neo_raw, ros_to_compass_deg(neo_ros), neo_ros, r["yaw_neo3_valid"]),
+            ("YAHBOOM MAG", yah_raw, ros_to_compass_deg(yah_ros), yah_ros, r["yaw_yahboom_valid"]),
+            ("INERTIA", wit_raw, ros_to_compass_deg(inert_ros), inert_ros, r["yaw_inertial_valid"]),
+        )
+        print(f"AGV YAW CALIBRATION  {r['utc_iso8601']}")
+        print(f"YAML   : {self.calibration_yaml}")
+        print(f"SOURCE : {self.calibration.get('source_record','--')}")
+        ev = self.calibration.get("evidence", {})
+        print(f"FIT    : NEO3 RMS={fmt(ev.get('neo3_fit_rms_deg'))} deg | YAH RMS={fmt(ev.get('yahboom_fit_rms_deg'))} deg | gyro closure={fmt(ev.get('gyro_closure_error_deg'))} deg")
+        if not bool(ev.get("strict_stage1_valid", False)):
+            print(f"NOTE   : strict North closure gate belum PASS (NEO={fmt(ev.get('neo3_north_closure_error_deg'))} deg, YAH={fmt(ev.get('yahboom_north_closure_error_deg'))} deg)")
+        print("\nSENSOR        RAW / BELUM CAL       COMPASS TERKALIBRASI       ROS REP-103 TERKALIBRASI       VALID")
+        print("------------- ---------------------- -------------------------- ------------------------------- -----")
+        for name, raw, comp, ros, valid in rows:
+            rosrad = math.radians(ros) if math.isfinite(ros) else float("nan")
+            print(f"{name:<13} {fmt(raw):>8} deg             {fmt(comp):>8} deg {cardinal(comp):<2}          {fmt(ros):>8} deg ({fmt(rosrad,4):>8} rad)      {valid}")
+        print(f"\nWIT angle diagnostic: raw={fmt(wit_raw)} deg -> independent ROS fit={fmt(wit_ros)} deg; runtime INERTIA tetap NEO3 anchor + integral gyro.")
+        print(f"GNSS lon={fmt(r['longitude_deg'],8)} lat={fmt(r['latitude_deg'],8)} fix={r['fix_type']} sat={r['satellites']} | checksum_bad={r['bad_yahboom_checksum']} crc_bad={r['bad_neo3_crc']}", flush=True)
+
+
+class RosCalibrationRecorder(_ros.RosRecorder):
+    """ROS-topic backend; never opens ACM/USB serial devices."""
+    def __init__(self, args: argparse.Namespace, calibration_yaml: Path):
+        self.calibration_yaml = calibration_yaml.resolve()
+        self.calibration = load_calibration(self.calibration_yaml)
+        super().__init__(args)
+        self.mag_cfg = flatten_mag_config(self.mag_cfg, self.calibration)
+        self.inertia_angle_model = self.calibration["inertia_angle"]
+        self.last_display = 0.0
+
+    def _fresh(self, topic: str, max_age=.75):
+        # Recompute all three displayed yaw values from raw ROS sensor topics
+        # using the pinned calibration YAML. Do not silently reuse a heading
+        # node that may still have parameters from an older launch.
+        if topic in ("/neo3/mag_heading_fusion", "/imu/mag_heading_fusion", "/imu/inertial_heading"):
+            return None
+        return super()._fresh(topic, max_age)
+
+    _wit_raw_to_ros = CalibrationRecorder._wit_raw_to_ros
+    dashboard = CalibrationRecorder.dashboard
+
+
+def run_ros(args: argparse.Namespace) -> int:
+    _ros.rclpy.init()
+    node = RosCalibrationRecorder(args, Path(args.calibration_yaml))
+    deadline = time.monotonic() + args.duration if args.duration > 0 else None
+    try:
+        while _ros.rclpy.ok() and (deadline is None or time.monotonic() < deadline):
+            _ros.rclpy.spin_once(node, timeout_sec=.05)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.close()
+        print(f"\nSAVED summary: {node.summary_path}\nSAVED raw:     {node.raw_path}\nSAVED meta:    {node.meta_path}")
+        node.destroy_node()
+        if _ros.rclpy.ok():
+            _ros.rclpy.shutdown()
+    return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Live raw/Compass/ROS yaw calibration viewer")
+    ap.add_argument("--calibration-yaml", default=str(CAL_YAML))
+    ap.add_argument("--source", choices=("auto", "ros", "direct"), default="auto",
+                    help="auto (default): ROS when serial is owned, direct when sensor ports are free")
+    ap.add_argument("--neo-port", default=_direct.F411_BY_ID)
+    ap.add_argument("--neo-baud", type=int, default=1_000_000)
+    ap.add_argument("--imu-port", default=_direct.YAHBOOM_BY_ID)
+    ap.add_argument("--imu-baud", type=int, default=921_600)
+    ap.add_argument("--rate", type=float, default=10.0)
+    ap.add_argument("--duration", type=float, default=0.0)
+    ap.add_argument("--accel-fsr-g", type=float, default=16.0)
+    ap.add_argument("--gyro-fsr-dps", type=float, default=2000.0)
+    ap.add_argument("--output-dir", default=str(AGV_ROOT / "tools" / "records"))
+    ap.add_argument("--takeover", action="store_true")
+    args = ap.parse_args()
+
+    owners = _ros._sensor_serial_owners()
+    if args.source == "ros" or (args.source == "auto" and owners):
+        detail = ", ".join(f"{d}:PID={','.join(map(str,p))}" for d,p in owners.items()) or "forced"
+        prefix = "AUTO -> " if args.source == "auto" else ""
+        print(f"[DATA CAL] {prefix}ROS_TOPICS ({detail})", flush=True)
+        return run_ros(args)
+
+    if args.source == "direct" and owners and not args.takeover:
+        detail = ", ".join(f"{d}:PID={','.join(map(str,p))}" for d,p in owners.items())
+        raise SystemExit(f"DIRECT ditolak: serial sedang dipakai ({detail}). Gunakan --source auto/ros.")
+
+    print("[DATA CAL] AUTO -> DIRECT_SERIAL (sensor ports free)" if args.source == "auto" else "[DATA CAL] source=DIRECT_SERIAL", flush=True)
+    rec = None
+    try:
+        rec = CalibrationRecorder(args, Path(args.calibration_yaml))
+        signal.signal(signal.SIGTERM, lambda *_: setattr(rec, "running", False))
+        signal.signal(signal.SIGINT, lambda *_: setattr(rec, "running", False))
+        rec.run()
+        return 0
+    except KeyboardInterrupt:
+        if rec: rec.close()
+        return 0
+    except Exception as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        if rec:
+            try: rec.close()
+            except Exception: pass
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

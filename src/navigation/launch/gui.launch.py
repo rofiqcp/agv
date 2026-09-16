@@ -45,14 +45,17 @@ def _active_config_dir(nav_share: str) -> str:
     return os.path.join(nav_share, "config")
 
 
-def _yaml_ros_param(path: str, node_name: str, key: str, default):
-    """Read a launch default from the same ROS YAML edited by the GUI."""
+def _yaml_ros_param(path: str, node_name: str, key: str):
+    """Read a required launch value from ROS YAML; missing authority is fatal."""
     try:
         with open(path, "r", encoding="utf-8") as handle:
             data = yaml.safe_load(handle) or {}
-        return data.get(node_name, {}).get("ros__parameters", {}).get(key, default)
-    except (OSError, TypeError, yaml.YAMLError):
-        return default
+        params = data.get(node_name, {}).get("ros__parameters", {})
+        if key not in params:
+            raise RuntimeError(f"Missing YAML authority {path}:{node_name}.ros__parameters.{key}")
+        return params[key]
+    except (OSError, TypeError, yaml.YAMLError) as exc:
+        raise RuntimeError(f"Cannot read YAML authority {path}: {exc}") from exc
 
 
 
@@ -116,19 +119,19 @@ def generate_launch_description() -> LaunchDescription:
         if perception_config_dir else "")
 
     collision_default = bool(_yaml_ros_param(
-        navigation_core_params, "navigation_core", "collision_monitor_enabled", False))
+        navigation_core_params, "navigation_core", "collision_monitor_enabled"))
     camera_metric_default = bool(_yaml_ros_param(
-        navigation_core_params, "navigation_core", "camera_metric_calibration_validated", False))
+        navigation_core_params, "navigation_core", "camera_metric_calibration_validated"))
     configured_mode = str(_yaml_ros_param(
-        perception_params, "perception", "perception_mode", "cpu") or "cpu").strip().lower()
+        perception_params, "perception", "perception_mode")).strip().lower()
     configured_engine = str(_yaml_ros_param(
-        perception_params, "perception", "engine_path", "") or "")
+        perception_params, "perception", "engine_path"))
     configured_pt = str(_yaml_ros_param(
-        perception_params, "perception", "pt_model_path", "auto") or "auto")
+        perception_params, "perception", "pt_model_path"))
     cpu_fps_default = float(_yaml_ros_param(
-        perception_params, "perception", "cpu_inference_fps", 2.0))
+        perception_params, "perception", "cpu_inference_fps"))
     cpu_threads_default = int(_yaml_ros_param(
-        perception_params, "perception", "cpu_threads", 0))
+        perception_params, "perception", "cpu_threads"))
 
     # Keep the runtime arguments intentionally aligned with autonomous.launch.py.
     # A second rviz2 process stays disabled: agv_gui embeds rviz_common directly
@@ -173,9 +176,6 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("perception_respawn", default_value="true"),
         DeclareLaunchArgument("stage3_commissioning_mode", default_value="false"),
         DeclareLaunchArgument("start_web_gui", default_value="true"),
-        DeclareLaunchArgument("web_bind_address", default_value="127.0.0.1", choices=["127.0.0.1"]),
-        DeclareLaunchArgument("web_port", default_value="5000", choices=["5000"]),
-        DeclareLaunchArgument("web_read_only", default_value="false"),
     ]
 
     autonomous = IncludeLaunchDescription(
@@ -216,9 +216,6 @@ def generate_launch_description() -> LaunchDescription:
             "perception_respawn": LaunchConfiguration("perception_respawn"),
             "stage3_commissioning_mode": LaunchConfiguration("stage3_commissioning_mode"),
             "start_web_gui": LaunchConfiguration("start_web_gui"),
-            "web_bind_address": LaunchConfiguration("web_bind_address"),
-            "web_port": LaunchConfiguration("web_port"),
-            "web_read_only": LaunchConfiguration("web_read_only"),
         }.items(),
     )
 

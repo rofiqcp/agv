@@ -356,14 +356,17 @@ def _optional_package_share(package_name: str) -> str:
     except PackageNotFoundError:
         return ''
 
-def _yaml_ros_param(path: str, node_name: str, key: str, default):
-    """Read one ROS parameter from the same writable YAML used by runtime."""
+def _yaml_ros_param(path: str, node_name: str, key: str):
+    """Read a required ROS parameter from writable YAML; never hide a source-code fallback."""
     try:
         with open(path, 'r', encoding='utf-8') as handle:
             data = yaml.safe_load(handle) or {}
-        return data.get(node_name, {}).get('ros__parameters', {}).get(key, default)
-    except (OSError, TypeError, yaml.YAMLError):
-        return default
+        params = data.get(node_name, {}).get('ros__parameters', {})
+        if key not in params:
+            raise RuntimeError(f'Missing YAML authority {path}:{node_name}.ros__parameters.{key}')
+        return params[key]
+    except (OSError, TypeError, yaml.YAMLError) as exc:
+        raise RuntimeError(f'Cannot read YAML authority {path}: {exc}') from exc
 
 
 def _vehicle_params(path: str) -> dict:
@@ -677,18 +680,22 @@ def generate_launch_description() -> LaunchDescription:
     stage3_params = os.path.join(nav_config_dir, 'stage3_navigation.yaml')
     collision_params = os.path.join(nav_config_dir, 'collision_monitor_production.yaml')
     vehicle_ssot = _vehicle_params(vehicle_params)
-    effective_wheelbase = float(vehicle_ssot.get('effective_wheelbase_m', vehicle_ssot.get('wheelbase_m', 0.70)))
-    track_width = float(vehicle_ssot.get('track_width_m', 0.48))
-    wheel_radius = float(vehicle_ssot.get('wheel_radius_m', 0.145))
-    drive_erpm_per_mps = float(vehicle_ssot.get('drive_erpm_per_mps', 8000.0))
-    drive_odom_scale = float(vehicle_ssot.get('drive_odometry_calibration_scale', 1.0))
-    drive_pole_pairs = int(vehicle_ssot.get('drive_motor_pole_pairs', 15))
-    drive_gear_ratio = float(vehicle_ssot.get('drive_gear_ratio', 1.0))
-    max_forward_speed = float(vehicle_ssot.get('max_forward_speed_mps', 1.0))
-    max_reverse_speed = float(vehicle_ssot.get('max_reverse_speed_mps', 1.0))
-    max_yaw_rate = float(vehicle_ssot.get('max_yaw_rate_rps', 0.625907910003))
-    max_steering = float(vehicle_ssot.get('max_steering_angle_rad', 0.523598775598))
-    minimum_turning_radius = float(vehicle_ssot.get('minimum_turning_radius_m', 1.597679121829))
+    required_vehicle_keys = (
+        'effective_wheelbase_m', 'track_width_m', 'wheel_radius_m', 'drive_erpm_per_mps',
+        'max_forward_speed_mps', 'max_reverse_speed_mps', 'max_yaw_rate_rps',
+        'max_steering_angle_rad', 'minimum_turning_radius_m')
+    missing_vehicle = [key for key in required_vehicle_keys if key not in vehicle_ssot]
+    if missing_vehicle:
+        raise RuntimeError('vehicle.yaml missing runtime SSOT keys: ' + ', '.join(missing_vehicle))
+    effective_wheelbase = float(vehicle_ssot['effective_wheelbase_m'])
+    track_width = float(vehicle_ssot['track_width_m'])
+    wheel_radius = float(vehicle_ssot['wheel_radius_m'])
+    drive_erpm_per_mps = float(vehicle_ssot['drive_erpm_per_mps'])
+    max_forward_speed = float(vehicle_ssot['max_forward_speed_mps'])
+    max_reverse_speed = float(vehicle_ssot['max_reverse_speed_mps'])
+    max_yaw_rate = float(vehicle_ssot['max_yaw_rate_rps'])
+    max_steering = float(vehicle_ssot['max_steering_angle_rad'])
+    minimum_turning_radius = float(vehicle_ssot['minimum_turning_radius_m'])
     bt_xml = os.path.join(nav_share, 'behavior_trees', 'ackermann_navigate_to_pose.xml')
     rviz_file = os.path.join(nav_share, 'rviz', 'autonomous.rviz')
     xacro_file = os.path.join(nav_share, 'urdf', 'agv.urdf.xacro')
@@ -697,30 +704,30 @@ def generate_launch_description() -> LaunchDescription:
     camera_params = os.path.join(perception_config_dir, 'astra_yolop_gpu.yaml') if astra_share else ''
 
     collision_default = bool(_yaml_ros_param(
-        navigation_core_params, 'navigation_core', 'collision_monitor_enabled', False))
+        navigation_core_params, 'navigation_core', 'collision_monitor_enabled'))
     camera_metric_default = bool(_yaml_ros_param(
-        navigation_core_params, 'navigation_core', 'camera_metric_calibration_validated', False))
+        navigation_core_params, 'navigation_core', 'camera_metric_calibration_validated'))
     steering_calibration_default = bool(_yaml_ros_param(
-        vehicle_params, 'vehicle', 'steering_calibration_valid', False))
+        vehicle_params, 'vehicle', 'steering_calibration_valid'))
     steering_circle_calibration_default = bool(_yaml_ros_param(
-        vehicle_params, 'vehicle', 'steering_circle_calibration_valid', False))
+        vehicle_params, 'vehicle', 'steering_circle_calibration_valid'))
     drive_odometry_calibration_default = bool(_yaml_ros_param(
-        vehicle_params, 'vehicle', 'drive_odometry_calibration_valid', False))
+        vehicle_params, 'vehicle', 'drive_odometry_calibration_valid'))
     imu_calibration_default = bool(_yaml_ros_param(
-        imu_params, 'data_imu_node', 'stationary_calibration_valid', False))
+        imu_params, 'data_imu_node', 'stationary_calibration_valid'))
     stage3_production_default = bool(_yaml_ros_param(
-        stage3_params, 'stage3_navigation', 'production_autonomy_certified', False))
+        stage3_params, 'stage3_navigation', 'production_autonomy_certified'))
     stage3_commissioning_speed = float(_yaml_ros_param(
-        stage3_params, 'stage3_navigation', 'commissioning_speed_cap_mps', 1.0))
-    configured_mode = str(_yaml_ros_param(camera_params, 'perception', 'perception_mode', 'off') or 'off').strip().lower()
-    configured_engine = str(_yaml_ros_param(camera_params, 'perception', 'engine_path', '') or '')
+        stage3_params, 'stage3_navigation', 'commissioning_speed_cap_mps'))
+    configured_mode = str(_yaml_ros_param(camera_params, 'perception', 'perception_mode')).strip().lower()
+    configured_engine = str(_yaml_ros_param(camera_params, 'perception', 'engine_path'))
     engine_path = os.environ.get('YOLOP_ENGINE_PATH', configured_engine)
-    configured_pt = str(_yaml_ros_param(camera_params, 'perception', 'pt_model_path', 'auto') or 'auto')
+    configured_pt = str(_yaml_ros_param(camera_params, 'perception', 'pt_model_path'))
     pt_model_path = _discover_cpu_model(configured_pt, astra_share)
     cpu_fps_default = float(_yaml_ros_param(
-        camera_params, 'perception', 'cpu_inference_fps', 2.0))
+        camera_params, 'perception', 'cpu_inference_fps'))
     cpu_threads_default = int(_yaml_ros_param(
-        camera_params, 'perception', 'cpu_threads', 0))
+        camera_params, 'perception', 'cpu_threads'))
 
     robot_description = xacro.process_file(
         xacro_file,
@@ -787,9 +794,6 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('perception_respawn', default_value='true'),
         DeclareLaunchArgument('stage3_commissioning_mode', default_value='false'),
         DeclareLaunchArgument('start_web_gui', default_value='true'),
-        DeclareLaunchArgument('web_bind_address', default_value='127.0.0.1', choices=['127.0.0.1']),
-        DeclareLaunchArgument('web_port', default_value='5000', choices=['5000']),
-        DeclareLaunchArgument('web_read_only', default_value='false'),
     ]
 
     environment = [
@@ -819,11 +823,11 @@ def generate_launch_description() -> LaunchDescription:
         package='navigation', executable='joint_state_visualizer',
         name='joint_state_visualizer', output='screen',
         respawn=True, respawn_delay=2.0,
-        parameters=[{
+        parameters=[navigation_core_params, {
             'wheelbase_m': effective_wheelbase,
-            'track_width_m': float(_yaml_ros_param(vehicle_params, 'vehicle', 'track_width_m', 0.48)),
-            'wheel_radius_m': float(_yaml_ros_param(vehicle_params, 'vehicle', 'wheel_radius_m', 0.145)),
-            'max_visual_steering_rad': float(_yaml_ros_param(vehicle_params, 'vehicle', 'max_steering_angle_rad', 0.523598775598)),
+            'track_width_m': float(_yaml_ros_param(vehicle_params, 'vehicle', 'track_width_m')),
+            'wheel_radius_m': float(_yaml_ros_param(vehicle_params, 'vehicle', 'wheel_radius_m')),
+            'max_visual_steering_rad': float(_yaml_ros_param(vehicle_params, 'vehicle', 'max_steering_angle_rad')),
             'use_sim_time': LaunchConfiguration('use_sim_time'),
         }],
     )
@@ -886,9 +890,6 @@ def generate_launch_description() -> LaunchDescription:
             'vehicle_track_width_m': str(track_width),
             'vehicle_wheel_radius_m': str(wheel_radius),
             'vehicle_drive_erpm_per_mps': str(drive_erpm_per_mps),
-            'vehicle_drive_odometry_scale': str(drive_odom_scale),
-            'vehicle_drive_motor_pole_pairs': str(drive_pole_pairs),
-            'vehicle_drive_gear_ratio': str(drive_gear_ratio),
         }.items(),
     )
 
@@ -918,7 +919,7 @@ def generate_launch_description() -> LaunchDescription:
     sensor_contract_monitor = Node(
         package='navigation', executable='sensor_contract_monitor', name='sensor_contract_monitor',
         output='screen', respawn=True, respawn_delay=2.0,
-        parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],
+        parameters=[navigation_core_params, {'use_sim_time': LaunchConfiguration('use_sim_time')}],
     )
     precision_localization_monitor = Node(
         package='navigation', executable='precision_localization_monitor', name='precision_localization_monitor',
@@ -1070,17 +1071,7 @@ def generate_launch_description() -> LaunchDescription:
             LaunchConfiguration('enable_semantic_calibration'), "'.lower() == 'true' and ",
             str(semantic_torch_available)])),
         respawn=True, respawn_delay=3.0,
-        parameters=[{
-            'input_topic': '/camera/astra/image_preview/compressed',
-            'output_topic': '/perception/semantic_detections',
-            'status_topic': '/perception/semantic_status',
-            'score_threshold': 0.20,
-            'inference_hz': 1.0,
-            'cpu_threads': 1,
-            'enabled': True,
-            'torch_hub_dir': str(_agv_root() / 'models' / 'torch'),
-            'use_sim_time': LaunchConfiguration('use_sim_time'),
-        }],
+        parameters=[camera_params, {'use_sim_time': LaunchConfiguration('use_sim_time')}],
     )
 
     map_server = Node(
@@ -1104,16 +1095,7 @@ def generate_launch_description() -> LaunchDescription:
     cmd_vel_router = Node(
         package='navigation', executable='cmd_vel_router', name='cmd_vel_router',
         output='screen', respawn=True, respawn_delay=2.0,
-        parameters=[{
-            'teleop_topic': '/cmd_vel/teleop',
-            'autonomy_topic': '/cmd_vel/autonomy_pre_smoother',
-            'autonomy_gate_topic': '/system/autonomy_motion_allowed',
-            'global_estop_topic': '/safety/estop',
-            'output_topic': '/cmd_vel/pre_smoother',
-            # Keep router diagnostics separate from the actuator mux state.
-            'source_topic': '/navigation/cmd_mux/source',
-            'use_sim_time': LaunchConfiguration('use_sim_time'),
-        }])
+        parameters=[navigation_core_params, {'use_sim_time': LaunchConfiguration('use_sim_time')}])
 
     smoother = Node(
         package='nav2_velocity_smoother', executable='velocity_smoother', name='velocity_smoother',
@@ -1242,7 +1224,7 @@ def generate_launch_description() -> LaunchDescription:
         package='navigation', executable='vehicle_dynamics_observer',
         name='vehicle_dynamics_observer', output='screen', respawn=True, respawn_delay=2.0,
         parameters=[precision_params, {
-            'wheelbase_m': float(_yaml_ros_param(vehicle_params, 'vehicle', 'wheelbase_m', 0.70)),
+            'wheelbase_m': float(_yaml_ros_param(vehicle_params, 'vehicle', 'wheelbase_m')),
             'use_sim_time': LaunchConfiguration('use_sim_time')}])
 
     mode_rviz = PythonExpression(["'", LaunchConfiguration('mode'), "'.lower() == 'rviz'"])
@@ -1274,13 +1256,7 @@ def generate_launch_description() -> LaunchDescription:
         package='navigation', executable='agv_web_gui', name='agv_web_gui', output='screen',
         condition=IfCondition(mode_web),
         respawn=True, respawn_delay=2.0,
-        parameters=[{
-            'bind_address': LaunchConfiguration('web_bind_address'),
-            'port': ParameterValue(LaunchConfiguration('web_port'), value_type=int),
-            'read_only': ParameterValue(LaunchConfiguration('web_read_only'), value_type=bool),
-            'camera_jpeg_fps': 5.0,
-            'use_sim_time': LaunchConfiguration('use_sim_time'),
-        }])
+        parameters=[navigation_core_params, {'use_sim_time': LaunchConfiguration('use_sim_time')}])
 
     # Jalankan RViz resmi secara langsung. Jangan bergantung pada wrapper
     # navigation/rviz_clean_launcher karena wrapper itu bisa tidak ikut

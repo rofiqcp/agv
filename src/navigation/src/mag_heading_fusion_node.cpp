@@ -382,7 +382,14 @@ private:
     if (!have_map_yaw_) { reject("map_yaw_unavailable"); return; }
     if (!have_tilt_ || (t-last_tilt_time_).seconds() < 0.0 || (t-last_tilt_time_).seconds() > tilt_timeout_sec_) { reject("tilt_stale"); return; }
     if (std::abs(roll_rad_) > imu_planar_max_tilt_rad_ || std::abs(pitch_rad_) > imu_planar_max_tilt_rad_) { reject("planar_tilt_out_of_range"); return; }
-    const double x=msg.data[0], y=msg.data[1];
+    // Calibration YAML is fitted in Yahboom sensor-native MAG coordinates.
+    // /imu/raw_sensor_vectors layout is ax,ay,az,gx,gy,gz,mx,my,mz (native),
+    // while legacy /imu/mag_raw_lsb is already rotated to REP-103 body frame.
+    // Accept both layouts, but prefer the native 9-vector contract so the
+    // calibration is never silently applied in a different frame.
+    const bool native_vector = msg.data.size() >= 9;
+    const double x = native_vector ? msg.data[6] : msg.data[0];
+    const double y = native_vector ? msg.data[7] : msg.data[1];
     if (!std::isfinite(x) || !std::isfinite(y)) { reject("non_finite_raw_lsb"); return; }
     const double bx=x-imu_bias_x_lsb_, by=y-imu_bias_y_lsb_;
     const double qx=imu_m00_*bx + imu_m01_*by;
@@ -470,11 +477,19 @@ private:
       mx_heading = neo_m00_ * bx + neo_m01_ * by;
       my_heading = neo_m10_ * bx + neo_m11_ * by;
     }
-    const double cr = std::cos(roll_rad_), sr = std::sin(roll_rad_);
-    const double cp = std::cos(pitch_rad_), sp = std::sin(pitch_rad_);
-    const double xh = mx_heading * cp + mz_heading * sp;
-    const double yh = mx_heading * sr * sp + my_heading * cr - mz_heading * sr * cp;
-    if (std::hypot(xh, yh) < 1.0) { reject("horizontal_field_too_small"); return; }
+    double xh = mx_heading;
+    double yh = my_heading;
+    if (!(source == Source::NEO3 && neo_planar_calibration_enabled_ && !neo_full_calibration_enabled_)) {
+      const double cr = std::cos(roll_rad_), sr = std::sin(roll_rad_);
+      const double cp = std::cos(pitch_rad_), sp = std::sin(pitch_rad_);
+      xh = mx_heading * cp + mz_heading * sp;
+      yh = mx_heading * sr * sp + my_heading * cr - mz_heading * sr * cp;
+    }
+    // A planar XY fit normalizes/scales X and Y while Z remains raw uT.
+    // Mixing those units during tilt compensation corrupts heading. In planar
+    // mode the tilt gate above guarantees near-horizontal operation, so use
+    // calibrated XY directly. Full 3-D calibration keeps tilt compensation.
+    if (std::hypot(xh, yh) < 1.0e-9) { reject("horizontal_field_too_small"); return; }
 
     const double raw_north_in_body = std::atan2(yh, xh);
     const double sign = source == Source::IMU ? imu_sign_ : neo_sign_;

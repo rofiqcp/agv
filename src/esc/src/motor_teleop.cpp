@@ -235,15 +235,17 @@ public:
     RCLCPP_INFO(get_logger(),
                 "[JOY] DIRECT evdev (tanpa joy_node/joy_linux) | old axis[1]=>ABS_Y | old axis[2]=>AUTO ABS_Z/ABS_RX");
     RCLCPP_INFO(get_logger(),
-                "[JOY] L1=BTN_TL speed+ | L2=BTN_TL2 speed- | R1=BTN_TR yaw+ | R2=BTN_TR2 yaw-");
+                "[JOY] LB=BTN_TL speed+ | LT=BTN_TL2 speed- | RB=BTN_TR steering-limit+ | RT=BTN_TR2 steering-limit-");
+    RCLCPP_INFO(get_logger(),
+                "[JOY] limit-button axis isolation %.0f ms: LB/LT/RB/RT tidak boleh mengubah cmd_vel",
+                limit_button_axis_guard_sec_ * 1000.0);
     RCLCPP_INFO(get_logger(),
                 "[JOY] Axis shaping: forward_deadzone=%.2f forward_full=%.2f | yaw_deadzone=%.2f yaw_full=%.2f",
                 joy_forward_deadzone_, joy_forward_full_scale_threshold_,
                 joy_yaw_deadzone_, joy_yaw_full_scale_threshold_);
     RCLCPP_INFO(get_logger(),
-                "[DRIVE] Teleop speed startup=%.2f m/s max=%.2f m/s | L1 +%.2f m/s (~%.0f RPM/step) | L2 -step | accel=%.2f decel=%.2f m/s^2 smoothing=%s",
+                "[DRIVE] Teleop speed startup=%.2f m/s max=%.2f m/s | L1 +%.2f m/s | L2 -step | accel=%.2f decel=%.2f m/s^2 smoothing=%s",
                 max_speed_, speed_max_, speed_step_,
-                speed_max_ > 1.0e-9 ? (speed_step_ / speed_max_) * 300.0 : 0.0,
                 teleop_accel_limit_mps2_, teleop_decel_limit_mps2_,
                 teleop_velocity_smoothing_enabled_ ? "ON" : "OFF");
     RCLCPP_INFO(get_logger(),
@@ -310,6 +312,10 @@ private:
     bool ready{false};
     bool wait_center_logged{false};
     std::unordered_map<uint16_t, bool> button_down;
+    // Limit buttons share one HID report with analog axes on several low-cost
+    // controllers. Freeze axis sampling briefly around press/release so a
+    // speed/steering-limit button can never inject a motion command.
+    std::chrono::steady_clock::time_point limit_axis_guard_until{};
   };
 
   void declare_all_parameters() {
@@ -357,6 +363,7 @@ private:
     declare_parameter<bool>("joy_auto_center", true);
     declare_parameter<double>("joy_auto_center_max_abs", 0.08);
     declare_parameter<double>("button_debounce_sec", 0.20);
+    declare_parameter<double>("limit_button_axis_guard_sec", 0.18);
 
     declare_parameter<bool>("log_command_changes", true);
   }
@@ -400,6 +407,7 @@ private:
     joy_auto_center_ = get_parameter("joy_auto_center").as_bool();
     joy_auto_center_max_abs_ = get_parameter("joy_auto_center_max_abs").as_double();
     button_debounce_sec_ = get_parameter("button_debounce_sec").as_double();
+    limit_button_axis_guard_sec_ = get_parameter("limit_button_axis_guard_sec").as_double();
 
     log_command_changes_ = get_parameter("log_command_changes").as_bool();
 
@@ -429,6 +437,9 @@ private:
       throw std::runtime_error("joy_auto_center_max_abs harus <= joy_axis_init_tolerance");
     }
     if (button_debounce_sec_ < 0.0) throw std::runtime_error("button_debounce_sec tidak boleh negatif");
+    if (limit_button_axis_guard_sec_ < 0.0 || limit_button_axis_guard_sec_ > 1.0) {
+      throw std::runtime_error("limit_button_axis_guard_sec harus 0..1 s");
+    }
     if (gamepad_forward_abs_code_ < 0 || gamepad_forward_abs_code_ > ABS_MAX) {
       throw std::runtime_error("gamepad_forward_abs_code invalid");
     }
@@ -703,18 +714,26 @@ private:
       return fd_supports_abs(fd, gamepad_yaw_abs_code_) ? gamepad_yaw_abs_code_ : -1;
     }
 
-    // AX1/ShanWan Android mode umumnya right-stick X = ABS_Z.
-    // XInput/standard Linux umumnya right-stick X = ABS_RX.
-    const int preference[] = {ABS_Z, ABS_RX, ABS_RZ, ABS_RY};
-    int fallback = -1;
+    input_id id{};
+    (void)input_device_id(fd, id);
+    // Installed AX1/ShanWan-compatible 20bc:5001: right-stick X is ABS_Z;
+    // LT/RT are separate controls. This HID may boot with zeroed ABS snapshots
+    // until its first report, so allow the known mapping without center probing.
+    if (id.vendor == 0x20bc && id.product == 0x5001 && fd_supports_abs(fd, ABS_Z)) {
+      return ABS_Z;
+    }
+
+    // Generic controllers: accept only an axis that is centered at discovery.
+    // Do not fall back to a non-centered ABS_RZ/ABS_Z: on XInput-style devices
+    // those codes are often triggers and would make a trigger press steer.
+    const int preference[] = {ABS_RX, ABS_Z, ABS_RZ, ABS_RY};
     for (int code : preference) {
       if (code == gamepad_forward_abs_code_ || !fd_supports_abs(fd, code)) continue;
       input_absinfo info{};
       if (!get_abs_info(fd, code, info)) continue;
-      if (fallback < 0) fallback = code;
-      if (centered_axis(info)) return code;
+      if (centered_axis(info, 0.40)) return code;
     }
-    return fallback;
+    return -1;
   }
 
   bool probe_gamepad(const std::string &path, GamepadCandidate &candidate) const {
@@ -927,18 +946,38 @@ private:
     return std::abs(static_cast<double>(raw) - mid) / (range * 0.5);
   }
 
+  bool limit_button_down(const GamepadDevice &dev) const {
+    const uint16_t codes[] = {BTN_TL, BTN_TL2, BTN_TR, BTN_TR2};
+    for (uint16_t code : codes) {
+      const auto it = dev.button_down.find(code);
+      if (it != dev.button_down.end() && it->second) return true;
+    }
+    return false;
+  }
+
+  void arm_limit_axis_guard(GamepadDevice &dev) const {
+    const auto guard = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+        std::chrono::duration<double>(limit_button_axis_guard_sec_));
+    dev.limit_axis_guard_until = std::chrono::steady_clock::now() + guard;
+  }
+
   void handle_gamepad_button(GamepadDevice &dev, uint16_t code, int32_t value) {
     std::string action;
     std::string label;
-    if (code == BTN_TL) { action = "speed_up"; label = "JOY L1"; }
-    else if (code == BTN_TL2) { action = "speed_down"; label = "JOY L2"; }
-    else if (code == BTN_TR) { action = "yaw_up"; label = "JOY R1"; }
-    else if (code == BTN_TR2) { action = "yaw_down"; label = "JOY R2"; }
+    // Physical mapping: left pair changes speed envelope, right pair changes
+    // steering-request envelope. Limit buttons never create motion commands.
+    if (code == BTN_TL) { action = "speed_up"; label = "JOY LB"; }
+    else if (code == BTN_TL2) { action = "speed_down"; label = "JOY LT"; }
+    else if (code == BTN_TR) { action = "yaw_up"; label = "JOY RB"; }
+    else if (code == BTN_TR2) { action = "yaw_down"; label = "JOY RT"; }
     else return;
 
     const bool pressed = value != 0;
     const bool previous = dev.button_down[code];
     dev.button_down[code] = pressed;
+    // Guard press and release. A few HID firmwares alter analog bytes in the
+    // same report as shoulder/trigger buttons, including a release spike.
+    arm_limit_axis_guard(dev);
     if (!pressed || previous || value == 2) return;
 
     const double now_sec = std::chrono::duration<double>(
@@ -985,6 +1024,13 @@ private:
         }
         return true;
       }
+    }
+
+    // Limit adjustment is control-plane only. Hold the previous joystick
+    // fractions while LB/LT/RB/RT is down and during the short release guard.
+    // This prevents a limit-button HID report from moving the front wheel.
+    if (limit_button_down(dev) || std::chrono::steady_clock::now() < dev.limit_axis_guard_until) {
+      return true;
     }
 
     const double forward = normalize_evdev_axis(
@@ -1173,11 +1219,9 @@ private:
     }
     if (log_command_changes_) {
       if (label == "speed") {
-        const double old_rpm = speed_max_ > 1.0e-9 ? (old_value / speed_max_) * 300.0 : 0.0;
-        const double new_rpm = speed_max_ > 1.0e-9 ? (new_value / speed_max_) * 300.0 : 0.0;
         RCLCPP_INFO(get_logger(),
-                    "[LIMIT] %s speed %.2f -> %.2f m/s | STM target scale ~%.0f -> %.0f RPM",
-                    source.c_str(), old_value, new_value, old_rpm, new_rpm);
+                    "[LIMIT] %s speed %.2f -> %.2f m/s",
+                    source.c_str(), old_value, new_value);
       } else {
         RCLCPP_INFO(get_logger(), "[LIMIT] %s %s %.1f -> %.1f %s",
                     source.c_str(), label.c_str(), old_value, new_value, unit.c_str());
@@ -1424,6 +1468,7 @@ private:
   bool joy_auto_center_{true};
   double joy_auto_center_max_abs_{0.08};
   double button_debounce_sec_{0.20};
+  double limit_button_axis_guard_sec_{0.18};
   bool gamepad_absent_logged_{false};
   std::unordered_map<uint16_t, double> button_last_trigger_sec_;
 

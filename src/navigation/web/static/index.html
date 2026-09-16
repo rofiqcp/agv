@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#07100f">
   <link rel="icon" href="data:,">
   <title>ADV Operator Console</title>
-  <link rel="stylesheet" href="/styles.css?v=20260915-report-lifecycle-v1">
+  <link rel="stylesheet" href="/styles.css?v=20260916-r414-heading-v1">
   <link rel="stylesheet" href="/tokens.css?v=20260913-stage6-v1">
   <link rel="stylesheet" href="/base.css?v=20260913-stage6-v1">
   <link rel="stylesheet" href="/shell.css?v=20260913-stage6-v1">
@@ -16,7 +16,7 @@
   <link rel="stylesheet" href="/workspaces.css?v=20260913-stage6-v1">
   <link rel="stylesheet" href="/perception_bab4.css?v=20260914-bab4-v1">
   <link rel="stylesheet" href="/single-navigation.css?v=20260914-single-nav-v1">
-  <link rel="stylesheet" href="/ui-polish.css?v=20260915-ui-polish-v1">
+  <link rel="stylesheet" href="/ui-polish.css?v=20260916-r41-summary-graph-v1">
 </head>
 <body>
   <div class="app-shell">
@@ -402,7 +402,7 @@
               <div class="vesc-section-head"><div><span class="eyebrow">MOTOR CONTROL</span><h3>Direct Dual Controls</h3></div><button class="danger-btn" id="vescSendZero">STOP BOTH</button></div>
               <div class="vesc-dual-control-grid">
                 <fieldset><legend>LEFT • STEERING</legend><div class="vesc-command-row"><b>Position 0–360°</b><button data-vesc-nudge="vescLeftPosInput:-5">−</button><input id="vescLeftPosInput" type="number" min="0" max="360" step="1" value="180"><button data-vesc-nudge="vescLeftPosInput:5">+</button><button class="primary-btn" id="vescLeftSetPos">SET</button></div><div class="vesc-command-row"><b>Current A</b><button data-vesc-nudge="vescLeftCurrentInput:-1">−</button><input id="vescLeftCurrentInput" type="number" min="-20" max="20" step="0.1" value="0"><button data-vesc-nudge="vescLeftCurrentInput:1">+</button><button class="primary-btn" id="vescLeftSetCurrent">SET</button></div><div class="vesc-command-row"><b>Duty</b><button data-vesc-nudge="vescLeftDutyInput:-0.05">−</button><input id="vescLeftDutyInput" type="number" min="-0.95" max="0.95" step="0.01" value="0"><button data-vesc-nudge="vescLeftDutyInput:0.05">+</button><button class="primary-btn" id="vescLeftSetDuty">SET</button></div></fieldset>
-                <fieldset><legend>RIGHT • VELOCITY</legend><div class="vesc-command-row"><b>eRPM</b><button data-vesc-nudge="vescRightRpmInput:-500">−</button><input id="vescRightRpmInput" type="number" min="-10000" max="10000" step="100" value="0"><button data-vesc-nudge="vescRightRpmInput:500">+</button><button class="primary-btn" id="vescRightSetRpm">SET</button></div><div class="vesc-command-row"><b>Current A</b><button data-vesc-nudge="vescRightCurrentInput:-1">−</button><input id="vescRightCurrentInput" type="number" min="-20" max="20" step="0.1" value="0"><button data-vesc-nudge="vescRightCurrentInput:1">+</button><button class="primary-btn" id="vescRightSetCurrent">SET</button></div><div class="vesc-command-row"><b>Duty</b><button data-vesc-nudge="vescRightDutyInput:-0.05">−</button><input id="vescRightDutyInput" type="number" min="-0.95" max="0.95" step="0.01" value="0"><button data-vesc-nudge="vescRightDutyInput:0.05">+</button><button class="primary-btn" id="vescRightSetDuty">SET</button></div><div class="vesc-command-row"><b>Brake A</b><span></span><input id="vescRightBrakeInput" type="number" min="0" max="20" step="0.1" value="2"><span></span><button class="warning-btn" id="vescRightSetBrake">BRAKE</button></div></fieldset>
+                <fieldset><legend>RIGHT • VELOCITY</legend><div class="vesc-command-row"><b>eRPM</b><button data-vesc-nudge="vescRightErpmInput:-500">−</button><input id="vescRightErpmInput" type="number" min="-10000" max="10000" step="100" value="0"><button data-vesc-nudge="vescRightErpmInput:500">+</button><button class="primary-btn" id="vescRightSetErpm">SET</button></div><div class="vesc-command-row"><b>Current A</b><button data-vesc-nudge="vescRightCurrentInput:-1">−</button><input id="vescRightCurrentInput" type="number" min="-20" max="20" step="0.1" value="0"><button data-vesc-nudge="vescRightCurrentInput:1">+</button><button class="primary-btn" id="vescRightSetCurrent">SET</button></div><div class="vesc-command-row"><b>Duty</b><button data-vesc-nudge="vescRightDutyInput:-0.05">−</button><input id="vescRightDutyInput" type="number" min="-0.95" max="0.95" step="0.01" value="0"><button data-vesc-nudge="vescRightDutyInput:0.05">+</button><button class="primary-btn" id="vescRightSetDuty">SET</button></div><div class="vesc-command-row"><b>Brake A</b><span></span><input id="vescRightBrakeInput" type="number" min="0" max="20" step="0.1" value="2"><span></span><button class="warning-btn" id="vescRightSetBrake">BRAKE</button></div></fieldset>
               </div>
               <div class="vesc-control-envelope" id="vescEffectiveLimits">Effective command limits: waiting MC/tuning readback.</div>
             </section>
@@ -411,7 +411,7 @@
               <div class="vesc-section-head"><div><span class="eyebrow">VESC STANDARD MOTOR SETUP</span><h3>FOC Detection & Sensor Commissioning</h3></div><span class="status-chip waiting" id="vescDetectState">IDLE</span></div>
               <p class="vesc-setup-warning">Motor dapat bergerak selama deteksi. Jalankan hanya saat kendaraan terangkat/aman, Web Maintenance aktif, dan tidak ada VESC Tool/Python owner lain.</p>
               <div class="vesc-setup-grid">
-                <article class="vesc-card"><div class="vesc-card-head"><b>Detect All FOC</b><span>VESC-compatible transactional workflow</span></div><div class="vesc-form-row"><label>Max power loss W<input id="vescDetectAllPower" type="number" min="5" max="500" step="1" value="50"></label><label>Input I min A<input id="vescDetectAllImin" type="number" min="-30" max="0" step="0.5" value="-8"></label><label>Input I max A<input id="vescDetectAllImax" type="number" min="0" max="30" step="0.5" value="8"></label><label>Open-loop RPM<input id="vescDetectAllOpenloop" type="number" min="50" max="3000" step="10" value="250"></label><label>Sensorless eRPM<input id="vescDetectAllSlErpm" type="number" min="100" max="10000" step="100" value="2500"></label></div><button class="vesc-v2-action warning-btn vesc-maint-action" id="vescDetectAll">DETECT ALL FOC • BOTH MOTORS</button></article>
+                <article class="vesc-card"><div class="vesc-card-head"><b>Detect All FOC</b><span>VESC-compatible transactional workflow</span></div><div class="vesc-form-row"><label>Max power loss W<input id="vescDetectAllPower" type="number" min="5" max="500" step="1" value="50"></label><label>Input I min A<input id="vescDetectAllImin" type="number" min="-30" max="0" step="0.5" value="-8"></label><label>Input I max A<input id="vescDetectAllImax" type="number" min="0" max="30" step="0.5" value="8"></label><label>Open-loop eRPM<input id="vescDetectAllOpenloop" type="number" min="50" max="3000" step="10" value="250"></label><label>Sensorless eRPM<input id="vescDetectAllSlErpm" type="number" min="100" max="10000" step="100" value="2500"></label></div><button class="vesc-v2-action warning-btn vesc-maint-action" id="vescDetectAll">DETECT ALL FOC • BOTH MOTORS</button></article>
                 <article class="vesc-card"><div class="vesc-card-head"><b>Standalone Measurements</b><span>Read-only detect; does not imply EEPROM store</span></div><div class="vesc-form-row"><label>Sensor detect current A<input id="vescSetupDetectCurrent" type="number" min="0.1" max="5" step="0.1" value="1.0"></label></div><div class="vesc-detect-actions"><button class="vesc-v2-action soft-btn vesc-maint-action" id="vescDetectRlLeft">Measure R/L LEFT</button><button class="vesc-v2-action soft-btn vesc-maint-action" id="vescDetectRlRight">Measure R/L RIGHT</button><button class="vesc-v2-action soft-btn vesc-maint-action" id="vescDetectFluxLeft">Measure Flux LEFT</button><button class="vesc-v2-action soft-btn vesc-maint-action" id="vescDetectFluxRight">Measure Flux RIGHT</button><button class="warning-btn vesc-maint-action" id="vescDetectEncoderSetup">Detect LEFT Encoder</button><button class="warning-btn vesc-maint-action" id="vescDetectHallSetup">Detect RIGHT Hall</button></div><div class="vesc-form-row"><label>Flux current A<input id="vescFluxCurrent" type="number" min="0.5" max="20" step="0.1" value="2"></label><label>Ramp eRPM/s<input id="vescFluxRamp" type="number" min="50" max="5000" step="50" value="600"></label><label>Duty<input id="vescFluxDuty" type="number" min="0.02" max="0.5" step="0.01" value="0.15"></label><label>Resistance Ω<input id="vescFluxResistance" type="number" min="0.000001" max="5" step="0.000001" value="0.05"></label><label>Inductance H<input id="vescFluxInductance" type="number" min="0.000001" max="0.1" step="0.000001" value="0.0001"></label></div></article>
               </div>
               <div class="vesc-detect-result" id="vescDetectDetail">No detection result yet. Detect result, applied state, and EEPROM verification are intentionally separate.</div>
@@ -430,12 +430,12 @@
               <div class="vesc-section-head"><div><span class="eyebrow">LIVE DUAL MOTOR</span><h3>Runtime Telemetry</h3></div><small>RUNTIME memakai /esc/foc/telemetry. MAINTENANCE memakai reply VESC per motor.</small></div>
               <div class="vesc-dual-live-grid">
                 <article class="vesc-live-motor-card"><div class="vesc-card-head"><b>LEFT • STEERING</b><span class="path-tag">ID 1 • ABI/TIM4</span></div>
-                  <div class="vesc-primary-readout"><div><span>Duty</span><b id="vescLeftDuty">--</b></div><div><span>Motor I</span><b id="vescLeftMotorCurrent">--</b></div><div><span>eRPM</span><b id="vescLeftRpm">--</b></div><div><span>Position</span><b id="vescLeftPosition">--</b></div><div><span>Vbus</span><b id="vescLeftVbus">--</b></div><div><span>Fault</span><b id="vescLeftFault">--</b></div></div>
+                  <div class="vesc-primary-readout"><div><span>Duty</span><b id="vescLeftDuty">--</b></div><div><span>Motor I</span><b id="vescLeftMotorCurrent">--</b></div><div><span>eRPM</span><b id="vescLeftErpm">--</b></div><div><span>Position</span><b id="vescLeftPosition">--</b></div><div><span>Vbus</span><b id="vescLeftVbus">--</b></div><div><span>Fault</span><b id="vescLeftFault">--</b></div></div>
                   <div class="vesc-secondary-readout"><span>Iq <b id="vescLeftIq">--</b></span><span>Id <b id="vescLeftId">--</b></span><span>Input I <b id="vescLeftInputCurrent">--</b></span><span>Vq <b id="vescLeftVq">--</b></span><span>Vd <b id="vescLeftVd">--</b></span><span>MOS <b id="vescLeftTemp">--</b></span><span>Raw TIM4 <b id="vescLeftRawEncoder">--</b></span></div>
                   <details><summary>Decoded LEFT telemetry</summary><div class="json-pretty vesc-all-vars" id="vescLeftAllVariables">Waiting...</div></details>
                 </article>
                 <article class="vesc-live-motor-card"><div class="vesc-card-head"><b>RIGHT • VELOCITY</b><span class="path-tag">ID 2 • Hall</span></div>
-                  <div class="vesc-primary-readout"><div><span>Duty</span><b id="vescRightDuty">--</b></div><div><span>Motor I</span><b id="vescRightMotorCurrent">--</b></div><div><span>eRPM</span><b id="vescRightRpm">--</b></div><div><span>Position</span><b id="vescRightPosition">--</b></div><div><span>Vbus</span><b id="vescRightVbus">--</b></div><div><span>Fault</span><b id="vescRightFault">--</b></div></div>
+                  <div class="vesc-primary-readout"><div><span>Duty</span><b id="vescRightDuty">--</b></div><div><span>Motor I</span><b id="vescRightMotorCurrent">--</b></div><div><span>eRPM</span><b id="vescRightErpm">--</b></div><div><span>Position</span><b id="vescRightPosition">--</b></div><div><span>Vbus</span><b id="vescRightVbus">--</b></div><div><span>Fault</span><b id="vescRightFault">--</b></div></div>
                   <div class="vesc-secondary-readout"><span>Iq <b id="vescRightIq">--</b></span><span>Id <b id="vescRightId">--</b></span><span>Input I <b id="vescRightInputCurrent">--</b></span><span>Vq <b id="vescRightVq">--</b></span><span>Vd <b id="vescRightVd">--</b></span><span>MOS <b id="vescRightTemp">--</b></span><span>Sensor <b id="vescRightSensor">HALL</b></span></div>
                   <details><summary>Decoded RIGHT telemetry</summary><div class="json-pretty vesc-all-vars" id="vescRightAllVariables">Waiting...</div></details>
                 </article>
@@ -452,7 +452,7 @@
             </section>
 
             <section class="vesc-section" id="vescCompareSection">
-              <div class="vesc-section-head"><div><span class="eyebrow">MOTOR COMPARE / DATA ANALYSIS</span><h3>LEFT Steering vs RIGHT Drive Health</h3></div><small>Perbandingan health dan telemetry; fungsi motor berbeda sehingga gain/rpm tidak dinilai MATCH secara buta.</small></div>
+              <div class="vesc-section-head"><div><span class="eyebrow">MOTOR COMPARE / DATA ANALYSIS</span><h3>LEFT Steering vs RIGHT Drive Health</h3></div><small>Perbandingan health dan telemetry; fungsi motor berbeda sehingga gain/eRPM tidak dinilai MATCH secara buta.</small></div>
               <div class="vesc-compare-grid">
                 <div class="vesc-compare-head"><span>Metric</span><b>LEFT • ID 1</b><b>RIGHT • ID 2</b><em>Assessment</em></div>
                 <div id="vescCompareRows" class="vesc-compare-rows"><div class="empty-state">Waiting dual telemetry...</div></div>
@@ -474,10 +474,10 @@
             </section>
 
             <section class="vesc-section" id="vescDriveScaleSection">
-              <div class="vesc-section-head"><div><span class="eyebrow">ACKERMANN DRIVE BASELINE</span><h3>1.00 m/s → 8000 eRPM</h3></div><span class="status-chip" id="vescDriveScaleState">BASELINE</span></div>
-              <div class="vesc-form-row"><label>Baseline eRPM / (m/s)<input id="vescDriveNativeErpmPerMps" type="number" readonly></label><label>Calibration scale<input id="vescDriveScaleInput" type="number" min="0.2" max="5" step="0.001"></label><label>Effective command eRPM/(m/s)<input id="vescDriveEffectiveErpmPerMps" type="number" readonly></label><label>Command at 1.00 m/s<input id="vescDriveExampleErpm" type="number" readonly></label></div>
-              <div class="button-row"><button class="primary-btn" id="vescDriveScaleSave">Stage + Review Scale</button><button class="soft-btn" id="vescDriveScaleReload">Reload</button></div>
-              <p class="hint">Baseline indoor sementara: eRPM = speed[m/s] × 8000 ÷ calibration_scale. Kalibrasi ground-speed final dilakukan di luar gedung.</p>
+              <div class="vesc-section-head"><div><span class="eyebrow">DIRECT DRIVE CALIBRATION</span><h3>VESC eRPM ↔ Nav2 m/s</h3></div><span class="status-chip" id="vescDriveScaleState">DIRECT</span></div>
+              <div class="vesc-form-row"><label>Calibrated eRPM / (m/s)<input id="vescDriveErpmPerMpsInput" type="number" min="100" max="50000" step="1"></label><label>Command at 1.00 m/s [eRPM]<input id="vescDriveExampleErpm" type="number" readonly></label><label>Speed at 1000 eRPM [m/s]<input id="vescDriveExampleMps" type="number" readonly></label></div>
+              <div class="button-row"><button class="primary-btn" id="vescDriveErpmPerMpsSave">Stage + Review eRPM/m/s</button><button class="soft-btn" id="vescDriveScaleReload">Reload</button></div>
+              <p class="hint">Satu rumus runtime: eRPM = m/s × drive_erpm_per_mps dan m/s = eRPM ÷ drive_erpm_per_mps. Tidak ada mechanical RPM atau multiplier odometry tambahan.</p>
             </section>
 
 
@@ -542,10 +542,7 @@
               <div><span>Raw TIM4 / POS</span><b id="ackScaleEncoderRaw">--</b></div>
             </div>
             <div class="vesc-form-row">
-              <label>Wheel radius (m)<input id="ackScaleWheelRadius" type="number" min="0.01" max="1" step="0.001"></label>
-              <label>Pole pairs<input id="ackScalePolePairs" type="number" min="1" max="100" step="1"></label>
-              <label>Gear ratio<input id="ackScaleGear" type="number" min="0.01" max="100" step="0.01"></label>
-              <label>Odom scale<input id="ackScaleDriveScale" type="number" min="0.2" max="5" step="0.001"></label>
+              <label>Drive eRPM / (m/s)<input id="ackScaleErpmPerMpsInput" type="number" min="100" max="50000" step="1"></label>
             </div>
             <div class="vesc-form-row">
               <label>Physical LEFT (deg)<input id="ackScaleLeftLimit" type="number" min="-45" max="-1" step="0.1"></label>
@@ -633,7 +630,7 @@
           <article class="panel commissioning-roadmap" id="commissioningRoadmap">
             <div class="commissioning-step" data-phase="esc"><i>1</i><div><span>FIRST</span><b>ESC / FOC Total</b><small>Sensor motor → FOC current → outer loop → step → repeatability → load → final gate</small></div><em id="phaseEscState">REQUIRED</em></div>
             <div class="commissioning-arrow">→</div>
-            <div class="commissioning-step" data-phase="navigation"><i>2</i><div><span>AFTER ESC</span><b>Navigasi</b><small>RPM↔m/s → steering/yaw → IMU/GNSS → EKF → Nav2 planner/controller → safety → end-to-end</small></div><em id="phaseNavState">LOCKED</em></div>
+            <div class="commissioning-step" data-phase="navigation"><i>2</i><div><span>AFTER ESC</span><b>Navigasi</b><small>eRPM↔m/s → steering/yaw → IMU/GNSS → EKF → Nav2 planner/controller → safety → end-to-end</small></div><em id="phaseNavState">LOCKED</em></div>
             <div class="commissioning-arrow">→</div>
             <div class="commissioning-step" data-phase="perception"><i>3</i><div><span>LAST</span><b>Persepsi</b><small>Camera → detection → metric calibration → drivable/lane → near-field → trajectory safety → end-to-end</small></div><em id="phasePerState">LOCKED</em></div>
           </article>
@@ -684,17 +681,19 @@
                   <label>Candidate<select id="runCandidate"><option value="baseline">Baseline</option><option value="candidate-a">Candidate A</option><option value="candidate-b">Candidate B</option><option value="candidate-c">Candidate C</option><option value="final">Final</option></select></label>
                   <label>Variation / Run<input id="runVariation" value="run-01" autocomplete="off"></label>
                   <label>Condition<input id="runCondition" value="nominal" autocomplete="off"></label>
-                  <label>Sample rate<input id="runSampleRate" type="number" min="1" max="20" step="1" value="5"><small>Hz</small></label>
+                  <label>Sample rate<input id="runSampleRate" type="number" min="1" max="100" step="1" value="5"><small>Hz</small></label>
                   <div class="record-actions"><button class="record-toggle start" id="recordToggleBtn" data-active="false">● START</button></div>
                 </div>
                 <div class="record-footer"><span id="recordElapsed">00:00.0</span><span id="recordPath">Output: $AGV_ROOT/data/{navigasi|presepsi|esc}</span><span id="recordMessage">START/STOP → tabel 1 Hz tersimpan • Save CSV / Excel • tiap grafik dapat Download PNG</span></div>
               </article>
 
+              <div id="report41TimedPanel" hidden></div>
+
               <article class="panel graph-workspace">
                 <div class="panel-head"><div><span class="eyebrow">LIVE / SUMMARY</span><h2>Grafik Pengujian</h2></div><div class="graph-controls"><button class="soft-btn active" id="graphLiveMode">LIVE</button><button class="soft-btn" id="graphClearBtn">Clear</button></div></div>
                 <div id="graphTabs" class="lab-tabs" hidden></div>
                 <div id="experimentGraphs" class="experiment-graphs"><div class="empty-state">Subbab ini tidak mendefinisikan grafik.</div></div>
-                <div id="imuHeading9Graphs"></div>
+                <div id="imuHeadingLinearityGraphs"></div>
               </article>
 
               <div class="lab-two-col">
@@ -774,7 +773,7 @@
                 <div class="panel-head"><div><span class="eyebrow">REPORT TABLE</span><h2>Tabel Pengujian</h2></div><div class="graph-controls"><span class="muted" id="tableLiveHint">Preview live + hasil run</span><button class="soft-btn" id="saveTableCsvBtn">Save CSV</button><button class="primary-btn" id="saveTableExcelBtn">Save Excel (.xlsx)</button></div></div>
                 <div id="tableTabs" class="lab-tabs" hidden></div>
                 <div id="experimentTables" class="experiment-table-stack"><div class="empty-state">Subbab ini tidak mendefinisikan tabel.</div></div>
-                <div id="imuHeading9Table"></div>
+                <div id="imuHeadingLinearityTable"></div>
               </article>
 
               <article class="panel trial-recap" id="trialRecapPanel">
@@ -889,12 +888,13 @@
   <script src="/system_views.js?v=20260913-stage6-v1" defer></script>
   <script src="/perception_calibration.js?v=20260914-single-nav-v1" defer></script>
   <script src="/imu_calibration.js?v=20260913-stage6-v1" defer></script>
-  <script src="/tuning_catalog.js?v=20260915-raw41-v1" defer></script>
+  <script src="/tuning_catalog.js?v=20260916-r414-heading-v1" defer></script>
   <script src="/tuning_ui.js?v=20260915-report-lifecycle-v1" defer></script>
-  <script src="/tuning_charts.js?v=20260915-report-lifecycle-v1" defer></script>
+  <script src="/tuning_charts.js?v=20260916-r414-inertia-fallback-v1" defer></script>
   <script src="/tuning_trials.js?v=20260915-raw41-v1" defer></script>
-  <script src="/tuning_evidence.js?v=20260915-raw41-v1" defer></script>
-  <script src="/imu_heading_validation.js?v=20260915-r412-100sample-v1" defer></script>
+  <script src="/tuning_evidence.js?v=20260916-r41-timed-v1" defer></script>
+  <script src="/report_41_timed.js?v=20260916-r41-summary-graph-v1" defer></script>
+  <script src="/imu_heading_validation.js?v=20260916-r412-60s50hz-v1" defer></script>
   <script src="/perception_bab4.js?v=20260914-single-nav-v1" defer></script>
   <script src="/config.js?v=20260913-stage6-v1" defer></script>
   <script src="/export_tools.js?v=20260915-bab4-report-v4" defer></script>

@@ -1,0 +1,294 @@
+#!/usr/bin/env python3
+"""ROS-native AGV data recorder installed as ``ros2 run navigation data``.
+
+This logger intentionally shares summary.csv columns with
+F4gateway/tools/data.py.  Here the transport is ROS topics, so it validates the
+sensor data after F411/Yahboom drivers, calibration, timestamp mapping and
+localization rather than taking ownership of the serial ports.
+"""
+from __future__ import annotations
+import argparse, csv, hashlib, json, math, os, shutil, socket, subprocess, sys, time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
+
+import rclpy
+import yaml
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
+from rosidl_runtime_py.convert import message_to_ordereddict
+from rosidl_runtime_py.utilities import get_message
+
+AGV_ROOT = Path(os.environ.get("AGV_ROOT", str(Path(__file__).resolve().parents[1]))).expanduser().resolve()
+sys.path.insert(0, str(AGV_ROOT / "tools"))
+from data_common import (  # noqa: E402
+    UNIFIED_FIELDS, NAN, apply_lut, deg, enu_from_origin, finite,
+    geodetic_to_ecef, norm_angle, wrap360,
+)
+
+RAW_PREFIXES=("/gnss","/neo3","/neo3pro","/imu","/heading","/odometry","/localization/map_yaw_from_enu")
+
+
+def iso_utc(ns:int)->str:
+    return datetime.fromtimestamp(ns/1e9,tz=timezone.utc).isoformat(timespec="microseconds")
+
+def stamp_ns(msg:Any)->int:
+    h=getattr(msg,"header",None); s=getattr(h,"stamp",None) if h is not None else None
+    return int(s.sec)*1_000_000_000+int(s.nanosec) if s is not None else 0
+
+def yaw_from_q(q:Any)->float:
+    x,y,z,w=map(float,(q.x,q.y,q.z,q.w))
+    return norm_angle(math.atan2(2.0*(w*z+x*y),1.0-2.0*(y*y+z*z)))
+
+def roll_pitch_from_q(q:Any)->Tuple[float,float]:
+    x,y,z,w=map(float,(q.x,q.y,q.z,q.w))
+    roll=math.atan2(2*(w*x+y*z),1-2*(x*x+y*y)); s=2*(w*y-z*x)
+    pitch=math.copysign(math.pi/2,s) if abs(s)>=1 else math.asin(s)
+    return roll,pitch
+
+def sha256_file(path:Path)->str:
+    h=hashlib.sha256()
+    with path.open("rb") as f:
+        for b in iter(lambda:f.read(1<<20),b""): h.update(b)
+    return h.hexdigest()
+
+def git_head(path:Path)->str:
+    try:return subprocess.check_output(["git","-C",str(path),"rev-parse","HEAD"],text=True,stderr=subprocess.DEVNULL).strip()
+    except Exception:return ""
+
+class RosRecorder(Node):
+    def __init__(self,args:argparse.Namespace):
+        super().__init__("agv_data_recorder")
+        self.a=args; self.root=AGV_ROOT; self.f4=self.root/"F4gateway"; self.nav_cfg=self.root/"src/navigation/config"
+        self.mag_cfg=self._load_params(self.nav_cfg/"mag_heading.yaml","mag_heading_fusion")
+        self.imu_cfg=self._load_params(self.nav_cfg/"imu.yaml","data_imu_node")
+        self.latest:Dict[str,Tuple[Any,int]]={}; self.subs={}; self.raw_count=0; self.sample_seq=0
+        self.start_wall_ns=time.time_ns(); self.start_mono_ns=time.monotonic_ns(); self.last_dashboard=0
+        self.origin=None; self.gnss_enu=(NAN,NAN,NAN); self.fix=None; self.quality=[]; self.gnss_meta=[]; self.gnss_heading=NAN
+        self.map_yaw=0.0; self.roll=self.pitch=0.0; self.imu_yaw=NAN; self.gyro_z=NAN
+        self.imu_acc=[NAN]*3; self.imu_gyro=[NAN]*3; self.imu_raw_vectors=[]; self.yah_mag_raw=[NAN]*3
+        self.neo_mag=[NAN]*3; self.neo_norm=NAN; self.neo_diag=NAN; self.neo_valid=False
+        self.yah_q=[NAN,NAN]; self.yah_norm=NAN; self.yah_diag=NAN; self.yah_valid=False
+        self.inertial=NAN; self.inertial_last_ns=0; self.inertial_source="none"
+        self.baro_pressure=NAN; self.baro_temp=NAN
+        self.counts=dict(gnss=0,neo_mag=0,acc=0,gyro=0,angle=0,imu_mag=0)
+        self.outdir=self._create_outdir(args.output_dir); self.raw_path=self.outdir/"raw.jsonl"; self.summary_path=self.outdir/"summary.csv"; self.meta_path=self.outdir/"metadata.json"
+        self.raw_f=self.raw_path.open("w",encoding="utf-8",buffering=1); self.sum_f=self.summary_path.open("w",encoding="utf-8",newline="",buffering=1)
+        self.writer=csv.DictWriter(self.sum_f,fieldnames=UNIFIED_FIELDS); self.writer.writeheader(); self._snapshot(); self._write_meta(True)
+        self.qos=QoSProfile(history=HistoryPolicy.KEEP_LAST,depth=100,reliability=ReliabilityPolicy.BEST_EFFORT,durability=DurabilityPolicy.VOLATILE)
+        self.create_timer(.5,self.discover); self.create_timer(1.0/max(1.0,args.rate),self.sample); self.create_timer(1.0,self.flush)
+        self.get_logger().info(f"ROS unified data recording -> {self.outdir}")
+
+    @staticmethod
+    def _load_params(path:Path,key:str)->Dict[str,Any]:
+        try:return yaml.safe_load(path.read_text())[key]["ros__parameters"]
+        except Exception:return {}
+
+    def _create_outdir(self,arg:str)->Path:
+        base=Path(arg).expanduser() if arg else self.root/"tools/records"; base.mkdir(parents=True,exist_ok=True)
+        stamp=datetime.now().astimezone().strftime("%Y%m%d_%H%M%S"); out=base/f"data_ros_{stamp}"; n=1
+        while out.exists():out=base/f"data_ros_{stamp}_{n:02d}";n+=1
+        out.mkdir(parents=True); latest=base/"latest_ros"
+        try:
+            if latest.is_symlink() or latest.exists():latest.unlink()
+            latest.symlink_to(out.name)
+        except Exception:pass
+        return out
+
+    def _snapshot(self)->None:
+        for p in (self.nav_cfg/"mag_heading.yaml",self.nav_cfg/"yahboom_mag_calibration.yaml",self.nav_cfg/"imu.yaml",self.f4/".pio/build/blackpill_f411ce_neo3pro/firmware.identity.json"):
+            if p.exists():
+                try:shutil.copy2(p,self.outdir/p.name)
+                except Exception:pass
+
+    def _write_meta(self,started:bool)->None:
+        snaps={}
+        for p in self.outdir.iterdir():
+            if p.is_file() and p.name not in ("raw.jsonl","summary.csv","metadata.json"):
+                try:snaps[p.name]=sha256_file(p)
+                except Exception:pass
+        meta={"schema":"agv-data-unified-v2","source_mode":"ROS_TOPICS","started":bool(started),"start_wall_utc_ns":self.start_wall_ns,
+              "start_utc_iso8601":iso_utc(self.start_wall_ns),"stop_wall_utc_ns":None if started else time.time_ns(),"hostname":socket.gethostname(),
+              "ros_domain_id":os.environ.get("ROS_DOMAIN_ID",""),"workspace_git_head":git_head(self.root),"f4gateway_git_head":git_head(self.f4),
+              "summary_fields":UNIFIED_FIELDS,"raw_prefixes":RAW_PREFIXES,
+              "timestamp_contract":"exact ROS header stamp retained; /neo3pro/gnss/meta retains F411 mcu_ms + DroneCAN network_us/gnss_us/time_standard",
+              "xy_contract":"prefer /odometry/filtered_map, then /odometry/gnss_map, else WGS84 local ENU from first valid fix",
+              "raw_contract":"raw.jsonl stores every dynamically discovered ROS message below configured prefixes", "snapshot_sha256":snaps}
+        self.meta_path.write_text(json.dumps(meta,indent=2,sort_keys=True))
+
+    def discover(self)->None:
+        for topic,types in self.get_topic_names_and_types():
+            if topic in self.subs or not any(topic==p or topic.startswith(p+"/") for p in RAW_PREFIXES) or len(types)!=1:continue
+            try:
+                cls=get_message(types[0]); self.subs[topic]=self.create_subscription(cls,topic,lambda m,t=topic:self.on_raw(t,m),self.qos)
+            except Exception as exc:self.get_logger().warning(f"Cannot subscribe {topic} ({types}): {exc}")
+
+    def on_raw(self,topic:str,msg:Any)->None:
+        wall=time.time_ns(); mono=time.monotonic_ns(); rosnow=self.get_clock().now().nanoseconds; hns=stamp_ns(msg); self.raw_count+=1
+        try:payload=message_to_ordereddict(msg)
+        except Exception:payload={"repr":str(msg)}
+        self.raw_f.write(json.dumps({"source":"ROS","topic":topic,"type":msg.__class__.__module__.replace(".","/")+"/"+msg.__class__.__name__,
+            "wall_utc_ns":wall,"utc_iso8601":iso_utc(wall),"ros_receive_ns":rosnow,"monotonic_ns":mono,"header_stamp_ns":hns,"msg":payload},separators=(",",":"),allow_nan=True)+"\n")
+        self.latest[topic]=(msg,mono); self.dispatch(topic,msg,hns)
+
+    def dispatch(self,topic:str,msg:Any,hns:int)->None:
+        if topic=="/gnss/fix_raw":
+            lat,lon,alt=map(float,(msg.latitude,msg.longitude,msg.altitude))
+            if math.isfinite(lat) and math.isfinite(lon) and abs(lat)<=90 and abs(lon)<=180 and not(abs(lat)<1e-12 and abs(lon)<1e-12):
+                self.fix=msg; self.counts["gnss"]+=1
+                if self.origin is None:self.origin=(lat,lon,alt,geodetic_to_ecef(lat,lon,alt))
+                self.gnss_enu=enu_from_origin(lat,lon,alt,self.origin)
+        elif topic=="/gnss/quality":self.quality=list(msg.data)
+        elif topic=="/neo3pro/gnss/meta":self.gnss_meta=list(msg.data)
+        elif topic=="/neo3pro/gnss/heading_rad":self.gnss_heading=float(msg.data)
+        elif topic=="/localization/map_yaw_from_enu":
+            if math.isfinite(float(msg.data)):self.map_yaw=norm_angle(float(msg.data))
+        elif topic=="/imu/data":
+            self.roll,self.pitch=roll_pitch_from_q(msg.orientation);self.imu_yaw=yaw_from_q(msg.orientation);self.gyro_z=float(msg.angular_velocity.z)
+            self.imu_acc=[float(msg.linear_acceleration.x),float(msg.linear_acceleration.y),float(msg.linear_acceleration.z)]
+            self.imu_gyro=[float(msg.angular_velocity.x),float(msg.angular_velocity.y),float(msg.angular_velocity.z)];self._integrate(hns or self.get_clock().now().nanoseconds)
+        elif topic=="/imu/raw_sensor_vectors":
+            self.imu_raw_vectors=list(msg.data)
+            if len(self.imu_raw_vectors)>=6:self.counts["acc"]+=1;self.counts["gyro"]+=1
+            if len(self.imu_raw_vectors)>=9:self.yah_mag_raw=list(map(float,self.imu_raw_vectors[6:9]));self._yah_heading();self.counts["imu_mag"]+=1
+        elif topic=="/imu/mag_raw_lsb":
+            if len(msg.data)>=3:self.yah_mag_raw=list(map(float,msg.data[:3]));self._yah_heading();self.counts["imu_mag"]+=1
+        elif topic=="/neo3/mag":
+            self.neo_mag=[float(msg.magnetic_field.x)*1e6,float(msg.magnetic_field.y)*1e6,float(msg.magnetic_field.z)*1e6];self._neo_heading();self.counts["neo_mag"]+=1
+        elif topic=="/neo3pro/mag/meta":
+            v=list(msg.data)
+            if len(v)>=8:self.neo_mag=[float(v[5]),float(v[6]),float(v[7])];self._neo_heading()
+        elif topic=="/neo3pro/baro/pressure":self.baro_pressure=float(msg.fluid_pressure)
+        elif topic=="/neo3pro/baro/temperature":self.baro_temp=float(msg.temperature)
+
+    def _integrate(self,ns:int)->None:
+        if not math.isfinite(self.inertial):
+            if math.isfinite(self.neo_diag):self.inertial=self.neo_diag;self.inertial_source="neo3_calibrated_ros"
+            elif math.isfinite(self.imu_yaw):self.inertial=self.imu_yaw;self.inertial_source="imu_orientation"
+            self.inertial_last_ns=ns;return
+        if self.inertial_source!="neo3_calibrated_ros" and math.isfinite(self.neo_diag):self.inertial=self.neo_diag;self.inertial_source="neo3_calibrated_ros";self.inertial_last_ns=ns;return
+        dt=(ns-self.inertial_last_ns)*1e-9 if self.inertial_last_ns else 0.;self.inertial_last_ns=ns
+        if 0<dt<=.2 and math.isfinite(self.gyro_z):
+            b=self.imu_cfg.get("gyro_bias",[0.,0.,0.]);bz=float(b[2]) if len(b)>=3 else 0.;self.inertial=norm_angle(self.inertial+(self.gyro_z-bz)*dt)
+
+    def _neo_heading(self)->None:
+        mx,my,mz=self.neo_mag
+        if not all(math.isfinite(x) for x in (mx,my,mz)):return
+        self.neo_norm=math.sqrt(mx*mx+my*my+mz*mz);p=self.mag_cfg;bx,by=p.get("neo3_mag_bias_xy_ut",[0.,0.])[:2];m=p.get("neo3_mag_matrix_xy",[1.,0.,0.,1.])
+        qx=float(m[0])*(mx-float(bx))+float(m[1])*(my-float(by));qy=float(m[2])*(mx-float(bx))+float(m[3])*(my-float(by))
+        cr,sr,cp,sp=math.cos(self.roll),math.sin(self.roll),math.cos(self.pitch),math.sin(self.pitch);xh=qx*cp+mz*sp;yh=qx*sr*sp+qy*cr-mz*sr*cp
+        if math.hypot(xh,yh)<1e-9:return
+        yaw=norm_angle(float(p.get("neo3_mag_yaw_sign",1.))*math.atan2(yh,xh)+float(p.get("neo3_mag_yaw_offset_rad",0.))-float(p.get("magnetic_declination_rad",0.)))
+        if p.get("neo3_heading_lut_enabled",False):yaw=apply_lut(yaw,p.get("neo3_heading_lut_input_rad",[]),p.get("neo3_heading_lut_correction_rad",[]))
+        self.neo_diag=norm_angle(yaw+self.map_yaw);mt=float(p.get("neo3_planar_max_tilt_rad",.2617993878));self.neo_valid=15<=self.neo_norm<=100 and abs(self.roll)<=mt and abs(self.pitch)<=mt
+
+    def _yah_heading(self)->None:
+        x,y,z=self.yah_mag_raw
+        if not all(math.isfinite(float(v)) for v in (x,y,z)):return
+        p=self.mag_cfg;bx,by=p.get("imu_mag_bias_xy_lsb",[0.,0.])[:2];m=p.get("imu_mag_matrix_xy_per_lsb",[1.,0.,0.,1.]);qx=float(m[0])*(x-float(bx))+float(m[1])*(y-float(by));qy=float(m[2])*(x-float(bx))+float(m[3])*(y-float(by));self.yah_q=[qx,qy];self.yah_norm=math.hypot(qx,qy)
+        yaw=norm_angle(float(p.get("imu_mag_yaw_sign",1.))*math.atan2(qy,qx)+float(p.get("imu_mag_yaw_offset_rad",0.))-float(p.get("magnetic_declination_rad",0.)))
+        if p.get("imu_heading_lut_enabled",False):yaw=apply_lut(yaw,p.get("imu_heading_lut_input_rad",[]),p.get("imu_heading_lut_correction_rad",[]))
+        self.yah_diag=norm_angle(yaw+self.map_yaw);lo=float(p.get("imu_corrected_norm_min",.75));hi=float(p.get("imu_corrected_norm_max",1.25));mt=float(p.get("imu_planar_max_tilt_rad",.2617993878));self.yah_valid=lo<=self.yah_norm<=hi and abs(self.roll)<=mt and abs(self.pitch)<=mt
+
+    def _fresh(self,topic:str,max_age=.75)->Optional[Any]:
+        i=self.latest.get(topic);return None if not i or (time.monotonic_ns()-i[1])*1e-9>max_age else i[0]
+    def _yaw_choice(self,topic:str,fallback:float,source:str,valid:bool):
+        m=self._fresh(topic)
+        if m is not None:
+            try:return yaw_from_q(m.pose.pose.orientation),topic,True
+            except Exception:pass
+        return fallback,source,bool(valid and math.isfinite(fallback))
+    def _xy(self):
+        for t,s in (("/odometry/filtered_map","nav2_filtered_map"),("/odometry/gnss_map","gnss_map")):
+            m=self._fresh(t,1.5)
+            if m is not None:return float(m.pose.pose.position.x),float(m.pose.pose.position.y),s
+        return float(self.gnss_enu[0]),float(self.gnss_enu[1]),"gnss_local_enu_ros"
+
+    def sample(self)->None:
+        self.sample_seq+=1;wall=time.time_ns();mono=time.monotonic_ns();rosnow=self.get_clock().now().nanoseconds;x,y,xys=self._xy();q=self.quality;meta=self.gnss_meta
+        ny,ns,nv=self._yaw_choice("/neo3/mag_heading_fusion",self.neo_diag,"neo3_calibrated_ros",self.neo_valid);yy,ys,yv=self._yaw_choice("/imu/mag_heading_fusion",self.yah_diag,"yahboom_calibrated_ros",self.yah_valid)
+        im=self._fresh("/imu/inertial_heading");iy,isrc,iv=(yaw_from_q(im.pose.pose.orientation),"/imu/inertial_heading",True) if im is not None else (self.inertial,"logger_gyro_integral:"+self.inertial_source,math.isfinite(self.inertial))
+        lat=float(self.fix.latitude) if self.fix is not None else NAN;lon=float(self.fix.longitude) if self.fix is not None else NAN;alt=float(self.fix.altitude) if self.fix is not None else NAN;meas=stamp_ns(self.fix) if self.fix is not None else 0;meas=meas or rosnow
+        getq=lambda i,d=NAN:float(q[i]) if len(q)>i and math.isfinite(q[i]) else d;getm=lambda i,d=NAN:float(meta[i]) if len(meta)>i and math.isfinite(meta[i]) else d
+        course_deg=wrap360(90.0-math.degrees(getq(7))) if math.isfinite(getq(7)) else NAN
+        raw=self.imu_raw_vectors;acc=self.imu_acc;gyr=self.imu_gyro;accnorm=math.sqrt(sum(v*v for v in acc)) if all(math.isfinite(v) for v in acc) else NAN
+        row={k:"" for k in UNIFIED_FIELDS};row.update({
+          "source_mode":"ROS_TOPICS","sample_seq":self.sample_seq,"wall_utc_ns":wall,"utc_iso8601":iso_utc(wall),"ros_now_ns":rosnow,"monotonic_ns":mono,"measurement_stamp_ns":meas,"measurement_stamp_sec":meas//1_000_000_000,"measurement_stamp_nanosec":meas%1_000_000_000,
+          "f411_mcu_ms":int(getm(1,-1)),"dronecan_network_us":int(getm(3,-1)),"dronecan_gnss_us":int(getm(4,-1)),"dronecan_time_standard":int(getm(5,-1)),"timestamp_source_code":int(getq(24,-1)),
+          "x_m":x,"y_m":y,"xy_source":xys,"gnss_east_m":self.gnss_enu[0],"gnss_north_m":self.gnss_enu[1],"longitude_deg":lon,"latitude_deg":lat,"altitude_m":alt,"hacc_m":getq(2),"vacc_m":getq(10),"fix_type":int(getq(3,-1)),"fix_valid":int(getq(44,0)>.5),"satellites":int(getq(0,-1)),"satellites_visible":int(getm(11,-1)),
+          "gnss_ground_speed_mps":getq(6),"gnss_course_deg":course_deg,"gnss_vel_n_mps":getq(12),"gnss_vel_e_mps":getq(11),"gnss_vel_d_mps":getq(13),"gnss_sacc_mps":getq(5),"gnss_course_acc_deg":math.degrees(getq(8)) if math.isfinite(getq(8)) else NAN,"gnss_pdop":getm(15,getq(1)),"gnss_rate_hz":getm(21,getq(22)),
+          "yaw_neo3_deg":deg(ny),"yaw_neo3_source":ns,"yaw_neo3_valid":int(nv),"neo3_mag_x_ut":self.neo_mag[0],"neo3_mag_y_ut":self.neo_mag[1],"neo3_mag_z_ut":self.neo_mag[2],"neo3_mag_norm_ut":self.neo_norm,"neo3_node_id":int(getm(2,-1)),
+          "yaw_yahboom_deg":deg(yy),"yaw_yahboom_source":ys,"yaw_yahboom_valid":int(yv),"yah_mag_raw_x_lsb":self.yah_mag_raw[0],"yah_mag_raw_y_lsb":self.yah_mag_raw[1],"yah_mag_raw_z_lsb":self.yah_mag_raw[2],"yah_mag_corrected_x":self.yah_q[0],"yah_mag_corrected_y":self.yah_q[1],"yahboom_corrected_norm":self.yah_norm,
+          "yaw_inertial_deg":deg(iy),"yaw_inertial_source":isrc,"yaw_inertial_valid":int(iv),"gyro_integrated_yaw_deg":deg(self.inertial),"yaw_gnss_heading_deg":deg(self.gnss_heading),"yaw_imu_orientation_deg":deg(self.imu_yaw),"map_yaw_from_enu_deg":deg(self.map_yaw),
+          "imu_acc_x_mps2":acc[0],"imu_acc_y_mps2":acc[1],"imu_acc_z_mps2":acc[2],"imu_acc_norm_mps2":accnorm,"imu_gyro_x_rps":gyr[0],"imu_gyro_y_rps":gyr[1],"imu_gyro_z_rps":gyr[2],"gyro_z_rps":self.gyro_z,"imu_gyro_x_dps":math.degrees(gyr[0]) if math.isfinite(gyr[0]) else NAN,"imu_gyro_y_dps":math.degrees(gyr[1]) if math.isfinite(gyr[1]) else NAN,"imu_gyro_z_dps":math.degrees(gyr[2]) if math.isfinite(gyr[2]) else NAN,
+          "imu_roll_deg":deg(self.roll),"imu_pitch_deg":deg(self.pitch),"imu_accgyro_yaw_deg":deg(self.imu_yaw),"baro_pressure_pa":self.baro_pressure,"baro_temperature_k":self.baro_temp,
+          "f4_line_count":"","gnss_count":self.counts["gnss"],"neo3_mag_count":self.counts["neo_mag"],"imu_acc_count":self.counts["acc"],"imu_gyro_count":self.counts["gyro"],"imu_angle_count":self.counts["angle"],"imu_mag_count":self.counts["imu_mag"],"raw_message_count":self.raw_count,"raw_reference":f"ROS topics={len(self.subs)} messages={self.raw_count}"})
+        if len(raw)>=6:
+            row.update({"imu_acc_x_mps2":raw[0],"imu_acc_y_mps2":raw[1],"imu_acc_z_mps2":raw[2],"imu_gyro_x_rps":raw[3],"imu_gyro_y_rps":raw[4],"imu_gyro_z_rps":raw[5]})
+        self.writer.writerow(row);self.dashboard(row)
+
+    @staticmethod
+    def fmt(v:Any,n=3)->str:
+        try:x=float(v);return f"{x:.{n}f}" if math.isfinite(x) else "--"
+        except Exception:return "--"
+    def dashboard(self,r:Dict[str,Any])->None:
+        now=time.monotonic()
+        if not sys.stdout.isatty() and now-self.last_dashboard<1:return
+        self.last_dashboard=now
+        if sys.stdout.isatty():print("\033[2J\033[H",end="")
+        print(f"AGV DATA [ROS] {r['utc_iso8601']} save={self.outdir}")
+        print(f"x={self.fmt(r['x_m'])} y={self.fmt(r['y_m'])} [{r['xy_source']}] | lon={self.fmt(r['longitude_deg'],8)} lat={self.fmt(r['latitude_deg'],8)} hAcc={self.fmt(r['hacc_m'])}m sat={r['satellites']} fix={r['fix_type']}")
+        print(f"yaw NEO3={self.fmt(r['yaw_neo3_deg'])} [{r['yaw_neo3_valid']}] | Yahboom={self.fmt(r['yaw_yahboom_deg'])} [{r['yaw_yahboom_valid']}] | inertia={self.fmt(r['yaw_inertial_deg'])}")
+        print(f"ROS stamp={r['measurement_stamp_sec']}.{int(r['measurement_stamp_nanosec']):09d} F411={r['f411_mcu_ms']}ms Fix2UTC={r['dronecan_gnss_us']} time_std={r['dronecan_time_standard']} raw_topics={len(self.subs)}",flush=True)
+    def flush(self):
+        try:self.raw_f.flush();self.sum_f.flush()
+        except Exception:pass
+    def close(self):
+        try:self.flush();os.fsync(self.raw_f.fileno());os.fsync(self.sum_f.fileno())
+        except Exception:pass
+        self._write_meta(False)
+        try:self.raw_f.close();self.sum_f.close()
+        except Exception:pass
+
+def _sensor_serial_owned()->bool:
+    devices=(
+        "/dev/serial/by-id/usb-STMicroelectronics_BLACKPILL_F411CE_CDC_in_FS_Mode_338133833134-if00",
+        "/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0",
+    )
+    for dev in devices:
+        if not Path(dev).exists():continue
+        try:
+            cp=subprocess.run(["fuser",dev],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,timeout=.5)
+            if cp.returncode==0 and cp.stdout.strip():return True
+        except Exception:pass
+    return False
+
+def _exec_direct(a:argparse.Namespace)->int:
+    direct=AGV_ROOT/"F4gateway/tools/data.py"
+    if not direct.exists():raise SystemExit(f"Direct logger not found: {direct}")
+    argv=[sys.executable,str(direct),"--rate",str(a.rate)]
+    if a.duration>0:argv += ["--duration",str(a.duration)]
+    if a.output_dir:argv += ["--output-dir",a.output_dir]
+    print(f"[AGV DATA] source=DIRECT_SERIAL ({direct})",flush=True)
+    os.execv(sys.executable,argv)
+    return 0
+
+def main()->int:
+    ap=argparse.ArgumentParser(description="AGV 3-yaw realtime logger (auto ROS/direct serial)")
+    ap.add_argument("--output-dir",default="");ap.add_argument("--rate",type=float,default=10.0);ap.add_argument("--duration",type=float,default=0.0)
+    ap.add_argument("--source",choices=("direct","ros","auto"),default="direct",help="direct (default): read F411+Yahboom hardware; ros: subscribe ROS topics; auto: direct when ports are free, otherwise ROS")
+    a=ap.parse_args()
+    if a.source=="direct":return _exec_direct(a)
+    if a.source=="auto" and not _sensor_serial_owned():
+        print("[AGV DATA] sensor serial ports are free -> direct realtime 3-yaw mode",flush=True)
+        return _exec_direct(a)
+    rclpy.init()
+    node=RosRecorder(a);deadline=time.monotonic()+a.duration if a.duration>0 else None
+    try:
+        while rclpy.ok() and (deadline is None or time.monotonic()<deadline):rclpy.spin_once(node,timeout_sec=.05)
+    except KeyboardInterrupt:pass
+    finally:
+        node.close();print(f"\nSAVED summary: {node.summary_path}\nSAVED raw:     {node.raw_path}\nSAVED meta:    {node.meta_path}");node.destroy_node()
+        if rclpy.ok():rclpy.shutdown()
+    return 0
+if __name__=="__main__":raise SystemExit(main())

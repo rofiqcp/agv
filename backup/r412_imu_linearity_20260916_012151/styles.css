@@ -1,0 +1,21 @@
+/* Legacy stylesheet split into ordered domain/feature modules. Keep import order: it preserves the historical cascade exactly. */
+@import url("/legacy-core.css?v=20260913-stage2-css-v1");
+@import url("/experiments.css?v=20260913-stage2-css-v1");
+@import url("/navigation.css?v=20260913-stage2-css-v1");
+@import url("/perception.css?v=20260913-stage2-css-v1");
+@import url("/hmi.css?v=20260913-stage2-css-v1");
+@import url("/tuning.css?v=20260913-stage2-css-v1");
+@import url("/perception-calibration.css?v=20260914-obcal-v3");
+@import url("/domain-sidebar.css?v=20260913-stage2-css-v1");
+@import url("/engineering-workspaces.css?v=20260913-stage2-css-v1");
+@import url("/esc.css?v=20260914-robust-v2");
+@import url("/engineering-theme.css?v=20260913-stage2-css-v1");
+@import url("/workspace-tabs.css?v=20260913-stage2-css-v1");
+@import url("/navigation-advanced.css?v=20260913-stage2-css-v1");
+@import url("/imu-calibration.css?v=20260913-stage2-css-v1");
+@import url("/evidence.css?v=20260913-stage2-css-v1");
+@import url("/legacy-final-authority.css?v=20260913-stage2-css-v1");
+@import url("/shared-calibration.css?v=20260913-stage2-css-v1");
+
+@import url("/imu-heading-validation.css?v=20260915-r412-100sample-v1");
+@import url("/report-dual-export.css?v=20260915-report-lifecycle-v1");

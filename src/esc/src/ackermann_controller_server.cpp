@@ -50,7 +50,7 @@ constexpr std::uint8_t kVescGetValuesSelective = 50;
 constexpr std::uint32_t kRuntimeValuesMask =
   (1U << 0U) | (1U << 2U) | (1U << 3U) | (1U << 4U) | (1U << 5U) |
   (1U << 6U) | (1U << 7U) | (1U << 8U) | (1U << 15U) | (1U << 16U) | (1U << 17U);
-constexpr std::uint8_t kVescSetRpm = 8;
+constexpr std::uint8_t kVescSetErpm = 8;
 constexpr std::uint8_t kVescSetPos = 9;
 constexpr std::uint8_t kVescCustomAppData = 36;
 constexpr std::uint8_t kHbMagic0 = 0x48;
@@ -197,10 +197,10 @@ public:
       serial_device_.empty() ? "AUTO" : serial_device_.c_str());
     RCLCPP_INFO(
       get_logger(),
-      "Drive scale: speed +/-%.3f m/s -> baseline VESC +/-%.1f ERPM (%.1f eRPM/(m/s), r=%.3fm, pp=%d, gear=%.3f); "
+      "Drive conversion: speed +/-%.3f m/s <-> VESC +/-%.1f eRPM (%.3f eRPM/(m/s)); "
       "native direct VESC | steering +/-%.1f deg | teleop yaw +/-%.1f deg/s",
-      speed_max_mps_, speed_max_mps_ * nativeDriveErpmPerMps(), nativeDriveErpmPerMps(), drive_wheel_radius_m_,
-      drive_motor_pole_pairs_, drive_gear_ratio_, steering_max_deg_, yaw_max_deg_s_);
+      speed_max_mps_, speed_max_mps_ * driveErpmPerMps(), driveErpmPerMps(),
+      steering_max_deg_, yaw_max_deg_s_);
     RCLCPP_INFO(
       get_logger(),
       "Steering feedback calibration: %s | CMD L/C/R=%+.3f/%+.3f/%+.3f deg | FB L/C/R=%+.3f/%+.3f/%+.3f deg | "
@@ -263,7 +263,7 @@ private:
   struct SerialCommand
   {
     std::int16_t left_cdeg{0};
-    std::int16_t right_rpm_x10{0};  // legacy direct-serial frame only
+    std::int16_t right_erpm_x10{0};  // legacy direct-serial frame only
     double stm32_right_erpm{0.0};   // native VESC COMM_SET_RPM; no int16 truncation
     std::uint8_t flags{0};
   };
@@ -300,15 +300,9 @@ private:
     declare_parameter<double>("speed_max", 0.5);
     declare_parameter<double>("yaw_max_deg_s", 80.0);
     declare_parameter<double>("serial_left_max_deg", 90.0);
-    declare_parameter<double>("drive_wheel_radius_m", 0.145);
-    declare_parameter<int>("drive_motor_pole_pairs", 15);
-    declare_parameter<double>("drive_gear_ratio", 1.0);
-    // Temporary direct commissioning baseline: 1.00 m/s = 8000 electrical RPM.
-    // Wheel/pole/gear remain engineering metadata until outdoor calibration replaces this baseline.
+    // Single longitudinal calibration authority: VESC electrical speed <-> ground speed.
+    // Nav2 remains SI (m/s); VESC remains eRPM. N2.1 updates this value directly.
     declare_parameter<double>("drive_erpm_per_mps", 8000.0);
-    // Multiplicative calibration from raw wheel-model speed to measured ground speed.
-    // scale = V_GNSS / V_raw_ESC. This is runtime-adjustable after N2.1 trials.
-    declare_parameter<double>("drive_odometry_calibration_scale", 1.0);
     declare_parameter<double>("wheelbase_m", 0.70);
     declare_parameter<double>("track_width_m", 0.48);
     declare_parameter<double>("min_speed_for_nav_steering_mps", 0.05);
@@ -431,10 +425,10 @@ private:
     declare_parameter<std::string>("odom_frame", "odom");
     declare_parameter<std::string>("base_frame", "base_footprint");
     // Covariance is a confidence signal to robot_localization, not decoration.
-    // Raise uncertainty when RPM tracking error is high and when the Ackermann
+    // Raise uncertainty when eRPM tracking error is high and when the Ackermann
     // steering model is operating near its mechanical extremes.
     declare_parameter<double>("odom_v_variance_base", 0.03);
-    declare_parameter<double>("odom_v_variance_rpm_error_gain", 0.20);
+    declare_parameter<double>("odom_v_variance_erpm_error_gain", 0.20);
     declare_parameter<std::string>("wheel_slip_topic", "/localization/wheel_slip");
     declare_parameter<double>("wheel_slip_timeout_sec", 0.75);
     declare_parameter<double>("wheel_slip_covariance_multiplier", 25.0);
@@ -474,12 +468,7 @@ private:
     speed_max_mps_ = std::max(0.01, get_parameter("speed_max").as_double());
     yaw_max_deg_s_ = std::clamp(get_parameter("yaw_max_deg_s").as_double(), 1.0, 180.0);
     steering_max_deg_ = std::clamp(get_parameter("serial_left_max_deg").as_double(), 1.0, 90.0);
-    drive_wheel_radius_m_ = std::clamp(get_parameter("drive_wheel_radius_m").as_double(), 0.01, 1.0);
-    drive_motor_pole_pairs_ = std::clamp(static_cast<int>(get_parameter("drive_motor_pole_pairs").as_int()), 1, 100);
-    drive_gear_ratio_ = std::clamp(get_parameter("drive_gear_ratio").as_double(), 0.01, 100.0);
     drive_erpm_per_mps_ = std::clamp(get_parameter("drive_erpm_per_mps").as_double(), 100.0, 50000.0);
-    drive_odometry_calibration_scale_ = std::clamp(
-      get_parameter("drive_odometry_calibration_scale").as_double(), 0.20, 5.0);
     wheelbase_m_ = std::max(0.05, get_parameter("wheelbase_m").as_double());
     track_width_m_ = std::max(0.0, get_parameter("track_width_m").as_double());
     min_speed_for_nav_steering_mps_ = std::max(
@@ -677,7 +666,7 @@ private:
     odom_frame_ = get_parameter("odom_frame").as_string();
     base_frame_ = get_parameter("base_frame").as_string();
     odom_v_variance_base_ = std::max(1.0e-6, get_parameter("odom_v_variance_base").as_double());
-    odom_v_variance_rpm_error_gain_ = std::max(0.0, get_parameter("odom_v_variance_rpm_error_gain").as_double());
+    odom_v_variance_erpm_error_gain_ = std::max(0.0, get_parameter("odom_v_variance_erpm_error_gain").as_double());
     wheel_slip_topic_ = get_parameter("wheel_slip_topic").as_string();
     wheel_slip_timeout_sec_ = std::clamp(get_parameter("wheel_slip_timeout_sec").as_double(), 0.1, 5.0);
     wheel_slip_covariance_multiplier_ = std::clamp(
@@ -724,8 +713,8 @@ private:
     bool touched = false;
     bool serial_enabled_requested = serial_enabled_;
     bool serial_enabled_touched = false;
-    double drive_scale = drive_odometry_calibration_scale_;
-    bool drive_scale_touched = false;
+    double drive_erpm_per_mps = drive_erpm_per_mps_;
+    bool drive_erpm_per_mps_touched = false;
     bool raw_commissioning_requested = raw_commissioning_enabled_;
     bool raw_commissioning_touched = false;
 
@@ -736,8 +725,8 @@ private:
           serial_enabled_requested = parameter.as_bool(); serial_enabled_touched = true;
         } else if (name == "raw_commissioning_enabled") {
           raw_commissioning_requested = parameter.as_bool(); raw_commissioning_touched = true;
-        } else if (name == "drive_odometry_calibration_scale") {
-          drive_scale = parameter.as_double(); drive_scale_touched = true;
+        } else if (name == "drive_erpm_per_mps") {
+          drive_erpm_per_mps = parameter.as_double(); drive_erpm_per_mps_touched = true;
         } else if (name == "steering_feedback_calibration_enabled") {
           enabled = parameter.as_bool(); touched = true;
         } else if (name == "steering_calibration_mode_enabled") {
@@ -813,13 +802,13 @@ private:
         raw_commissioning_enabled_ ? "ENABLED" : "DISABLED");
     }
 
-    if (drive_scale_touched) {
-      if (!std::isfinite(drive_scale) || drive_scale < 0.20 || drive_scale > 5.0) {
-        result.reason = "drive_odometry_calibration_scale harus finite dan 0.20..5.00";
+    if (drive_erpm_per_mps_touched) {
+      if (!std::isfinite(drive_erpm_per_mps) || drive_erpm_per_mps < 100.0 || drive_erpm_per_mps > 50000.0) {
+        result.reason = "drive_erpm_per_mps harus finite dan 100..50000 eRPM/(m/s)";
         return result;
       }
-      drive_odometry_calibration_scale_ = drive_scale;
-      RCLCPP_INFO(get_logger(), "Drive velocity scale runtime updated: %.8f", drive_odometry_calibration_scale_);
+      drive_erpm_per_mps_ = drive_erpm_per_mps;
+      RCLCPP_INFO(get_logger(), "Drive eRPM/m/s calibration updated live: %.8f", drive_erpm_per_mps_);
     }
 
     if (!touched) {
@@ -832,8 +821,8 @@ private:
         return result;
       }
       result.successful = true;
-      result.reason = drive_scale_touched ?
-        "drive odometry scale diterapkan live" :
+      result.reason = drive_erpm_per_mps_touched ?
+        "drive_erpm_per_mps diterapkan live" :
         "parameter tidak terkait steering calibration/serial";
       return result;
     }
@@ -1732,39 +1721,29 @@ private:
       biased_base + steering_center_hold_trim_state_deg_ + p_term, -90.0, 90.0);
   }
 
-  double nativeDriveErpmPerMps() const
+  double driveErpmPerMps() const
   {
-    // Commissioning baseline is intentionally explicit. For the current indoor
-    // phase, 1.00 m/s maps to 8000 eRPM. Outdoor measured calibration later
-    // adjusts drive_odometry_calibration_scale without changing command topology.
     return drive_erpm_per_mps_;
   }
 
-  double rightCommandUnitsPerMps() const
+  double driveMpsFromErpm(double erpm) const
   {
-    // If measured ground speed is raw_model_speed * scale, command ERPM for a
-    // requested ground speed must be divided by the same scale.
-    return nativeDriveErpmPerMps() / drive_odometry_calibration_scale_;
+    return erpm / driveErpmPerMps();
   }
 
-  double rawDriveMpsFromErpm(double erpm) const
+  double rightCommandLimitErpm() const
   {
-    return erpm / nativeDriveErpmPerMps();
+    return speed_max_mps_ * driveErpmPerMps();
   }
 
-  double rightCommandLimit() const
-  {
-    return speed_max_mps_ * rightCommandUnitsPerMps();
-  }
-
-  double rightRpmFor(const Selected & selected) const
+  double rightErpmFor(const Selected & selected) const
   {
     if (selected.estop) return 0.0;
-    const double limit = rightCommandLimit();
-    double rpm = selected.twist.linear.x * rightCommandUnitsPerMps();
-    rpm = std::clamp(rpm, -limit, limit);
-    if (invert_drive_) rpm = -rpm;
-    return rpm;
+    const double limit_erpm = rightCommandLimitErpm();
+    double erpm = selected.twist.linear.x * driveErpmPerMps();
+    erpm = std::clamp(erpm, -limit_erpm, limit_erpm);
+    if (invert_drive_) erpm = -erpm;
+    return erpm;
   }
 
   bool rawCommissioningSnapshot(const rclcpp::Time & t, double & erpm, double & steering_deg)
@@ -1801,8 +1780,8 @@ private:
        applyYawRateFeedback(selected, steering_feedforward_deg, t));
 
     double protocol_cmd_deg = 0.0;  // display convention; converted to STM polarity below
-    double right_rpm = maintenance_active ? 0.0 :
-      (raw_commissioning_active ? raw_erpm : rightRpmFor(selected));
+    double right_erpm = maintenance_active ? 0.0 :
+      (raw_commissioning_active ? raw_erpm : rightErpmFor(selected));
     std::string effective_source = maintenance_active ? maintenance_owner :
       (raw_commissioning_active ? "RAW_COMMISSIONING" : selected.source);
 
@@ -1831,7 +1810,7 @@ private:
           -steering_calibration_direct_limit_deg_, steering_calibration_direct_limit_deg_);
       }
       protocol_cmd_deg = calibration_latched_command_deg_;
-      right_rpm = 0.0;
+      right_erpm = 0.0;
       effective_source = "STEERING_CALIBRATION_DIRECT";
       resetCenterHold();
     } else if (selected.source.rfind("HMI_", 0) == 0) {
@@ -1865,7 +1844,7 @@ private:
     geometry_msgs::msg::Twist actuator = selected.twist;
     if (raw_commissioning_active) {
       actuator = geometry_msgs::msg::Twist{};
-      actuator.linear.x = rawDriveMpsFromErpm(right_rpm);
+      actuator.linear.x = driveMpsFromErpm(right_erpm);
     }
     if (maintenance_active || selected.estop || (steering_calibration_mode_enabled_ && !raw_commissioning_active))
       actuator = geometry_msgs::msg::Twist{};
@@ -1877,7 +1856,7 @@ private:
 
     std_msgs::msg::Float64 drive_target;
     drive_target.data = (maintenance_active || selected.estop || (steering_calibration_mode_enabled_ && !raw_commissioning_active)) ?
-      0.0 : (raw_commissioning_active ? rawDriveMpsFromErpm(right_rpm) : selected.twist.linear.x);
+      0.0 : (raw_commissioning_active ? driveMpsFromErpm(right_erpm) : selected.twist.linear.x);
     drive_target_pub_->publish(drive_target);
     std_msgs::msg::Float64 steering_target;
     steering_target.data = steering_deg * kPi / 180.0;
@@ -1894,9 +1873,9 @@ private:
     SerialCommand serial_cmd;
     const double transport_steering_deg = steering_deg;
     serial_cmd.left_cdeg = static_cast<std::int16_t>(std::lround(transport_steering_deg * 100.0));
-    serial_cmd.stm32_right_erpm = right_rpm;
-    const double legacy_right_x10 = std::clamp(right_rpm * 10.0, -32768.0, 32767.0);
-    serial_cmd.right_rpm_x10 = static_cast<std::int16_t>(std::lround(legacy_right_x10));
+    serial_cmd.stm32_right_erpm = right_erpm;
+    const double legacy_right_x10 = std::clamp(right_erpm * 10.0, -32768.0, 32767.0);
+    serial_cmd.right_erpm_x10 = static_cast<std::int16_t>(std::lround(legacy_right_x10));
     serial_cmd.flags = selected.estop ? kFlagEstop : 0U;
     {
       std::lock_guard<std::mutex> lock(serial_command_mutex_);
@@ -1910,15 +1889,15 @@ private:
       RCLCPP_INFO(
         get_logger(),
         "MUX -> %s | v=%.3f m/s yaw=%.3f rad/s | steer_target=%.2f deg uncal_target=%.2f deg "
-        "center_fb=%+.2f err=%+.2f P=%+.2f trim_state=%+.2f deg STM=%.2f deg right_target=%.1f rpm",
+        "center_fb=%+.2f err=%+.2f P=%+.2f trim_state=%+.2f deg STM=%.2f deg right_target=%.1f eRPM",
         effective_source.c_str(), actuator.linear.x, actuator.angular.z, steering_deg,
         protocol_cmd_deg, last_center_hold_measured_uncal_deg_, last_center_hold_error_deg_,
-        last_center_hold_p_deg_, last_center_hold_trim_deg_, steering_stm_deg, right_rpm);
+        last_center_hold_p_deg_, last_center_hold_trim_deg_, steering_stm_deg, right_erpm);
     }
 
     diagnostic_source_ = effective_source;
     diagnostic_drive_target_mps_ = (maintenance_active || selected.estop || steering_calibration_mode_enabled_) ? 0.0 : selected.twist.linear.x;
-    diagnostic_drive_target_rpm_ = right_rpm;
+    diagnostic_drive_target_erpm_ = right_erpm;
     diagnostic_steering_target_deg_ = steering_deg;
     diagnostic_steering_raw_target_deg_ = protocol_cmd_deg;
 
@@ -2047,7 +2026,7 @@ private:
     frame[3] = kTypeCommand;
     writeU16Le(&frame[4], seq);
     writeU16Le(&frame[6], static_cast<std::uint16_t>(cmd.left_cdeg));
-    writeU16Le(&frame[8], static_cast<std::uint16_t>(cmd.right_rpm_x10));
+    writeU16Le(&frame[8], static_cast<std::uint16_t>(cmd.right_erpm_x10));
     frame[10] = cmd.flags;
     frame[11] = 0U;
     writeU16Le(&frame[12], crc16Ccitt(&frame[2], 10));
@@ -2122,7 +2101,7 @@ private:
   {
     std::vector<std::uint8_t> batch; batch.reserve(96U);
     appendVescSetPos(batch, static_cast<double>(cmd.left_cdeg) * 0.01);
-    appendVescSetRpm(batch, cmd.stm32_right_erpm);
+    appendVescSetErpm(batch, cmd.stm32_right_erpm);
     appendVescValuesRequest(batch, false);
     appendVescValuesRequest(batch, true);
     if (include_calibration) appendSteeringCalibrationRequest(batch);
@@ -2132,7 +2111,7 @@ private:
   std::vector<std::uint8_t> buildNativeSafeStopBatch(double steering_deg)
   {
     std::vector<std::uint8_t> batch; batch.reserve(72U);
-    for (int i=0; i<3; ++i) { appendVescSetRpm(batch, 0.0); appendVescSetPos(batch, steering_deg); }
+    for (int i=0; i<3; ++i) { appendVescSetErpm(batch, 0.0); appendVescSetPos(batch, steering_deg); }
     return batch;
   }
 
@@ -2209,7 +2188,7 @@ private:
 
     const std::uint16_t seq = readU16Le(&frame[4]);
     const double steering_deg = static_cast<double>(readI16Le(&frame[6])) * 0.01;
-    const double rpm = static_cast<double>(readI16Le(&frame[8])) * 0.1;
+    const double erpm = static_cast<double>(readI16Le(&frame[8])) * 0.1;
     const std::uint8_t status = frame[10];
 
     std::lock_guard<std::mutex> lock(feedback_mutex_);
@@ -2217,7 +2196,7 @@ private:
     last_ack_time_ = std::chrono::steady_clock::now();
     last_ack_seq_ = seq;
     measured_steering_deg_ = steering_deg;
-    measured_rpm_ = rpm;
+    measured_erpm_ = erpm;
     feedback_status_ = status;
     feedback_updated_ = true;
   }
@@ -2236,10 +2215,10 @@ private:
     appendVescFrame(batch, payload);
   }
 
-  void appendVescSetRpm(std::vector<std::uint8_t> &batch, double rpm)
+  void appendVescSetErpm(std::vector<std::uint8_t> &batch, double erpm)
   {
-    std::vector<std::uint8_t> inner{kVescSetRpm};
-    appendI32Be(inner, static_cast<std::int32_t>(std::lround(rpm)));
+    std::vector<std::uint8_t> inner{kVescSetErpm};
+    appendI32Be(inner, static_cast<std::int32_t>(std::lround(erpm)));
     appendVescFrame(batch, wrapRightMotor(inner));
   }
 
@@ -2302,7 +2281,7 @@ private:
   void handleVescValues(const std::vector<std::uint8_t> &p)
   {
     double temp_mos_c = 0.0, current_motor_a = 0.0, current_in_a = 0.0;
-    double id_a = 0.0, iq_a = 0.0, duty = 0.0, rpm = 0.0, vbus_v = 0.0, position_deg = 0.0;
+    double id_a = 0.0, iq_a = 0.0, duty = 0.0, erpm = 0.0, vbus_v = 0.0, position_deg = 0.0;
     std::uint8_t fault = 255U, vesc_id = 255U;
     if (p.size() >= 59U && p[0] == kVescGetValues) {
       temp_mos_c = static_cast<double>(readI16Be(&p[1])) / 10.0;
@@ -2311,7 +2290,7 @@ private:
       id_a = static_cast<double>(readI32Be(&p[13])) / 100.0;
       iq_a = static_cast<double>(readI32Be(&p[17])) / 100.0;
       duty = static_cast<double>(readI16Be(&p[21])) / 1000.0;
-      rpm = static_cast<double>(readI32Be(&p[23]));
+      erpm = static_cast<double>(readI32Be(&p[23]));
       vbus_v = static_cast<double>(readI16Be(&p[27])) / 10.0;
       fault = p[53];
       position_deg = static_cast<double>(readI32Be(&p[54])) / 1000000.0;
@@ -2324,7 +2303,7 @@ private:
       id_a = static_cast<double>(readI32Be(&p[15])) / 100.0;
       iq_a = static_cast<double>(readI32Be(&p[19])) / 100.0;
       duty = static_cast<double>(readI16Be(&p[23])) / 1000.0;
-      rpm = static_cast<double>(readI32Be(&p[25]));
+      erpm = static_cast<double>(readI32Be(&p[25]));
       vbus_v = static_cast<double>(readI16Be(&p[29])) / 10.0;
       fault = p[31];
       position_deg = static_cast<double>(readI32Be(&p[32])) / 1000000.0;
@@ -2348,13 +2327,13 @@ private:
         left_id_a_ = id_a;
         left_iq_a_ = iq_a;
         left_duty_ = duty;
-        left_rpm_ = rpm;
+        left_erpm_ = erpm;
         left_vbus_v_ = vbus_v;
         // LEFT starts a new ordered runtime pair. Any orphan RIGHT sample from a
         // damaged/old transaction is intentionally discarded here.
         values_pair_mask_ = 0x01U;
       } else if (vesc_id == kVescRightMotorId) {
-        measured_rpm_ = rpm;
+        measured_erpm_ = erpm;
         right_fault_code_ = fault;
         right_values_seen_ = true;
         right_values_time_ = t;
@@ -2503,14 +2482,14 @@ private:
       << ",\"current_motor_a\":" << left_current_motor_a_
       << ",\"current_in_a\":" << left_current_in_a_
       << ",\"id_a\":" << left_id_a_ << ",\"iq_a\":" << left_iq_a_
-      << ",\"duty\":" << left_duty_ << ",\"rpm\":" << left_rpm_
+      << ",\"duty\":" << left_duty_ << ",\"erpm\":" << left_erpm_
       << ",\"vbus_v\":" << left_vbus_v_ << ",\"position_deg\":" << measured_steering_deg_ << "},"
       << "\"right\":{\"id\":2,\"fault\":" << static_cast<unsigned>(right_fault_code_)
       << ",\"temp_mos_c\":" << right_temp_mos_c_
       << ",\"current_motor_a\":" << right_current_motor_a_
       << ",\"current_in_a\":" << right_current_in_a_
       << ",\"id_a\":" << right_id_a_ << ",\"iq_a\":" << right_iq_a_
-      << ",\"duty\":" << right_duty_ << ",\"rpm\":" << measured_rpm_
+      << ",\"duty\":" << right_duty_ << ",\"erpm\":" << measured_erpm_
       << ",\"vbus_v\":" << right_vbus_v_ << "},"
       << "\"steering_cal\":{\"calibrated\":" << (steering_calibrated_?"true":"false")
       << ",\"homed\":" << (steering_homed_?"true":"false")
@@ -2817,7 +2796,7 @@ private:
     bool ack_seen = false;
     bool feedback_updated = false;
     double steering_deg = 0.0;
-    double rpm = 0.0;
+    double erpm = 0.0;
     std::uint8_t status = 0U;
     std::uint16_t ack_seq = 0U;
     std::chrono::steady_clock::time_point ack_time;
@@ -2827,7 +2806,7 @@ private:
       feedback_updated = feedback_updated_;
       feedback_updated_ = false;
       steering_deg = measured_steering_deg_;
-      rpm = measured_rpm_;
+      erpm = measured_erpm_;
       status = feedback_status_;
       ack_seq = last_ack_seq_;
       ack_time = last_ack_time_;
@@ -2869,10 +2848,10 @@ private:
       diagnostic_last_log_ = diag_now;
       RCLCPP_INFO(
         get_logger(),
-        "[ESC-TRACE] src=%s drive_cmd=%.3f m/s target=%.1f rpm actual=%.1f rpm err=%+.1f rpm | "
+        "[ESC-TRACE] src=%s drive_cmd=%.3f m/s target=%.1f eRPM actual=%.1f eRPM err=%+.1f eRPM | "
         "steer_target=%+.2f deg protocol_cmd=%+.2f deg protocol_fb=%+.2f deg cal_fb=%+.2f deg",
-        diagnostic_source_.c_str(), diagnostic_drive_target_mps_, diagnostic_drive_target_rpm_,
-        rpm, diagnostic_drive_target_rpm_ - rpm, diagnostic_steering_target_deg_,
+        diagnostic_source_.c_str(), diagnostic_drive_target_mps_, diagnostic_drive_target_erpm_,
+        erpm, diagnostic_drive_target_erpm_ - erpm, diagnostic_steering_target_deg_,
         diagnostic_steering_raw_target_deg_, steering_uncalibrated_deg, steering_calibrated_deg);
     }
 
@@ -2897,16 +2876,16 @@ private:
         << " lut=" << ((steering_physical_lut_enabled_ && steering_physical_lut_valid_) ? "on" : "off")
         << " lut_n=" << steering_lut_physical_deg_.size()
         << " lut_dir=" << steering_lut_motion_direction_
-        << " right=" << rpm << "erpm"
+        << " right=" << erpm << "erpm"
         << " fw_status=0x" << std::hex << static_cast<unsigned>(status);
     status_msg.data = oss.str();
     status_pub_->publish(status_msg);
 
     if (!ack_fresh || !feedback_updated) return;
 
-    // The command mapping intentionally defines speed_max_mps <-> right_max_rpm.
-    const double drive_raw_mps = rawDriveMpsFromErpm(rpm) * (invert_drive_ ? -1.0 : 1.0);
-    const double drive_mps = drive_raw_mps * drive_odometry_calibration_scale_;
+    // Direct command mapping defines speed_max_mps <-> calibrated eRPM limit.
+    const double drive_mps = driveMpsFromErpm(erpm) * (invert_drive_ ? -1.0 : 1.0);
+    const double drive_raw_mps = drive_mps;
     const double steering_rad = steering_calibrated_deg * kPi / 180.0;
     // steering_rad adalah sudut roda DALAM Ackermann (RIGHT-positive).
     // R_center = track/2 + L/tan(|delta_inner|).
@@ -2959,8 +2938,8 @@ private:
     odom.pose.pose.orientation.w = std::cos(odom_yaw_ * 0.5);
     odom.twist.twist.linear.x = drive_mps;
     odom.twist.twist.angular.z = yaw_rate;
-    const double rpm_error_norm = std::clamp(
-      std::abs(diagnostic_drive_target_rpm_ - rpm) / std::max(1.0, rightCommandLimit()), 0.0, 2.0);
+    const double erpm_error_norm = std::clamp(
+      std::abs(diagnostic_drive_target_erpm_ - erpm) / std::max(1.0, rightCommandLimitErpm()), 0.0, 2.0);
     const double steer_norm = std::clamp(
       std::abs(steering_rad) /
       std::max(1.0e-6, operationalPhysicalLimitDeg() * kPi / 180.0), 0.0, 1.0);
@@ -2968,7 +2947,7 @@ private:
       (stamp - wheel_slip_received_).seconds() >= 0.0 &&
       (stamp - wheel_slip_received_).seconds() <= wheel_slip_timeout_sec_;
     const double intrinsic_v_var = odom_v_variance_base_ +
-      odom_v_variance_rpm_error_gain_ * rpm_error_norm * rpm_error_norm;
+      odom_v_variance_erpm_error_gain_ * erpm_error_norm * erpm_error_norm;
     double v_var = intrinsic_v_var;
     if (slip_fresh) v_var *= wheel_slip_covariance_multiplier_;
     const double yaw_var = odom_yaw_variance_base_ +
@@ -2981,7 +2960,7 @@ private:
       odom_yaw_variance_steer_gain_ * steer_norm * steer_norm;
 
     // Independent validation stream: identical wheel measurement/timestamp, but
-    // covariance is the intrinsic encoder/RPM model BEFORE localization's own
+    // covariance is the intrinsic eRPM-to-speed model BEFORE localization's own
     // wheel-slip feedback inflation. This prevents the slip detector from
     // reducing its own NIS by enlarging the denominator after it fires.
     auto odom_validation = odom;
@@ -3017,11 +2996,7 @@ private:
   double speed_max_mps_{0.5};
   double yaw_max_deg_s_{80.0};
   double steering_max_deg_{90.0};
-  double drive_wheel_radius_m_{0.145};
-  int drive_motor_pole_pairs_{15};
-  double drive_gear_ratio_{1.0};
   double drive_erpm_per_mps_{8000.0};
-  double drive_odometry_calibration_scale_{1.0};
   double wheelbase_m_{0.70};
   double track_width_m_{0.48};
   double min_speed_for_nav_steering_mps_{0.05};
@@ -3136,7 +3111,7 @@ private:
   std::string odom_frame_{"odom"};
   std::string base_frame_{"base_footprint"};
   double odom_v_variance_base_{0.03};
-  double odom_v_variance_rpm_error_gain_{0.20};
+  double odom_v_variance_erpm_error_gain_{0.20};
   std::string wheel_slip_topic_{"/localization/wheel_slip"};
   double wheel_slip_timeout_sec_{0.75};
   double wheel_slip_covariance_multiplier_{25.0};
@@ -3149,7 +3124,7 @@ private:
   std::chrono::steady_clock::time_point diagnostic_last_log_{std::chrono::steady_clock::now()};
   std::string diagnostic_source_{"IDLE"};
   double diagnostic_drive_target_mps_{0.0};
-  double diagnostic_drive_target_rpm_{0.0};
+  double diagnostic_drive_target_erpm_{0.0};
   double diagnostic_steering_target_deg_{0.0};
   double diagnostic_steering_raw_target_deg_{0.0};
 
@@ -3202,7 +3177,7 @@ private:
   std::chrono::steady_clock::time_point last_ack_time_{};
   std::uint16_t last_ack_seq_{0U};
   double measured_steering_deg_{0.0};
-  double measured_rpm_{0.0};
+  double measured_erpm_{0.0};
   std::uint8_t feedback_status_{0U};
   bool left_values_seen_{false}, right_values_seen_{false};
   std::uint8_t values_pair_mask_{0U};
@@ -3218,7 +3193,7 @@ private:
   double left_id_a_{0.0}, right_id_a_{0.0};
   double left_iq_a_{0.0}, right_iq_a_{0.0};
   double left_duty_{0.0}, right_duty_{0.0};
-  double left_rpm_{0.0};
+  double left_erpm_{0.0};
   double left_vbus_v_{0.0}, right_vbus_v_{0.0};
 
   // Odom integration

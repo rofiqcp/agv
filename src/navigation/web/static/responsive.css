@@ -84,3 +84,10 @@
   .map-toolbar{width:100%!important;max-width:100%!important;overflow-x:auto!important;overflow-y:hidden!important;justify-content:flex-start!important;flex-wrap:nowrap!important;padding-block:.2rem;overscroll-behavior-x:contain;scrollbar-width:thin}
   .map-toolbar>*{flex:0 0 auto!important}
 }
+
+/* Final QA: at laptop widths show every map action without hidden horizontal scroll. */
+@media(max-width:1280px) and (min-width:821px){
+  .map-head{height:auto!important;min-height:0!important;display:block!important}
+  .map-toolbar{width:100%!important;max-width:100%!important;overflow:visible!important;overflow-y:visible!important;justify-content:flex-start!important;flex-wrap:wrap!important;padding-block:.2rem}
+  .map-toolbar>*{flex:0 0 auto!important}
+}

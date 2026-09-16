@@ -28,7 +28,8 @@ for token in ("vescDetectAll", "vescDetectRlLeft", "vescDetectRlRight",
               "vescDetectEncoderSetup", "vescDetectHallSetup"):
     req(f'id="{token}"' in html, f"VESC setup control missing: {token}")
 for token in ("web_lease_timeout_ms", "webLeaseTick", "web_lease_expired_safe_stop",
-              "cancelWebDetectionIfActive", "max_abs_current_a",
+              "webMotorHeartbeatTick", "clearWebMotorHeartbeat", "web_motor_heartbeat_",
+              "COMM_ALIVE", "cancelWebDetectionIfActive", "max_abs_current_a",
               "SAFE_STOP:BOTH", "COMM_DETECT_MOTOR_R_L",
               "COMM_DETECT_MOTOR_FLUX_LINKAGE_OPENLOOP",
               "COMM_DETECT_APPLY_ALL_FOC", "/esc/vesc/detect_state"):
@@ -40,4 +41,4 @@ req(".vesc-motor-setup" in css and ".vesc-detect-result" in css,
     "VESC motor setup styling missing")
 print("PASS web_vesc_robustness_self_check")
 print("order: scope -> direct controls -> FOC setup -> utilities -> telemetry")
-print("safety: atomic stop + browser lease + fail-closed maintenance owner")
+print("safety: atomic stop + browser lease + VESC ALIVE refresh + fail-closed maintenance owner")

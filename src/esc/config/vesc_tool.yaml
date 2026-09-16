@@ -4,7 +4,7 @@ vesc_tool_bridge:
     tcp_service_hz: 1000.0
     max_abs_duty: 0.95
     max_abs_current_a: 20.0
-    max_abs_rpm: 8000.0
+    max_abs_erpm: 8000.0
     # Browser must renew this lease while Web Maintenance owns the motor link.
     # Lost tab/network => bridge safe-stops both motors then restores runtime.
     web_lease_timeout_ms: 1200

@@ -1,0 +1,32 @@
+stmf4_hmi_bridge:
+  ros__parameters:
+    serial_device: auto
+    serial_baud: 1000000
+    reconnect_sec: 0.50
+    telemetry_rate_hz: 20.0
+    serial_poll_hz: 1000.0
+    command_rate_hz: 30.0
+    heartbeat_sec: 5.0
+    hmi_transport_timeout_sec: 2.0
+    manual_speed_max_mps: 1.0
+    manual_command_lease_sec: 0.30
+    manual_speed_min_pct: 10
+    manual_speed_max_pct: 50
+    manual_speed_default_pct: 20
+    steering_test_angle_deg: 20.0
+    hmi_steer_full_scale_deg: 90.0
+    teleop_yaw_max_deg_s: 80.0
+    invert_hmi_steering: false
+    default_mode: AUTO
+    waypoint_file: data/hmi_waypoints.tsv
+    waypoint_pose_timeout_sec: 2.5
+    neo3_sensor_timeout_sec: 2.0
+    neo3_gnss_frame_id: gnss_link
+    neo3_mag_frame_id: gnss_link
+    neo3pro_baro_frame_id: gnss_link
+    neo3_mag_sigma_ut: 3.0
+    # Fix2 does not expose active constellation mask; default conservatively to GPS.
+    neo3pro_navsat_service_mask: 1
+    neo3_safety_button_as_estop: false
+    neo3_require_protocol_crc: true
+    publish_stm32_gnss: true

@@ -35,3 +35,4 @@ global_field_test_localizer:
 
     # Diagnostic only by default. Do not claim IMU orientation is map-aligned.
     use_imu_orientation_seed: false
+    enable_imu: true

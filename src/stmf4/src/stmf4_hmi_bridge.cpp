@@ -405,6 +405,7 @@ private:
     declare_parameter<std::string>("neo3pro_baro_frame_id", "gnss_link");
     declare_parameter<double>("neo3_mag_sigma_ut", 3.0);
     declare_parameter<int>("neo3pro_navsat_service_mask", sensor_msgs::msg::NavSatStatus::SERVICE_GPS);
+    declare_parameter<int>("neo3pro_gnss_rate_hz", 10);
     declare_parameter<bool>("neo3_safety_button_as_estop", false);
     declare_parameter<bool>("publish_stm32_gnss", true);
     declare_parameter<bool>("neo3_require_protocol_crc", true);
@@ -437,6 +438,7 @@ private:
     neo3pro_baro_frame_id_ = get_parameter("neo3pro_baro_frame_id").as_string();
     neo3_mag_sigma_ut_ = std::clamp(get_parameter("neo3_mag_sigma_ut").as_double(), 0.1, 100.0);
     neo3pro_navsat_service_mask_ = static_cast<std::uint16_t>(std::clamp<std::int64_t>(get_parameter("neo3pro_navsat_service_mask").as_int(), 0, 15));
+    neo3pro_gnss_rate_hz_ = static_cast<int>(std::clamp<std::int64_t>(get_parameter("neo3pro_gnss_rate_hz").as_int(), 5, 20));
     neo3_safety_button_as_estop_ = get_parameter("neo3_safety_button_as_estop").as_bool();
     publish_stm32_gnss_ = get_parameter("publish_stm32_gnss").as_bool();
     neo3_require_protocol_crc_ = get_parameter("neo3_require_protocol_crc").as_bool();
@@ -651,7 +653,6 @@ private:
           const double v = std::strtod(msg->data.c_str() + p + 7, &end);
           if (end != msg->data.c_str() + p + 7 && std::isfinite(v)) {
             motor_erpm_ = v;
-            motor_mech_rpm_ = drive_motor_pole_pairs_ > 0 ? v / static_cast<double>(drive_motor_pole_pairs_) : 0.0;
           }
         }
       });
@@ -668,7 +669,7 @@ private:
           left_iq_a_ = jsonNumber(*left, "iq_a").value_or(0.0);
           left_duty_ = jsonNumber(*left, "duty").value_or(0.0);
           left_temp_mos_c_ = jsonNumber(*left, "temp_mos_c").value_or(0.0);
-          left_rpm_ = jsonNumber(*left, "rpm").value_or(0.0);
+          left_erpm_ = jsonNumber(*left, "erpm").value_or(0.0);
           left_fault_ = static_cast<unsigned>(std::clamp(jsonNumber(*left, "fault").value_or(255.0), 0.0, 255.0));
           left_position_deg_ = jsonNumber(*left, "position_deg").value_or(0.0);
           right_vbus_v_ = jsonNumber(*right, "vbus_v").value_or(0.0);
@@ -678,7 +679,7 @@ private:
           right_iq_a_ = jsonNumber(*right, "iq_a").value_or(0.0);
           right_duty_ = jsonNumber(*right, "duty").value_or(0.0);
           right_temp_mos_c_ = jsonNumber(*right, "temp_mos_c").value_or(0.0);
-          right_rpm_ = jsonNumber(*right, "rpm").value_or(0.0);
+          right_erpm_ = jsonNumber(*right, "erpm").value_or(0.0);
           right_fault_ = static_cast<unsigned>(std::clamp(jsonNumber(*right, "fault").value_or(255.0), 0.0, 255.0));
           foc_values_valid_ = std::isfinite(left_vbus_v_) && std::isfinite(right_vbus_v_);
         }
@@ -1034,6 +1035,12 @@ private:
   bool neo3CommandAllowed(const std::string &command) const {
     if (command == "STATUS" || command == "CAN:STATUS" || command == "CAN:RECOVER" ||
         command == "BARO:ON" || command == "BARO:OFF" || command == "LED:OFF") return true;
+    if (command.rfind("GPS:RATE:", 0) == 0) {
+      const std::string raw = command.substr(sizeof("GPS:RATE:") - 1U);
+      char *end = nullptr; errno = 0;
+      const unsigned long value = std::strtoul(raw.c_str(), &end, 10);
+      return errno == 0 && end != raw.c_str() && *end == '\0' && value >= 5UL && value <= 20UL && (1000UL % value) == 0UL;
+    }
     if (command.rfind("LED:BRIGHTNESS:", 0) == 0) {
       const std::string raw = command.substr(sizeof("LED:BRIGHTNESS:") - 1U);
       char *end = nullptr; errno = 0;
@@ -1099,6 +1106,7 @@ private:
     // Do not mutate peripheral indication state on reconnect. LED commands are
     // explicit operator actions only; this also avoids reconnect-triggered load.
     sendLine("NEO:STATUS");
+    sendLine("NEO:GPS:RATE:" + std::to_string(neo3pro_gnss_rate_hz_));
     sendLine("USB:STATUS");
     last_usb_status_request_ = std::chrono::steady_clock::now();
   }
@@ -2240,7 +2248,7 @@ private:
                   sendConfigReply(false, txn, key, "READBACK_MISMATCH");
                   return;
                 }
-                if (key == "DRVSCALE") drive_scale_runtime_ = actual;
+                if (key == "ERPMMPS") drive_erpm_per_mps_runtime_ = actual;
                 config_request_in_flight_.store(false);
                 sendConfigReply(true, txn, key, fixed(actual, 4));
               } catch (const std::exception &e) {
@@ -2368,10 +2376,10 @@ private:
       sendConfigReply(true, txn, key, fixed(steering_test_angle_deg_, 1));
       return;
     }
-    if (key == "DRVSCALE") {
+    if (key == "ERPMMPS") {
       double value = 0.0;
       if (!parseFiniteDouble(raw, &value)) { sendConfigReply(false, txn, key, "INVALID_NUMBER"); return; }
-      requestDoubleConfig(esc_params_, "drive_odometry_calibration_scale", txn, key, value, 0.20, 5.00);
+      requestDoubleConfig(esc_params_, "drive_erpm_per_mps", txn, key, value, 100.0, 50000.0);
       return;
     }
     if (key == "PERINF") {
@@ -2388,21 +2396,17 @@ private:
     const std::uint32_t generation = config_sync_generation_.fetch_add(1U) + 1U;
     const std::uint32_t epoch = config_epoch_.load();
     if (esc_params_ && esc_params_->service_is_ready()) {
-      esc_params_->get_parameters({"drive_odometry_calibration_scale", "drive_motor_pole_pairs"},
+      esc_params_->get_parameters({"drive_erpm_per_mps"},
         [this, generation, epoch](auto future) {
           try {
             const auto values = future.get();
             if (generation != config_sync_generation_.load() || epoch != config_epoch_.load() ||
-                config_request_in_flight_.load() || values.size() != 2U) return;
+                config_request_in_flight_.load() || values.size() != 1U) return;
             if (values[0].get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
               const double value = values[0].as_double();
-              if (std::isfinite(value)) drive_scale_runtime_ = value;
+              if (std::isfinite(value)) drive_erpm_per_mps_runtime_ = value;
             }
-            if (values[1].get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
-              drive_motor_pole_pairs_ = std::clamp(static_cast<int>(values[1].as_int()), 1, 100);
-              motor_mech_rpm_ = motor_erpm_ / static_cast<double>(drive_motor_pole_pairs_);
-            }
-            sendState("CFGDRVSCALE", fixed(drive_scale_runtime_, 4), false);
+            sendState("CFGERPMMPS", fixed(drive_erpm_per_mps_runtime_, 3), false);
           } catch (const std::exception &e) {
             RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "ESC config sync failed: %s", e.what());
           }
@@ -2810,8 +2814,8 @@ private:
     }
     {
       std::ostringstream p; p << flag(foc_valid) << ',' << fixed(finite(left_vbus_v_),2) << ','
-        << fixed(finite(left_current_motor_a_),2) << ',' << fixed(finite(left_duty_),4) << ',' << fixed(finite(left_rpm_),1) << ',' << left_fault_ << ','
-        << fixed(finite(right_vbus_v_),2) << ',' << fixed(finite(right_current_motor_a_),2) << ',' << fixed(finite(right_duty_),4) << ',' << fixed(finite(right_rpm_),1) << ',' << right_fault_;
+        << fixed(finite(left_current_motor_a_),2) << ',' << fixed(finite(left_duty_),4) << ',' << fixed(finite(left_erpm_),1) << ',' << left_fault_ << ','
+        << fixed(finite(right_vbus_v_),2) << ',' << fixed(finite(right_current_motor_a_),2) << ',' << fixed(finite(right_duty_),4) << ',' << fixed(finite(right_erpm_),1) << ',' << right_fault_;
       send_ext("ESCX","MTR",++escx_motor_seq_,foc_age,p.str());
     }
     {
@@ -2961,7 +2965,6 @@ private:
     sendState("DRIVE_TGT", fixed(drive_target_mps_, 3), force);
     sendState("DRIVE_ACT", fixed(drive_actual_mps_, 3), force);
     sendState("ERPM", fixed(motor_erpm_, 1), force);
-    sendState("RPM", fixed(motor_mech_rpm_, 1), force);
     sendState("STEER_TARGET", fixed(sign * steering_target_rad_ * 180.0 / kPi, 2), force);
     sendState("STEER_ACTUAL", fixed(sign * steering_actual_rad_ * 180.0 / kPi, 2), force);
     sendState("STEER_ERR", fixed(sign * (steering_target_rad_ - steering_actual_rad_) * 180.0 / kPi, 2), force);
@@ -2996,7 +2999,7 @@ private:
 
     sendState("MANUAL_SPEED", std::to_string(manual_speed_pct_), force);
     sendState("CFGSTEERTEST", fixed(steering_test_angle_deg_, 1), force);
-    sendState("CFGDRVSCALE", fixed(drive_scale_runtime_, 4), force);
+    sendState("CFGERPMMPS", fixed(drive_erpm_per_mps_runtime_, 3), force);
     sendState("CFGPERINF", perception_inference_runtime_ ? "1" : "0", force);
     extendedTelemetryTick();
     mirrorWaypointState(force, force_critical);
@@ -3042,6 +3045,7 @@ private:
   double waypoint_pose_timeout_sec_{2.5};
   double neo3_sensor_timeout_sec_{2.0}, neo3_mag_sigma_ut_{3.0};
   std::uint16_t neo3pro_navsat_service_mask_{sensor_msgs::msg::NavSatStatus::SERVICE_GPS};
+  int neo3pro_gnss_rate_hz_{10};
   bool publish_stm32_gnss_{true};
   bool neo3_require_protocol_crc_{true};
   bool neo3_sequence_initialized_{false};
@@ -3087,9 +3091,8 @@ private:
   bool esc_ready_{false}, esc_feedback_{false}, steer_connected_{false}, motion_ready_{false}, nav2_ready_{false}, estop_{false};
   double latitude_{0.0}, longitude_{0.0}, hdop_{0.0}, hacc_m_{999.0}, gnss_age_sec_{99.0};
   double heading_deg_{0.0}, gyro_z_rps_{0.0}, drive_target_mps_{0.0}, drive_actual_mps_{0.0};
-  double steering_target_rad_{0.0}, steering_actual_rad_{0.0}, motor_erpm_{0.0}, motor_mech_rpm_{0.0};
-  int drive_motor_pole_pairs_{15};
-  double drive_scale_runtime_{1.0};
+  double steering_target_rad_{0.0}, steering_actual_rad_{0.0}, motor_erpm_{0.0};
+  double drive_erpm_per_mps_runtime_{1.0};
   bool perception_inference_runtime_{false};
   std::string localization_state_text_{"UNKNOWN"}, gnss_status_text_{"UNKNOWN"}, imu_status_text_{"UNKNOWN"};
   std::string ekf_local_status_text_{"UNKNOWN"}, ekf_global_status_text_{"UNKNOWN"}, lane_state_text_{"UNKNOWN"};
@@ -3124,9 +3127,9 @@ private:
   // Extended HMI telemetry mirrors authoritative ROS sources; no duplicate control ownership.
   bool foc_values_valid_{false}, steering_cal_ext_valid_{false};
   double left_vbus_v_{0.0}, left_current_motor_a_{0.0}, left_current_in_a_{0.0}, left_id_a_{0.0}, left_iq_a_{0.0};
-  double left_duty_{0.0}, left_temp_mos_c_{0.0}, left_rpm_{0.0}, left_position_deg_{0.0};
+  double left_duty_{0.0}, left_temp_mos_c_{0.0}, left_erpm_{0.0}, left_position_deg_{0.0};
   double right_vbus_v_{0.0}, right_current_motor_a_{0.0}, right_current_in_a_{0.0}, right_id_a_{0.0}, right_iq_a_{0.0};
-  double right_duty_{0.0}, right_temp_mos_c_{0.0}, right_rpm_{0.0};
+  double right_duty_{0.0}, right_temp_mos_c_{0.0}, right_erpm_{0.0};
   unsigned left_fault_{255U}, right_fault_{255U};
   bool steering_calibrated_ext_{false}, steering_homed_ext_{false}, steering_synced_ext_{false};
   int32_t steering_raw_count_ext_{0}, steering_span_ext_{0}, steering_raw_target_ext_{0};

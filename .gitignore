@@ -36,3 +36,6 @@ referensi/navigasi/
 referensi/hmi/
 # Local browser QA dependencies
 /.playwright/
+
+# High-volume telemetry captures stay local; commit summaries/metadata instead.
+tools/records/**/raw.jsonl

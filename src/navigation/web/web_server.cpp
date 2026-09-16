@@ -1307,15 +1307,15 @@ class WebRosBridge {
     return true;
   }
 
-  bool setDriveOdometryScale(double scale, QString *message) {
+  bool setDriveErpmPerMps(double erpmPerMps, QString *message) {
     if (readOnly_) return rejectReadOnly(message);
-    if (!std::isfinite(scale) || scale < 0.20 || scale > 5.0) {
-      if (message) *message = "Drive scale harus finite dan 0.20..5.00";
+    if (!std::isfinite(erpmPerMps) || erpmPerMps < 100.0 || erpmPerMps > 50000.0) {
+      if (message) *message = "drive_erpm_per_mps harus finite dan 100..50000 eRPM/(m/s)";
       return false;
     }
     const double speed = scalarState("esc_drive_actual").value_or(0.0);
     if (std::abs(speed) > 0.03) {
-      if (message) *message = QString("Apply scale ditolak: kendaraan masih bergerak (%1 m/s)").arg(speed,0,'f',3);
+      if (message) *message = QString("Apply eRPM/m/s ditolak: kendaraan masih bergerak (%1 m/s)").arg(speed,0,'f',3);
       return false;
     }
     auto client=node_->create_client<rcl_interfaces::srv::SetParametersAtomically>(
@@ -1325,19 +1325,19 @@ class WebRosBridge {
       return false;
     }
     auto req=std::make_shared<rcl_interfaces::srv::SetParametersAtomically::Request>();
-    rcl_interfaces::msg::Parameter p; p.name="drive_odometry_calibration_scale";
-    p.value.type=rcl_interfaces::msg::ParameterType::PARAMETER_DOUBLE; p.value.double_value=scale;
+    rcl_interfaces::msg::Parameter p; p.name="drive_erpm_per_mps";
+    p.value.type=rcl_interfaces::msg::ParameterType::PARAMETER_DOUBLE; p.value.double_value=erpmPerMps;
     req->parameters.push_back(p);
     auto future=client->async_send_request(req);
     if (future.wait_for(1200ms)!=std::future_status::ready) {
-      if (message) *message = "Timeout apply drive scale ke runtime";
+      if (message) *message = "Timeout apply eRPM/m/s ke runtime";
       return false;
     }
     try {
       const auto result=future.get();
       if (!result->result.successful) { if(message)*message=QString::fromStdString(result->result.reason); return false; }
     } catch (const std::exception &e) { if(message)*message=QString::fromUtf8(e.what()); return false; }
-    if (message) *message=QString("Drive scale %.8f aktif live").arg(scale,0,'f',8);
+    if (message) *message=QString("Drive calibration %1 eRPM/(m/s) aktif live").arg(erpmPerMps,0,'f',3);
     return true;
   }
 
@@ -1352,15 +1352,11 @@ class WebRosBridge {
     const bool steerCal = experimentId == QStringLiteral("N3.1") || experimentId == QStringLiteral("N3.2");
     if (active && steerCal && (!boolState("connected.imu") || !boolState("connected.neo3_mag"))) { if (message) *message = "Trial steering ditolak: IMU/IST8310 belum online"; return false; }
     if (active && steerCal && !sourceConfigBool("vehicle", "vehicle.ros__parameters.drive_odometry_calibration_valid", false)) { if (message) *message = "Trial steering ditolak: drive odometry scale N2.1 belum certified"; return false; }
-    const double wheelR = sourceConfigNumber("esc", "esc_ackermann.ros__parameters.drive_wheel_radius_m", 0.145);
-    const double polePairs = sourceConfigNumber("esc", "esc_ackermann.ros__parameters.drive_motor_pole_pairs", 15.0);
-    const double gear = sourceConfigNumber("esc", "esc_ackermann.ros__parameters.drive_gear_ratio", 1.0);
-    const double scale = sourceConfigNumber("esc", "esc_ackermann.ros__parameters.drive_odometry_calibration_scale", 1.0);
+    const double erpmPerMps = sourceConfigNumber("esc", "esc_ackermann.ros__parameters.drive_erpm_per_mps", 8000.0);
     const double speedMax = sourceConfigNumber("esc", "esc_ackermann.ros__parameters.speed_max", 0.5);
     const double yawMaxDeg = sourceConfigNumber("teleop", "motor_teleop.ros__parameters.yaw_max_deg_s", 80.0);
     const double steerLimit = sourceConfigNumber("esc", "esc_ackermann.ros__parameters.steering_physical_operational_limit_deg", 28.0);
-    const double erpmPerMps = (60.0 * gear * polePairs) / (2.0 * kPi * std::max(0.01, wheelR));
-    const double speed = erpm / erpmPerMps * scale;
+    const double speed = erpm / std::max(100.0, erpmPerMps);
     if (std::abs(speed) > speedMax + 1.0e-6) {
       if (message) *message = QString("Trial ditolak: %1 eRPM = %2 m/s > speed_max %3 m/s").arg(erpm,0,'f',1).arg(speed,0,'f',3).arg(speedMax,0,'f',3);
       return false;
@@ -1470,9 +1466,19 @@ class WebRosBridge {
     else if (fileKey == QStringLiteral("imu")) add(QStringLiteral("data_imu_node"),QStringLiteral("/data_imu_node"));
     else if (fileKey == QStringLiteral("imu_speed")) add(QStringLiteral("imu_speed_diagnostic"),QStringLiteral("/imu_speed_diagnostic"));
     else if (fileKey == QStringLiteral("mag_heading")) add(QStringLiteral("mag_heading_fusion"),QStringLiteral("/mag_heading_fusion"));
-    else if (fileKey == QStringLiteral("navigation_core")) add(QStringLiteral("navigation_core"),QStringLiteral("/navigation_core"));
+    else if (fileKey == QStringLiteral("navigation_core")) {
+      if (path.startsWith(QStringLiteral("cmd_vel_router."))) add(QStringLiteral("cmd_vel_router"),QStringLiteral("/cmd_vel_router"));
+      else if (path.startsWith(QStringLiteral("sensor_contract_monitor."))) add(QStringLiteral("sensor_contract_monitor"),QStringLiteral("/sensor_contract_monitor"));
+      else if (path.startsWith(QStringLiteral("joint_state_visualizer."))) add(QStringLiteral("joint_state_visualizer"),QStringLiteral("/joint_state_visualizer"));
+      else if (path.startsWith(QStringLiteral("agv_web_gui."))) add(QStringLiteral("agv_web_gui"),QStringLiteral("/agv_web_gui"));
+      else add(QStringLiteral("navigation_core"),QStringLiteral("/navigation_core"));
+    }
     else if (fileKey == QStringLiteral("trajectory_safety")) add(QStringLiteral("trajectory_safety_supervisor"),QStringLiteral("/trajectory_safety_supervisor"));
-    else if (fileKey == QStringLiteral("perception")) add(QStringLiteral("perception"),QStringLiteral("/perception"));
+    else if (fileKey == QStringLiteral("perception")) {
+      if (path.startsWith(QStringLiteral("semantic_obstacle."))) add(QStringLiteral("semantic_obstacle"),QStringLiteral("/semantic_obstacle"));
+      else if (path.startsWith(QStringLiteral("bbox_static_test_logger."))) add(QStringLiteral("bbox_static_test_logger"),QStringLiteral("/bbox_static_test_logger"));
+      else add(QStringLiteral("perception"),QStringLiteral("/perception"));
+    }
     else if (fileKey == QStringLiteral("collision")) add(QStringLiteral("collision_monitor"),QStringLiteral("/collision_monitor"));
     else if (fileKey == QStringLiteral("esc")) add(QStringLiteral("esc_ackermann"),QStringLiteral("/esc_ackermann"));
     else if (fileKey == QStringLiteral("hmi")) add(QStringLiteral("stmf4_hmi_bridge"),QStringLiteral("/stmf4_hmi_bridge"));
@@ -3042,10 +3048,10 @@ class LocalHttpServer : public QObject {
       return sendJson(socket,ok?200:409,result);
     } else if (request.path == "/api/experiment/trial/optimal-scale") {
       if (json.value("apply").toBool(false)) return sendJson(socket,409,QJsonObject{{"ok",false},{"code","USE_CONFIG_TRANSACTION"},{"message","Direct optimal-scale apply dinonaktifkan; gunakan proposal_items → Validate → Diff Review → Apply"}});
-      QJsonObject result;ok=calculateOptimalScaleProposal(&message,&result);
-      if(ok){const double scale=result.value("scale").toDouble();const QString iso=QDateTime::currentDateTime().toString(Qt::ISODateWithMs);QJsonArray proposalItems;
-        proposalItems.append(QJsonObject{{"file_key","esc"},{"path","esc_ackermann.ros__parameters.drive_odometry_calibration_scale"},{"value",scale}});
-        proposalItems.append(QJsonObject{{"file_key","vehicle"},{"path","vehicle.ros__parameters.drive_odometry_calibration_scale"},{"value",scale},{"generated",true}});
+      QJsonObject result;ok=calculateOptimalErpmPerMpsProposal(&message,&result);
+      if(ok){const double erpmPerMps=result.value("erpm_per_mps").toDouble();const QString iso=QDateTime::currentDateTime().toString(Qt::ISODateWithMs);QJsonArray proposalItems;
+        proposalItems.append(QJsonObject{{"file_key","esc"},{"path","esc_ackermann.ros__parameters.drive_erpm_per_mps"},{"value",erpmPerMps}});
+        proposalItems.append(QJsonObject{{"file_key","vehicle"},{"path","vehicle.ros__parameters.drive_erpm_per_mps"},{"value",erpmPerMps},{"generated",true}});
         proposalItems.append(QJsonObject{{"file_key","vehicle"},{"path","vehicle.ros__parameters.drive_odometry_calibration_valid"},{"value",true},{"generated",true}});
         proposalItems.append(QJsonObject{{"file_key","vehicle"},{"path","vehicle.ros__parameters.drive_odometry_calibration_saved_at"},{"value",iso},{"generated",true}});
         const QJsonObject evidence{{"accepted_trials",result.value("accepted_trials")},{"valid_trials",result.value("valid_trials")},{"rejected_trial_ids",result.value("rejected_trial_ids")}};
@@ -3354,12 +3360,12 @@ class LocalHttpServer : public QObject {
     if (recordingCandidate_.isEmpty()) recordingCandidate_ = QStringLiteral("baseline");
     recordingVariation_ = json.value("variation").toString().trimmed();
     recordingCondition_ = json.value("condition").toString().trimmed();
-    recordingRateHz_ = std::clamp(json.value("sample_rate_hz").toDouble(5.0), 1.0, 20.0);
+    recordingRateHz_ = std::clamp(json.value("sample_rate_hz").toDouble(5.0), 1.0, 100.0);
     recordingStartedIso_ = QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
     recordingStartedMs_ = nowMs();
     recordingRows_.clear();
     recording_ = true;
-    recordingTimer_.start(std::max(50, static_cast<int>(std::lround(1000.0 / recordingRateHz_))));
+    recordingTimer_.start(std::max(10, static_cast<int>(std::lround(1000.0 / recordingRateHz_))));
     captureRecordingSample();
     if (message) *message = QStringLiteral("CSV recording dimulai: ") + subsystem + QStringLiteral("/") + id;
     return true;
@@ -3627,14 +3633,14 @@ class LocalHttpServer : public QObject {
       {"config_revision",configRevisionState().value("config_revision")},
       {"task_config_fingerprint",taskConfigFingerprint(recordingSubsystem_,recordingSourceExperimentId_)}};
     auto input=[&](const char*k)->std::optional<double>{const QJsonValue v=recordingTrialInputs_.value(k); if(v.isDouble())return v.toDouble(); bool ok=false;double x=v.toString().toDouble(&ok);return ok?std::optional<double>(x):std::nullopt;};
-    putNumber(o,"rpm_set",input("test_erpm")); putNumber(o,"steering_set_deg",input("test_steering_deg"));
-    const auto rpm=meanRecording("vesc_right_values.rpm"),raw=meanRecording("esc_drive_raw"),esc=meanRecording("esc_odom.v"),
+    putNumber(o,"erpm_set",input("test_erpm")); putNumber(o,"steering_set_deg",input("test_steering_deg"));
+    const auto erpm=meanRecording("vesc_right_values.erpm"),raw=meanRecording("esc_drive_raw"),esc=meanRecording("esc_odom.v"),
       gnss=meanRecording("gnss_vel.speed"),imu=meanRecording("imu_speed_kalman"),hacc=meanRecording("gnss_quality.hacc_m");
-    putNumber(o,"mean_rpm_esc",rpm);putNumber(o,"mean_v_esc_raw_mps",raw);putNumber(o,"mean_v_esc_mps",esc);
+    putNumber(o,"mean_erpm_esc",erpm);putNumber(o,"mean_v_esc_raw_mps",raw);putNumber(o,"mean_v_esc_mps",esc);
     putNumber(o,"mean_v_gnss_mps",gnss);putNumber(o,"mean_v_imu_mps",imu);putNumber(o,"mean_hacc_m",hacc);
     const auto xp=firstLastRecording("gnss_map_odom.x"),yp=firstLastRecording("gnss_map_odom.y");
     if(xp&&yp){const double dx=xp->second-xp->first,dy=yp->second-yp->first;o["delta_x_m"]=dx;o["delta_y_m"]=dy;o["distance_gnss_m"]=std::hypot(dx,dy);}
-    if(raw&&gnss&&std::abs(*raw)>0.02)o["scale_candidate"]=std::abs(*gnss)/std::abs(*raw);
+    if(erpm&&gnss&&std::abs(*gnss)>0.02)o["erpm_per_mps_candidate"]=std::abs(*erpm)/std::abs(*gnss);
     if(recordingSourceExperimentId_=="N3.1"||recordingSourceExperimentId_=="N3.2"){
       putNumber(o,"mean_steering_actual_rad",meanRecording("esc_steer_actual"));putNumber(o,"mean_gyro_z_rps",meanRecording("imu.gz"));
       putNumber(o,"mean_yaw_rate_model_rps",meanRecording("esc_kinematic_yaw_rate"));o["max_lateral_deviation_m"]=maxLateralDeviation();
@@ -3700,59 +3706,60 @@ class LocalHttpServer : public QObject {
 
   static double median(QVector<double> v){if(v.empty())return std::numeric_limits<double>::quiet_NaN();std::sort(v.begin(),v.end());const int n=v.size();return n%2?v[n/2]:0.5*(v[n/2-1]+v[n/2]);}
 
-  bool calculateOptimalScaleProposal(QString *message,QJsonObject *result) {
+  bool calculateOptimalErpmPerMpsProposal(QString *message,QJsonObject *result) {
     const QJsonArray list = trialList("navigation", "N2.1");
-    struct P { double raw, gnss, scale; QString id; };
+    struct P { double erpm, gnss, erpm_per_mps; QString id; };
     QVector<P> valid;
-    QVector<double> scales;
+    QVector<double> candidates;
     for (const auto &v : list) {
       const auto o = v.toObject();
-      const double raw = std::abs(o.value("mean_v_esc_raw_mps").toDouble());
+      const double erpm = std::abs(o.value("mean_erpm_esc").toDouble());
       const double gnss = std::abs(o.value("mean_v_gnss_mps").toDouble());
-      if (raw <= 0.03 || gnss <= 0.03) continue;
-      const double k = gnss / raw;
-      if (std::isfinite(k) && k >= 0.20 && k <= 5.00) {
-        valid.push_back({raw, gnss, k, o.value("trial_id").toString()});
-        scales.push_back(k);
+      if (erpm <= 50.0 || gnss <= 0.03) continue;
+      const double k = erpm / gnss;
+      if (std::isfinite(k) && k >= 100.0 && k <= 50000.0) {
+        valid.push_back({erpm, gnss, k, o.value("trial_id").toString()});
+        candidates.push_back(k);
       }
     }
     if (valid.size() < 3) {
-      if (message) *message = "Butuh minimal 3 trial valid N2.1 untuk scale optimal";
+      if (message) *message = "Butuh minimal 3 trial valid N2.1 untuk kalibrasi eRPM/(m/s)";
       return false;
     }
-    const double med = median(scales);
+    const double med = median(candidates);
     QVector<double> dev;
-    for (double k : scales) dev.push_back(std::abs(k - med));
+    for (double k : candidates) dev.push_back(std::abs(k - med));
     const double mad = median(dev);
     const double tol = std::max(0.05 * std::abs(med), 3.0 * 1.4826 * mad);
     double xy = 0.0, xx = 0.0;
     int accepted = 0;
     QJsonArray rejected;
     for (const auto &p : valid) {
-      if (std::abs(p.scale - med) > tol) { rejected.append(p.id); continue; }
-      xy += p.raw * p.gnss;
-      xx += p.raw * p.raw;
+      if (std::abs(p.erpm_per_mps - med) > tol) { rejected.append(p.id); continue; }
+      // Through-origin fit: eRPM = K * V_ground. This is the single runtime conversion.
+      xy += p.gnss * p.erpm;
+      xx += p.gnss * p.gnss;
       ++accepted;
     }
     if (accepted < 2 || xx <= 1e-9) {
       if (message) *message = "Trial valid setelah outlier rejection tidak cukup";
       return false;
     }
-    const double scale = std::clamp(xy / xx, 0.20, 5.0);
+    const double erpm_per_mps = std::clamp(xy / xx, 100.0, 50000.0);
     QJsonObject store = loadTrialStore();
     QJsonObject results = store.value("calibration_results").toObject();
     QJsonObject nav = results.value("navigation").toObject();
-    nav["N2.1"] = QJsonObject{{"optimal_scale", scale}, {"accepted_trials", accepted},
+    nav["N2.1"] = QJsonObject{{"erpm_per_mps", erpm_per_mps}, {"accepted_trials", accepted},
       {"total_valid_trials", valid.size()}, {"median_candidate", med}, {"mad", mad},
       {"rejected_trial_ids", rejected}, {"applied", false}, {"proposal_only", true},
       {"updated_at", QDateTime::currentDateTime().toString(Qt::ISODateWithMs)}};
     results["navigation"] = nav;
     store["calibration_results"] = results;
     saveTrialStore(store, nullptr);
-    if (result) *result = QJsonObject{{"scale", scale}, {"accepted_trials", accepted},
+    if (result) *result = QJsonObject{{"erpm_per_mps", erpm_per_mps}, {"accepted_trials", accepted},
       {"valid_trials", valid.size()}, {"rejected_trial_ids", rejected},
       {"applied", false}, {"proposal_only", true}};
-    if (message) *message = "Scale optimal berhasil dihitung sebagai proposal; belum ada YAML/runtime write";
+    if (message) *message = "Kalibrasi eRPM/(m/s) berhasil dihitung sebagai proposal; belum ada YAML/runtime write";
     return true;
   }
 

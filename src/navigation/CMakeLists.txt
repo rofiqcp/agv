@@ -204,7 +204,8 @@ if(BUILD_TESTING)
     steering_physical_part1_self_check
     steering_physical_part2_self_check
     steering_physical_part3_self_check
-    trajectory_safety_contract_self_check)
+    trajectory_safety_contract_self_check
+    yaml_parameter_authority_self_check)
 
   foreach(check_name IN LISTS NAVIGATION_PY_SELF_CHECKS)
     add_test(

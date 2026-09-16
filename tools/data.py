@@ -62,6 +62,9 @@ class RosRecorder(Node):
         self.a=args; self.root=AGV_ROOT; self.f4=self.root/"F4gateway"; self.nav_cfg=self.root/"src/navigation/config"
         self.mag_cfg=self._load_params(self.nav_cfg/"mag_heading.yaml","mag_heading_fusion")
         self.imu_cfg=self._load_params(self.nav_cfg/"imu.yaml","data_imu_node")
+        self.data_heading_cfg=self._load_data_heading(self.nav_cfg/"data_heading_calibration.yaml")
+        self.align_cfg=self.data_heading_cfg.get("cross_sensor_alignment",{})
+        self.yah_align_trim_rad=0.0
         self.latest:Dict[str,Tuple[Any,int]]={}; self.subs={}; self.raw_count=0; self.sample_seq=0
         self.start_wall_ns=time.time_ns(); self.start_mono_ns=time.monotonic_ns(); self.last_dashboard=0
         self.origin=None; self.gnss_enu=(NAN,NAN,NAN); self.fix=None; self.quality=[]; self.gnss_meta=[]; self.gnss_heading=NAN
@@ -84,6 +87,31 @@ class RosRecorder(Node):
         try:return yaml.safe_load(path.read_text())[key]["ros__parameters"]
         except Exception:return {}
 
+    @staticmethod
+    def _load_data_heading(path:Path)->Dict[str,Any]:
+        try:
+            root=yaml.safe_load(path.read_text()) or {}
+            return root.get("data_heading_calibration",{}) if isinstance(root,dict) else {}
+        except Exception:return {}
+
+    def _align_yah(self,yaw_map:float,neo_map:float=NAN)->float:
+        if not math.isfinite(yaw_map):return yaw_map
+        c=self.align_cfg if isinstance(self.align_cfg,dict) else {}
+        if not c.get("enabled",False):return yaw_map
+        enu=norm_angle(yaw_map-self.map_yaw)
+        aligned_enu=apply_lut(enu,c.get("heading_lut_input_rad",[]),c.get("heading_lut_correction_rad",[]))
+        base=norm_angle(aligned_enu+self.map_yaw)
+        a=c.get("adaptive_trim",{}) if isinstance(c.get("adaptive_trim",{}),dict) else {}
+        if a.get("enabled",False) and math.isfinite(neo_map) and math.isfinite(self.gyro_z):
+            if abs(self.gyro_z)<=float(a.get("gyro_stationary_max_rps",0.02)):
+                current=norm_angle(base+self.yah_align_trim_rad)
+                err=norm_angle(neo_map-current)
+                if abs(err)<=float(a.get("update_gate_rad",0.0872664626)):
+                    alpha=max(0.0,min(1.0,float(a.get("alpha",0.10))))
+                    limit=abs(float(a.get("max_abs_trim_rad",0.0349065850)))
+                    self.yah_align_trim_rad=max(-limit,min(limit,self.yah_align_trim_rad+alpha*err))
+        return norm_angle(base+self.yah_align_trim_rad)
+
     def _create_outdir(self,arg:str)->Path:
         base=Path(arg).expanduser() if arg else self.root/"tools/records"; base.mkdir(parents=True,exist_ok=True)
         stamp=datetime.now().astimezone().strftime("%Y%m%d_%H%M%S"); out=base/f"data_ros_{stamp}"; n=1
@@ -96,7 +124,7 @@ class RosRecorder(Node):
         return out
 
     def _snapshot(self)->None:
-        for p in (self.nav_cfg/"mag_heading.yaml",self.nav_cfg/"yahboom_mag_calibration.yaml",self.nav_cfg/"imu.yaml",self.f4/".pio/build/blackpill_f411ce_neo3pro/firmware.identity.json"):
+        for p in (self.nav_cfg/"mag_heading.yaml",self.nav_cfg/"data_heading_calibration.yaml",self.nav_cfg/"yahboom_mag_calibration.yaml",self.nav_cfg/"imu.yaml",self.f4/".pio/build/blackpill_f411ce_neo3pro/firmware.identity.json"):
             if p.exists():
                 try:shutil.copy2(p,self.outdir/p.name)
                 except Exception:pass
@@ -152,7 +180,16 @@ class RosRecorder(Node):
             if len(self.imu_raw_vectors)>=6:self.counts["acc"]+=1;self.counts["gyro"]+=1
             if len(self.imu_raw_vectors)>=9:self.yah_mag_raw=list(map(float,self.imu_raw_vectors[6:9]));self._yah_heading();self.counts["imu_mag"]+=1
         elif topic=="/imu/mag_raw_lsb":
-            if len(msg.data)>=3:self.yah_mag_raw=list(map(float,msg.data[:3]));self._yah_heading();self.counts["imu_mag"]+=1
+            # This topic is already rotated to REP-103 body frame by imu_node.
+            # Calibration was fitted against sensor-native WIT LSB, which are
+            # available in /imu/raw_sensor_vectors[6:9]. Never let the rotated
+            # topic overwrite a fresh native sample (it caused 180-deg flips).
+            if self._fresh("/imu/raw_sensor_vectors",.20) is None and len(msg.data)>=3:
+                sx=float(self.imu_cfg.get("vector_x_sign",1.0)) or 1.0
+                sy=float(self.imu_cfg.get("vector_y_sign",1.0)) or 1.0
+                sz=float(self.imu_cfg.get("vector_z_sign",1.0)) or 1.0
+                self.yah_mag_raw=[float(msg.data[0])/sx,float(msg.data[1])/sy,float(msg.data[2])/sz]
+                self._yah_heading();self.counts["imu_mag"]+=1
         elif topic=="/neo3/mag":
             self.neo_mag=[float(msg.magnetic_field.x)*1e6,float(msg.magnetic_field.y)*1e6,float(msg.magnetic_field.z)*1e6];self._neo_heading();self.counts["neo_mag"]+=1
         elif topic=="/neo3pro/mag/meta":
@@ -176,7 +213,10 @@ class RosRecorder(Node):
         if not all(math.isfinite(x) for x in (mx,my,mz)):return
         self.neo_norm=math.sqrt(mx*mx+my*my+mz*mz);p=self.mag_cfg;bx,by=p.get("neo3_mag_bias_xy_ut",[0.,0.])[:2];m=p.get("neo3_mag_matrix_xy",[1.,0.,0.,1.])
         qx=float(m[0])*(mx-float(bx))+float(m[1])*(my-float(by));qy=float(m[2])*(mx-float(bx))+float(m[3])*(my-float(by))
-        cr,sr,cp,sp=math.cos(self.roll),math.sin(self.roll),math.cos(self.pitch),math.sin(self.pitch);xh=qx*cp+mz*sp;yh=qx*sr*sp+qy*cr-mz*sr*cp
+        if bool(p.get("neo3_full_calibration_enabled",False)):
+            cr,sr,cp,sp=math.cos(self.roll),math.sin(self.roll),math.cos(self.pitch),math.sin(self.pitch);xh=qx*cp+mz*sp;yh=qx*sr*sp+qy*cr-mz*sr*cp
+        else:
+            xh,yh=qx,qy
         if math.hypot(xh,yh)<1e-9:return
         yaw=norm_angle(float(p.get("neo3_mag_yaw_sign",1.))*math.atan2(yh,xh)+float(p.get("neo3_mag_yaw_offset_rad",0.))-float(p.get("magnetic_declination_rad",0.)))
         if p.get("neo3_heading_lut_enabled",False):yaw=apply_lut(yaw,p.get("neo3_heading_lut_input_rad",[]),p.get("neo3_heading_lut_correction_rad",[]))
@@ -207,6 +247,8 @@ class RosRecorder(Node):
     def sample(self)->None:
         self.sample_seq+=1;wall=time.time_ns();mono=time.monotonic_ns();rosnow=self.get_clock().now().nanoseconds;x,y,xys=self._xy();q=self.quality;meta=self.gnss_meta
         ny,ns,nv=self._yaw_choice("/neo3/mag_heading_fusion",self.neo_diag,"neo3_calibrated_ros",self.neo_valid);yy,ys,yv=self._yaw_choice("/imu/mag_heading_fusion",self.yah_diag,"yahboom_calibrated_ros",self.yah_valid)
+        if yv and math.isfinite(yy) and self.align_cfg.get("enabled",False):
+            yy=self._align_yah(yy,ny if nv else NAN);ys=ys+"+neo3_cross_align"
         im=self._fresh("/imu/inertial_heading");iy,isrc,iv=(yaw_from_q(im.pose.pose.orientation),"/imu/inertial_heading",True) if im is not None else (self.inertial,"logger_gyro_integral:"+self.inertial_source,math.isfinite(self.inertial))
         lat=float(self.fix.latitude) if self.fix is not None else NAN;lon=float(self.fix.longitude) if self.fix is not None else NAN;alt=float(self.fix.altitude) if self.fix is not None else NAN;meas=stamp_ns(self.fix) if self.fix is not None else 0;meas=meas or rosnow
         getq=lambda i,d=NAN:float(q[i]) if len(q)>i and math.isfinite(q[i]) else d;getm=lambda i,d=NAN:float(meta[i]) if len(meta)>i and math.isfinite(meta[i]) else d
@@ -250,25 +292,45 @@ class RosRecorder(Node):
         try:self.raw_f.close();self.sum_f.close()
         except Exception:pass
 
-def _sensor_serial_owned()->bool:
-    devices=(
-        "/dev/serial/by-id/usb-STMicroelectronics_BLACKPILL_F411CE_CDC_in_FS_Mode_338133833134-if00",
-        "/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0",
-    )
-    for dev in devices:
-        if not Path(dev).exists():continue
+SENSOR_SERIAL_DEVICES=(
+    "/dev/serial/by-id/usb-STMicroelectronics_BLACKPILL_F411CE_CDC_in_FS_Mode_338133833134-if00",
+    "/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0",
+)
+
+def _sensor_serial_owners()->Dict[str,list[int]]:
+    """Return real serial devices currently opened by another process.
+
+    Resolve /dev/serial/by-id symlinks first: fuser on a symlink can miss the
+    owner on some systems even though /dev/ttyACM* or /dev/ttyUSB* is open.
+    """
+    owners:Dict[str,list[int]]={}
+    for dev in SENSOR_SERIAL_DEVICES:
+        p=Path(dev)
+        if not p.exists():continue
+        try: real=str(p.resolve())
+        except Exception: real=dev
         try:
-            cp=subprocess.run(["fuser",dev],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,timeout=.5)
-            if cp.returncode==0 and cp.stdout.strip():return True
+            cp=subprocess.run(["fuser",real],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,timeout=.5)
+            pids=[]
+            if cp.returncode==0:
+                for token in cp.stdout.split():
+                    try:pids.append(int(token))
+                    except ValueError:pass
+            if pids:owners[real]=pids
         except Exception:pass
-    return False
+    return owners
+
+def _sensor_serial_owned()->bool:
+    return bool(_sensor_serial_owners())
 
 def _exec_direct(a:argparse.Namespace)->int:
     direct=AGV_ROOT/"F4gateway/tools/data.py"
     if not direct.exists():raise SystemExit(f"Direct logger not found: {direct}")
     argv=[sys.executable,str(direct),"--rate",str(a.rate)]
     if a.duration>0:argv += ["--duration",str(a.duration)]
-    if a.output_dir:argv += ["--output-dir",a.output_dir]
+    output_dir = Path(a.output_dir).expanduser() if a.output_dir else (AGV_ROOT / "tools" / "records")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    argv += ["--output-dir", str(output_dir)]
     print(f"[AGV DATA] source=DIRECT_SERIAL ({direct})",flush=True)
     os.execv(sys.executable,argv)
     return 0
@@ -276,12 +338,22 @@ def _exec_direct(a:argparse.Namespace)->int:
 def main()->int:
     ap=argparse.ArgumentParser(description="AGV 3-yaw realtime logger (auto ROS/direct serial)")
     ap.add_argument("--output-dir",default="");ap.add_argument("--rate",type=float,default=10.0);ap.add_argument("--duration",type=float,default=0.0)
-    ap.add_argument("--source",choices=("direct","ros","auto"),default="direct",help="direct (default): read F411+Yahboom hardware; ros: subscribe ROS topics; auto: direct when ports are free, otherwise ROS")
+    ap.add_argument("--source",choices=("direct","ros","auto"),default="auto",help="auto (default): use ROS while sensor serial ports are owned, otherwise read hardware directly; ros: force topics; direct: force serial")
     a=ap.parse_args()
-    if a.source=="direct":return _exec_direct(a)
-    if a.source=="auto" and not _sensor_serial_owned():
-        print("[AGV DATA] sensor serial ports are free -> direct realtime 3-yaw mode",flush=True)
+    owners=_sensor_serial_owners()
+    if a.source=="direct":
+        if owners:
+            detail=", ".join(f"{dev}:PID={','.join(map(str,pids))}" for dev,pids in owners.items())
+            raise SystemExit(f"DIRECT ditolak: sensor serial sedang dipakai ({detail}). Gunakan --source auto/ros agar tidak bentrok.")
         return _exec_direct(a)
+    if a.source=="auto" and not owners:
+        print("[AGV DATA] AUTO -> DIRECT_SERIAL (sensor ports free)",flush=True)
+        return _exec_direct(a)
+    if a.source=="auto":
+        detail=", ".join(f"{dev}:PID={','.join(map(str,pids))}" for dev,pids in owners.items())
+        print(f"[AGV DATA] AUTO -> ROS_TOPICS (serial owned: {detail})",flush=True)
+    else:
+        print("[AGV DATA] source=ROS_TOPICS (forced)",flush=True)
     rclpy.init()
     node=RosRecorder(a);deadline=time.monotonic()+a.duration if a.duration>0 else None
     try:

@@ -15,14 +15,8 @@ esc_ackermann:
     manual_release_hold_sec: 0.5
     speed_max: 1.0
     serial_left_max_deg: 90.0
-    # Direct-serial fallback scale only. Native VESC uses physical eRPM conversion.
-    serial_right_max_rpm: 300.0
-    drive_wheel_radius_m: 0.145
-    drive_motor_pole_pairs: 15
-    drive_gear_ratio: 1.0
     drive_erpm_per_mps: 8000.0
     # Applied live after N2.1 GNSS/RPM calibration: V_ground = V_raw_ESC * scale.
-    drive_odometry_calibration_scale: 1.0
     wheelbase_m: 0.7
     track_width_m: 0.48
     min_speed_for_nav_steering_mps: 0.05
@@ -118,10 +112,30 @@ esc_ackermann:
     odom_frame: odom
     base_frame: base_footprint
     odom_v_variance_base: 0.03
-    odom_v_variance_rpm_error_gain: 0.2
+    odom_v_variance_erpm_error_gain: 0.2
     wheel_slip_topic: /localization/wheel_slip
     wheel_slip_timeout_sec: 0.75
     wheel_slip_covariance_multiplier: 25.0
     odom_yaw_variance_base: 0.08
     odom_yaw_variance_steer_gain: 0.3
     odom_yaw_rate_variance_base: 0.05
+
+    # Runtime routing and commissioning authority. These were previously hidden in launch/C++ defaults.
+    teleop_topic: /cmd_vel/ackermann_direct_teleop_disabled
+    teleop_source_topic: /navigation/cmd_mux/source
+    nav2_topic: /cmd_vel
+    active_source_topic: /esc/mux/active_source
+    maintenance_owner_topic: /esc/vesc/maintenance_owner
+    perception_state_topic: /navigation/trajectory_safety_state
+    perception_state_timeout_sec: 0.75
+    require_autonomy_gate: true
+    raw_commissioning_enabled: false
+    raw_commissioning_topic: /esc/commissioning/raw_actuator
+    raw_commissioning_timeout_sec: 0.25
+    raw_commissioning_max_erpm: 8000.0
+    raw_commissioning_max_steering_deg: 30.0
+    transport_mode: direct_vesc
+    serial_device: auto
+    serial_enabled: true
+    integration_bypass: false
+    yaw_max_deg_s: 80.0

@@ -90,3 +90,54 @@
   .operator-priority-item{min-height:74px}
   .health-card{align-items:flex-start}
 }
+/* Report chart quality: scoped to navigation BAB IV report pages (R4.1-R4.4). */
+.navigation-report-mode .experiment-graphs{grid-template-columns:1fr!important;gap:14px!important}
+.navigation-report-mode .chart-card{padding:14px!important;border-radius:12px!important;border:1px solid rgba(148,163,184,.28)!important;box-shadow:0 8px 26px rgba(0,0,0,.16)!important}
+.navigation-report-mode .chart-title{gap:8px!important;padding:2px 2px 10px!important}
+.navigation-report-mode .chart-title b{font-size:14px!important;line-height:1.35!important;font-weight:750!important;white-space:normal!important;overflow:visible!important;text-overflow:clip!important}
+.navigation-report-mode .chart-title .direct-index{font-size:10px!important;font-weight:800!important;letter-spacing:.06em!important}
+.navigation-report-mode .chart-engineering-tools{gap:5px!important}
+.navigation-report-mode .chart-tool-btn,.navigation-report-mode .chart-png-btn{font-size:9px!important;min-height:30px!important;padding:4px 9px!important}
+.navigation-report-mode .chart-canvas-wrap{overflow:hidden!important;border:1px solid rgba(148,163,184,.34)!important;border-radius:8px!important;box-shadow:inset 0 0 0 1px rgba(255,255,255,.02)!important}
+.navigation-report-mode .chart-canvas-wrap canvas,.navigation-report-mode .chart-card canvas{height:340px!important}
+.navigation-report-mode .chart-axis-labels{font-size:11px!important;font-weight:650!important;line-height:1.45!important;padding:7px 3px 3px!important;color:#9fb0b5!important}
+.navigation-report-mode .chart-legend{gap:8px!important;padding:10px 2px 2px!important;align-items:stretch!important}
+.navigation-report-mode .chart-legend-item{grid-template-columns:12px minmax(120px,auto) auto!important;gap:6px 8px!important;min-height:50px!important;padding:7px 9px!important;border-radius:7px!important;font-size:10.5px!important;background:rgba(255,255,255,.035)!important}
+.navigation-report-mode .chart-legend-item>i{width:10px!important;height:10px!important}
+.navigation-report-mode .chart-legend-item span{font-size:10.5px!important;font-weight:700!important}
+.navigation-report-mode .chart-legend-item b{font-size:11px!important;font-weight:800!important}
+.navigation-report-mode .chart-legend-item small{font-size:9px!important;line-height:1.35!important;color:#91a0a4!important}
+.navigation-report-mode .chart-diagnostic{font-size:8px!important;line-height:1.45!important;padding:7px 9px!important}
+.light.navigation-report-mode .chart-card{box-shadow:0 8px 24px rgba(15,23,42,.08)!important}
+.light.navigation-report-mode .chart-axis-labels{color:#475569!important}
+.light.navigation-report-mode .chart-legend-item{background:#f8fafc!important;border-color:#cbd5e1!important}
+.light.navigation-report-mode .chart-legend-item small{color:#64748b!important}
+@media(max-width:900px){
+  .navigation-report-mode .chart-canvas-wrap canvas,.navigation-report-mode .chart-card canvas{height:300px!important}
+  .navigation-report-mode .chart-title b{font-size:13px!important}
+  .navigation-report-mode .chart-legend-item{grid-template-columns:10px minmax(100px,1fr) auto!important}
+}
+@media(max-width:560px){
+  .navigation-report-mode .chart-card{padding:9px!important}
+  .navigation-report-mode .chart-canvas-wrap canvas,.navigation-report-mode .chart-card canvas{height:260px!important}
+  .navigation-report-mode .chart-axis-labels{font-size:9.5px!important;flex-direction:column!important;gap:2px!important}
+  .navigation-report-mode .chart-legend{display:grid!important;grid-template-columns:1fr!important}
+  .navigation-report-mode .chart-legend-item{width:100%!important;min-height:46px!important;font-size:9.5px!important}
+  .navigation-report-mode .chart-legend-item span{font-size:9.5px!important}
+  .navigation-report-mode .chart-legend-item small{font-size:8.5px!important}
+}
+.navigation-report-mode .chart-legend{font-size:10.5px!important;line-height:1.5!important;color:#aebdc1!important}
+.light.navigation-report-mode .chart-legend{color:#475569!important}
+
+/* R4.1 summary graph: paired directly with the 60-second summary table. */
+#report41TimedPanel .r41-summary-graph-section{display:grid;gap:8px;margin-top:2px}
+#report41TimedPanel .r41-summary-graph-wrap{border:1px solid var(--border);border-radius:10px;background:var(--chart-bg);overflow:hidden;padding:6px}
+#report41TimedPanel .r41-summary-graph-wrap canvas{display:block;width:100%;min-height:320px}
+#report41TimedPanel .r41-summary-legend{display:flex;align-items:center;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:10px}
+#report41TimedPanel .r41-summary-legend span{display:inline-flex;align-items:center;gap:6px}
+#report41TimedPanel .r41-summary-legend button{margin-left:auto}
+#report41TimedPanel .r41-summary-legend i{display:inline-block;width:22px;height:8px;border-radius:999px}
+#report41TimedPanel .r41-summary-legend i.mean{width:10px;height:10px;border-radius:50%;background:#2f9e73}
+#report41TimedPanel .r41-summary-legend i.std{background:rgba(72,224,164,.24);border:1px solid rgba(72,224,164,.45)}
+#report41TimedPanel .r41-summary-legend i.range{height:3px;background:#55b8ff}
+@media(max-width:560px){#report41TimedPanel .r41-summary-graph-wrap{padding:3px}#report41TimedPanel .r41-summary-legend{gap:8px;font-size:9px}#report41TimedPanel .r41-summary-legend button{width:100%;margin-left:0}}

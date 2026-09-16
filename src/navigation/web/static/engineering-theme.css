@@ -118,3 +118,11 @@ body,.app-shell,.main-shell{background:var(--bg)}
 .tuning-input-row>.param-number-control{flex:1 1 auto}.config-param-editor .param-number-control{grid-template-columns:1fr;margin-top:4px}.config-param-editor .param-number-control .param-slider{margin-top:2px}
 input[type=number]{font-variant-numeric:tabular-nums}
 @media(max-width:620px){.param-number-control{grid-template-columns:92px minmax(100px,1fr)}.config-param-editor .param-number-control{grid-template-columns:1fr}}
+
+/* Final QA: keep Configuration filters contained at laptop widths. */
+@media(max-width:1280px) and (min-width:821px){
+  .config-toolbar{height:auto;flex-wrap:wrap;align-content:center}
+  .config-toolbar>b{flex:1 1 100%;min-width:0;margin-right:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .config-toolbar .config-filter-btn{flex:0 0 auto}
+  .config-toolbar #configRowCount{margin-left:auto}
+}

@@ -27,6 +27,8 @@ stmf4_hmi_bridge:
     neo3_mag_sigma_ut: 3.0
     # Fix2 does not expose active constellation mask; default conservatively to GPS.
     neo3pro_navsat_service_mask: 1
+    # NEO3 Pro DroneCAN GNSS source-rate target. 10 Hz = GPS1_RATE_MS 100 ms.
+    neo3pro_gnss_rate_hz: 10
     neo3_safety_button_as_estop: false
     neo3_require_protocol_crc: true
     publish_stm32_gnss: true
