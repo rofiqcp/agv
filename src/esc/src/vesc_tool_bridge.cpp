@@ -57,7 +57,7 @@ constexpr std::uint8_t COMM_GET_MCCONF_TEMP = 91;
 constexpr std::uint8_t RIGHT_ID = 2;
 constexpr std::uint8_t HB_MAGIC0 = 0x48;
 constexpr std::uint8_t HB_MAGIC1 = 0x42;
-constexpr std::uint8_t HB_VERSION = 1;
+constexpr std::uint8_t HB_VERSION = 2;
 constexpr std::uint8_t HB_GET_POS_STATE = 2;
 constexpr std::uint8_t HB_SET_POS_LIMITS = 3;
 constexpr std::uint8_t HB_RESET_POSITION = 5;
@@ -275,7 +275,9 @@ class VescToolBridge final : public rclcpp::Node {
     max_abs_current_a_ = std::clamp(declare_parameter<double>("max_abs_current_a", 20.0), 0.1, 100.0);
     max_abs_erpm_ = std::clamp(declare_parameter<double>("max_abs_erpm", 8000.0), 10.0, 200000.0);
     web_lease_timeout_ms_ = static_cast<int>(std::clamp<std::int64_t>(
-      declare_parameter<int>("web_lease_timeout_ms", 1200), 500, 5000));
+      declare_parameter<int>("web_lease_timeout_ms", 5000), 500, 5000));
+    tcp_keepalive_period_ms_ = static_cast<int>(std::clamp<std::int64_t>(
+      declare_parameter<int>("tcp_keepalive_period_ms", 100), 50, 250));
     tcp_enabled_ = declare_parameter<bool>("tcp_enabled", true);
     tcp_port_ = static_cast<int>(std::clamp<std::int64_t>(declare_parameter<int>("tcp_port", 65102), 1024, 65535));
     python_tcp_enabled_ = declare_parameter<bool>("python_tcp_enabled", true);
@@ -319,7 +321,7 @@ class VescToolBridge final : public rclcpp::Node {
     command_sub_ = create_subscription<std_msgs::msg::String>("/esc/vesc/tool_command", 20,
       [this](std_msgs::msg::String::ConstSharedPtr m) { command(m->data); });
 
-    transition_timer_ = create_wall_timer(2ms, [this]() { transitionTick(); webLeaseTick(); });
+    transition_timer_ = create_wall_timer(2ms, [this]() { transitionTick(); webLeaseTick(); tcpKeepaliveTick(); });
     poll_timer_ = create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::duration<double>(1.0 / poll_hz_)), [this]() { pollTick(); });
     tcp_timer_ = create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -435,6 +437,30 @@ class VescToolBridge final : public rclcpp::Node {
       const auto packet = frame(motorPayload(motor, std::move(p)));
       if (!packet.empty()) { std_msgs::msg::UInt8MultiArray m; m.data = packet; tx_pub_->publish(m); }
     }
+  }
+
+  void sendMaintenanceAlive(int motor) {
+    const auto packet = frame(motorPayload(motor, {COMM_ALIVE}));
+    if (packet.empty()) return;
+    std_msgs::msg::UInt8MultiArray m; m.data = packet; tx_pub_->publish(m);
+  }
+
+  void tcpKeepaliveTick() {
+    // Match stock VESC Tool semantics: after a one-shot Speed/Position/Current
+    // setpoint it keeps COMM_ALIVE flowing. The local F103 watchdog is 300 ms;
+    // 100 ms leaves margin for ROS/USB scheduling without weakening that watchdog.
+    // ALIVE never starts a motor by itself and maintenance entry already places
+    // an explicit zero-current barrier in front of this owner.
+    if (!tcp_client_armed_ || python_tcp_client_armed_ || !maintenance_active_ ||
+        transition_ != Transition::NONE) {
+      tcp_keepalive_next_ = {};
+      return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (tcp_keepalive_next_.time_since_epoch().count() != 0 && now < tcp_keepalive_next_) return;
+    sendMaintenanceAlive(1);
+    sendMaintenanceAlive(2);
+    tcp_keepalive_next_ = now + std::chrono::milliseconds(tcp_keepalive_period_ms_);
   }
 
   void forceRuntimeAfterTcp(const std::string &event) {
@@ -748,6 +774,7 @@ class VescToolBridge final : public rclcpp::Node {
       << ",\"tcp_server\":" << (tcp_server_fd_ >= 0 ? "true" : "false")
       << ",\"tcp_port\":" << tcp_port_ << ",\"tcp_client\":" << (tcp_client_fd_ >= 0 ? "true" : "false")
       << ",\"tcp_armed\":" << (tcp_client_armed_ ? "true" : "false")
+      << ",\"tcp_keepalive_period_ms\":" << tcp_keepalive_period_ms_
       << ",\"tcp_role\":\"OWNER_PRIORITY_90\""
       << ",\"web_lease_active\":" << (web_lease_active_ ? "true" : "false")
       << ",\"web_lease_remaining_ms\":" << lease_ms
@@ -796,10 +823,11 @@ class VescToolBridge final : public rclcpp::Node {
     if (std::chrono::steady_clock::now() <= web_lease_deadline_) return;
     if (transition_ != Transition::NONE) return;
     web_lease_active_ = false;
+    clearWebMotorHeartbeat();
     if (maintenance_active_) {
       cancelWebDetectionIfActive();
-      publishStatus("web_lease_expired_safe_stop");
-      beginExit();
+      publishStatus("web_lease_expired_maintenance_latched");
+      publishOwner();
     }
   }
 
@@ -1332,11 +1360,11 @@ class VescToolBridge final : public rclcpp::Node {
 
   double poll_hz_{50.0}, tcp_service_hz_{1000.0};
   double max_abs_duty_{0.95}, max_abs_current_a_{20.0}, max_abs_erpm_{8000.0};
-  int web_lease_timeout_ms_{1200};
+  int web_lease_timeout_ms_{5000}, tcp_keepalive_period_ms_{100};
   bool maintenance_active_{false}, gateway_connected_{false}, transport_connected_{false}, tcp_enabled_{true}, python_tcp_enabled_{true};
   bool web_lease_active_{false}, web_detection_active_{false};
   bool web_motor_heartbeat_[2]{false, false};
-  std::chrono::steady_clock::time_point web_lease_deadline_{};
+  std::chrono::steady_clock::time_point web_lease_deadline_{}, tcp_keepalive_next_{};
   bool tcp_probe_pending_{false}, python_probe_pending_{false};
   bool tcp_client_armed_{false}, python_tcp_client_armed_{false};
   int tcp_port_{65102}, tcp_server_fd_{-1}, tcp_client_fd_{-1};

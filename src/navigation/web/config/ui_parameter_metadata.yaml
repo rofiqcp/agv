@@ -610,28 +610,6 @@ parameters:
     related: []
     source_of_constraint: source YAML type + reviewed ROS Web authority mapping
     step: 1
-  esc:esc_ackermann.ros__parameters.drive_odometry_calibration_scale:
-    identity: esc:esc_ackermann.ros__parameters.drive_odometry_calibration_scale
-    file_key: esc
-    yaml_path: esc_ackermann.ros__parameters.drive_odometry_calibration_scale
-    label: Drive odometry calibration scale
-    group: ESC
-    level: advanced
-    type: number
-    risk: motion
-    write_authority: ros_yaml
-    requires_stationary: true
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: Parameter Drive odometry calibration scale pada esc. Nilai dan tipe mengikuti source YAML/ROS yang aktif.
-    effect_up: Tidak diasumsikan oleh UI; evaluasi perubahan menggunakan telemetry/evidence domain terkait.
-    effect_down: Tidak diasumsikan oleh UI; evaluasi perubahan menggunakan telemetry/evidence domain terkait.
-    related: []
-    source_of_constraint: 'src/esc/src/ackermann_controller_server.cpp: drive scale callback finite 0.20..5.00'
-    step: 0.0001
-    unit: ratio
-    hard_min: 0.2
-    hard_max: 5.0
   esc:esc_ackermann.ros__parameters.odom_v_variance_base:
     identity: esc:esc_ackermann.ros__parameters.odom_v_variance_base
     file_key: esc
@@ -708,6 +686,114 @@ parameters:
     related: []
     source_of_constraint: source YAML type + reviewed ROS Web authority mapping
     step: 0.001
+  esc:esc_ackermann.ros__parameters.steering_vesc_pos_left_deg:
+    identity: esc:esc_ackermann.ros__parameters.steering_vesc_pos_left_deg
+    file_key: esc
+    yaml_path: esc_ackermann.ros__parameters.steering_vesc_pos_left_deg
+    label: VESC POS at physical -30 deg
+    group: ESC
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Raw LEFT VESC position captured while the steering wheel is physically at -30 deg.
+    effect_up: Shifts the ROS physical-to-VESC mapping for the negative steering side.
+    effect_down: Shifts the ROS physical-to-VESC mapping for the negative steering side.
+    unit: deg
+    hard_min: 0.0
+    hard_max: 360.0
+    step: 0.1
+    related: []
+    source_of_constraint: ackermann_controller_server VESC POS calibration 0..360
+  esc:esc_ackermann.ros__parameters.steering_vesc_pos_center_deg:
+    identity: esc:esc_ackermann.ros__parameters.steering_vesc_pos_center_deg
+    file_key: esc
+    yaml_path: esc_ackermann.ros__parameters.steering_vesc_pos_center_deg
+    label: VESC POS at physical 0 deg
+    group: ESC
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Raw LEFT VESC position captured with the steering physically straight at 0 deg.
+    effect_up: Moves the raw VESC center used by ROS mapping.
+    effect_down: Moves the raw VESC center used by ROS mapping.
+    unit: deg
+    hard_min: 0.0
+    hard_max: 360.0
+    step: 0.1
+    related: []
+    source_of_constraint: ackermann_controller_server VESC POS calibration 0..360
+  esc:esc_ackermann.ros__parameters.steering_vesc_pos_right_deg:
+    identity: esc:esc_ackermann.ros__parameters.steering_vesc_pos_right_deg
+    file_key: esc
+    yaml_path: esc_ackermann.ros__parameters.steering_vesc_pos_right_deg
+    label: VESC POS at physical +30 deg
+    group: ESC
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Raw LEFT VESC position captured while the steering wheel is physically at +30 deg.
+    effect_up: Shifts the ROS physical-to-VESC mapping for the positive steering side.
+    effect_down: Shifts the ROS physical-to-VESC mapping for the positive steering side.
+    unit: deg
+    hard_min: 0.0
+    hard_max: 360.0
+    step: 0.1
+    related: []
+    source_of_constraint: ackermann_controller_server VESC POS calibration 0..360
+  esc:esc_ackermann.ros__parameters.steering_vesc_pos_reference_deg:
+    identity: esc:esc_ackermann.ros__parameters.steering_vesc_pos_reference_deg
+    file_key: esc
+    yaml_path: esc_ackermann.ros__parameters.steering_vesc_pos_reference_deg
+    label: Steering VESC POS physical reference
+    group: ESC
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Physical reference magnitude for the three-point raw VESC POS calibration; project canonical value is 30 deg.
+    effect_up: Expands the physical angle represented by the captured LEFT/RIGHT raw POS points.
+    effect_down: Contracts the physical angle represented by the captured LEFT/RIGHT raw POS points.
+    unit: deg
+    hard_min: 1.0
+    hard_max: 30.0
+    recommended_min: 30.0
+    recommended_max: 30.0
+    step: 0.1
+    related: []
+    source_of_constraint: project steering reference -30/0/+30 deg
+  esc:esc_ackermann.ros__parameters.steering_vesc_pos_calibration_saved_at:
+    identity: esc:esc_ackermann.ros__parameters.steering_vesc_pos_calibration_saved_at
+    file_key: esc
+    yaml_path: esc_ackermann.ros__parameters.steering_vesc_pos_calibration_saved_at
+    label: VESC POS calibration saved at
+    group: ESC
+    level: advanced
+    type: string
+    risk: low
+    write_authority: ros_yaml
+    requires_stationary: false
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Timestamp/evidence marker for the ROS-side steering VESC POS calibration.
+    effect_up: Metadata only.
+    effect_down: Metadata only.
+    related: []
+    source_of_constraint: ROS Web calibration evidence metadata
   esc:esc_ackermann.ros__parameters.steering_physical_calibration_enabled:
     identity: esc:esc_ackermann.ros__parameters.steering_physical_calibration_enabled
     file_key: esc
@@ -7018,26 +7104,6 @@ parameters:
     effect_down: Tidak diasumsikan oleh UI; evaluasi perubahan menggunakan telemetry/evidence domain terkait.
     related: []
     source_of_constraint: source YAML type + reviewed ROS Web authority mapping
-  vehicle:vehicle.ros__parameters.drive_odometry_calibration_scale:
-    identity: vehicle:vehicle.ros__parameters.drive_odometry_calibration_scale
-    file_key: vehicle
-    yaml_path: vehicle.ros__parameters.drive_odometry_calibration_scale
-    label: Vehicle drive odometry calibration scale
-    group: VEHICLE
-    level: expert
-    type: number
-    risk: info
-    write_authority: calibration_generated
-    requires_stationary: false
-    apply_mode: startup_only
-    metadata_complete: true
-    summary: Parameter Vehicle drive odometry calibration scale pada vehicle. Nilai dan tipe mengikuti source YAML/ROS yang
-      aktif.
-    effect_up: Tidak diasumsikan oleh UI; evaluasi perubahan menggunakan telemetry/evidence domain terkait.
-    effect_down: Tidak diasumsikan oleh UI; evaluasi perubahan menggunakan telemetry/evidence domain terkait.
-    related: []
-    source_of_constraint: source YAML type + reviewed ROS Web authority mapping
-    step: 1
   vehicle:vehicle.ros__parameters.drive_odometry_calibration_valid:
     identity: vehicle:vehicle.ros__parameters.drive_odometry_calibration_valid
     file_key: vehicle
@@ -7209,185 +7275,6 @@ parameters:
     - index: 7
       hard_min: 0.0
       hard_max: 1.0
-  mag_heading:mag_heading_fusion.ros__parameters.imu_mag_yaw_sign:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.imu_mag_yaw_sign
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.imu_mag_yaw_sign
-    label: IMU magnetometer yaw sign
-    group: YAHBOOM MAG CALIBRATION
-    level: advanced
-    type: number
-    risk: safety_critical
-    write_authority: calibration_generated
-    requires_stationary: true
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: Generated only by Yahboom 8-direction calibration after fit/transition/mounting quality gates PASS.
-    effect_up: Tidak dituning manual; nilai berasal dari hasil fit kalibrasi.
-    effect_down: Tidak dituning manual; nilai berasal dari hasil fit kalibrasi.
-    related: []
-    source_of_constraint: yahboom_mag_planar_fit.py + yahboom_apply_calibration.py
-    unit: sign
-    options:
-    - -1.0
-    - 1.0
-  mag_heading:mag_heading_fusion.ros__parameters.imu_mag_yaw_offset_rad:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.imu_mag_yaw_offset_rad
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.imu_mag_yaw_offset_rad
-    label: IMU magnetometer yaw offset
-    group: YAHBOOM MAG CALIBRATION
-    level: advanced
-    type: number
-    risk: safety_critical
-    write_authority: calibration_generated
-    requires_stationary: true
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: Generated only by Yahboom 8-direction calibration after fit/transition/mounting quality gates PASS.
-    effect_up: Tidak dituning manual; nilai berasal dari hasil fit kalibrasi.
-    effect_down: Tidak dituning manual; nilai berasal dari hasil fit kalibrasi.
-    related: []
-    source_of_constraint: yahboom_mag_planar_fit.py + yahboom_apply_calibration.py
-    unit: rad
-    step: 0.0001
-  mag_heading:mag_heading_fusion.ros__parameters.imu_mag_bias_xy_lsb:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.imu_mag_bias_xy_lsb
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.imu_mag_bias_xy_lsb
-    label: IMU magnetometer XY bias
-    group: YAHBOOM MAG CALIBRATION
-    level: advanced
-    type: list
-    risk: safety_critical
-    write_authority: calibration_generated
-    requires_stationary: true
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: Generated only by Yahboom 8-direction calibration after fit/transition/mounting quality gates PASS.
-    effect_up: Tidak dituning manual; nilai berasal dari hasil fit kalibrasi.
-    effect_down: Tidak dituning manual; nilai berasal dari hasil fit kalibrasi.
-    related: []
-    source_of_constraint: yahboom_mag_planar_fit.py + yahboom_apply_calibration.py
-    unit: LSB [x,y]
-    list_length: 2
-  mag_heading:mag_heading_fusion.ros__parameters.imu_mag_matrix_xy_per_lsb:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.imu_mag_matrix_xy_per_lsb
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.imu_mag_matrix_xy_per_lsb
-    label: IMU magnetometer XY matrix
-    group: YAHBOOM MAG CALIBRATION
-    level: advanced
-    type: list
-    risk: safety_critical
-    write_authority: calibration_generated
-    requires_stationary: true
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: Generated only by Yahboom 8-direction calibration after fit/transition/mounting quality gates PASS.
-    effect_up: Tidak dituning manual; nilai berasal dari hasil fit kalibrasi.
-    effect_down: Tidak dituning manual; nilai berasal dari hasil fit kalibrasi.
-    related: []
-    source_of_constraint: yahboom_mag_planar_fit.py + yahboom_apply_calibration.py
-    unit: 1/LSB [2x2]
-    list_length: 4
-  mag_heading:mag_heading_fusion.ros__parameters.imu_heading_lut_input_rad:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.imu_heading_lut_input_rad
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.imu_heading_lut_input_rad
-    label: IMU heading LUT input
-    group: YAHBOOM MAG CALIBRATION
-    level: advanced
-    type: list
-    risk: safety_critical
-    write_authority: calibration_generated
-    requires_stationary: true
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: Generated only by Yahboom 8-direction calibration after fit/transition/mounting quality gates PASS.
-    effect_up: Tidak dituning manual; nilai berasal dari hasil fit kalibrasi.
-    effect_down: Tidak dituning manual; nilai berasal dari hasil fit kalibrasi.
-    related: []
-    source_of_constraint: yahboom_mag_planar_fit.py + yahboom_apply_calibration.py
-    unit: rad
-    list_length: 8
-  mag_heading:mag_heading_fusion.ros__parameters.imu_heading_lut_correction_rad:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.imu_heading_lut_correction_rad
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.imu_heading_lut_correction_rad
-    label: IMU heading LUT correction
-    group: YAHBOOM MAG CALIBRATION
-    level: advanced
-    type: list
-    risk: safety_critical
-    write_authority: calibration_generated
-    requires_stationary: true
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: Generated only by Yahboom 8-direction calibration after fit/transition/mounting quality gates PASS.
-    effect_up: Tidak dituning manual; nilai berasal dari hasil fit kalibrasi.
-    effect_down: Tidak dituning manual; nilai berasal dari hasil fit kalibrasi.
-    related: []
-    source_of_constraint: yahboom_mag_planar_fit.py + yahboom_apply_calibration.py
-    unit: rad
-    list_length: 8
-  mag_heading:mag_heading_fusion.ros__parameters.imu_planar_calibration_enabled:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.imu_planar_calibration_enabled
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.imu_planar_calibration_enabled
-    label: IMU planar calibration enabled
-    group: YAHBOOM MAG CALIBRATION
-    level: advanced
-    type: boolean
-    risk: safety_critical
-    write_authority: calibration_generated
-    requires_stationary: true
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: Generated only by Yahboom 8-direction calibration after fit/transition/mounting quality gates PASS.
-    effect_up: Tidak dituning manual; nilai berasal dari hasil fit kalibrasi.
-    effect_down: Tidak dituning manual; nilai berasal dari hasil fit kalibrasi.
-    related: []
-    source_of_constraint: yahboom_mag_planar_fit.py + yahboom_apply_calibration.py
-    unit: bool
-  mag_heading:mag_heading_fusion.ros__parameters.imu_heading_lut_enabled:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.imu_heading_lut_enabled
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.imu_heading_lut_enabled
-    label: IMU heading LUT enabled
-    group: YAHBOOM MAG CALIBRATION
-    level: advanced
-    type: boolean
-    risk: safety_critical
-    write_authority: calibration_generated
-    requires_stationary: true
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: Generated only by Yahboom 8-direction calibration after fit/transition/mounting quality gates PASS.
-    effect_up: Tidak dituning manual; nilai berasal dari hasil fit kalibrasi.
-    effect_down: Tidak dituning manual; nilai berasal dari hasil fit kalibrasi.
-    related: []
-    source_of_constraint: yahboom_mag_planar_fit.py + yahboom_apply_calibration.py
-    unit: bool
-  mag_heading:mag_heading_fusion.ros__parameters.enable_imu_mag_heading:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.enable_imu_mag_heading
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.enable_imu_mag_heading
-    label: IMU magnetic heading enabled
-    group: YAHBOOM MAG CALIBRATION
-    level: advanced
-    type: boolean
-    risk: safety_critical
-    write_authority: calibration_generated
-    requires_stationary: true
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: Generated only by Yahboom 8-direction calibration after fit/transition/mounting quality gates PASS.
-    effect_up: Tidak dituning manual; nilai berasal dari hasil fit kalibrasi.
-    effect_down: Tidak dituning manual; nilai berasal dari hasil fit kalibrasi.
-    related: []
-    source_of_constraint: yahboom_mag_planar_fit.py + yahboom_apply_calibration.py
-    unit: bool
   vehicle:vehicle.ros__parameters.wheelbase_m:
     identity: vehicle:vehicle.ros__parameters.wheelbase_m
     file_key: vehicle
@@ -7552,7 +7439,7 @@ parameters:
     identity: vehicle:vehicle.ros__parameters.drive_erpm_per_mps
     file_key: vehicle
     yaml_path: vehicle.ros__parameters.drive_erpm_per_mps
-    label: "Drive Erpm Per Mps"
+    label: "Vehicle authority: drive eRPM per m/s"
     group: "VEHICLE"
     level: advanced
     type: number
@@ -7561,11 +7448,16 @@ parameters:
     requires_stationary: true
     apply_mode: node_restart
     metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
+    summary: "Physical/runtime SSOT yang dibaca autonomous.launch.py. N2.1 mengubah nilai ini hanya melalui proposal kalibrasi tervalidasi."
+    effect_up: "Pada restart full stack nilai authority lebih besar menaikkan eRPM untuk m/s yang sama."
+    effect_down: "Pada restart full stack nilai authority lebih kecil menurunkan eRPM untuk m/s yang sama."
+    unit: eRPM/(m/s)
+    hard_min: 100
+    hard_max: 50000
+    recommended_min: 100
+    recommended_max: 50000
     related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
+    source_of_constraint: "vehicle.yaml runtime SSOT + N2.1 calibration proposal"
     step: 0.001
 
   vehicle:vehicle.ros__parameters.measured_left_steering_limit_rad:
@@ -15289,6 +15181,31 @@ parameters:
     source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
     step: 0.001
 
+  localization:localization_core.ros__parameters.gnss_min_usable_rate_hz:
+    identity: localization:localization_core.ros__parameters.gnss_min_usable_rate_hz
+    file_key: localization
+    yaml_path: localization_core.ros__parameters.gnss_min_usable_rate_hz
+    label: "GNSS minimum usable rate"
+    group: "LOCALIZATION"
+    level: advanced
+    type: number
+    risk: safety
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: "Defense-in-depth rate gate in LocalizationCore. Planning quality, strict motion gate, GNSS velocity and COG fusion fail closed below this rate."
+    effect_up: "Lebih ketat terhadap source-rate rendah; availability berkurang."
+    effect_down: "Lebih permisif terhadap source-rate rendah."
+    unit: Hz
+    hard_min: 0.1
+    hard_max: 25
+    recommended_min: 7
+    recommended_max: 7
+    related: ["hmi:stmf4_hmi_bridge.ros__parameters.neo3pro_min_usable_rate_hz"]
+    source_of_constraint: "Production GNSS contract: minimum usable threshold 7 Hz (actual must be >7 Hz)"
+    step: 0.5
+
   localization:localization_core.ros__parameters.gnss_velocity_covariance_min_variance:
     identity: localization:localization_core.ros__parameters.gnss_velocity_covariance_min_variance
     file_key: localization
@@ -19388,87 +19305,11 @@ parameters:
     related: []
     source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
 
-  mag_heading:mag_heading_fusion.ros__parameters.imu_mag_topic:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.imu_mag_topic
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.imu_mag_topic
-    label: "Imu Mag Topic"
-    group: "MAG HEADING"
-    level: advanced
-    type: string
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-
-  mag_heading:mag_heading_fusion.ros__parameters.neo3_mag_topic:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.neo3_mag_topic
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.neo3_mag_topic
-    label: "Neo3 Mag Topic"
-    group: "MAG HEADING"
-    level: advanced
-    type: string
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-
   mag_heading:mag_heading_fusion.ros__parameters.map_yaw_topic:
     identity: mag_heading:mag_heading_fusion.ros__parameters.map_yaw_topic
     file_key: mag_heading
     yaml_path: mag_heading_fusion.ros__parameters.map_yaw_topic
     label: "Map Yaw Topic"
-    group: "MAG HEADING"
-    level: advanced
-    type: string
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-
-  mag_heading:mag_heading_fusion.ros__parameters.imu_heading_topic:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.imu_heading_topic
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.imu_heading_topic
-    label: "Imu Heading Topic"
-    group: "MAG HEADING"
-    level: advanced
-    type: string
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-
-  mag_heading:mag_heading_fusion.ros__parameters.neo3_heading_topic:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.neo3_heading_topic
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.neo3_heading_topic
-    label: "Neo3 Heading Topic"
     group: "MAG HEADING"
     level: advanced
     type: string
@@ -19502,46 +19343,6 @@ parameters:
     related: []
     source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
 
-  mag_heading:mag_heading_fusion.ros__parameters.tilt_timeout_sec:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.tilt_timeout_sec
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.tilt_timeout_sec
-    label: "Tilt Timeout Sec"
-    group: "MAG HEADING"
-    level: advanced
-    type: number
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    step: 0.001
-
-  mag_heading:mag_heading_fusion.ros__parameters.max_tilt_rad:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.max_tilt_rad
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.max_tilt_rad
-    label: "Max Tilt Rad"
-    group: "MAG HEADING"
-    level: advanced
-    type: number
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    step: 0.001
-
   mag_heading:mag_heading_fusion.ros__parameters.magnetic_declination_rad:
     identity: mag_heading:mag_heading_fusion.ros__parameters.magnetic_declination_rad
     file_key: mag_heading
@@ -19562,339 +19363,6 @@ parameters:
     source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
     step: 0.001
 
-  mag_heading:mag_heading_fusion.ros__parameters.min_field_norm_ut:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.min_field_norm_ut
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.min_field_norm_ut
-    label: "Min Field Norm Ut"
-    group: "MAG HEADING"
-    level: advanced
-    type: number
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    step: 0.001
-
-  mag_heading:mag_heading_fusion.ros__parameters.max_field_norm_ut:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.max_field_norm_ut
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.max_field_norm_ut
-    label: "Max Field Norm Ut"
-    group: "MAG HEADING"
-    level: advanced
-    type: number
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    step: 0.001
-
-  mag_heading:mag_heading_fusion.ros__parameters.neo3_mag_yaw_sign:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.neo3_mag_yaw_sign
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.neo3_mag_yaw_sign
-    label: "Neo3 Mag Yaw Sign"
-    group: "MAG HEADING"
-    level: advanced
-    type: number
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    step: 0.001
-
-  mag_heading:mag_heading_fusion.ros__parameters.neo3_mag_yaw_offset_rad:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.neo3_mag_yaw_offset_rad
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.neo3_mag_yaw_offset_rad
-    label: "Neo3 Mag Yaw Offset Rad"
-    group: "MAG HEADING"
-    level: advanced
-    type: number
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    step: 0.001
-
-  mag_heading:mag_heading_fusion.ros__parameters.imu_heading_variance_rad2:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.imu_heading_variance_rad2
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.imu_heading_variance_rad2
-    label: "Imu Heading Variance Rad2"
-    group: "MAG HEADING"
-    level: advanced
-    type: number
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    step: 0.001
-
-  mag_heading:mag_heading_fusion.ros__parameters.neo3_heading_variance_rad2:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.neo3_heading_variance_rad2
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.neo3_heading_variance_rad2
-    label: "Neo3 Heading Variance Rad2"
-    group: "MAG HEADING"
-    level: advanced
-    type: number
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    step: 0.001
-
-  mag_heading:mag_heading_fusion.ros__parameters.max_heading_rate_rps:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.max_heading_rate_rps
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.max_heading_rate_rps
-    label: "Max Heading Rate Rps"
-    group: "MAG HEADING"
-    level: advanced
-    type: number
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    step: 0.001
-
-  mag_heading:mag_heading_fusion.ros__parameters.rate_gate_margin_rad:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.rate_gate_margin_rad
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.rate_gate_margin_rad
-    label: "Rate Gate Margin Rad"
-    group: "MAG HEADING"
-    level: advanced
-    type: number
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    step: 0.001
-
-  mag_heading:mag_heading_fusion.ros__parameters.field_qualification_valid:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.field_qualification_valid
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.field_qualification_valid
-    label: "Field Qualification Valid"
-    group: "MAG HEADING"
-    level: advanced
-    type: boolean
-    risk: sensor
-    write_authority: calibration_generated
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-
-  mag_heading:mag_heading_fusion.ros__parameters.field_qualification_saved_at:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.field_qualification_saved_at
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.field_qualification_saved_at
-    label: "Field Qualification Saved At"
-    group: "MAG HEADING"
-    level: advanced
-    type: string
-    risk: sensor
-    write_authority: calibration_generated
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-
-  mag_heading:mag_heading_fusion.ros__parameters.field_qualification_evidence_sha256:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.field_qualification_evidence_sha256
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.field_qualification_evidence_sha256
-    label: "Field Qualification Evidence Sha256"
-    group: "MAG HEADING"
-    level: advanced
-    type: string
-    risk: sensor
-    write_authority: calibration_generated
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-
-  mag_heading:mag_heading_fusion.ros__parameters.enable_current_emi_gate:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.enable_current_emi_gate
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.enable_current_emi_gate
-    label: "Enable Current Emi Gate"
-    group: "MAG HEADING"
-    level: advanced
-    type: boolean
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-
-  mag_heading:mag_heading_fusion.ros__parameters.motor_current_topic:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.motor_current_topic
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.motor_current_topic
-    label: "Motor Current Topic"
-    group: "MAG HEADING"
-    level: advanced
-    type: string
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-
-  mag_heading:mag_heading_fusion.ros__parameters.current_emi_gate_threshold_a:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.current_emi_gate_threshold_a
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.current_emi_gate_threshold_a
-    label: "Current Emi Gate Threshold A"
-    group: "MAG HEADING"
-    level: advanced
-    type: number
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    step: 0.001
-
-  mag_heading:mag_heading_fusion.ros__parameters.current_emi_gate_timeout_sec:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.current_emi_gate_timeout_sec
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.current_emi_gate_timeout_sec
-    label: "Current Emi Gate Timeout Sec"
-    group: "MAG HEADING"
-    level: advanced
-    type: number
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    step: 0.001
-
-  mag_heading:mag_heading_fusion.ros__parameters.enable_neo3_mag_heading:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.enable_neo3_mag_heading
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.enable_neo3_mag_heading
-    label: "Enable Neo3 Mag Heading"
-    group: "MAG HEADING"
-    level: advanced
-    type: boolean
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-
-  mag_heading:mag_heading_fusion.ros__parameters.imu_inertial_heading_topic:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.imu_inertial_heading_topic
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.imu_inertial_heading_topic
-    label: "Imu Inertial Heading Topic"
-    group: "MAG HEADING"
-    level: advanced
-    type: string
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-
   mag_heading:mag_heading_fusion.ros__parameters.validated_heading_topic:
     identity: mag_heading:mag_heading_fusion.ros__parameters.validated_heading_topic
     file_key: mag_heading
@@ -19914,385 +19382,11 @@ parameters:
     related: []
     source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
 
-  mag_heading:mag_heading_fusion.ros__parameters.consensus_max_error_rad:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.consensus_max_error_rad
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.consensus_max_error_rad
-    label: "Consensus Max Error Rad"
-    group: "MAG HEADING"
-    level: advanced
-    type: number
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    step: 0.001
-
-  mag_heading:mag_heading_fusion.ros__parameters.consensus_hold_sec:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.consensus_hold_sec
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.consensus_hold_sec
-    label: "Consensus Hold Sec"
-    group: "MAG HEADING"
-    level: advanced
-    type: number
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    step: 0.001
-
-  mag_heading:mag_heading_fusion.ros__parameters.consensus_timeout_sec:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.consensus_timeout_sec
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.consensus_timeout_sec
-    label: "Consensus Timeout Sec"
-    group: "MAG HEADING"
-    level: advanced
-    type: number
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    step: 0.001
-
   mag_heading:mag_heading_fusion.ros__parameters.validated_heading_variance_rad2:
     identity: mag_heading:mag_heading_fusion.ros__parameters.validated_heading_variance_rad2
     file_key: mag_heading
     yaml_path: mag_heading_fusion.ros__parameters.validated_heading_variance_rad2
     label: "Validated Heading Variance Rad2"
-    group: "MAG HEADING"
-    level: advanced
-    type: number
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    step: 0.001
-
-  mag_heading:mag_heading_fusion.ros__parameters.neo3_calibration_owner:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.neo3_calibration_owner
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.neo3_calibration_owner
-    label: "Neo3 Calibration Owner"
-    group: "MAG HEADING"
-    level: advanced
-    type: string
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-
-  mag_heading:mag_heading_fusion.ros__parameters.neo3_calibration_ownership_verified:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.neo3_calibration_ownership_verified
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.neo3_calibration_ownership_verified
-    label: "Neo3 Calibration Ownership Verified"
-    group: "MAG HEADING"
-    level: advanced
-    type: boolean
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-
-  mag_heading:mag_heading_fusion.ros__parameters.neo3_planar_max_tilt_rad:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.neo3_planar_max_tilt_rad
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.neo3_planar_max_tilt_rad
-    label: "Neo3 Planar Max Tilt Rad"
-    group: "MAG HEADING"
-    level: advanced
-    type: number
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    step: 0.001
-
-  mag_heading:mag_heading_fusion.ros__parameters.neo3_full_calibration_enabled:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.neo3_full_calibration_enabled
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.neo3_full_calibration_enabled
-    label: "Neo3 Full Calibration Enabled"
-    group: "MAG HEADING"
-    level: advanced
-    type: boolean
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-
-  mag_heading:mag_heading_fusion.ros__parameters.neo3_mag_bias_xyz_ut:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.neo3_mag_bias_xyz_ut
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.neo3_mag_bias_xyz_ut
-    label: "Neo3 Mag Bias Xyz Ut"
-    group: "MAG HEADING"
-    level: advanced
-    type: list
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    list_length: 3
-
-  mag_heading:mag_heading_fusion.ros__parameters.neo3_mag_matrix_3x3:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.neo3_mag_matrix_3x3
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.neo3_mag_matrix_3x3
-    label: "Neo3 Mag Matrix 3X3"
-    group: "MAG HEADING"
-    level: advanced
-    type: list
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    list_length: 9
-
-  mag_heading:mag_heading_fusion.ros__parameters.neo3_planar_calibration_enabled:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.neo3_planar_calibration_enabled
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.neo3_planar_calibration_enabled
-    label: "Neo3 Planar Calibration Enabled"
-    group: "MAG HEADING"
-    level: advanced
-    type: boolean
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-
-  mag_heading:mag_heading_fusion.ros__parameters.neo3_mag_bias_xy_ut:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.neo3_mag_bias_xy_ut
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.neo3_mag_bias_xy_ut
-    label: "Neo3 Mag Bias Xy Ut"
-    group: "MAG HEADING"
-    level: advanced
-    type: list
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    list_length: 2
-
-  mag_heading:mag_heading_fusion.ros__parameters.neo3_mag_matrix_xy:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.neo3_mag_matrix_xy
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.neo3_mag_matrix_xy
-    label: "Neo3 Mag Matrix Xy"
-    group: "MAG HEADING"
-    level: advanced
-    type: list
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    list_length: 4
-
-  mag_heading:mag_heading_fusion.ros__parameters.neo3_heading_lut_enabled:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.neo3_heading_lut_enabled
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.neo3_heading_lut_enabled
-    label: "Neo3 Heading Lut Enabled"
-    group: "MAG HEADING"
-    level: advanced
-    type: boolean
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-
-  mag_heading:mag_heading_fusion.ros__parameters.neo3_heading_lut_input_rad:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.neo3_heading_lut_input_rad
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.neo3_heading_lut_input_rad
-    label: "Neo3 Heading Lut Input Rad"
-    group: "MAG HEADING"
-    level: advanced
-    type: list
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    list_length: 8
-
-  mag_heading:mag_heading_fusion.ros__parameters.neo3_heading_lut_correction_rad:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.neo3_heading_lut_correction_rad
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.neo3_heading_lut_correction_rad
-    label: "Neo3 Heading Lut Correction Rad"
-    group: "MAG HEADING"
-    level: advanced
-    type: list
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    list_length: 8
-
-  mag_heading:mag_heading_fusion.ros__parameters.imu_raw_mag_topic:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.imu_raw_mag_topic
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.imu_raw_mag_topic
-    label: "Imu Raw Mag Topic"
-    group: "MAG HEADING"
-    level: advanced
-    type: string
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-
-  mag_heading:mag_heading_fusion.ros__parameters.imu_corrected_norm_min:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.imu_corrected_norm_min
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.imu_corrected_norm_min
-    label: "Imu Corrected Norm Min"
-    group: "MAG HEADING"
-    level: advanced
-    type: number
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    step: 0.001
-
-  mag_heading:mag_heading_fusion.ros__parameters.imu_corrected_norm_max:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.imu_corrected_norm_max
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.imu_corrected_norm_max
-    label: "Imu Corrected Norm Max"
-    group: "MAG HEADING"
-    level: advanced
-    type: number
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    step: 0.001
-
-  mag_heading:mag_heading_fusion.ros__parameters.imu_planar_max_tilt_rad:
-    identity: mag_heading:mag_heading_fusion.ros__parameters.imu_planar_max_tilt_rad
-    file_key: mag_heading
-    yaml_path: mag_heading_fusion.ros__parameters.imu_planar_max_tilt_rad
-    label: "Imu Planar Max Tilt Rad"
     group: "MAG HEADING"
     level: advanced
     type: number
@@ -22952,7 +22046,7 @@ parameters:
     identity: esc:esc_ackermann.ros__parameters.drive_erpm_per_mps
     file_key: esc
     yaml_path: esc_ackermann.ros__parameters.drive_erpm_per_mps
-    label: "Drive Erpm Per Mps"
+    label: "Drive eRPM per m/s"
     group: "ESC"
     level: advanced
     type: number
@@ -22961,11 +22055,16 @@ parameters:
     requires_stationary: true
     apply_mode: node_restart
     metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
+    summary: "Konversi tunggal eRPM→m/s. Untuk N2.1 gunakan proposal kalibrasi dari trial GNSS, bukan tebakan manual."
+    effect_up: "Untuk target m/s yang sama, command eRPM menjadi lebih besar."
+    effect_down: "Untuk target m/s yang sama, command eRPM menjadi lebih kecil."
+    unit: eRPM/(m/s)
+    hard_min: 100
+    hard_max: 50000
+    recommended_min: 100
+    recommended_max: 50000
     related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
+    source_of_constraint: "ackermann_controller_server runtime guard 100..50000 eRPM/(m/s)"
     step: 0.001
 
   esc:esc_ackermann.ros__parameters.min_speed_for_nav_steering_mps:
@@ -27327,10 +26426,10 @@ parameters:
     related: []
     source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
 
-  hmi:stmf4_hmi_bridge.ros__parameters.neo3_mag_frame_id:
-    identity: hmi:stmf4_hmi_bridge.ros__parameters.neo3_mag_frame_id
+  hmi:stmf4_hmi_bridge.ros__parameters.rm3100_mag_frame_id:
+    identity: hmi:stmf4_hmi_bridge.ros__parameters.rm3100_mag_frame_id
     file_key: hmi
-    yaml_path: stmf4_hmi_bridge.ros__parameters.neo3_mag_frame_id
+    yaml_path: stmf4_hmi_bridge.ros__parameters.rm3100_mag_frame_id
     label: "Neo3 Mag Frame Id"
     group: "HMI"
     level: advanced
@@ -27365,10 +26464,10 @@ parameters:
     related: []
     source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
 
-  hmi:stmf4_hmi_bridge.ros__parameters.neo3_mag_sigma_ut:
-    identity: hmi:stmf4_hmi_bridge.ros__parameters.neo3_mag_sigma_ut
+  hmi:stmf4_hmi_bridge.ros__parameters.rm3100_mag_sigma_ut:
+    identity: hmi:stmf4_hmi_bridge.ros__parameters.rm3100_mag_sigma_ut
     file_key: hmi
-    yaml_path: stmf4_hmi_bridge.ros__parameters.neo3_mag_sigma_ut
+    yaml_path: stmf4_hmi_bridge.ros__parameters.rm3100_mag_sigma_ut
     label: "Neo3 Mag Sigma Ut"
     group: "HMI"
     level: advanced
@@ -27409,7 +26508,7 @@ parameters:
     identity: hmi:stmf4_hmi_bridge.ros__parameters.neo3pro_gnss_rate_hz
     file_key: hmi
     yaml_path: stmf4_hmi_bridge.ros__parameters.neo3pro_gnss_rate_hz
-    label: "Neo3Pro Gnss Rate Hz"
+    label: "NEO3 Pro source-rate target"
     group: "HMI"
     level: advanced
     type: number
@@ -27418,11 +26517,66 @@ parameters:
     requires_stationary: true
     apply_mode: node_restart
     metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
+    summary: "Target rate DroneCAN/F411; target bukan bukti rate aktual. Verifikasi telemetry Rate GNSS setelah Apply."
+    effect_up: "Update target lebih rapat; wajib cek measured rate, jitter, dan stabilitas link."
+    effect_down: "Beban/burst turun tetapi update GNSS lebih jarang."
+    unit: Hz
+    hard_min: 5
+    hard_max: 20
+    recommended_min: 5
+    recommended_max: 10
     related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
+    source_of_constraint: "stmf4_hmi_bridge clamp 5..20 Hz + runtime telemetry verification"
+    step: 5
+
+  hmi:stmf4_hmi_bridge.ros__parameters.neo3pro_min_usable_rate_hz:
+    identity: hmi:stmf4_hmi_bridge.ros__parameters.neo3pro_min_usable_rate_hz
+    file_key: hmi
+    yaml_path: stmf4_hmi_bridge.ros__parameters.neo3pro_min_usable_rate_hz
+    label: "NEO3 Pro minimum usable rate"
+    group: "HMI"
+    level: advanced
+    type: number
+    risk: safety
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: "Fail-closed GNSS rate gate. Raw diagnostics remain visible, but qualified fix/velocity/fusion require measured PVT rate above this threshold."
+    effect_up: "Gate lebih ketat terhadap source-rate drop; availability turun jika transport tidak mampu mempertahankan rate."
+    effect_down: "Gate lebih permisif; GNSS rate rendah dapat masuk ke navigation/fusion."
+    unit: Hz
+    hard_min: 1
+    hard_max: 20
+    recommended_min: 7
+    recommended_max: 7
+    related: ["hmi:stmf4_hmi_bridge.ros__parameters.neo3pro_gnss_rate_hz"]
+    source_of_constraint: "Production GNSS contract: target 10 Hz, minimum usable threshold 7 Hz (actual must be >7 Hz)"
+    step: 0.5
+
+  hmi:stmf4_hmi_bridge.ros__parameters.neo3pro_rate_reapply_sec:
+    identity: hmi:stmf4_hmi_bridge.ros__parameters.neo3pro_rate_reapply_sec
+    file_key: hmi
+    yaml_path: stmf4_hmi_bridge.ros__parameters.neo3pro_rate_reapply_sec
+    label: "NEO3 Pro rate reapply interval"
+    group: "HMI"
+    level: advanced
+    type: number
+    risk: sensor
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: "Bounded retry interval for enforcing the configured NEO3 Pro rate when measured PVT remains away from target."
+    effect_up: "Retry lebih jarang; recovery dari salah rate lebih lambat."
+    effect_down: "Retry lebih cepat; hindari terlalu kecil agar receiver tidak sering menerima request."
+    unit: s
+    hard_min: 2
+    hard_max: 60
+    recommended_min: 10
+    recommended_max: 10
+    related: ["hmi:stmf4_hmi_bridge.ros__parameters.neo3pro_gnss_rate_hz"]
+    source_of_constraint: "Bounded enforcement loop in stmf4_hmi_bridge"
     step: 1
 
   hmi:stmf4_hmi_bridge.ros__parameters.neo3_safety_button_as_estop:
@@ -30604,3 +29758,383 @@ parameters:
     related: []
     source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
     step: 0.001
+
+# RM3100-only metadata generated after retirement of Yahboom magnetometer path.
+  mag_heading:mag_heading_fusion.ros__parameters.rm3100_mag_topic:
+    identity: mag_heading:mag_heading_fusion.ros__parameters.rm3100_mag_topic
+    file_key: mag_heading
+    yaml_path: mag_heading_fusion.ros__parameters.rm3100_mag_topic
+    label: RM3100 Mag Topic
+    group: RM3100 MAGNETOMETER
+    level: advanced
+    type: string
+    risk: system
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: RM3100-only heading pipeline parameter. Yahboom magnetometer is not an authority or fallback.
+    effect_up: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    effect_down: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    related: []
+    source_of_constraint: mag_heading.yaml + RM3100 calibration workflow
+  mag_heading:mag_heading_fusion.ros__parameters.heading_topic:
+    identity: mag_heading:mag_heading_fusion.ros__parameters.heading_topic
+    file_key: mag_heading
+    yaml_path: mag_heading_fusion.ros__parameters.heading_topic
+    label: Heading Topic
+    group: RM3100 MAGNETOMETER
+    level: advanced
+    type: string
+    risk: system
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: RM3100-only heading pipeline parameter. Yahboom magnetometer is not an authority or fallback.
+    effect_up: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    effect_down: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    related: []
+    source_of_constraint: mag_heading.yaml + RM3100 calibration workflow
+  mag_heading:mag_heading_fusion.ros__parameters.calibrated_mag_topic:
+    identity: mag_heading:mag_heading_fusion.ros__parameters.calibrated_mag_topic
+    file_key: mag_heading
+    yaml_path: mag_heading_fusion.ros__parameters.calibrated_mag_topic
+    label: Calibrated Mag Topic
+    group: RM3100 MAGNETOMETER
+    level: advanced
+    type: string
+    risk: system
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: RM3100-only heading pipeline parameter. Yahboom magnetometer is not an authority or fallback.
+    effect_up: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    effect_down: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    related: []
+    source_of_constraint: mag_heading.yaml + RM3100 calibration workflow
+  mag_heading:mag_heading_fusion.ros__parameters.inertial_heading_topic:
+    identity: mag_heading:mag_heading_fusion.ros__parameters.inertial_heading_topic
+    file_key: mag_heading
+    yaml_path: mag_heading_fusion.ros__parameters.inertial_heading_topic
+    label: Inertial Heading Topic
+    group: RM3100 MAGNETOMETER
+    level: advanced
+    type: string
+    risk: system
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: RM3100-only heading pipeline parameter. Yahboom magnetometer is not an authority or fallback.
+    effect_up: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    effect_down: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    related: []
+    source_of_constraint: mag_heading.yaml + RM3100 calibration workflow
+  mag_heading:mag_heading_fusion.ros__parameters.rm3100_yaw_sign:
+    identity: mag_heading:mag_heading_fusion.ros__parameters.rm3100_yaw_sign
+    file_key: mag_heading
+    yaml_path: mag_heading_fusion.ros__parameters.rm3100_yaw_sign
+    label: RM3100 Yaw Sign
+    group: RM3100 MAGNETOMETER
+    level: advanced
+    type: number
+    risk: calibration
+    write_authority: calibration_generated
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: RM3100-only heading pipeline parameter. Yahboom magnetometer is not an authority or fallback.
+    effect_up: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    effect_down: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    related: []
+    source_of_constraint: mag_heading.yaml + RM3100 calibration workflow
+  mag_heading:mag_heading_fusion.ros__parameters.rm3100_yaw_offset_rad:
+    identity: mag_heading:mag_heading_fusion.ros__parameters.rm3100_yaw_offset_rad
+    file_key: mag_heading
+    yaml_path: mag_heading_fusion.ros__parameters.rm3100_yaw_offset_rad
+    label: RM3100 Yaw Offset Rad
+    group: RM3100 MAGNETOMETER
+    level: advanced
+    type: number
+    risk: calibration
+    write_authority: calibration_generated
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: RM3100-only heading pipeline parameter. Yahboom magnetometer is not an authority or fallback.
+    effect_up: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    effect_down: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    related: []
+    source_of_constraint: mag_heading.yaml + RM3100 calibration workflow
+  mag_heading:mag_heading_fusion.ros__parameters.rm3100_heading_alignment_rad:
+    identity: mag_heading:mag_heading_fusion.ros__parameters.rm3100_heading_alignment_rad
+    file_key: mag_heading
+    yaml_path: mag_heading_fusion.ros__parameters.rm3100_heading_alignment_rad
+    label: RM3100 Heading Alignment Rad
+    group: RM3100 MAGNETOMETER
+    level: advanced
+    type: number
+    risk: calibration
+    write_authority: calibration_generated
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: RM3100-only heading pipeline parameter. Yahboom magnetometer is not an authority or fallback.
+    effect_up: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    effect_down: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    related: []
+    source_of_constraint: mag_heading.yaml + RM3100 calibration workflow
+  mag_heading:mag_heading_fusion.ros__parameters.rm3100_heading_variance_rad2:
+    identity: mag_heading:mag_heading_fusion.ros__parameters.rm3100_heading_variance_rad2
+    file_key: mag_heading
+    yaml_path: mag_heading_fusion.ros__parameters.rm3100_heading_variance_rad2
+    label: RM3100 Heading Variance Rad2
+    group: RM3100 MAGNETOMETER
+    level: advanced
+    type: number
+    risk: calibration
+    write_authority: calibration_generated
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: RM3100-only heading pipeline parameter. Yahboom magnetometer is not an authority or fallback.
+    effect_up: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    effect_down: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    related: []
+    source_of_constraint: mag_heading.yaml + RM3100 calibration workflow
+  mag_heading:mag_heading_fusion.ros__parameters.rm3100_calibration_owner:
+    identity: mag_heading:mag_heading_fusion.ros__parameters.rm3100_calibration_owner
+    file_key: mag_heading
+    yaml_path: mag_heading_fusion.ros__parameters.rm3100_calibration_owner
+    label: RM3100 Calibration Owner
+    group: RM3100 MAGNETOMETER
+    level: advanced
+    type: string
+    risk: calibration
+    write_authority: calibration_generated
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: RM3100-only heading pipeline parameter. Yahboom magnetometer is not an authority or fallback.
+    effect_up: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    effect_down: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    related: []
+    source_of_constraint: mag_heading.yaml + RM3100 calibration workflow
+  mag_heading:mag_heading_fusion.ros__parameters.rm3100_full_calibration_enabled:
+    identity: mag_heading:mag_heading_fusion.ros__parameters.rm3100_full_calibration_enabled
+    file_key: mag_heading
+    yaml_path: mag_heading_fusion.ros__parameters.rm3100_full_calibration_enabled
+    label: RM3100 Full Calibration Enabled
+    group: RM3100 MAGNETOMETER
+    level: advanced
+    type: bool
+    risk: calibration
+    write_authority: calibration_generated
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: RM3100-only heading pipeline parameter. Yahboom magnetometer is not an authority or fallback.
+    effect_up: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    effect_down: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    related: []
+    source_of_constraint: mag_heading.yaml + RM3100 calibration workflow
+  mag_heading:mag_heading_fusion.ros__parameters.rm3100_mag_bias_xyz_ut:
+    identity: mag_heading:mag_heading_fusion.ros__parameters.rm3100_mag_bias_xyz_ut
+    file_key: mag_heading
+    yaml_path: mag_heading_fusion.ros__parameters.rm3100_mag_bias_xyz_ut
+    label: RM3100 Mag Bias Xyz Ut
+    group: RM3100 MAGNETOMETER
+    level: advanced
+    type: list
+    risk: calibration
+    write_authority: calibration_generated
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: RM3100-only heading pipeline parameter. Yahboom magnetometer is not an authority or fallback.
+    effect_up: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    effect_down: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    related: []
+    source_of_constraint: mag_heading.yaml + RM3100 calibration workflow
+  mag_heading:mag_heading_fusion.ros__parameters.rm3100_mag_matrix_3x3:
+    identity: mag_heading:mag_heading_fusion.ros__parameters.rm3100_mag_matrix_3x3
+    file_key: mag_heading
+    yaml_path: mag_heading_fusion.ros__parameters.rm3100_mag_matrix_3x3
+    label: RM3100 Mag Matrix 3X3
+    group: RM3100 MAGNETOMETER
+    level: advanced
+    type: list
+    risk: calibration
+    write_authority: calibration_generated
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: RM3100-only heading pipeline parameter. Yahboom magnetometer is not an authority or fallback.
+    effect_up: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    effect_down: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    related: []
+    source_of_constraint: mag_heading.yaml + RM3100 calibration workflow
+  mag_heading:mag_heading_fusion.ros__parameters.rm3100_planar_calibration_enabled:
+    identity: mag_heading:mag_heading_fusion.ros__parameters.rm3100_planar_calibration_enabled
+    file_key: mag_heading
+    yaml_path: mag_heading_fusion.ros__parameters.rm3100_planar_calibration_enabled
+    label: RM3100 Planar Calibration Enabled
+    group: RM3100 MAGNETOMETER
+    level: advanced
+    type: bool
+    risk: calibration
+    write_authority: calibration_generated
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: RM3100-only heading pipeline parameter. Yahboom magnetometer is not an authority or fallback.
+    effect_up: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    effect_down: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    related: []
+    source_of_constraint: mag_heading.yaml + RM3100 calibration workflow
+  mag_heading:mag_heading_fusion.ros__parameters.rm3100_mag_bias_xy_ut:
+    identity: mag_heading:mag_heading_fusion.ros__parameters.rm3100_mag_bias_xy_ut
+    file_key: mag_heading
+    yaml_path: mag_heading_fusion.ros__parameters.rm3100_mag_bias_xy_ut
+    label: RM3100 Mag Bias Xy Ut
+    group: RM3100 MAGNETOMETER
+    level: advanced
+    type: list
+    risk: calibration
+    write_authority: calibration_generated
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: RM3100-only heading pipeline parameter. Yahboom magnetometer is not an authority or fallback.
+    effect_up: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    effect_down: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    related: []
+    source_of_constraint: mag_heading.yaml + RM3100 calibration workflow
+  mag_heading:mag_heading_fusion.ros__parameters.rm3100_mag_matrix_xy:
+    identity: mag_heading:mag_heading_fusion.ros__parameters.rm3100_mag_matrix_xy
+    file_key: mag_heading
+    yaml_path: mag_heading_fusion.ros__parameters.rm3100_mag_matrix_xy
+    label: RM3100 Mag Matrix Xy
+    group: RM3100 MAGNETOMETER
+    level: advanced
+    type: list
+    risk: calibration
+    write_authority: calibration_generated
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: RM3100-only heading pipeline parameter. Yahboom magnetometer is not an authority or fallback.
+    effect_up: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    effect_down: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    related: []
+    source_of_constraint: mag_heading.yaml + RM3100 calibration workflow
+  mag_heading:mag_heading_fusion.ros__parameters.rm3100_heading_lut_enabled:
+    identity: mag_heading:mag_heading_fusion.ros__parameters.rm3100_heading_lut_enabled
+    file_key: mag_heading
+    yaml_path: mag_heading_fusion.ros__parameters.rm3100_heading_lut_enabled
+    label: RM3100 Heading Lut Enabled
+    group: RM3100 MAGNETOMETER
+    level: advanced
+    type: bool
+    risk: calibration
+    write_authority: calibration_generated
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: RM3100-only heading pipeline parameter. Yahboom magnetometer is not an authority or fallback.
+    effect_up: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    effect_down: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    related: []
+    source_of_constraint: mag_heading.yaml + RM3100 calibration workflow
+  mag_heading:mag_heading_fusion.ros__parameters.rm3100_heading_lut_input_rad:
+    identity: mag_heading:mag_heading_fusion.ros__parameters.rm3100_heading_lut_input_rad
+    file_key: mag_heading
+    yaml_path: mag_heading_fusion.ros__parameters.rm3100_heading_lut_input_rad
+    label: RM3100 Heading Lut Input Rad
+    group: RM3100 MAGNETOMETER
+    level: advanced
+    type: list
+    risk: calibration
+    write_authority: calibration_generated
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: RM3100-only heading pipeline parameter. Yahboom magnetometer is not an authority or fallback.
+    effect_up: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    effect_down: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    related: []
+    source_of_constraint: mag_heading.yaml + RM3100 calibration workflow
+  mag_heading:mag_heading_fusion.ros__parameters.rm3100_heading_lut_correction_rad:
+    identity: mag_heading:mag_heading_fusion.ros__parameters.rm3100_heading_lut_correction_rad
+    file_key: mag_heading
+    yaml_path: mag_heading_fusion.ros__parameters.rm3100_heading_lut_correction_rad
+    label: RM3100 Heading Lut Correction Rad
+    group: RM3100 MAGNETOMETER
+    level: advanced
+    type: list
+    risk: calibration
+    write_authority: calibration_generated
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: RM3100-only heading pipeline parameter. Yahboom magnetometer is not an authority or fallback.
+    effect_up: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    effect_down: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    related: []
+    source_of_constraint: mag_heading.yaml + RM3100 calibration workflow
+  mag_heading:mag_heading_fusion.ros__parameters.rm3100_inertial_stationary_correction:
+    identity: mag_heading:mag_heading_fusion.ros__parameters.rm3100_inertial_stationary_correction
+    file_key: mag_heading
+    yaml_path: mag_heading_fusion.ros__parameters.rm3100_inertial_stationary_correction
+    label: RM3100 Inertial Stationary Correction
+    group: RM3100 MAGNETOMETER
+    level: advanced
+    type: bool
+    risk: system
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: RM3100-only heading pipeline parameter. Yahboom magnetometer is not an authority or fallback.
+    effect_up: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    effect_down: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    related: []
+    source_of_constraint: mag_heading.yaml + RM3100 calibration workflow
+  mag_heading:mag_heading_fusion.ros__parameters.rm3100_inertial_correction_max_rate_dps:
+    identity: mag_heading:mag_heading_fusion.ros__parameters.rm3100_inertial_correction_max_rate_dps
+    file_key: mag_heading
+    yaml_path: mag_heading_fusion.ros__parameters.rm3100_inertial_correction_max_rate_dps
+    label: RM3100 Inertial Correction Max Rate Dps
+    group: RM3100 MAGNETOMETER
+    level: advanced
+    type: number
+    risk: system
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: RM3100-only heading pipeline parameter. Yahboom magnetometer is not an authority or fallback.
+    effect_up: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    effect_down: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    related: []
+    source_of_constraint: mag_heading.yaml + RM3100 calibration workflow
+  mag_heading:mag_heading_fusion.ros__parameters.rm3100_inertial_correction_max_error_rad:
+    identity: mag_heading:mag_heading_fusion.ros__parameters.rm3100_inertial_correction_max_error_rad
+    file_key: mag_heading
+    yaml_path: mag_heading_fusion.ros__parameters.rm3100_inertial_correction_max_error_rad
+    label: RM3100 Inertial Correction Max Error Rad
+    group: RM3100 MAGNETOMETER
+    level: advanced
+    type: number
+    risk: system
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: RM3100-only heading pipeline parameter. Yahboom magnetometer is not an authority or fallback.
+    effect_up: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    effect_down: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
+    related: []
+    source_of_constraint: mag_heading.yaml + RM3100 calibration workflow

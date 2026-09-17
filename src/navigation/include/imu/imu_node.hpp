@@ -4,7 +4,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp/timer.hpp>
 #include <sensor_msgs/msg/imu.hpp>
-#include <sensor_msgs/msg/magnetic_field.hpp>
 #include <std_msgs/msg/byte_multi_array.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
@@ -32,9 +31,6 @@ private:
   bool publishImu();
   bool packetStampNow(rclcpp::Time & stamp);
   void publishTimingDiagnostics(const rclcpp::Time & measurement_stamp, const rclcpp::Time & publish_stamp);
-  void publishMag();
-  void publishMagRawLsb();
-  void publishRawSensorVectors();
   void publishCalibrationVectors();
   void publishProfileStatus(const std::string & state, const std::string & detail);
   bool configureOptimalProfile(std::string & detail);
@@ -68,7 +64,7 @@ private:
   bool persist_output_config_ = false;
   bool configure_algorithm_on_connect_ = true;
   int algorithm_mode_ = 1;  // 1=6-axis: yaw relatif; mag diproses terpisah oleh ROS
-  int output_content_mask_ = 0x001E;  // ACC + GYRO + ANGLE + MAG
+  int output_content_mask_ = 0x000E;  // ACC + GYRO + ANGLE only
   int output_rate_code_ = 0x06;       // 10 Hz: ~46% UART load at 9600 baud
   double orientation_packet_timeout_sec_ = 2.0;
   // Publishing freshness is separate from the slower stream-recovery timeout.
@@ -112,21 +108,6 @@ private:
   double pitch_offset_rad_ = 0.0;
   double yaw_offset_rad_ = 0.0;
   double magnetic_declination_rad_ = 0.0;
-  double mag_scale_tesla_per_lsb_ = 0.0;
-  bool publish_mag_tesla_ = false;
-  // Absolute yaw may use the onboard magnetometer instead of WIT ANGLE yaw.
-  // ANGLE yaw was observed to jump while stationary; MAG is used only after a
-  // field north-reference calibration and is filtered/bounded before EKF fusion.
-  bool use_magnetic_yaw_ = false;
-  double mag_yaw_sign_ = -1.0;
-  double mag_yaw_offset_rad_ = 0.0;
-  double mag_yaw_filter_alpha_ = 0.20;
-  double mag_yaw_max_step_rad_ = 0.0523598776;
-  double mag_yaw_packet_timeout_sec_ = 0.50;
-  double mag_yaw_min_norm_ut_ = 100.0;
-  double mag_yaw_max_norm_ut_ = 1000.0;
-  bool mag_yaw_filter_initialized_ = false;
-  double filtered_mag_yaw_rad_ = 0.0;
   std::vector<double> accel_bias_{0.0, 0.0, 0.0};
   // Per-axis six-position scale. Neutral until field evidence is reviewed.
   std::vector<double> accel_scale_{1.0, 1.0, 1.0};
@@ -145,11 +126,9 @@ private:
   double roll_ = 0.0, pitch_ = 0.0, yaw_ = 0.0;
   double ax_ = 0.0, ay_ = 0.0, az_ = 0.0;
   double gx_ = 0.0, gy_ = 0.0, gz_ = 0.0;
-  double mx_ = 0.0, my_ = 0.0, mz_ = 0.0;
   bool has_angle_ = false;
   bool has_acc_ = false;
   bool has_gyro_ = false;
-  bool has_mag_ = false;
   std::chrono::steady_clock::time_point last_publish_time_{};
 
   // Stats / stream health
@@ -158,16 +137,13 @@ private:
   size_t packets_acc_ = 0;
   size_t packets_gyro_ = 0;
   size_t packets_angle_ = 0;
-  size_t packets_mag_ = 0;
   size_t packets_quat_ = 0;
   double last_orientation_packet_time_ = 0.0;
   double last_accel_packet_time_ = 0.0;
   double last_gyro_packet_time_ = 0.0;
-  double last_mag_packet_time_ = 0.0;
   rclcpp::Time last_accel_measurement_stamp_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_gyro_measurement_stamp_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_orientation_measurement_stamp_{0, 0, RCL_ROS_TIME};
-  rclcpp::Time last_mag_measurement_stamp_{0, 0, RCL_ROS_TIME};
   bool packet_clock_initialized_ = false;
   std::int64_t packet_clock_offset_ns_ = 0;
   std::int64_t last_packet_stamp_ns_ = 0;
@@ -195,9 +171,6 @@ private:
 
   // ROS
   rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr pub_imu_;
-  rclcpp::Publisher<sensor_msgs::msg::MagneticField>::SharedPtr pub_mag_;
-  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_mag_raw_lsb_;
-  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_raw_sensor_vectors_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_calibration_vectors_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_profile_status_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_timing_;

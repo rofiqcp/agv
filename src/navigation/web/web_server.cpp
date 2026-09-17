@@ -1060,13 +1060,26 @@ class WebRosBridge {
       return result;
     }
 
+    // N2.1 special case: drive_erpm_per_mps is overridden by the parent autonomous
+    // launch from vehicle.yaml. Respawning only /esc_ackermann would therefore reuse
+    // the old launch argument. Keep the persistent YAML transaction, but apply this
+    // one parameter through its proven dynamic callback after any required respawns.
+    const QString driveErpmPath = QStringLiteral("esc_ackermann.ros__parameters.drive_erpm_per_mps");
+    std::optional<double> driveErpmLiveTarget;
     QSet<QString> restartNodes;
     bool hasRuntimeTarget = false;
     for (const QJsonValue &value : changes) {
       if (!value.isObject()) continue;
       const QJsonObject change = value.toObject();
-      const auto targets = runtimeTargetsForChange(change.value("file_key").toString(), change.value("path").toString());
+      const QString fileKey = change.value("file_key").toString();
+      const QString path = change.value("path").toString();
+      const auto targets = runtimeTargetsForChange(fileKey, path);
       if (!targets.isEmpty()) hasRuntimeTarget = true;
+      if (fileKey == QStringLiteral("esc") && path == driveErpmPath) {
+        const QJsonValue expected = expectedRuntimeValue(fileKey, path);
+        if (expected.isDouble()) driveErpmLiveTarget = expected.toDouble();
+        continue;
+      }
       for (const auto &target : targets) restartNodes.insert(target.first);
     }
     if (!hasRuntimeTarget) {
@@ -1099,18 +1112,30 @@ class WebRosBridge {
       signaled += stopped;
       restartResults.append(QJsonObject{{"node", nodeName}, {"matched_processes", pids.size()}, {"signaled", stopped}});
     }
-    result["mode"] = "safe_batch_restart";
+    result["mode"] = driveErpmLiveTarget.has_value() ? "safe_batch_restart_plus_live_drive_scale" : "safe_batch_restart";
     result["restart"] = restartResults;
     result["signaled_processes"] = signaled;
-    if (signaled == 0) {
+    if (signaled == 0 && !restartNodes.isEmpty() && !driveErpmLiveTarget.has_value()) {
       result["status"] = "NEXT_START";
-      result["message"] = "Node target tidak sedang berjalan; seluruh baseline YAML akan aktif pada start berikutnya.";
+      result["message"] = "Node target tidak sedang berjalan; seluruh YAML akan aktif pada start berikutnya.";
       result["runtime_match"] = false;
       update("runtime_config_apply", result);
       return result;
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    if (signaled > 0) std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    if (driveErpmLiveTarget.has_value()) {
+      QString liveMessage;
+      const bool liveOk = setDriveErpmPerMps(*driveErpmLiveTarget, &liveMessage);
+      result["drive_erpm_live_apply"] = QJsonObject{{"ok",liveOk},{"value",*driveErpmLiveTarget},{"message",liveMessage}};
+      if (!liveOk) {
+        result["status"] = "NEXT_START";
+        result["message"] = QStringLiteral("YAML tersimpan, tetapi eRPM/(m/s) belum dapat diaktifkan live: ") + liveMessage;
+        result["runtime_match"] = false;
+        update("runtime_config_apply", result);
+        return result;
+      }
+    }
     QJsonArray verify;
     bool allMatch = false;
     int verifyAttempts = 0;
@@ -1198,14 +1223,23 @@ class WebRosBridge {
     return true;
   }
 
+  bool clearGoalVisualization(QString *message) {
+    update("goal_pose", QJsonObject{});
+    update("nav_path", QJsonObject{{"frame_id", "map"}, {"points", QJsonArray{}}, {"length_m", 0.0}});
+    update("local_path", QJsonObject{{"points", QJsonArray{}}});
+    update("web_action", QJsonObject{{"ok", true}, {"action", "clear_goal_visual"}, {"at_ms", nowMs()}});
+    if (message) *message = "Marker goal dan path visual dibersihkan";
+    return true;
+  }
+
   bool cancelNavigation(QString *message) {
     if (readOnly_) return rejectReadOnly(message);
-    auto client = node_->create_client<action_msgs::srv::CancelGoal>("/navigate_to_pose/_action/cancel_goal");
-    if (!client->wait_for_service(350ms)) {
+    if (!navCancelClient_ || !navCancelClient_->service_is_ready()) {
       if (message) *message = "Service cancel Nav2 belum tersedia";
       return false;
     }
     auto request = std::make_shared<action_msgs::srv::CancelGoal::Request>();
+    auto client = navCancelClient_;
     client->async_send_request(request, [this, client](rclcpp::Client<action_msgs::srv::CancelGoal>::SharedFuture future) {
       try {
         const auto result = future.get();
@@ -1219,7 +1253,8 @@ class WebRosBridge {
                                          {"message", QString::fromUtf8(e.what())}, {"at_ms", nowMs()}});
       }
     });
-    if (message) *message = "Permintaan cancel dikirim ke Nav2";
+    clearGoalVisualization(nullptr);
+    if (message) *message = "Permintaan cancel dikirim ke Nav2; marker/path dibersihkan";
     return true;
   }
 
@@ -1350,7 +1385,6 @@ class WebRosBridge {
     const bool navCal = experimentId == QStringLiteral("N2.1") || experimentId == QStringLiteral("N3.1") || experimentId == QStringLiteral("N3.2");
     if (active && navCal && !objectBoolState("gnss_quality", "gnss_fix_ok")) { if (message) *message = "Trial ditolak: GNSS fix belum qualified"; return false; }
     const bool steerCal = experimentId == QStringLiteral("N3.1") || experimentId == QStringLiteral("N3.2");
-    if (active && steerCal && (!boolState("connected.imu") || !boolState("connected.neo3_mag"))) { if (message) *message = "Trial steering ditolak: IMU/IST8310 belum online"; return false; }
     if (active && steerCal && !sourceConfigBool("vehicle", "vehicle.ros__parameters.drive_odometry_calibration_valid", false)) { if (message) *message = "Trial steering ditolak: drive odometry scale N2.1 belum certified"; return false; }
     const double erpmPerMps = sourceConfigNumber("esc", "esc_ackermann.ros__parameters.drive_erpm_per_mps", 8000.0);
     const double speedMax = sourceConfigNumber("esc", "esc_ackermann.ros__parameters.speed_max", 0.5);
@@ -1448,6 +1482,7 @@ class WebRosBridge {
   std::unique_ptr<tf2_ros::Buffer> tfBuffer_;
   std::shared_ptr<tf2_ros::TransformListener> tfListener_;
   rclcpp::TimerBase::SharedPtr tfTimer_;
+  rclcpp::Client<action_msgs::srv::CancelGoal>::SharedPtr navCancelClient_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr goalPub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr vescToolCommandPub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr initialPosePub_;
@@ -1645,14 +1680,8 @@ class WebRosBridge {
 
     const std::vector<std::pair<const char *, const char *>> bools = {
         {"/gnss/connected", "connected.gnss"}, {"/imu/connected", "connected.imu"},
-        // /neo3/mag_connected is the canonical magnetic-link health for both
-        // legacy IST8310 and NEO3 Pro RM3100. Keep the sensor-specific flags
-        // separately so the Web UI can identify which hardware is live.
-        {"/neo3/mag_connected", "connected.neo3_mag"},
-        {"/neo3/ist8310_connected", "connected.ist8310"},
         {"/neo3pro/rm3100_connected", "connected.rm3100"},
-        {"/neo3/mag_heading_valid", "neo3_mag_heading_valid"},
-        {"/imu/mag_heading_valid", "imu_mag_heading_valid"},
+        {"/neo3pro/mag_heading_valid", "rm3100_heading_valid"},
         {"/neo3/safety_switch", "neo3_safety_switch"},
         {"/hmi/connected", "connected.hmi"},
         {"/teleop/joystick_connected", "connected.joystick"},
@@ -1694,6 +1723,7 @@ class WebRosBridge {
     const std::vector<std::pair<const char *, const char *>> strings = {
         {"/system/localization_state", "localization_state"}, {"/system/gnss_status", "gnss_status"},
         {"/gnss/state", "gnss_driver_state"}, {"/neo3/status", "neo3_status"},
+        {"/neo3pro/param", "neo3_param"},
         {"/system/magnetic_heading_status", "magnetic_heading_status"},
         {"/imu/profile_status", "imu_profile_status"},
         {"/gnss/motion_diagnostics", "gnss_motion"},
@@ -1748,6 +1778,22 @@ class WebRosBridge {
         const QString raw = QString::fromStdString(msg->data);
         if (channel == "goal_state") update(channel, QJsonObject{{"state", raw.trimmed().toUpper()}, {"raw", raw}});
         else if (channel == "hmi_page" || channel == "hmi_mode") update(channel, raw.trimmed().toUpper());
+        else if (channel == "neo3_param") {
+          const QStringList parts = raw.split(',');
+          QJsonObject one{{"raw",raw}};
+          if (parts.size() >= 4) {
+            const QString name=parts.at(2).trimmed(), text=parts.at(3).trimmed();
+            bool numberOk=false; const double number=text.toDouble(&numberOk);
+            one["name"]=name; one["value_text"]=text; if(numberOk) one["value"]=number;
+            if (name.startsWith(QStringLiteral("COMPASS_"))) {
+              static QJsonObject compassParams;
+              compassParams[name]=numberOk?QJsonValue(number):QJsonValue(text);
+              compassParams["last_name"]=name; compassParams["updated_at_ms"]=QDateTime::currentMSecsSinceEpoch();
+              update("neo3_compass_params",compassParams);
+            }
+          }
+          update(channel,one);
+        }
         else if (channel == "raw_detections") update(channel, parseRawDetectionSummary(raw));
         else if (channel == "perception_performance") update(channel, normalizePerceptionPerformance(parseJsonOrKv(raw)));
         else if (channel == "obstacle_metrics") update(channel, enrichObstacleMetrics(parseJsonOrKv(raw)));
@@ -1840,12 +1886,9 @@ class WebRosBridge {
                                    {"measurement_stamp_sec", double(msg->header.stamp.sec) + msg->header.stamp.nanosec * 1e-9}});
           });
     };
-    // Canonical fusion stays on /neo3/mag; NEO3 Pro additionally exposes the
-    // unambiguous RM3100 stream on /neo3pro/mag. The F411 bridge mirrors Pro
-    // samples to both topics, so legacy configurations remain compatible.
-    magSubscribe("/neo3/mag", "neo3_mag");
+    // RM3100 on NEO3 Pro is the only magnetometer stream used by ROS.
     magSubscribe("/neo3pro/mag", "rm3100_mag");
-    magSubscribe("/imu/mag", "imu_mag");
+    magSubscribe("/neo3pro/mag_calibrated", "rm3100_mag_calibrated");
 
     const auto magneticHeadingSubscribe = [this, sensorQos](const char *topic, const char *channel) {
       const QString ch = QString::fromLatin1(channel);
@@ -1858,8 +1901,7 @@ class WebRosBridge {
                                    {"measurement_stamp_sec", double(msg->header.stamp.sec) + msg->header.stamp.nanosec * 1e-9}});
           });
     };
-    magneticHeadingSubscribe("/neo3/mag_heading_fusion", "neo3_mag_heading");
-    magneticHeadingSubscribe("/imu/mag_heading_fusion", "imu_mag_heading");
+    magneticHeadingSubscribe("/neo3pro/mag_heading_fusion", "rm3100_heading");
     magneticHeadingSubscribe("/imu/inertial_heading", "imu_inertial_heading");
     magneticHeadingSubscribe("/heading/validated_fusion", "validated_heading");
     subscribe<std_msgs::msg::Float64>("/localization/map_yaw_from_enu", stateQos,
@@ -1867,24 +1909,6 @@ class WebRosBridge {
         update("map_yaw_from_enu", msg->data);
       });
 
-    subscribe<std_msgs::msg::Float64MultiArray>("/imu/raw_sensor_vectors", sensorQos,
-      [this](std_msgs::msg::Float64MultiArray::ConstSharedPtr msg) {
-        if (msg->data.size() < 9U) return;
-        const double ax=msg->data[0], ay=msg->data[1], az=msg->data[2];
-        const double an=std::sqrt(ax*ax+ay*ay+az*az);
-        QString mounting=QStringLiteral("UNKNOWN"), detail=QStringLiteral("gravity belum stabil");
-        bool mountingOk=false;
-        if (std::isfinite(an) && std::abs(an-9.80665)<=1.5) {
-          if (az>7.2 && std::abs(ax)<4.5 && std::abs(ay)<4.5) { mounting="TOP_UP"; mountingOk=true; detail="horizontal/top-up"; }
-          else if (az<-7.2) { mounting="UPSIDE_DOWN"; detail="Z sensor terbalik"; }
-          else if (std::abs(ax)>7.2 || std::abs(ay)>7.2) { mounting="SIDE_MOUNTED"; detail="gravity dominan pada X/Y"; }
-          else { mounting="TILT_MISMATCH"; detail="sensor terlalu miring untuk kalibrasi planar"; }
-        }
-        update("imu_raw_sensor", QJsonObject{{"ax",ax},{"ay",ay},{"az",az},{"acc_norm",an},
-          {"gx",msg->data[3]},{"gy",msg->data[4]},{"gz",msg->data[5]},
-          {"mx_lsb",msg->data[6]},{"my_lsb",msg->data[7]},{"mz_lsb",msg->data[8]},
-          {"mounting_state",mounting},{"mounting_ok",mountingOk},{"mounting_detail",detail}});
-      });
 
     subscribe<sensor_msgs::msg::Imu>("/imu/data", sensorQos, [this](sensor_msgs::msg::Imu::ConstSharedPtr msg) {
       const auto &q = msg->orientation;
@@ -2138,15 +2162,37 @@ class WebRosBridge {
       if (cellCount > msg->data.size() || cellCount > 100000000ULL ||
           msg->info.width > static_cast<unsigned int>(std::numeric_limits<int>::max()) ||
           msg->info.height > static_cast<unsigned int>(std::numeric_limits<int>::max())) return;
-      QImage image(static_cast<int>(msg->info.width), static_cast<int>(msg->info.height), QImage::Format_Grayscale8);
+      // The static map may be several thousand pixels wide. Serving the full
+      // raster made Chromium decode tens of millions of pixels on every retry,
+      // which could leave the map placeholder visible and make the HMI appear
+      // blocked even though /map metadata was healthy. Downsample only the Web
+      // preview; all world geometry continues to use the original map metadata.
+      constexpr unsigned int kMaxMapRaster = 1600U;
+      const unsigned int largest = std::max(msg->info.width, msg->info.height);
+      const unsigned int stride = std::max(1U, (largest + kMaxMapRaster - 1U) / kMaxMapRaster);
+      const unsigned int outW = (msg->info.width + stride - 1U) / stride;
+      const unsigned int outH = (msg->info.height + stride - 1U) / stride;
+      QImage image(static_cast<int>(outW), static_cast<int>(outH), QImage::Format_Grayscale8);
       if (image.isNull()) return;
-      for (unsigned int y = 0; y < msg->info.height; ++y) {
-        uchar *row = image.scanLine(static_cast<int>(msg->info.height - 1 - y));
-        for (unsigned int x = 0; x < msg->info.width; ++x) {
-          const int8_t occ = msg->data[static_cast<size_t>(y) * msg->info.width + x];
+      for (unsigned int oy = 0; oy < outH; ++oy) {
+        uchar *row = image.scanLine(static_cast<int>(outH - 1U - oy));
+        for (unsigned int ox = 0; ox < outW; ++ox) {
+          int maxOcc = -1;
+          bool sawUnknown = false;
+          const unsigned int y0 = oy * stride, x0 = ox * stride;
+          const unsigned int y1 = std::min(msg->info.height, y0 + stride);
+          const unsigned int x1 = std::min(msg->info.width, x0 + stride);
+          for (unsigned int y = y0; y < y1; ++y) {
+            const size_t base = static_cast<size_t>(y) * msg->info.width;
+            for (unsigned int x = x0; x < x1; ++x) {
+              const int occ = static_cast<int>(msg->data[base + x]);
+              if (occ < 0) sawUnknown = true; else maxOcc = std::max(maxOcc, occ);
+            }
+          }
           int shade = 118;
-          if (occ >= 0) shade = std::clamp(245 - static_cast<int>(occ) * 2, 35, 245);
-          row[x] = static_cast<uchar>(shade);
+          if (maxOcc >= 0) shade = std::clamp(245 - maxOcc * 2, 35, 245);
+          else if (!sawUnknown) shade = 245;
+          row[ox] = static_cast<uchar>(shade);
         }
       }
       QByteArray encoded;
@@ -2158,7 +2204,9 @@ class WebRosBridge {
       }
       const auto &origin = msg->info.origin.position;
       update("map_meta", QJsonObject{{"width", static_cast<int>(msg->info.width)}, {"height", static_cast<int>(msg->info.height)},
-                                     {"resolution", msg->info.resolution}, {"origin_x", origin.x}, {"origin_y", origin.y},
+                                     {"image_width", static_cast<int>(outW)}, {"image_height", static_cast<int>(outH)},
+                                     {"stride", static_cast<int>(stride)}, {"resolution", msg->info.resolution},
+                                     {"origin_x", origin.x}, {"origin_y", origin.y},
                                      {"frame_id", QString::fromStdString(msg->header.frame_id)}, {"at_ms", nowMs()}});
     });
 
@@ -2260,6 +2308,7 @@ class WebRosBridge {
     });
 
     goalPub_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>("/navigation/goal_request", 10);
+    navCancelClient_ = node_->create_client<action_msgs::srv::CancelGoal>("/navigate_to_pose/_action/cancel_goal");
     initialPosePub_ = node_->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>("/initialpose", 10);
     hmiRequestPub_ = node_->create_publisher<std_msgs::msg::String>("/hmi/request", 10);
     vescToolCommandPub_ = node_->create_publisher<std_msgs::msg::String>("/esc/vesc/tool_command", 20);
@@ -2282,10 +2331,10 @@ class LocalHttpServer : public QObject {
     connect(&recordingTimer_, &QTimer::timeout, this, [this]() { captureRecordingSample(); });
     hostTimer_.setInterval(1000);
     connect(&hostTimer_, &QTimer::timeout, this, [this]() { sampleHostMetrics(); });
-    imuCalibrationProcess_.setProcessChannelMode(QProcess::MergedChannels);
-    connect(&imuCalibrationProcess_, &QProcess::readyReadStandardOutput, this, [this]() {
-      imuCalibrationLastOutput_ += QString::fromUtf8(imuCalibrationProcess_.readAllStandardOutput());
-      if (imuCalibrationLastOutput_.size() > 4000) imuCalibrationLastOutput_ = imuCalibrationLastOutput_.right(4000);
+    rm3100CalibrationProcess_.setProcessChannelMode(QProcess::MergedChannels);
+    connect(&rm3100CalibrationProcess_, &QProcess::readyReadStandardOutput, this, [this]() {
+      rm3100CalibrationLastOutput_ += QString::fromUtf8(rm3100CalibrationProcess_.readAllStandardOutput());
+      if (rm3100CalibrationLastOutput_.size() > 6000) rm3100CalibrationLastOutput_ = rm3100CalibrationLastOutput_.right(6000);
     });
   }
 
@@ -2668,8 +2717,8 @@ class LocalHttpServer : public QObject {
   QTimer bindRetryTimer_;
   QTimer recordingTimer_;
   QTimer hostTimer_;
-  QProcess imuCalibrationProcess_;
-  QString imuCalibrationLastOutput_;
+  QProcess rm3100CalibrationProcess_;
+  QString rm3100CalibrationLastOutput_;
   quint64 hostPrevTotal_{0};
   quint64 hostPrevIdle_{0};
   QHostAddress bindAddress_;
@@ -2711,80 +2760,77 @@ class LocalHttpServer : public QObject {
     catch (...) { return agvPath(QStringLiteral("install/navigation/share/navigation")); }
   }
 
-  QJsonObject imuCalibrationStatus() const {
-    QJsonObject out{{"running", imuCalibrationProcess_.state()!=QProcess::NotRunning},
-                    {"process_state", static_cast<int>(imuCalibrationProcess_.state())},
-                    {"last_output", imuCalibrationLastOutput_.right(1200)}};
-    const QString statePath=agvPath(QStringLiteral("calibration/yahboom_calibration_state.json"));
+  QJsonObject rm3100CalibrationStatus() const {
+    QJsonObject out{{"running", rm3100CalibrationProcess_.state()!=QProcess::NotRunning},
+                    {"process_state", static_cast<int>(rm3100CalibrationProcess_.state())},
+                    {"last_output", rm3100CalibrationLastOutput_.right(2000)}};
+    const QString statePath=agvPath(QStringLiteral("calibration/rm3100_calibration_state.json"));
     QFile sf(statePath);
     if (sf.open(QIODevice::ReadOnly)) {
       QJsonParseError e{}; const auto d=QJsonDocument::fromJson(sf.readAll(),&e);
-      if (e.error==QJsonParseError::NoError && d.isObject()) {
+      if (e.error==QJsonParseError::NoError && d.isObject())
         for (auto it=d.object().constBegin(); it!=d.object().constEnd(); ++it) out[it.key()]=it.value();
-      }
     }
-    const QString fitPath=agvPath(QStringLiteral("calibration/yahboom_mag_planar_latest.yaml"));
+    const QString fitPath=agvPath(QStringLiteral("calibration/rm3100_ardupilot_latest.yaml"));
     if (QFileInfo(fitPath).isFile()) {
       try { out["fit"] = yamlToJson(YAML::LoadFile(fitPath.toStdString())); }
       catch (const std::exception &e) { out["fit_error"]=QString::fromUtf8(e.what()); }
     }
+    QString stationaryReason;
+    const bool stationaryOk = bridge_ && bridge_->vehicleStationary(&stationaryReason);
+    const QJsonObject snap = bridge_ ? bridge_->snapshot() : QJsonObject{};
+    const bool sensorOnline = snap.value("connected.rm3100").toBool(false);
+    out["stationary_ok"] = stationaryOk;
+    out["stationary_reason"] = stationaryOk ? QStringLiteral("Kendaraan diam dan command netral.") : stationaryReason;
+    out["sensor_online"] = sensorOnline;
+    out["wire_semantics"]="/neo3pro/mag = DroneCAN/AP_Periph field before ROS-host correction; native RM3100 register raw is not exposed by this transport";
     return out;
   }
 
-  bool startImuCalibration(const QString &direction, QString *message) {
+  bool setRm3100CalibrationFace(const QString &requestedFace, QString *message) {
+    if (rm3100CalibrationProcess_.state()==QProcess::NotRunning) { if(message)*message="Kalibrasi RM3100 belum berjalan"; return false; }
+    const QString face=requestedFace.trimmed().toUpper();
+    static const QSet<QString> allowed{QStringLiteral("LEVEL"),QStringLiteral("LEFT_SIDE"),QStringLiteral("RIGHT_SIDE"),QStringLiteral("NOSE_UP"),QStringLiteral("NOSE_DOWN"),QStringLiteral("INVERTED")};
+    if (!allowed.contains(face)) { if(message)*message="Fase RM3100 tidak valid"; return false; }
+    const QString path=agvPath(QStringLiteral("calibration/rm3100_calibration_control.json"));
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly|QIODevice::Text)) { if(message)*message="Gagal membuka control RM3100"; return false; }
+    const QJsonObject payload{{"target_face",face},{"updated_at_ms",nowMs()}};
+    file.write(QJsonDocument(payload).toJson(QJsonDocument::Compact));
+    if (!file.commit()) { if(message)*message="Gagal commit control RM3100"; return false; }
+    if(message)*message=QStringLiteral("RM3100 target face → ")+face;
+    return true;
+  }
+
+  bool startRm3100Calibration(QString *message) {
     if (bridge_->readOnly()) { if(message)*message="Web GUI read-only"; return false; }
-    if (imuCalibrationProcess_.state()!=QProcess::NotRunning) { if(message)*message="Kalibrasi Yahboom masih berjalan"; return false; }
-    QString stationary;
-    if (!bridge_->vehicleStationary(&stationary)) { if(message)*message=stationary; return false; }
-    const QString d=direction.trimmed().toUpper();
-    if (d!="CW" && d!="CCW") { if(message)*message="direction wajib CW atau CCW"; return false; }
-    const QString script=navigationSharePath()+QStringLiteral("/tools/yahboom_8dir_calibration.py");
-    if (!QFileInfo(script).isFile()) { if(message)*message="Backend calibration script tidak ditemukan: "+script; return false; }
-    imuCalibrationLastOutput_.clear();
-    imuCalibrationProcess_.setProgram(agvPythonPath());
-    imuCalibrationProcess_.setArguments({script,QStringLiteral("--direction"),d});
-    imuCalibrationProcess_.setWorkingDirectory(agvRootPath());
-    imuCalibrationProcess_.start();
-    if (!imuCalibrationProcess_.waitForStarted(1200)) { if(message)*message="Gagal start backend kalibrasi"; return false; }
-    if(message)*message=QStringLiteral("Wizard heading 360 9-stop %1 dimulai; mulai dari Utara 0°, ikuti target 45° sampai kembali ke Utara.").arg(d);
-    return true;
-  }
-
-  bool stopImuCalibration(QString *message) {
-    if (imuCalibrationProcess_.state()==QProcess::NotRunning) { if(message)*message="Tidak ada kalibrasi aktif"; return false; }
-    imuCalibrationProcess_.terminate();
-    if (!imuCalibrationProcess_.waitForFinished(1200)) { imuCalibrationProcess_.kill(); imuCalibrationProcess_.waitForFinished(700); }
-    const QString path=agvPath(QStringLiteral("calibration/yahboom_calibration_state.json"));
-    QJsonObject st=imuCalibrationStatus(); st["status"]="STOPPED"; st["instruction"]="Dihentikan operator; hasil tidak boleh di-apply"; st["running"]=false;
-    QSaveFile f(path); if(f.open(QIODevice::WriteOnly)){f.write(QJsonDocument(st).toJson(QJsonDocument::Indented));f.commit();}
-    if(message)*message="Kalibrasi Yahboom dihentikan; gate apply tetap tertutup";
-    return true;
-  }
-
-  bool proposeImuCalibration(QString *message, QJsonObject *result) {
-    if (imuCalibrationProcess_.state()!=QProcess::NotRunning) { if(message)*message="Tunggu kalibrasi selesai"; return false; }
-    const QString script=navigationSharePath()+QStringLiteral("/tools/yahboom_apply_calibration.py");
-    QProcess proc; proc.setProgram(agvPythonPath());
-    proc.setArguments({script,QStringLiteral("--workspace"),agvRootPath(),QStringLiteral("--propose")}); proc.start();
-    if(!proc.waitForStarted(1000) || !proc.waitForFinished(6000)){proc.kill();if(message)*message="Calibration proposal backend timeout";return false;}
-    QJsonParseError pe{}; const QJsonDocument doc=QJsonDocument::fromJson(proc.readAllStandardOutput().trimmed(),&pe);
-    if(pe.error!=QJsonParseError::NoError || !doc.isObject()){if(message)*message="Calibration proposal backend menghasilkan response invalid";return false;}
-    QJsonObject r=doc.object();
-    if(proc.exitCode()!=0 || !r.value("ok").toBool(false)){if(result)*result=r;if(message)*message=r.value("message").toString("Fit tidak lolos gate");return false;}
-    const QJsonArray proposalItems=r.value("proposal_items").toArray();
-    if(proposalItems.isEmpty()){if(message)*message="Calibration proposal kosong";return false;}
-    if(r.value("stage1_only").toBool(false)) {
-      r["proposal_registered"]=false; r["apply_locked"]=true;
-      r["runtime_write"]=false; r["yaml_write"]=false;
-      if (result) *result = r;
-      if (message) *message = "Stage-1 heading 360 PASS → preview proposal tersedia; Apply/YAML dikunci sampai Tahap 2";
-      return true;
+    if (rm3100CalibrationProcess_.state()!=QProcess::NotRunning) { if(message)*message="Kalibrasi RM3100 masih berjalan"; return false; }
+    QString stationary; if (!bridge_->vehicleStationary(&stationary)) { if(message)*message=stationary; return false; }
+    const QJsonObject snap=bridge_->snapshot();
+    if (!snap.value("connected.rm3100").toBool(false)) {
+      if (message) *message = "RM3100/NEO3 Pro belum online";
+      return false;
     }
-    const QJsonObject proposal=registerConfigProposal(QStringLiteral("imu:yahboom"),proposalItems,r.value("evidence").toObject());
-    r["proposal"]=proposal;r["proposal_only"]=true;r["runtime_write"]=false;r["yaml_write"]=false;
-    if (result) *result = r;
-    if (message) *message = "Legacy Yahboom PASS → server proposal dibuat; review Diff sebelum config transaction";
+    const QString script=agvPath(QStringLiteral("src/navigation/tools/rm3100_ardupilot_calibration.py"));
+    if (!QFileInfo(script).isFile()) { if(message)*message="Backend RM3100 calibration tidak ditemukan: "+script; return false; }
+    rm3100CalibrationLastOutput_.clear();
+    rm3100CalibrationProcess_.setProgram(agvPythonPath());
+    rm3100CalibrationProcess_.setArguments({script,QStringLiteral("--workspace"),agvRootPath(),QStringLiteral("--topic"),QStringLiteral("/neo3pro/mag"),QStringLiteral("--imu-topic"),QStringLiteral("/imu/data")});
+    rm3100CalibrationProcess_.setWorkingDirectory(agvRootPath());
+    rm3100CalibrationProcess_.start();
+    if (!rm3100CalibrationProcess_.waitForStarted(1500)) { if(message)*message="Gagal start recorder RM3100"; return false; }
+    if(message)*message="RM3100 full-3D recorder dimulai. Ikuti enam orientasi dan putar perlahan 360 derajat pada setiap orientasi.";
     return true;
+  }
+
+  bool stopRm3100Calibration(QString *message) {
+    if (rm3100CalibrationProcess_.state()==QProcess::NotRunning) { if(message)*message="Tidak ada kalibrasi RM3100 aktif"; return false; }
+    rm3100CalibrationProcess_.terminate();
+    if (!rm3100CalibrationProcess_.waitForFinished(8000)) { rm3100CalibrationProcess_.kill(); rm3100CalibrationProcess_.waitForFinished(1000); if(message)*message="RM3100 fit timeout; process dihentikan"; return false; }
+    const QJsonObject st=rm3100CalibrationStatus();
+    const bool pass=st.value("status").toString()==QStringLiteral("PASS");
+    if(message)*message=pass?QStringLiteral("RM3100 full-3D fit PASS; review parameter dan Stage ke ROS melalui Diff Review"):st.value("instruction").toString(QStringLiteral("RM3100 fit belum PASS"));
+    return pass;
   }
 
   void acceptConnections() {
@@ -2866,7 +2912,7 @@ class LocalHttpServer : public QObject {
           {"atomic_batch_apply", true}, {"transaction_backup", true}, {"rollback_on_failure", true},
           {"runtime_readback", true}, {"revert", true}}}, {"at_ms", nowMs()}});
     }
-    if (request.method == "GET" && request.path == "/api/imu/calibration/status") return sendJson(socket, 200, imuCalibrationStatus());
+    if (request.method == "GET" && request.path == "/api/rm3100/calibration/status") return sendJson(socket, 200, rm3100CalibrationStatus());
     if (request.method == "GET" && request.path == "/api/experiment/record/status") {
       return sendJson(socket, 200, recordingStatus());
     }
@@ -2926,7 +2972,16 @@ class LocalHttpServer : public QObject {
     const QJsonObject json = doc.isObject() ? doc.object() : QJsonObject();
     QString message;
     bool ok = false;
-    if (request.path == "/api/config/proposal") {
+    if (request.path == "/api/navigation/tuning/entry") {
+      if (bridge_->readOnly()) return sendJson(socket,403,QJsonObject{{"ok",false},{"code","READ_ONLY"},{"message","Read-only; tuning state persistence ditolak"}});
+      const QString id=json.value("id").toString().trimmed(),action=json.value("action").toString(QStringLiteral("ensure")).trimmed().toLower();
+      QJsonObject result;
+      if(action==QStringLiteral("ensure")) ok=ensureNavigationTuningEntry(id,&message,&result);
+      else if(action==QStringLiteral("restore")) ok=buildNavigationStepEntryProposal(id,&message,&result);
+      else return sendJson(socket,400,QJsonObject{{"ok",false},{"message","action harus ensure atau restore"},{"at_ms",nowMs()}});
+      result["ok"]=ok;result["message"]=message;result["commissioning"]=commissioningState();result["at_ms"]=nowMs();
+      return sendJson(socket,ok?200:409,result);
+    } else if (request.path == "/api/config/proposal") {
       const QString sourceTask=json.value("source_task").toString();const QJsonArray proposalItems=json.value("items").toArray();
       const QMap<QString,QSet<QString>> allowedPaths{
         {QStringLiteral("perception:homography"),QSet<QString>{QStringLiteral("perception.ros__parameters.ground_src_points"),QStringLiteral("perception.ros__parameters.ground_dst_points")}},
@@ -3072,19 +3127,17 @@ class LocalHttpServer : public QObject {
       }
       ok=bridge_->publishTrialMotion(json.value("id").toString(), json.value("erpm").toDouble(0.0), json.value("steering_deg").toDouble(0.0), active, &message);
       return sendJson(socket,ok?200:409,QJsonObject{{"ok",ok},{"message",message},{"at_ms",nowMs()}});
+    } else if (request.path == "/api/rm3100/calibration/start") {
+      ok=startRm3100Calibration(&message);
+    } else if (request.path == "/api/rm3100/calibration/stop") {
+      ok=stopRm3100Calibration(&message);
+    } else if (request.path == "/api/rm3100/calibration/step") {
+      ok=setRm3100CalibrationFace(json.value("face").toString(),&message);
     } else if (request.path == "/api/imu/profile/optimal") {
       if (bridge_->readOnly()) return sendJson(socket,403,QJsonObject{{"ok",false},{"message","Web GUI read-only"}});
       QString stationary; if(!bridge_->vehicleStationary(&stationary)) return sendJson(socket,409,QJsonObject{{"ok",false},{"message",stationary}});
       ok=bridge_->triggerService("/imu/configure_optimal_profile","imu_optimal_profile",&message);
-    } else if (request.path == "/api/imu/calibration/start") {
-      ok=startImuCalibration(json.value("direction").toString(),&message);
-    } else if (request.path == "/api/imu/calibration/stop") {
-      ok=stopImuCalibration(&message);
-    } else if (request.path == "/api/imu/calibration/proposal") {
-      QJsonObject result;ok=proposeImuCalibration(&message,&result);result["ok"]=ok;result["message"]=message;result["at_ms"]=nowMs();return sendJson(socket,ok?200:409,result);
-    } else if (request.path == "/api/imu/calibration/apply") {
-      return sendJson(socket,409,QJsonObject{{"ok",false},{"code","USE_CONFIG_TRANSACTION"},{"message","Direct IMU apply dinonaktifkan; gunakan /api/imu/calibration/proposal → Validate → Diff Review → Apply"},{"at_ms",nowMs()}});
-    } else if (request.path == "/api/perception/inference") {
+        } else if (request.path == "/api/perception/inference") {
       ok = bridge_->setPerceptionInference(json.value("enabled").toBool(false), &message);
     } else if (request.path == "/api/navigation/goal") {
       ok = bridge_->publishGoal(json.value("x").toDouble(std::numeric_limits<double>::quiet_NaN()),
@@ -3093,6 +3146,8 @@ class LocalHttpServer : public QObject {
                                 &message);
     } else if (request.path == "/api/navigation/cancel") {
       ok = bridge_->cancelNavigation(&message);
+    } else if (request.path == "/api/navigation/clear-goal-visual") {
+      ok = bridge_->clearGoalVisualization(&message);
     } else if (request.path == "/api/localization/initial-pose") {
       ok = bridge_->publishInitialPose(json.value("x").toDouble(std::numeric_limits<double>::quiet_NaN()),
                                        json.value("y").toDouble(std::numeric_limits<double>::quiet_NaN()),
@@ -3244,7 +3299,13 @@ class LocalHttpServer : public QObject {
     if (!bridge_) { if (message) *message = QStringLiteral("ROS bridge tidak tersedia"); return false; }
     const QByteArray jpeg = bridge_->cameraJpeg();
     if (jpeg.isEmpty()) { if (message) *message = QStringLiteral("Camera frame belum tersedia"); return false; }
-    const QString root = agvPath(QStringLiteral("data/presepsi/evidence"));
+    QString root = agvPath(QStringLiteral("data/presepsi/evidence"));
+    if (recording_ && recordingSubsystem_ == QStringLiteral("perception") && recordingSourceExperimentId_.startsWith(QStringLiteral("F4.")) && recordingStartedMs_ > 0) {
+      const QString dataRoot = agvPath(QStringLiteral("data/presepsi"));
+      const QString runName = QStringLiteral("BAB4_") + recordingCsvStem(recordingSourceExperimentId_) + QStringLiteral("_") +
+        QDateTime::fromMSecsSinceEpoch(recordingStartedMs_).toString(QStringLiteral("yyyyMMdd_HHmmss"));
+      root = QDir(QDir(dataRoot).filePath(runName)).filePath(QStringLiteral("evidence_frames"));
+    }
     if (!QDir().mkpath(root)) { if (message) *message = QStringLiteral("Gagal membuat folder evidence"); return false; }
     QString safe = label.trimmed();
     safe.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9_.-]+")), QStringLiteral("_"));
@@ -3324,7 +3385,7 @@ class LocalHttpServer : public QObject {
       if (message) *message = QStringLiteral("Commissioning gate: motion task memerlukan ESC 4.9 Final Gate sebelum recording Navigasi");
       return false;
     }
-    if (subsystem == QStringLiteral("perception")) {
+    if (subsystem == QStringLiteral("perception") && !sourceExperimentId.startsWith(QStringLiteral("F4."))) {
       const bool esc_ready = taskQualified(QStringLiteral("steering"), QStringLiteral("4.9"));
       const bool nav_ready = taskQualified(QStringLiteral("navigation"), QStringLiteral("N16.1")) ||
                              taskQualified(QStringLiteral("navigation"), QStringLiteral("N17.1"));
@@ -3423,8 +3484,15 @@ class LocalHttpServer : public QObject {
     const QString domain = subsystem == QStringLiteral("navigation") ? QStringLiteral("navigasi") :
                            subsystem == QStringLiteral("perception") ? QStringLiteral("presepsi") : QStringLiteral("esc");
     const QString dataRoot = QDir(agvPath(QStringLiteral("data"))).filePath(domain);
-    if (!QDir().mkpath(dataRoot)) {
-      if (message) *message = QStringLiteral("Gagal membuat folder data: ") + dataRoot;
+    QString outputRoot = dataRoot;
+    if (subsystem == QStringLiteral("perception") && recording_ && recordingSubsystem_ == QStringLiteral("perception") &&
+        recordingSourceExperimentId_.startsWith(QStringLiteral("F4.")) && recordingStartedMs_ > 0) {
+      const QString runName = QStringLiteral("BAB4_") + recordingCsvStem(recordingSourceExperimentId_) + QStringLiteral("_") +
+        QDateTime::fromMSecsSinceEpoch(recordingStartedMs_).toString(QStringLiteral("yyyyMMdd_HHmmss"));
+      outputRoot = QDir(dataRoot).filePath(runName);
+    }
+    if (!QDir().mkpath(outputRoot)) {
+      if (message) *message = QStringLiteral("Gagal membuat folder data: ") + outputRoot;
       return false;
     }
     const QString stemLabel = id.isEmpty() ? label : id;
@@ -3432,9 +3500,9 @@ class LocalHttpServer : public QObject {
     const QString baseStem = recordingCsvStem(stemLabel) + QStringLiteral("_T%1_").arg(tableIndex + 1) + minuteStamp;
     QString fileName = baseStem + QStringLiteral(".csv");
     int suffix = 2;
-    while (QFileInfo::exists(QDir(dataRoot).filePath(fileName)))
+    while (QFileInfo::exists(QDir(outputRoot).filePath(fileName)))
       fileName = baseStem + QStringLiteral("_%1.csv").arg(suffix++, 2, 10, QChar('0'));
-    const QString path = QDir(dataRoot).filePath(fileName);
+    const QString path = QDir(outputRoot).filePath(fileName);
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
       if (message) *message = QStringLiteral("Gagal membuka template CSV: ") + path;
@@ -3445,7 +3513,7 @@ class LocalHttpServer : public QObject {
       if (message) *message = QStringLiteral("Gagal commit template CSV: ") + path;
       return false;
     }
-    if (result) *result = QJsonObject{{"path", path}, {"table_index", tableIndex}, {"section_id", id}, {"subsystem", subsystem}};
+    if (result) *result = QJsonObject{{"path", path}, {"table_index", tableIndex}, {"section_id", id}, {"subsystem", subsystem}, {"report_folder", outputRoot}};
     if (message) *message = QStringLiteral("Template table CSV tersimpan: ") + path;
     return true;
   }
@@ -3454,7 +3522,50 @@ class LocalHttpServer : public QObject {
     return agvPath(QStringLiteral("data/experiment_trials.yaml"));
   }
 
+  bool catalogTaskExists(const QString &subsystem, const QString &id) const {
+    for (const ExperimentSpec &spec : buildExperimentCatalog(subsystem)) if (spec.id == id) return true;
+    return false;
+  }
+
+  QJsonObject taskConfigSnapshot(const QString &subsystem, const QString &id) const {
+    QJsonObject values;
+    QJsonArray items;
+    for (const ExperimentSpec &spec : buildExperimentCatalog(subsystem)) {
+      if (spec.id != id) continue;
+      QSet<QString> seen;
+      for (const ExperimentParameterField &field : spec.parameterFields) {
+        if (field.yamlFileKey.isEmpty() || field.yamlPath.isEmpty()) continue;
+        const QString identity = field.yamlFileKey + QStringLiteral(":") + field.yamlPath;
+        if (seen.contains(identity)) continue;
+        seen.insert(identity);
+        const QJsonValue value = configStoredValue(field.yamlFileKey, field.yamlPath);
+        if (value.isUndefined() || value.isNull()) continue;
+        values[identity] = value;
+        items.append(QJsonObject{{"identity",identity},{"file_key",field.yamlFileKey},{"path",field.yamlPath},
+                                 {"label",field.label},{"kind",field.kind},{"locked",field.locked},{"value",value}});
+      }
+      break;
+    }
+    return QJsonObject{{"subsystem",subsystem},{"task_id",id},{"values",values},{"items",items},
+                       {"captured_at",QDateTime::currentDateTime().toString(Qt::ISODateWithMs)},
+                       {"config_revision",configRevisionState().value("config_revision")}};
+  }
+
   QString taskConfigFingerprint(const QString &subsystem, const QString &id) const {
+    const bool finalGate = (subsystem == QStringLiteral("steering") && id == QStringLiteral("4.9")) ||
+      (subsystem == QStringLiteral("navigation") && (id == QStringLiteral("N16.1") || id == QStringLiteral("N17.1"))) ||
+      (subsystem == QStringLiteral("perception") && id == QStringLiteral("4.9"));
+    const QJsonObject snapshot = taskConfigSnapshot(subsystem,id);
+    const QJsonObject values = snapshot.value("values").toObject();
+    if (!finalGate && !values.isEmpty()) {
+      QStringList rows;
+      for (const QString &identity : values.keys()) {
+        QJsonArray wrapper; wrapper.append(values.value(identity));
+        rows << identity + QStringLiteral("=") + QString::fromUtf8(QJsonDocument(wrapper).toJson(QJsonDocument::Compact));
+      }
+      std::sort(rows.begin(),rows.end());
+      return QString::fromLatin1(QCryptographicHash::hash(rows.join(QStringLiteral("\n")).toUtf8(),QCryptographicHash::Sha256).toHex());
+    }
     QSet<QString> keys;
     for (const ExperimentSpec &spec : buildExperimentCatalog(subsystem)) {
       if (spec.id != id) continue;
@@ -3462,12 +3573,9 @@ class LocalHttpServer : public QObject {
         if (!field.yamlFileKey.isEmpty()) keys.insert(field.yamlFileKey);
       break;
     }
-    const bool finalGate = (subsystem == QStringLiteral("steering") && id == QStringLiteral("4.9")) ||
-      (subsystem == QStringLiteral("navigation") && (id == QStringLiteral("N16.1") || id == QStringLiteral("N17.1"))) ||
-      (subsystem == QStringLiteral("perception") && id == QStringLiteral("4.9"));
     if (finalGate || keys.isEmpty()) {
       if (subsystem == QStringLiteral("steering")) keys.unite(QSet<QString>{"esc","vehicle","foc_thesis","vesc_tool"});
-      else if (subsystem == QStringLiteral("navigation")) keys.unite(QSet<QString>{"vehicle","navigation_core","nav2","ekf","localization","gnss","imu","mag_heading","imu_speed","trajectory_safety","collision","mppi_closed_loop","esc"});
+      else if (subsystem == QStringLiteral("navigation")) keys.unite(QSet<QString>{"vehicle","navigation_core","nav2","ekf","localization","gnss","imu","mag_heading","imu_speed","trajectory_safety","collision","mppi_closed_loop","esc","hmi"});
       else if (subsystem == QStringLiteral("perception")) keys.unite(QSet<QString>{"perception","bbox_calibration","trajectory_safety","navigation_core"});
     }
     const QJsonObject revs = configRevisionState().value("files").toObject();
@@ -3475,6 +3583,85 @@ class LocalHttpServer : public QObject {
     for (const QString &key : keys) if (revs.contains(key)) rows << key + QStringLiteral("=") + revs.value(key).toString();
     std::sort(rows.begin(), rows.end());
     return QString::fromLatin1(QCryptographicHash::hash(rows.join(QStringLiteral("\n")).toUtf8(), QCryptographicHash::Sha256).toHex());
+  }
+
+  QJsonObject navigationTuningState() const {
+    const QJsonObject store = loadTrialStore();
+    const QJsonObject persisted = store.value("navigation_tuning").toObject();
+    QJsonObject out;
+    for (const ExperimentSpec &spec : buildExperimentCatalog(QStringLiteral("navigation"))) {
+      if (!QRegularExpression(QStringLiteral(R"(^N\d+\.\d+$)")).match(spec.id).hasMatch()) continue;
+      QJsonObject row = persisted.value(spec.id).toObject();
+      if (row.isEmpty()) continue;
+      const QJsonObject current = taskConfigSnapshot(QStringLiteral("navigation"),spec.id);
+      const QJsonObject entryValues = row.value("entry_snapshot").toObject().value("values").toObject();
+      const QJsonObject currentValues = current.value("values").toObject();
+      QJsonArray changed;
+      for (const QString &identity : entryValues.keys())
+        if (currentValues.contains(identity) && !jsonRuntimeEquivalent(entryValues.value(identity),currentValues.value(identity))) changed.append(identity);
+      row["current_snapshot"] = current;
+      row["changed_identities"] = changed;
+      row["candidate_changed"] = !changed.isEmpty();
+      row["qualification"] = effectiveQualification(QStringLiteral("navigation"),spec.id);
+      out[spec.id] = row;
+    }
+    return out;
+  }
+
+  bool ensureNavigationTuningEntry(const QString &id, QString *message, QJsonObject *result) {
+    if (!QRegularExpression(QStringLiteral(R"(^N\d+\.\d+$)")).match(id).hasMatch() || !catalogTaskExists(QStringLiteral("navigation"),id)) {
+      if (message) *message = QStringLiteral("Navigation tuning id tidak valid");
+      return false;
+    }
+    QJsonObject store = loadTrialStore();
+    QJsonObject tuning = store.value("navigation_tuning").toObject();
+    QJsonObject row = tuning.value(id).toObject();
+    if (!row.contains("entry_snapshot")) {
+      row["entry_snapshot"] = taskConfigSnapshot(QStringLiteral("navigation"),id);
+      row["entry_created_at"] = QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
+      row["source"] = QStringLiteral("server_persistent_step_entry");
+      tuning[id] = row; store["navigation_tuning"] = tuning; store["version"] = 3;
+      store["updated_at"] = QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
+      if (!saveTrialStore(store,message)) return false;
+    }
+    const QJsonObject state = navigationTuningState().value(id).toObject();
+    if (result) *result = state;
+    if (message) *message = QStringLiteral("Step Entry persisten tersedia untuk ") + id;
+    return true;
+  }
+
+  bool buildNavigationStepEntryProposal(const QString &id, QString *message, QJsonObject *result) {
+    QJsonObject state;
+    if (!ensureNavigationTuningEntry(id,message,&state)) return false;
+    const QJsonObject entry = state.value("entry_snapshot").toObject();
+    const QJsonArray items = entry.value("items").toArray();
+    const QJsonObject metadata = loadUiParameterMetadata().value("parameters").toObject();
+    QJsonArray proposalItems;
+    for (const QJsonValue &v : items) {
+      const QJsonObject snap = v.toObject();
+      const QString fk=snap.value("file_key").toString(), path=snap.value("path").toString(), identity=fk+QStringLiteral(":")+path;
+      QJsonValue current; QString why;
+      if (!currentYamlValue(fk,path,&current,&why) || jsonRuntimeEquivalent(current,snap.value("value"))) continue;
+      const QJsonObject meta = metadata.value(identity).toObject();
+      const QString authority = meta.value("write_authority").toString();
+      const bool generatedAllowed = authority == QStringLiteral("calibration_generated");
+      const bool manualAllowed = authority == QStringLiteral("ros_yaml") && snap.value("kind").toString() != QStringLiteral("yaml_readonly") && !snap.value("locked").toBool(false);
+      const bool n2DrivePair = id == QStringLiteral("N2.1") && identity == QStringLiteral("esc:esc_ackermann.ros__parameters.drive_erpm_per_mps");
+      if (!generatedAllowed && !manualAllowed && !n2DrivePair) continue;
+      QJsonObject item{{"file_key",fk},{"path",path},{"value",snap.value("value")}};
+      if (generatedAllowed) item["generated"] = true;
+      proposalItems.append(item);
+    }
+    if (proposalItems.isEmpty()) {
+      if (result) *result = QJsonObject{{"proposal_items",QJsonArray()},{"state",state}};
+      if (message) *message = QStringLiteral("Current YAML sudah sama dengan Step Entry");
+      return true;
+    }
+    const QJsonObject evidence{{"restore_step",id},{"entry_created_at",state.value("entry_created_at")}};
+    const QJsonObject proposal = registerConfigProposal(QStringLiteral("navigation:step-entry:")+id,proposalItems,evidence);
+    if (result) *result = QJsonObject{{"proposal",proposal},{"proposal_items",proposalItems},{"state",state}};
+    if (message) *message = QStringLiteral("Proposal restore Step Entry dibuat; belum ada YAML/runtime write");
+    return true;
   }
 
   QJsonObject qualificationRecord(const QString &subsystem, const QString &id) const {
@@ -3513,6 +3700,7 @@ class LocalHttpServer : public QObject {
     const bool nav17 = taskQualified(QStringLiteral("navigation"),QStringLiteral("N17.1"));
     const bool per = taskQualified(QStringLiteral("perception"),QStringLiteral("4.9"));
     out["qualifications"] = effective;
+    out["navigation_tuning"] = navigationTuningState();
     out["phase"] = QJsonObject{{"esc_pass",esc},{"navigation_pass",nav16||nav17},{"perception_pass",per},
       {"navigation_gate_open",esc},{"perception_gate_open",esc&&(nav16||nav17)}};
     return out;
@@ -3532,13 +3720,32 @@ class LocalHttpServer : public QObject {
     QJsonArray evidence;
     for(const QJsonValue &v:requested){const QString tid=v.toString();if(!tid.isEmpty()&&existing.contains(tid))evidence.append(tid);else if(!tid.isEmpty()){if(message)*message="Evidence trial tidak ditemukan: "+tid;return false;}}
     if((status==QStringLiteral("PASS")||status==QStringLiteral("FAIL"))&&evidence.isEmpty()){if(message)*message=status+" membutuhkan minimal satu evidence trial yang valid";return false;}
+    const QString qualifiedAt=QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
+    const QJsonObject configSnapshot=taskConfigSnapshot(subsystem,id);
     QJsonObject q{{"subsystem",subsystem},{"task_id",id},{"status",status},{"effective_status",status},
       {"evidence_trial_ids",evidence},{"config_fingerprint",taskConfigFingerprint(subsystem,id)},
-      {"config_revision",configRevisionState().value("config_revision")},{"reviewer_source","operator_review"},
+      {"config_snapshot",configSnapshot},{"config_revision",configRevisionState().value("config_revision")},{"reviewer_source","operator_review"},
       {"reason",json.value("reason").toString()},{"metric_summary",json.value("metric_summary")},
-      {"qualified_at",QDateTime::currentDateTime().toString(Qt::ISODateWithMs)}};
+      {"qualified_at",qualifiedAt}};
     QJsonObject store=loadTrialStore(),qual=store.value("qualifications").toObject(),domain=qual.value(subsystem).toObject();
-    domain[id]=q;qual[subsystem]=domain;store["qualifications"]=qual;store["version"]=2;store["updated_at"]=QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
+    domain[id]=q;qual[subsystem]=domain;store["qualifications"]=qual;
+    if(subsystem==QStringLiteral("navigation")&&QRegularExpression(QStringLiteral(R"(^N\d+\.\d+$)")).match(id).hasMatch()){
+      QJsonObject tuning=store.value("navigation_tuning").toObject(),row=tuning.value(id).toObject();
+      if(!row.contains("entry_snapshot")){row["entry_snapshot"]=configSnapshot;row["entry_created_at"]=qualifiedAt;}
+      if(status==QStringLiteral("PASS")){
+        row["accepted_snapshot"]=configSnapshot;row["accepted_at"]=qualifiedAt;row["entry_snapshot"]=configSnapshot;
+        row["entry_created_at"]=qualifiedAt;row["accepted_evidence_trial_ids"]=evidence;row["source"]=QStringLiteral("server_persistent_step_entry");
+      }
+      tuning[id]=row;store["navigation_tuning"]=tuning;
+      if(id==QStringLiteral("N2.1")&&status==QStringLiteral("PASS")){
+        QJsonObject results=store.value("calibration_results").toObject(),nav=results.value("navigation").toObject(),cal=nav.value("N2.1").toObject();
+        cal["applied"]=true;cal["accepted_at"]=qualifiedAt;
+        const QJsonValue accepted=configStoredValue(QStringLiteral("vehicle"),QStringLiteral("vehicle.ros__parameters.drive_erpm_per_mps"));
+        if(!accepted.isUndefined())cal["accepted_erpm_per_mps"]=accepted;
+        nav["N2.1"]=cal;results["navigation"]=nav;store["calibration_results"]=results;
+      }
+    }
+    store["version"]=3;store["updated_at"]=qualifiedAt;
     if(!saveTrialStore(store,message))return false;
     if (result) *result = effectiveQualification(subsystem, id);
     if (message) *message = "Qualification " + subsystem + ":" + id + " → " + status;
@@ -3644,7 +3851,7 @@ class LocalHttpServer : public QObject {
     if(recordingSourceExperimentId_=="N3.1"||recordingSourceExperimentId_=="N3.2"){
       putNumber(o,"mean_steering_actual_rad",meanRecording("esc_steer_actual"));putNumber(o,"mean_gyro_z_rps",meanRecording("imu.gz"));
       putNumber(o,"mean_yaw_rate_model_rps",meanRecording("esc_kinematic_yaw_rate"));o["max_lateral_deviation_m"]=maxLateralDeviation();
-      for(const auto &pair:QVector<QPair<QString,QString>>{{"delta_yaw_imu_rad","imu.yaw_rad"},{"delta_yaw_imu_mag_rad","imu_mag_heading.yaw_rad"},{"delta_yaw_neo3_mag_rad","neo3_mag_heading.yaw_rad"},{"delta_cog_gnss_rad","gnss_cog_fusion.yaw_rad"}})
+      for(const auto &pair:QVector<QPair<QString,QString>>{{"delta_yaw_imu_rad","imu.yaw_rad"},{"delta_yaw_rm3100_rad","rm3100_heading.yaw_rad"},{"delta_cog_gnss_rad","gnss_cog_fusion.yaw_rad"}})
         if(auto q=firstLastRecording(pair.second))o[pair.first]=wrapAngle(q->second-q->first);
     }
     if(recordingSourceExperimentId_=="N3.1"){
@@ -3820,8 +4027,14 @@ class LocalHttpServer : public QObject {
                            recordingSubsystem_ == QStringLiteral("perception") ? QStringLiteral("presepsi") :
                            QStringLiteral("esc");
     const QString dataRoot = QDir(agvPath(QStringLiteral("data"))).filePath(domain);
-    if (!QDir().mkpath(dataRoot)) {
-      if (message) *message = QStringLiteral("Gagal membuat folder data: ") + dataRoot;
+    QString outputRoot = dataRoot;
+    if (recordingSubsystem_ == QStringLiteral("perception") && recordingSourceExperimentId_.startsWith(QStringLiteral("F4.")) && recordingStartedMs_ > 0) {
+      const QString runName = QStringLiteral("BAB4_") + recordingCsvStem(recordingSourceExperimentId_) + QStringLiteral("_") +
+        QDateTime::fromMSecsSinceEpoch(recordingStartedMs_).toString(QStringLiteral("yyyyMMdd_HHmmss"));
+      outputRoot = QDir(dataRoot).filePath(runName);
+    }
+    if (!QDir().mkpath(outputRoot)) {
+      if (message) *message = QStringLiteral("Gagal membuat folder data: ") + outputRoot;
       return false;
     }
 
@@ -3860,10 +4073,10 @@ class LocalHttpServer : public QObject {
     const QString baseStem = recordingCsvStem(recordingId_) + QStringLiteral("_") + minuteStamp;
     QString fileName = baseStem + QStringLiteral(".csv");
     int suffix = 2;
-    while (QFileInfo::exists(QDir(dataRoot).filePath(fileName))) {
+    while (QFileInfo::exists(QDir(outputRoot).filePath(fileName))) {
       fileName = baseStem + QStringLiteral("_%1.csv").arg(suffix++, 2, 10, QChar('0'));
     }
-    const QString primaryPath = QDir(dataRoot).filePath(fileName);
+    const QString primaryPath = QDir(outputRoot).filePath(fileName);
     QSaveFile csvFile(primaryPath);
     if (!csvFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
       if (message) *message = QStringLiteral("Gagal membuka CSV: ") + primaryPath;
@@ -3884,7 +4097,7 @@ class LocalHttpServer : public QObject {
                            {"source_experiment_id", recordingSourceExperimentId_},
                            {"section_label", recordingSectionLabel_}, {"sample_count", recordingRows_.size()},
                            {"primary_csv", primaryPath}, {"raw_csv", primaryPath},
-                           {"report_root", dataRoot},
+                           {"report_root", outputRoot}, {"report_folder", outputRoot},
                            {"download_url", QStringLiteral("/api/experiment/record/last.csv")},
                            {"download_name", lastDownloadName_}};
     }

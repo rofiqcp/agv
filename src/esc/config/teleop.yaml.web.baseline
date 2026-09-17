@@ -4,7 +4,7 @@
   ros__parameters:
     # Shared runtime vehicle speed envelope. Direct maintenance/VESC commissioning
     # commands have their own guarded electrical limits and do not use this cap.
-    speed_max: 1.00
+    speed_max: 0.75
 
     # Manual teleop request scale. +/-80 deg/s is only a normalized Twist encoding;
     # esc_ackermann converts that fraction to the calibrated physical wheel limit.
@@ -20,16 +20,18 @@ motor_teleop:
     output_topic: /cmd_vel/teleop
     publish_rate_hz: 50.0
 
-    speed_initial: 0.20
+    # Level 1 = 0.375 m/s = 3000 eRPM request; hold RB to raise through level 10.
+    # Level 10 requests 1.0 m/s = 8000 eRPM; Ackermann runtime safety currently clamps actual to 6000 eRPM.
+    speed_initial: 0.375
+    speed_min: 0.375
+    speed_max: 1.00
     speed_step: 0.10
-    speed_min: 0.10
 
-    # Start with the full normalized manual steering request range. R2 can reduce
-    # the request fraction and R1 can restore it. The ESC node still clamps the
-    # resulting wheel command to the physical commissioning/calibrated limit.
-    yaw_initial_deg_s: 80.0
+    # Level 1 = physical 10 deg; hold LB to raise through level 10 = physical 30 deg.
+    # Twist uses the legacy 80 deg/s full-scale encoding; Ackermann converts it to physical steering.
+    yaw_initial_deg_s: 26.666666667
     yaw_step_deg_s: 5.0
-    yaw_min_deg_s: 5.0
+    yaw_min_deg_s: 26.666666667
 
     keyboard_device: ""
     keyboard_rescan_sec: 2.0

@@ -5,7 +5,7 @@ from web_static_bundle import read_app_bundle, read_css_bundle
 ROOT=Path(__file__).resolve().parents[1]
 WEB=ROOT/'web'; STATIC=WEB/'static'
 app=read_app_bundle(STATIC); html=(STATIC/'index.html').read_text(); css=read_css_bundle(STATIC)
-replay=(STATIC/'replay.js').read_text(); geom=(STATIC/'camera_geometry.js').read_text(); analysis=(STATIC/'analysis_session.js').read_text(); diag=(STATIC/'diagnostics.js').read_text(); cpp=(WEB/'web_server.cpp').read_text(); imu=(ROOT/'tools/yahboom_apply_calibration.py').read_text()
+replay=(STATIC/'replay.js').read_text(); geom=(STATIC/'camera_geometry.js').read_text(); analysis=(STATIC/'analysis_session.js').read_text(); diag=(STATIC/'diagnostics.js').read_text(); cpp=(WEB/'web_server.cpp').read_text()
 meta=yaml.safe_load((WEB/'config/ui_parameter_metadata.yaml').read_text()) or {}; params=meta.get('parameters') or {}
 
 def need(text,needle): assert needle in text, needle
@@ -29,12 +29,11 @@ for source in ['perception:homography','perception:obstacle-distance','perceptio
     need(app,source); need(cpp,source)
 for needle in ['/api/config/proposal','registerConfigProposal','generatedProposalItemValid','GENERATED_PROPOSAL_STALE_CONFIG','proposal_id','allowedPaths']:
     need(cpp,needle)
-for ident in ['perception:perception.ros__parameters.nav2_obstacle_roi_points','perception:perception.ros__parameters.ground_src_points','perception:perception.ros__parameters.ground_dst_points','perception:perception.ros__parameters.obstacle_distance_calibration_coefficients','vehicle:vehicle.ros__parameters.drive_odometry_calibration_scale','mag_heading:mag_heading_fusion.ros__parameters.imu_mag_yaw_offset_rad']:
+for ident in ['perception:perception.ros__parameters.nav2_obstacle_roi_points','perception:perception.ros__parameters.ground_src_points','perception:perception.ros__parameters.ground_dst_points','perception:perception.ros__parameters.obstacle_distance_calibration_coefficients','vehicle:vehicle.ros__parameters.drive_erpm_per_mps']:
     assert params[ident]['write_authority']=='calibration_generated', ident
-# N2.1 and Yahboom are proposal-only at Web boundary.
+# N2.1 scale remains proposal-only at Web boundary.
 need(app,"writeRequest('/api/experiment/trial/optimal-scale',{apply:false})"); assert "writeRequest('/api/experiment/trial/optimal-scale',{apply:true})" not in app
-need(cpp,'USE_CONFIG_TRANSACTION'); need(cpp,'/api/imu/calibration/proposal'); need(cpp,'navigation:N2.1'); need(cpp,'imu:yahboom')
-need(imu,"add_argument('--propose'"); need(imu,"if a.propose:")
+need(cpp,'USE_CONFIG_TRANSACTION'); need(cpp,'navigation:N2.1')
 for legacy in ['/api/config/set','/api/config/reset','/api/config/reset-batch']:
     assert legacy not in app and legacy not in (STATIC/'vesc_workbench.js').read_text(), legacy
 # Evidence existence must not unlock phase; only effective qualification can.

@@ -792,7 +792,7 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('use_v4l2_userptr_zero_copy', default_value='false'),
         DeclareLaunchArgument('camera_metric_calibration_validated', default_value=str(camera_metric_default).lower()),
         DeclareLaunchArgument('perception_respawn', default_value='true'),
-        DeclareLaunchArgument('stage3_commissioning_mode', default_value='false'),
+        DeclareLaunchArgument('stage3_commissioning_mode', default_value='true'),
         DeclareLaunchArgument('start_web_gui', default_value='true'),
     ]
 
@@ -876,13 +876,14 @@ def generate_launch_description() -> LaunchDescription:
             'serial_device': LaunchConfiguration('esc_port'),
             'serial_enabled': LaunchConfiguration('esc_serial_enabled'),
             'integration_bypass': LaunchConfiguration('esc_integration_bypass'),
-            # Main runtime has ONE command chain for both joystick and autonomy:
-            # motor_teleop -> cmd_vel_router -> velocity_smoother -> /cmd_vel -> Ackermann.
-            # Direct Ackermann teleop subscription is intentionally pointed at an unused
-            # topic here, while router source metadata preserves TELEOP steering semantics.
+            # Manual teleop bypasses velocity_smoother so its angular.z remains the
+            # normalized steering envelope (Level 1..10 => 10..30 physical deg).
+            # Its source metadata also comes directly from motor_teleop. Autonomy
+            # still uses router -> velocity_smoother -> /cmd_vel -> Ackermann.
             'require_autonomy_gate': 'true',
-            'teleop_topic': '/cmd_vel/ackermann_direct_teleop_disabled',
-            'teleop_source_topic': '/navigation/cmd_mux/source',
+            'teleop_topic': '/cmd_vel/teleop',
+            'teleop_source_topic': '/teleop/active_source',
+            'router_source_topic': '/navigation/cmd_mux/source',
             'active_source_topic': '/esc/mux/active_source',
             'nav2_topic': '/cmd_vel',
             'vehicle_speed_max_mps': str(max_forward_speed),

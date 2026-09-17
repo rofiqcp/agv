@@ -24,7 +24,7 @@ assert 'USE_CONFIG_TRANSACTION' in cpp and 'proposal_items' in cpp
 assert 'Legacy direct config write dinonaktifkan' in cpp
 assert 'request.path == "/api/config/set" || request.path == "/api/config/reset" || request.path == "/api/config/reset-batch"' in cpp
 assert 'calculateOptimalScale(bool apply' not in cpp
-assert 'calculateOptimalScaleProposal' in cpp
+assert 'calculateOptimalErpmPerMpsProposal' in cpp
 assert 'CONFIG_REVISION_CHANGED' in cpp and 'dependency_results' in cpp
 assert 'list_length' in cpp and 'array_bounds' in cpp
 assert "writeRequest('/api/experiment/trial/optimal-scale',{apply:false})" in app
@@ -63,8 +63,8 @@ for identity,m in params.items():
         for b in m.get('array_bounds',[]): assert 0 <= int(b['index']) < int(m['list_length'])
 
 # Safety-critical Stage-1 authority/constraints.
-assert params['esc:esc_ackermann.ros__parameters.drive_odometry_calibration_scale']['hard_min']==0.20
-assert params['esc:esc_ackermann.ros__parameters.drive_odometry_calibration_scale']['hard_max']==5.00
+assert params['esc:esc_ackermann.ros__parameters.drive_erpm_per_mps']['hard_min']==100
+assert params['esc:esc_ackermann.ros__parameters.drive_erpm_per_mps']['hard_max']==50000
 for ident in ['perception:perception.ros__parameters.ground_src_points','perception:perception.ros__parameters.ground_dst_points',
               'perception:perception.ros__parameters.obstacle_distance_calibration_coefficients',
               'perception:perception.ros__parameters.camera_metric_calibration_validated']:

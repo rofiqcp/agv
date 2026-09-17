@@ -57,7 +57,7 @@ foc_thesis:
     kp_i: 0.0
     ki_i: 0.0
     iq_step_a: 1.0
-    iq_limit_a: 8.0
+    iq_limit_a: 10.0
     c1_kp_i: 0.0
     c1_ki_i: 0.0
     c2_kp_i: 0.0
@@ -70,7 +70,7 @@ foc_thesis:
     kp_pos: 0.0
     ki_pos: 0.0
     kd_pos: 0.0
-    iq_max_a: 8.0
+    iq_max_a: 10.0
     iq_slew_rate_a_per_s: 0.0
     tuning_target_deg: 20.0
     p1_kp_pos: 0.0

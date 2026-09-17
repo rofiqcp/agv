@@ -287,4 +287,4 @@ for map_yaml in sorted((ROOT / "maps").rglob("*.yaml")):
 print("PASS full-stack static re-audit")
 print("launch/YAML/XML/parameter uniqueness: PASS")
 print("command ownership + lane OFF isolation: PASS")
-print("fusion ESC/GNSS=vx; COG+validated-consensus=absolute yaw; global IMU=gyro-Z only; TF ownership: PASS")
+print("fusion ESC/GNSS=vx; COG+validated-RM3100=absolute yaw; global IMU=gyro-Z only; TF ownership: PASS")

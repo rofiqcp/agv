@@ -35,6 +35,7 @@ localization_core:
     gnss_max_measurement_age_sec: 1.0
     gnss_max_stamp_regression_sec: 0.02
     gnss_quality_timeout_sec: 0.6
+    gnss_min_usable_rate_hz: 7.0
     gnss_velocity_covariance_min_variance: 1.0e-06
     gnss_velocity_covariance_max_variance: 1.0
     require_gnss_velocity_certification_for_fusion: true
@@ -59,8 +60,8 @@ localization_core:
     stage2_max_wheel_gnss_residual_p95_mps: 0.25
     stage2_max_lateral_velocity_p95_mps: 0.15
     stage2_max_cog_doppler_residual_p95_rad: 0.1745329252
-    enable_global_gnss_velocity_fusion: true
-    enable_global_gnss_cog_fusion: true
+    enable_global_gnss_velocity_fusion: false
+    enable_global_gnss_cog_fusion: false
     gnss_velocity_fusion_topic: /gnss/base_velocity_fusion
     gnss_cog_fusion_topic: /gnss/cog_heading_fusion
     gnss_velocity_fusion_min_variance: 0.0025
@@ -68,7 +69,7 @@ localization_core:
     gnss_cog_fusion_min_variance_rad2: 0.00121846968
     gnss_cog_fusion_max_variance_rad2: 0.2741556778
     gnss_fusion_measurement_timeout_sec: 1.0
-    use_global_ekf_yaw_for_map_correction: true
+    use_global_ekf_yaw_for_map_correction: false
     global_ekf_yaw_correction_alpha: 0.05
     global_ekf_yaw_max_step_rad: 0.00872664626
     global_ekf_yaw_max_innovation_rad: 2.3561944902
@@ -126,6 +127,8 @@ localization_core:
     gnss_timeout_sec: 2.5
     imu_timeout_sec: 0.75
     odom_timeout_sec: 0.75
+    motion_max_local_vx_variance_m2ps2: 1.0
+    motion_max_local_yaw_variance_rad2: 0.25
     tf_publish_rate_hz: 30.0
     tf_future_offset_sec: 0.05
     status_publish_rate_hz: 1.0
@@ -158,4 +161,8 @@ localization_core:
     gnss_yaw_rate_min_variance: 0.0025
     gnss_yaw_rate_max_variance: 4.0
     anchor_init_requires_strict: false
+    validated_heading_topic: /heading/validated_fusion
     validated_heading_timeout_sec: 0.75
+    gnss_stationary_pose_variance_m2: 25.0
+    inflate_stationary_gnss_covariance: true
+    stationary_gnss_position_variance_m2: 25.0

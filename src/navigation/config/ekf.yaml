@@ -7,7 +7,7 @@ ekf_filter_node_odom:
     transform_timeout: 0.0
     predict_to_current_time: true
     print_diagnostics: false
-    dynamic_process_noise_covariance: false
+    dynamic_process_noise_covariance: true
     debug: false
     publish_tf: true
     publish_acceleration: false
@@ -24,7 +24,7 @@ ekf_filter_node_odom:
     - false
     - false
     - true
-    - false
+    - true
     - false
     - false
     - false
@@ -286,38 +286,16 @@ ekf_filter_node_odom:
     - 0.0
     - 0.015
     use_control: false
-    twist0: /gnss/base_velocity_fusion
-    twist0_config:
-    - false
-    - false
-    - false
-    - false
-    - false
-    - false
-    - true
-    - false
-    - false
-    - false
-    - false
-    - false
-    - false
-    - false
-    - false
-    twist0_queue_size: 20
-    twist0_nodelay: true
-    twist0_differential: false
-    twist0_relative: false
-    twist0_rejection_threshold: 10.0
 ekf_filter_node_map:
   ros__parameters:
     frequency: 10.0
-    sensor_timeout: 2.0
+    sensor_timeout: 1.0
     two_d_mode: true
     transform_time_offset: 0.0
     transform_timeout: 0.0
     predict_to_current_time: false
     print_diagnostics: false
-    dynamic_process_noise_covariance: false
+    dynamic_process_noise_covariance: true
     debug: false
     publish_tf: false
     publish_acceleration: false
@@ -346,9 +324,9 @@ ekf_filter_node_map:
     odom0_nodelay: true
     odom0_differential: false
     odom0_relative: false
-    odom0_pose_rejection_threshold: 12.0
-    twist0: /gnss/base_velocity_fusion
-    twist0_config:
+    odom0_pose_rejection_threshold: 1000.0
+    odom1: /esc/odom
+    odom1_config:
     - false
     - false
     - false
@@ -364,53 +342,11 @@ ekf_filter_node_map:
     - false
     - false
     - false
-    twist0_queue_size: 12
-    twist0_nodelay: true
-    twist0_rejection_threshold: 10.0
-    pose0: /gnss/cog_heading_fusion
-    pose0_config:
-    - false
-    - false
-    - false
-    - false
-    - false
-    - true
-    - false
-    - false
-    - false
-    - false
-    - false
-    - false
-    - false
-    - false
-    - false
-    pose0_queue_size: 10
-    pose0_nodelay: true
-    pose0_differential: false
-    pose0_relative: false
-    pose0_rejection_threshold: 4.0
-    pose1: /heading/validated_fusion
-    pose1_config:
-    - false
-    - false
-    - false
-    - false
-    - false
-    - true
-    - false
-    - false
-    - false
-    - false
-    - false
-    - false
-    - false
-    - false
-    - false
-    pose1_queue_size: 10
-    pose1_nodelay: true
-    pose1_differential: false
-    pose1_relative: false
-    pose1_rejection_threshold: 4.0
+    odom1_queue_size: 20
+    odom1_nodelay: true
+    odom1_differential: false
+    odom1_relative: false
+    odom1_twist_rejection_threshold: 5.0
     imu0: /imu/data
     imu0_config:
     - false
@@ -659,6 +595,27 @@ ekf_filter_node_map:
     - 0.0
     - 0.015
     use_control: false
-    twist0_differential: false
-    twist0_relative: false
     imu0_remove_gravitational_acceleration: false
+    imu0_angular_velocity_rejection_threshold: 5.0
+    pose0: /heading/validated_fusion
+    pose0_config:
+    - false
+    - false
+    - false
+    - false
+    - false
+    - true
+    - false
+    - false
+    - false
+    - false
+    - false
+    - false
+    - false
+    - false
+    - false
+    pose0_queue_size: 10
+    pose0_nodelay: true
+    pose0_differential: false
+    pose0_relative: false
+    pose0_rejection_threshold: 100.0

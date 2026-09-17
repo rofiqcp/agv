@@ -5,7 +5,6 @@
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <sensor_msgs/msg/imu.hpp>
-#include <sensor_msgs/msg/magnetic_field.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <sensor_msgs/msg/nav_sat_status.hpp>
 #include <std_msgs/msg/bool.hpp>
@@ -275,6 +274,7 @@ private:
     declare_parameter<double>("gnss_max_measurement_age_sec", 1.00);
     declare_parameter<double>("gnss_max_stamp_regression_sec", 0.02);
     declare_parameter<double>("gnss_quality_timeout_sec", 0.60);
+    declare_parameter<double>("gnss_min_usable_rate_hz", 7.0);
     declare_parameter<double>("gnss_velocity_covariance_min_variance", 1.0e-6);
     declare_parameter<double>("gnss_velocity_covariance_max_variance", 1.0);
     declare_parameter<bool>("require_gnss_velocity_certification_for_fusion", true);
@@ -382,6 +382,8 @@ private:
     // benar-benar bergerak agar URDF tidak meloncat terhadap planner.
     declare_parameter<double>("strict_correction_alpha", 0.20);
     declare_parameter<bool>("freeze_stationary_map_translation", true);
+    declare_parameter<bool>("inflate_stationary_gnss_covariance", true);
+    declare_parameter<double>("stationary_gnss_position_variance_m2", 25.0);
     declare_parameter<double>("strict_moving_correction_alpha", 0.03);
     declare_parameter<bool>("enable_wheel_slip_pose_correction", false);
     declare_parameter<double>("strict_slip_correction_alpha", 0.60);
@@ -400,6 +402,11 @@ private:
     declare_parameter<double>("gnss_timeout_sec", 2.5);
     declare_parameter<double>("imu_timeout_sec", 0.75);
     declare_parameter<double>("odom_timeout_sec", 0.75);
+    // Motion may not open from a filter that is only predicting after wheel/ESC loss.
+    // vx and yaw are directly observed again when ESC+IMU recover, so these two
+    // variances are the hot-plug readiness contract; odom x/y covariance is not.
+    declare_parameter<double>("motion_max_local_vx_variance_m2ps2", 1.0);
+    declare_parameter<double>("motion_max_local_yaw_variance_rad2", 0.25);
     declare_parameter<double>("tf_publish_rate_hz", 10.0);
     declare_parameter<double>("tf_future_offset_sec", 0.05);
     declare_parameter<double>("status_publish_rate_hz", 2.0);
@@ -509,6 +516,8 @@ private:
       get_parameter("gnss_max_stamp_regression_sec").as_double(), 0.0, 1.0);
     gnss_quality_timeout_sec_ = std::clamp(
       get_parameter("gnss_quality_timeout_sec").as_double(), 0.05, 5.0);
+    gnss_min_usable_rate_hz_ = std::clamp(
+      get_parameter("gnss_min_usable_rate_hz").as_double(), 0.1, 25.0);
     gnss_velocity_covariance_min_variance_ = std::max(
       1.0e-12, get_parameter("gnss_velocity_covariance_min_variance").as_double());
     gnss_velocity_covariance_max_variance_ = std::max(
@@ -604,6 +613,10 @@ private:
       get_parameter("strict_correction_alpha").as_double(), 0.0, 1.0);
     freeze_stationary_map_translation_ =
       get_parameter("freeze_stationary_map_translation").as_bool();
+    inflate_stationary_gnss_covariance_ =
+      get_parameter("inflate_stationary_gnss_covariance").as_bool();
+    stationary_gnss_position_variance_m2_ = std::max(
+      0.01, get_parameter("stationary_gnss_position_variance_m2").as_double());
     strict_moving_correction_alpha_ = std::clamp(
       get_parameter("strict_moving_correction_alpha").as_double(), 0.0, 1.0);
     enable_wheel_slip_pose_correction_ = get_parameter("enable_wheel_slip_pose_correction").as_bool();
@@ -633,6 +646,10 @@ private:
     gnss_timeout_sec_ = get_parameter("gnss_timeout_sec").as_double();
     imu_timeout_sec_ = get_parameter("imu_timeout_sec").as_double();
     odom_timeout_sec_ = get_parameter("odom_timeout_sec").as_double();
+    motion_max_local_vx_variance_m2ps2_ = std::max(1.0e-6,
+      get_parameter("motion_max_local_vx_variance_m2ps2").as_double());
+    motion_max_local_yaw_variance_rad2_ = std::max(1.0e-6,
+      get_parameter("motion_max_local_yaw_variance_rad2").as_double());
     tf_publish_rate_hz_ = std::max(1.0, get_parameter("tf_publish_rate_hz").as_double());
     tf_future_offset_sec_ = std::clamp(
       get_parameter("tf_future_offset_sec").as_double(), 0.0, 0.25);
@@ -1666,9 +1683,6 @@ private:
     esc_kinematic_yaw_sub_ = create_subscription<std_msgs::msg::Float64>(
       esc_kinematic_yaw_rate_topic_, sensor_qos,
       std::bind(&LocalizationCore::onEscKinematicYawRate, this, std::placeholders::_1));
-    mag_sub_ = create_subscription<sensor_msgs::msg::MagneticField>(
-      "/imu/mag", sensor_qos,
-      std::bind(&LocalizationCore::onMag, this, std::placeholders::_1));
     raw_wheel_odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
       raw_wheel_odom_topic_, sensor_qos,
       std::bind(&LocalizationCore::onRawWheelOdom, this, std::placeholders::_1));
@@ -1889,7 +1903,10 @@ private:
       const double step = std::clamp(global_ekf_yaw_correction_alpha_ * innovation,
         -global_ekf_yaw_max_step_rad_, global_ekf_yaw_max_step_rad_);
       anchor_map_odom_.yaw = navigation_math::normalizeAngle(anchor_map_odom_.yaw + step);
-      if (std::abs(step) > 1.0e-9) anchor_mode_ += "+VALIDATED_YAW";
+      if (std::abs(step) > 1.0e-9 &&
+          anchor_mode_.find("+VALIDATED_YAW") == std::string::npos) {
+        anchor_mode_ += "+VALIDATED_YAW";
+      }
     }
   }
 
@@ -1904,16 +1921,6 @@ private:
     last_esc_kinematic_yaw_time_ = now();
   }
 
-  // Fungsi: Menyimpan magnetometer mentah untuk HUD. MagneticField memakai
-  // Tesla; state internal disimpan sebagai microtesla agar angka mudah dibaca.
-  void onMag(const sensor_msgs::msg::MagneticField::SharedPtr msg)
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    imu_mag_x_ut_ = std::isfinite(msg->magnetic_field.x) ? msg->magnetic_field.x * 1.0e6 : 0.0;
-    imu_mag_y_ut_ = std::isfinite(msg->magnetic_field.y) ? msg->magnetic_field.y * 1.0e6 : 0.0;
-    imu_mag_z_ut_ = std::isfinite(msg->magnetic_field.z) ? msg->magnetic_field.z * 1.0e6 : 0.0;
-    last_mag_time_ = now();
-  }
 
   void onRawWheelOdom(const nav_msgs::msg::Odometry::SharedPtr msg)
   {
@@ -1954,6 +1961,7 @@ private:
     local_x_var_ = msg->pose.covariance[0];
     local_y_var_ = msg->pose.covariance[7];
     local_yaw_var_ = msg->pose.covariance[35];
+    local_vx_var_ = msg->twist.covariance[0];
     last_odom_time_ = now();
     have_odom_ = true;
 
@@ -2474,9 +2482,16 @@ private:
       anchor_map_odom_.yaw, startup_max_spread_m_);
   }
 
+  bool gnssRatePassesUnlocked() const
+  {
+    return quality_.received && std::isfinite(quality_.pvt_rate_hz) &&
+      quality_.pvt_rate_hz > gnss_min_usable_rate_hz_;
+  }
+
   bool highIntegrityFixPassesUnlocked() const
   {
     if (!isHighIntegrityGnssSource(quality_.source)) return false;
+    if (!gnssRatePassesUnlocked()) return false;
     if (!quality_.gnss_fix_ok || quality_.fix_metric < 3.0) return false;
     if (isNeo3ProDroneCanSource(quality_.source)) {
       // 3 = F411 measurement-time mapping, 4 = validated absolute DroneCAN GNSS UTC.
@@ -2514,6 +2529,7 @@ private:
   bool provisionalQualityPassesUnlocked() const
   {
     if (!allow_provisional_map_display_ || !quality_.received) return false;
+    if (!gnssRatePassesUnlocked()) return false;
     if (quality_.satellites < provisional_min_satellites_) return false;
     if (!std::isfinite(quality_.dop) || quality_.dop <= 0.0 || quality_.dop > provisional_max_dop_) return false;
     if (!std::isfinite(quality_.hacc_m) || quality_.hacc_m <= 0.0 || quality_.hacc_m > provisional_max_hacc_m_) return false;
@@ -2527,6 +2543,7 @@ private:
   bool degradedQualityPassesUnlocked() const
   {
     if (!allow_degraded_planning_ || !quality_.received) return false;
+    if (!gnssRatePassesUnlocked()) return false;
     if (quality_.satellites < degraded_min_satellites_) return false;
     if (!std::isfinite(quality_.dop) || quality_.dop <= 0.0 || quality_.dop > degraded_max_dop_) return false;
     if (!std::isfinite(quality_.hacc_m) || quality_.hacc_m <= 0.0 || quality_.hacc_m > degraded_max_hacc_m_) return false;
@@ -2541,6 +2558,7 @@ private:
   bool strictQualityPassesUnlocked() const
   {
     if (!quality_.received) return false;
+    if (!gnssRatePassesUnlocked()) return false;
     if (quality_.satellites < strict_min_satellites_) return false;
     if (!std::isfinite(quality_.dop) || quality_.dop <= 0.0 || quality_.dop > strict_max_dop_) return false;
     if (!std::isfinite(quality_.hacc_m) || quality_.hacc_m <= 0.0 || quality_.hacc_m > strict_max_hacc_m_) return false;
@@ -2553,6 +2571,7 @@ private:
   bool motionHoldQualityPassesUnlocked() const
   {
     if (!quality_.received) return false;
+    if (!gnssRatePassesUnlocked()) return false;
     if (quality_.satellites < motion_hold_min_satellites_) return false;
     if (!std::isfinite(quality_.dop) || quality_.dop <= 0.0 || quality_.dop > motion_hold_max_dop_) return false;
     if (!std::isfinite(quality_.hacc_m) || quality_.hacc_m <= 0.0 ||
@@ -2565,6 +2584,7 @@ private:
   bool motionCriticalQualityFailsUnlocked() const
   {
     if (!quality_.received) return true;
+    if (!gnssRatePassesUnlocked()) return true;
     if (quality_.satellites < motion_critical_min_satellites_) return true;
     if (!std::isfinite(quality_.dop) || quality_.dop <= 0.0 || quality_.dop > motion_critical_max_dop_) return true;
     if (!std::isfinite(quality_.hacc_m) || quality_.hacc_m <= 0.0 ||
@@ -2657,6 +2677,17 @@ private:
   {
     if (!strictQualityPassesUnlocked() || !strict_since_.has_value()) return false;
     return (now() - *strict_since_).seconds() >= strict_quality_hold_sec_;
+  }
+
+  // Hot-plug readiness: after ESC loss robot_localization can continue publishing
+  // predicted odometry at 30 Hz even though velocity is no longer observed. Fresh
+  // timestamps alone are therefore insufficient to open physical motion.
+  bool localMotionCovarianceReadyUnlocked() const
+  {
+    return std::isfinite(local_vx_var_) && local_vx_var_ >= 0.0 &&
+      local_vx_var_ <= motion_max_local_vx_variance_m2ps2_ &&
+      std::isfinite(local_yaw_var_) && local_yaw_var_ >= 0.0 &&
+      local_yaw_var_ <= motion_max_local_yaw_variance_rad2_;
   }
 
   // Fungsi: Freshness input lokal agar TF tidak terus dianggap valid saat sensor mati.
@@ -2758,6 +2789,10 @@ private:
       odom.pose.covariance[7] = 400.0;
       odom.pose.covariance[35] = 0.25;
     }
+    if (inflate_stationary_gnss_covariance_ && vehicleStationaryUnlocked()) {
+      odom.pose.covariance[0] = std::max(odom.pose.covariance[0], stationary_gnss_position_variance_m2_);
+      odom.pose.covariance[7] = std::max(odom.pose.covariance[7], stationary_gnss_position_variance_m2_);
+    }
     gnss_map_odom_pub_->publish(odom);
   }
 
@@ -2852,9 +2887,6 @@ private:
     double imu_ax = 0.0;
     double imu_ay = 0.0;
     double imu_az = 0.0;
-    double imu_mx_ut = 0.0;
-    double imu_my_ut = 0.0;
-    double imu_mz_ut = 0.0;
     navigation_math::Pose2D map_base;
     navigation_math::Pose2D local_pose;
     navigation_math::Pose2D global_pose;
@@ -2874,8 +2906,9 @@ private:
     bool degraded_gate = false;
     bool imu_data_fresh = false;
     bool imu_orientation_fresh = false;
-    bool mag_data_fresh = false;
     bool local_odom_fresh_status = false;
+    bool local_covariance_ready_status = false;
+    double local_vx_var = 0.0;
     int calibration_samples = 0;
     int calibration_unique = 0;
     double calibration_baseline_m = 0.0;
@@ -2895,9 +2928,6 @@ private:
         last_imu_orientation_time_.nanoseconds() > 0 &&
         (t - last_imu_orientation_time_).seconds() >= 0.0 &&
         (t - last_imu_orientation_time_).seconds() <= imu_timeout_sec_;
-      mag_data_fresh = last_mag_time_.nanoseconds() > 0 &&
-        (t - last_mag_time_).seconds() >= 0.0 &&
-        (t - last_mag_time_).seconds() <= std::max(2.0, 2.0 * imu_timeout_sec_);
       // Setelah anchor map->odom terkunci, planning tidak boleh flap hanya karena
       // GNSS/IMU sesaat stale. Anchor DEGRADED_HOLD memang sengaja dibekukan.
       // Cukup pertahankan local EKF odom fresh untuk planning; motion fisik tetap
@@ -2906,6 +2936,7 @@ private:
         (t - last_odom_time_).seconds() >= 0.0 &&
         (t - last_odom_time_).seconds() <= odom_timeout_sec_;
       local_odom_fresh_status = local_odom_fresh;
+      local_covariance_ready_status = localMotionCovarianceReadyUnlocked();
       const bool inputs_fresh = inputsFreshUnlocked();
       planning_ready = anchor_valid_ && local_odom_fresh;
       const bool manual_motion =
@@ -2916,7 +2947,7 @@ private:
       // still uses inputsFreshUnlocked() + GNSS quality gates.
       const bool manual_inputs_fresh =
         local_odom_fresh && imu_data_fresh && imu_orientation_fresh;
-      motion_ready = planning_ready &&
+      motion_ready = planning_ready && local_covariance_ready_status &&
         (manual_motion ? manual_inputs_fresh : inputs_fresh) &&
         (motionQualityReadyUnlocked() || manual_motion);
 
@@ -2972,15 +3003,13 @@ private:
       imu_ax = imu_accel_x_mps2_;
       imu_ay = imu_accel_y_mps2_;
       imu_az = imu_accel_z_mps2_;
-      imu_mx_ut = imu_mag_x_ut_;
-      imu_my_ut = imu_mag_y_ut_;
-      imu_mz_ut = imu_mag_z_ut_;
       local_pose = odom_base_;
       local_v = local_speed_mps_;
       local_w = local_yaw_rate_rps_;
       local_x_var = local_x_var_;
       local_y_var = local_y_var_;
       local_yaw_var = local_yaw_var_;
+      local_vx_var = local_vx_var_;
       global_pose = global_ekf_pose_;
       global_v = global_ekf_speed_mps_;
       global_w = global_ekf_yaw_rate_rps_;
@@ -3024,7 +3053,6 @@ private:
       imu_gx = nan; imu_gy = nan; imu_wz = nan;
       imu_ax = nan; imu_ay = nan; imu_az = nan;
     }
-    if (!mag_data_fresh) { imu_mx_ut = nan; imu_my_ut = nan; imu_mz_ut = nan; }
 
     std_msgs::msg::Float64 map_yaw_msg;
     map_yaw_msg.data = map_yaw_from_enu_status;
@@ -3057,6 +3085,9 @@ private:
        << "mode=" << mode
        << ";planning_ready=" << planning_ready
        << ";motion_localization_ready=" << motion_ready
+       << ";local_covariance_ready=" << local_covariance_ready_status
+       << ";local_vx_var=" << local_vx_var
+       << ";local_yaw_var=" << local_yaw_var
        << ";imu_orientation_fresh=" << imu_orientation_fresh
        << ";sat=" << sats
        << ";dop=" << dop
@@ -3103,6 +3134,9 @@ private:
             << ";cog_acc=" << cog_acc
             << ";cog_yaw_gate=" << (cog_yaw_gate ? "true" : "false")
             << ";gnss_fix_ok=" << (quality_.gnss_fix_ok ? "true" : "false")
+            << ";gnss_rate_hz=" << quality_.pvt_rate_hz
+            << ";gnss_rate_gate=" << gnss_min_usable_rate_hz_
+            << ";gnss_rate_ok=" << (gnssRatePassesUnlocked() ? "true" : "false")
             << ";gnss_high_integrity=" << (isHighIntegrityGnssSource(quality_.source) ? "true" : "false")
             << ";gnss_timestamp_source=" << quality_.timestamp_source
             << ";gnss_cov_epoch=" << (quality_.covariance_epoch_valid ? "true" : "false")
@@ -3124,9 +3158,7 @@ private:
            << "roll=" << imu_roll << ";pitch=" << imu_pitch << ";yaw=" << imu_yaw
            << ";gx=" << imu_gx << ";gy=" << imu_gy << ";gz=" << imu_wz
            << ";ax=" << imu_ax << ";ay=" << imu_ay << ";az=" << imu_az
-           << ";mx_ut=" << imu_mx_ut << ";my_ut=" << imu_my_ut << ";mz_ut=" << imu_mz_ut
            << ";imu_fresh=" << (imu_data_fresh ? "true" : "false")
-           << ";mag_fresh=" << (mag_data_fresh ? "true" : "false")
            << ";ackermann_w=" << esc_kinematic_w
            << ";yaw_residual=" << yaw_model_imu_residual
            << ";ackermann_fresh=" << (esc_kinematic_fresh ? "true" : "false");
@@ -3229,6 +3261,7 @@ private:
   double gnss_max_measurement_age_sec_{1.0};
   double gnss_max_stamp_regression_sec_{0.02};
   double gnss_quality_timeout_sec_{0.60};
+  double gnss_min_usable_rate_hz_{7.0};
   double gnss_velocity_covariance_min_variance_{1.0e-6};
   double gnss_velocity_covariance_max_variance_{1.0};
   bool require_gnss_velocity_certification_for_fusion_{true};
@@ -3290,6 +3323,8 @@ private:
   int motion_critical_min_satellites_{6};
   double strict_correction_alpha_{0.20};
   bool freeze_stationary_map_translation_{true};
+  bool inflate_stationary_gnss_covariance_{true};
+  double stationary_gnss_position_variance_m2_{25.0};
   double strict_moving_correction_alpha_{0.03};
   bool enable_wheel_slip_pose_correction_{false};
   double strict_slip_correction_alpha_{0.60};
@@ -3306,6 +3341,8 @@ private:
   double gnss_timeout_sec_{2.5};
   double imu_timeout_sec_{0.75};
   double odom_timeout_sec_{0.75};
+  double motion_max_local_vx_variance_m2ps2_{1.0};
+  double motion_max_local_yaw_variance_rad2_{0.25};
   double tf_publish_rate_hz_{10.0};
   double tf_future_offset_sec_{0.05};
   double status_publish_rate_hz_{2.0};
@@ -3347,9 +3384,6 @@ private:
   double imu_accel_x_mps2_{0.0};
   double imu_accel_y_mps2_{0.0};
   double imu_accel_z_mps2_{0.0};
-  double imu_mag_x_ut_{0.0};
-  double imu_mag_y_ut_{0.0};
-  double imu_mag_z_ut_{0.0};
   double local_forward_speed_mps_{0.0};
   double local_speed_mps_{0.0};
   double raw_wheel_forward_speed_mps_{0.0};
@@ -3358,6 +3392,7 @@ private:
   double local_x_var_{0.0};
   double local_y_var_{0.0};
   double local_yaw_var_{0.0};
+  double local_vx_var_{1.0e9};
   double gnss_enu_ve_mps_{0.0};
   double gnss_enu_vn_mps_{0.0};
   double gnss_map_vx_mps_{0.0};
@@ -3432,7 +3467,6 @@ private:
   rclcpp::Time last_imu_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_imu_orientation_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_esc_kinematic_yaw_time_{0, 0, RCL_ROS_TIME};
-  rclcpp::Time last_mag_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_odom_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_raw_wheel_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_global_odom_time_{0, 0, RCL_ROS_TIME};
@@ -3447,7 +3481,6 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::TwistWithCovarianceStamped>::SharedPtr gnss_velocity_fit_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr esc_kinematic_yaw_sub_;
-  rclcpp::Subscription<sensor_msgs::msg::MagneticField>::SharedPtr mag_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr raw_wheel_odom_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr global_odom_sub_;

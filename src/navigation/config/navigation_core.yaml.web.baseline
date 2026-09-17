@@ -14,7 +14,7 @@ navigation_core:
     command_rate_hz: 20.0
     status_rate_hz: 10.0
     autonomy_timeout_sec: 0.6
-    max_forward_speed_mps: 0.5
+    max_forward_speed_mps: 1.0
     max_reverse_speed_mps: 1.0
     max_yaw_rate_rps: 0.688498701004
     linear_deadband_mps: 0.08
@@ -69,7 +69,7 @@ cmd_vel_router:
     rate_hz: 50.0
     teleop_timeout_sec: 0.30
     autonomy_timeout_sec: 0.60
-    manual_release_hold_sec: 0.50
+    manual_release_hold_sec: 1.00
 
 sensor_contract_monitor:
   ros__parameters:

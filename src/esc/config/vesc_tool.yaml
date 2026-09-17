@@ -7,7 +7,10 @@ vesc_tool_bridge:
     max_abs_erpm: 8000.0
     # Browser must renew this lease while Web Maintenance owns the motor link.
     # Lost tab/network => bridge safe-stops both motors then restores runtime.
-    web_lease_timeout_ms: 1200
+    web_lease_timeout_ms: 5000
+    # Stock VESC Tool enables Send Alive after one-shot Speed/Position/Current.
+    # Keep TCP 65102 semantically identical while retaining the F103 300 ms watchdog.
+    tcp_keepalive_period_ms: 100
     # Highest-priority Python hardware tools use 65101. VESC Tool remains on
     # 65102 and can stay connected while Python temporarily owns maintenance.
     python_tcp_enabled: true

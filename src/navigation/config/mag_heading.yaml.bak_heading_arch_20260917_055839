@@ -1,0 +1,115 @@
+mag_heading_fusion:
+  ros__parameters:
+    imu_topic: /imu/data
+    imu_mag_topic: /imu/mag
+    neo3_mag_topic: /neo3pro/mag
+    map_yaw_topic: /localization/map_yaw_from_enu
+    imu_heading_topic: /imu/mag_heading_fusion
+    neo3_heading_topic: /neo3/mag_heading_fusion
+    output_frame: map
+    tilt_timeout_sec: 0.75
+    max_tilt_rad: 0.7853981634
+    magnetic_declination_rad: 0.0
+    min_field_norm_ut: 15.0
+    max_field_norm_ut: 100.0
+    imu_mag_yaw_sign: -1.0
+    imu_mag_yaw_offset_rad: 1.584282486548775
+    neo3_mag_yaw_sign: 1.0
+    neo3_mag_yaw_offset_rad: 1.6620326966378838
+    imu_heading_variance_rad2: 0.08
+    neo3_heading_variance_rad2: 0.00121846968
+    max_heading_rate_rps: 3.0
+    rate_gate_margin_rad: 0.35
+    field_qualification_valid: false
+    field_qualification_saved_at: ''
+    field_qualification_evidence_sha256: ''
+    enable_current_emi_gate: false
+    motor_current_topic: /esc/motor_current_abs_a
+    current_emi_gate_threshold_a: 1000000.0
+    current_emi_gate_timeout_sec: 0.35
+    enable_imu_mag_heading: false
+    enable_neo3_mag_heading: true
+    imu_inertial_heading_topic: /imu/inertial_heading
+    validated_heading_topic: /heading/validated_fusion
+    consensus_max_error_rad: 0.0872664626
+    consensus_hold_sec: 2.0
+    consensus_timeout_sec: 0.5
+    validated_heading_variance_rad2: 0.01
+    neo3_calibration_owner: ros_host
+    neo3_calibration_ownership_verified: true
+    neo3_planar_max_tilt_rad: 0.2617993878
+    neo3_full_calibration_enabled: false
+    neo3_mag_bias_xyz_ut:
+    - 0.0
+    - 0.0
+    - 0.0
+    neo3_mag_matrix_3x3:
+    - 1.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 1.0
+    neo3_planar_calibration_enabled: true
+    neo3_mag_bias_xy_ut:
+    - -13.876793349753695
+    - 1.9115564814814796
+    neo3_mag_matrix_xy:
+    - 0.03652314949169245
+    - -0.00045890339887859127
+    - -0.0004589033988785904
+    - 0.04150194919231958
+    neo3_heading_lut_enabled: true
+    neo3_heading_lut_input_rad:
+    - 1.4229333951861647
+    - 0.7003688219043257
+    - 0.25191914473139354
+    - -0.576254362848672
+    - -1.4687284707664956
+    - -2.359534869345018
+    - 2.976791413366419
+    - 2.196387289784848
+    neo3_heading_lut_correction_rad:
+    - 0.14786293160873187
+    - 0.08502934149312256
+    - -0.25191914473139354
+    - -0.20914380054877624
+    - -0.10206785602840095
+    - 0.0033403791526733784
+    - 0.1648012402233745
+    - 0.15980720040749707
+    imu_raw_mag_topic: /imu/raw_sensor_vectors
+    imu_planar_calibration_enabled: true
+    imu_mag_bias_xy_lsb:
+    - -3210.972642857143
+    - 1962.9921568627456
+    imu_mag_matrix_xy_per_lsb:
+    - 0.00014361742201833566
+    - 1.764238243854713e-06
+    - 1.7642382438547112e-06
+    - 0.0001387826149386249
+    imu_heading_lut_enabled: true
+    imu_heading_lut_input_rad:
+    - 1.7184068222031978
+    - 0.870680315639423
+    - 0.045862772165786936
+    - -0.802408221190599
+    - -1.6720712301641873
+    - -2.4806458972931407
+    - 3.090904520527717
+    - 2.371002426710136
+    imu_heading_lut_correction_rad:
+    - -0.1476104954083013
+    - -0.08528215224197477
+    - -0.045862772165786936
+    - 0.017010057793150676
+    - 0.10127490336929079
+    - 0.12445140710079583
+    - 0.05068813306207633
+    - -0.014807936517790663
+    imu_corrected_norm_min: 0.75
+    imu_corrected_norm_max: 1.25
+    imu_planar_max_tilt_rad: 0.2617993878

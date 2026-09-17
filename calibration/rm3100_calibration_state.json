@@ -1,0 +1,37 @@
+{
+  "status": "PASS",
+  "running": false,
+  "sample_count": 3490,
+  "fit_sample_count": 3490,
+  "rejected_fit_count": 0,
+  "elapsed_sec": 141.88,
+  "coverage_pct": 91.7,
+  "coverage_bins": 66,
+  "face_counts": {
+    "LEVEL": 960,
+    "LEFT_SIDE": 572,
+    "RIGHT_SIDE": 484,
+    "NOSE_UP": 528,
+    "NOSE_DOWN": 359,
+    "INVERTED": 587
+  },
+  "target_face": "INVERTED",
+  "observed_face": "LEVEL",
+  "roll_deg": -0.45043945312499994,
+  "pitch_deg": 2.0709228515624996,
+  "raw_wire": {
+    "x_ut": -18.4326,
+    "y_ut": -24.9756,
+    "z_ut": -31.909199999999995,
+    "norm_ut": 44.51672026059422,
+    "face": "INVERTED",
+    "observed_face": "LEVEL",
+    "accepted_for_fit": true,
+    "fit_reason": "OK"
+  },
+  "instruction": "PASS full 3D fit; stage ke ROS hanya setelah memastikan AP_Periph tidak sudah mengoreksi compass.",
+  "source_topic": "/neo3pro/mag",
+  "raw_semantics": "DroneCAN/AP_Periph field before ROS-host correction; not guaranteed native RM3100 register raw",
+  "csv_path": "/home/sirobo/agv/calibration/rm3100_3d_raw_20260917_114149.csv",
+  "fit_path": "/home/sirobo/agv/calibration/rm3100_ardupilot_latest.yaml"
+}

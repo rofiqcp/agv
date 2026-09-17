@@ -105,7 +105,7 @@ def main() -> int:
             "Global EKF harus fusion GNSS COG absolute yaw via pose0")
     require(global_.get("pose1") == "/heading/validated_fusion" and
             enabled(global_.get("pose1_config")) == {5},
-            "Global EKF harus fusion validated heading consensus via pose1")
+            "Global EKF harus fusion validated RM3100 heading via pose1")
     require("pose2" not in global_, "Global EKF tidak boleh mempunyai raw magnetic heading authority kedua")
 
     # GNSS vyaw integrity and low-speed de-weighting.

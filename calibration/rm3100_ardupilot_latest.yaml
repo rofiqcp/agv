@@ -1,0 +1,51 @@
+rm3100_ardupilot_calibration:
+  valid: true
+  created_at: '2026-09-17T11:44:11+07:00'
+  source_topic: /neo3pro/mag
+  source_semantics: DroneCAN/AP_Periph pre-ROS correction field
+  sample_count: 3490
+  fit_sample_count: 3454
+  coverage_pct: 91.66666666666667
+  coverage_bins: 66
+  face_counts:
+    LEVEL: 960
+    LEFT_SIDE: 572
+    RIGHT_SIDE: 484
+    NOSE_UP: 528
+    NOSE_DOWN: 359
+    INVERTED: 587
+  host_ros:
+    bias_xyz_ut:
+    - -12.81021989699917
+    - -0.25037000903352924
+    - -8.251344067342682
+    matrix_3x3:
+    - 0.924228957788029
+    - 0.01986993933060433
+    - 0.04190315437366519
+    - 0.019869939330604346
+    - 0.9913953888422709
+    - -0.0004582819881870549
+    - 0.04190315437366519
+    - -0.00045828198818714745
+    - 0.9925515965577556
+  ardupilot_equivalent:
+    COMPASS_OFS_X_mG: 128.1021989699917
+    COMPASS_OFS_Y_mG: 2.5037000903352924
+    COMPASS_OFS_Z_mG: 82.51344067342683
+    COMPASS_DIA_X: 0.924228957788029
+    COMPASS_DIA_Y: 0.9913953888422709
+    COMPASS_DIA_Z: 0.9925515965577556
+    COMPASS_ODI_X: 0.01986993933060433
+    COMPASS_ODI_Y: 0.04190315437366519
+    COMPASS_ODI_Z: -0.0004582819881870549
+  validation:
+    corrected_norm_mean_ut: 35.3393137306629
+    corrected_norm_std_ut: 1.0104658286576245
+    corrected_norm_cv: 0.02859324989610289
+    corrected_norm_p05_ut: 33.59149737337284
+    corrected_norm_p95_ut: 36.38190615981519
+    matrix_condition: 1.127552074335264
+    pass: true
+  warning: AP_Periph parameter readback must be checked before applying host calibration;
+    never enable AP_Periph and ROS hard/soft-iron correction together.

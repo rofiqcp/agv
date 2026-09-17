@@ -136,22 +136,6 @@ ImuNode::ImuNode(const rclcpp::NodeOptions & options)
   vector_x_sign_ = this->declare_parameter<double>("vector_x_sign", -1.0) < 0.0 ? -1.0 : 1.0;
   vector_y_sign_ = this->declare_parameter<double>("vector_y_sign", -1.0) < 0.0 ? -1.0 : 1.0;
   vector_z_sign_ = this->declare_parameter<double>("vector_z_sign", 1.0) < 0.0 ? -1.0 : 1.0;
-  publish_mag_tesla_ = this->declare_parameter<bool>("publish_mag_tesla", false);
-  mag_scale_tesla_per_lsb_ = this->declare_parameter<double>("mag_scale_tesla_per_lsb", 0.0);
-  use_magnetic_yaw_ = this->declare_parameter<bool>("use_magnetic_yaw", false);
-  const double configured_mag_yaw_sign = this->declare_parameter<double>("mag_yaw_sign", -1.0);
-  mag_yaw_sign_ = configured_mag_yaw_sign < 0.0 ? -1.0 : 1.0;
-  mag_yaw_offset_rad_ = this->declare_parameter<double>("mag_yaw_offset_rad", 0.0);
-  mag_yaw_filter_alpha_ = std::clamp(
-    this->declare_parameter<double>("mag_yaw_filter_alpha", 0.20), 0.01, 1.0);
-  mag_yaw_max_step_rad_ = std::clamp(
-    this->declare_parameter<double>("mag_yaw_max_step_rad", 0.0523598776), 0.001, 0.35);
-  mag_yaw_packet_timeout_sec_ = std::clamp(
-    this->declare_parameter<double>("mag_yaw_packet_timeout_sec", 0.50), 0.10, 2.0);
-  mag_yaw_min_norm_ut_ = std::max(0.0,
-    this->declare_parameter<double>("mag_yaw_min_norm_ut", 100.0));
-  mag_yaw_max_norm_ut_ = std::max(mag_yaw_min_norm_ut_ + 1.0,
-    this->declare_parameter<double>("mag_yaw_max_norm_ut", 1000.0));
   accel_bias_ = this->declare_parameter<std::vector<double>>("accel_bias", {0.0, 0.0, 0.0});
   accel_scale_ = this->declare_parameter<std::vector<double>>("accel_scale", {1.0, 1.0, 1.0});
   gyro_bias_ = this->declare_parameter<std::vector<double>>("gyro_bias", {0.0, 0.0, 0.0});
@@ -199,19 +183,10 @@ ImuNode::ImuNode(const rclcpp::NodeOptions & options)
       !valid_variance(linear_acceleration_covariance_)) {
     throw std::invalid_argument("IMU covariance diagonal must be finite and strictly positive");
   }
-  if (!std::isfinite(mag_scale_tesla_per_lsb_) || mag_scale_tesla_per_lsb_ < 0.0) {
-    throw std::invalid_argument("mag_scale_tesla_per_lsb must be finite and non-negative");
-  }
-  if (publish_mag_tesla_ && mag_scale_tesla_per_lsb_ <= 0.0) {
-    throw std::invalid_argument("publish_mag_tesla=true requires a calibrated positive mag_scale_tesla_per_lsb");
-  }
   RCLCPP_INFO(
     this->get_logger(),
-    "IMU yaw conversion: source=%s angle=normalize(%+.0f*yaw_raw + %.6f) "
-    "mag=normalize(%+.0f*atan2(My,Mx) + %.6f) declination=%.6f; gyro_z_ros=%+.0f*gyro_z_raw; vector_sign=[%+.0f,%+.0f,%+.0f]",
-    use_magnetic_yaw_ ? "MAG_FILTERED" : "ANGLE", yaw_sign_, yaw_offset_rad_,
-    mag_yaw_sign_, mag_yaw_offset_rad_, magnetic_declination_rad_, vector_z_sign_,
-    vector_x_sign_, vector_y_sign_, vector_z_sign_);
+    "Yahboom IMU-only: ANGLE yaw=normalize(%+.0f*yaw_raw + %.6f), gyro_z_ros=%+.0f*gyro_z_raw, vector_sign=[%+.0f,%+.0f,%+.0f]; magnetometer disabled",
+    yaw_sign_, yaw_offset_rad_, vector_z_sign_, vector_x_sign_, vector_y_sign_, vector_z_sign_);
   auto_detect_ = (port_ == "auto");
 
   // USB-UART pada sensor 10 Hz tidak memerlukan timeout 2 ms. Margin 20 ms
@@ -222,9 +197,6 @@ ImuNode::ImuNode(const rclcpp::NodeOptions & options)
   auto qos = rclcpp::SensorDataQoS().keep_last(20);
 
   pub_imu_ = this->create_publisher<sensor_msgs::msg::Imu>("imu/data", qos);
-  pub_mag_ = this->create_publisher<sensor_msgs::msg::MagneticField>("imu/mag", qos);
-  pub_mag_raw_lsb_ = this->create_publisher<std_msgs::msg::Float64MultiArray>("imu/mag_raw_lsb", qos);
-  pub_raw_sensor_vectors_ = this->create_publisher<std_msgs::msg::Float64MultiArray>("imu/raw_sensor_vectors", qos);
   pub_calibration_vectors_ = this->create_publisher<std_msgs::msg::Float64MultiArray>("imu/calibration_vectors", qos);
   pub_profile_status_ = this->create_publisher<std_msgs::msg::String>(
     "/imu/profile_status", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
@@ -396,7 +368,7 @@ bool ImuNode::configureOptimalProfile(std::string & detail)
   const auto pause = []() { std::this_thread::sleep_for(std::chrono::milliseconds(90)); };
   if (!writeSensorRegister(0x69, 0xB588)) { detail = "unlock gagal"; return false; }
   pause();
-  if (!writeSensorRegister(0x02, 0x001E)) { detail = "RSW gagal"; return false; }
+  if (!writeSensorRegister(0x02, 0x000E)) { detail = "RSW gagal"; return false; }
   pause();
   if (!writeSensorRegister(0x03, 0x0008)) { detail = "RRATE 50Hz gagal"; return false; }
   pause();
@@ -430,13 +402,13 @@ bool ImuNode::configureOptimalProfile(std::string & detail)
     last_reconnect_try_ = 0.0;
     return false;
   }
-  output_content_mask_ = 0x001E;
+  output_content_mask_ = 0x000E;
   output_rate_code_ = 0x08;
   algorithm_mode_ = 1;
   buf_.clear();
   last_data_time_ = nowSec();
   last_valid_packet_time_ = last_data_time_;
-  detail = "921600 baud / 50Hz / RSW 0x001E / AXIS6 1 / FILTK 30 tersimpan dan stream terverifikasi";
+  detail = "921600 baud / 50Hz / RSW 0x000E / AXIS6 1 / FILTK 30 tersimpan dan stream terverifikasi";
   RCLCPP_INFO(this->get_logger(), "IMU optimal profile PASS: %s", detail.c_str());
   return true;
 }
@@ -547,22 +519,19 @@ void ImuNode::openSerial(bool initial)
         last_orientation_packet_time_ = opened_at;
         last_accel_packet_time_ = 0.0;
         last_gyro_packet_time_ = 0.0;
-        last_mag_packet_time_ = 0.0;
         last_accel_measurement_stamp_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
         last_gyro_measurement_stamp_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
         last_orientation_measurement_stamp_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
-        last_mag_measurement_stamp_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
         last_packet_stamp_ns_ = 0;
         has_acc_ = false;
         has_gyro_ = false;
         has_angle_ = false;
-        has_mag_ = false;
         stream_announced_ = false;
         error_suppress_until_ = 0.0;
         active_port_ = port;
         bytes_received_ = 0;
         packets_parsed_ = 0;
-        packets_acc_ = packets_gyro_ = packets_angle_ = packets_quat_ = packets_mag_ = 0;
+        packets_acc_ = packets_gyro_ = packets_angle_ = packets_quat_ = 0;
         RCLCPP_INFO(this->get_logger(),
           "IMU stream detected on %s @ %d (WIT frame checksum valid)",
           port.c_str(), baudrate_);
@@ -598,16 +567,11 @@ void ImuNode::closeSerial()
   has_acc_ = false;
   has_gyro_ = false;
   has_angle_ = false;
-  has_mag_ = false;
-  mag_yaw_filter_initialized_ = false;
-  filtered_mag_yaw_rad_ = 0.0;
   last_accel_packet_time_ = 0.0;
   last_gyro_packet_time_ = 0.0;
-  last_mag_packet_time_ = 0.0;
   last_accel_measurement_stamp_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
   last_gyro_measurement_stamp_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
   last_orientation_measurement_stamp_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
-  last_mag_measurement_stamp_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
   last_packet_stamp_ns_ = 0;
   packet_clock_initialized_ = false;
   if (pub_connected_) { std_msgs::msg::Bool b; b.data = false; pub_connected_->publish(b); }
@@ -677,13 +641,13 @@ void ImuNode::publishTimingDiagnostics(
     std::sqrt(gyro_period_m2_sec2_ / static_cast<double>(gyro_period_count_ - 1)) * 1000.0 : 0.0;
   std_msgs::msg::Float64MultiArray timing;
   // Contract (append-only): seq, sensor stamp, publish stamp, publish age ms,
-  // accel/gyro/orientation/mag relative age ms, gyro period mean/std ms,
+  // accel/gyro/orientation relative age ms, gyro period mean/std ms,
   // future rejects, regression rejects, then histogram bins <=5,10,15,25,40,80,>80 ms.
   timing.data = {
     static_cast<double>(imu_publish_sequence_), measurement_stamp.seconds(), publish_stamp.seconds(),
     (publish_stamp - measurement_stamp).seconds() * 1000.0,
     age_ms(last_accel_measurement_stamp_), age_ms(last_gyro_measurement_stamp_),
-    age_ms(last_orientation_measurement_stamp_), age_ms(last_mag_measurement_stamp_),
+    age_ms(last_orientation_measurement_stamp_),
     gyro_period_mean_sec_ * 1000.0, gyro_std_ms,
     static_cast<double>(timestamp_future_rejects_),
     static_cast<double>(timestamp_regression_rejects_)};
@@ -738,15 +702,6 @@ bool ImuNode::publishImu()
     std::abs((measurement_stamp - last_accel_measurement_stamp_).seconds()) <= component_sync_max_gap_sec_;
   const bool orientation_fresh = orientation_fresh_by_age &&
     std::abs((measurement_stamp - last_orientation_measurement_stamp_).seconds()) <= component_sync_max_gap_sec_;
-  const bool mag_fresh = has_mag_ && last_mag_packet_time_ > 0.0 &&
-    stamp_sec - last_mag_packet_time_ >= 0.0 &&
-    stamp_sec - last_mag_packet_time_ <= mag_yaw_packet_timeout_sec_;
-  const double mag_norm_ut = std::sqrt(mx_ * mx_ + my_ * my_ + mz_ * mz_) *
-    mag_scale_tesla_per_lsb_ * 1.0e6;
-  const bool mag_norm_ok = std::isfinite(mag_norm_ut) &&
-    mag_norm_ut >= mag_yaw_min_norm_ut_ && mag_norm_ut <= mag_yaw_max_norm_ut_;
-  const bool magnetic_yaw_valid = mag_fresh && mag_norm_ok &&
-    std::hypot(mx_, my_) > 1.0;
 
   // /imu/data uses the gyro packet as its measurement epoch. Both local and global
   // robot_localization instances fuse gyro-Z from this message; orientation remains
@@ -764,26 +719,11 @@ bool ImuNode::publishImu()
   msg.header.stamp = measurement_stamp;
   msg.header.frame_id = frame_id_;
 
-  const bool yaw_source_valid = !use_magnetic_yaw_ || magnetic_yaw_valid;
-  if (orientation_fresh && publish_orientation_ && yaw_source_valid) {
+  if (orientation_fresh && publish_orientation_) {
     const double roll_rad = (invert_roll_ ? -1.0 : 1.0) * roll_ * M_PI / 180.0 + roll_offset_rad_;
     const double pitch_rad = (invert_pitch_ ? -1.0 : 1.0) * pitch_ * M_PI / 180.0 + pitch_offset_rad_;
-    double yaw_rad = normalizeAngle(
+    const double yaw_rad = normalizeAngle(
       yaw_sign_ * yaw_ * M_PI / 180.0 + yaw_offset_rad_ - magnetic_declination_rad_);
-    if (use_magnetic_yaw_) {
-      const double raw_mag_yaw = normalizeAngle(
-        mag_yaw_sign_ * std::atan2(my_, mx_) + mag_yaw_offset_rad_ - magnetic_declination_rad_);
-      if (!mag_yaw_filter_initialized_) {
-        filtered_mag_yaw_rad_ = raw_mag_yaw;
-        mag_yaw_filter_initialized_ = true;
-      } else {
-        const double innovation = normalizeAngle(raw_mag_yaw - filtered_mag_yaw_rad_);
-        const double step = std::clamp(
-          mag_yaw_filter_alpha_ * innovation, -mag_yaw_max_step_rad_, mag_yaw_max_step_rad_);
-        filtered_mag_yaw_rad_ = normalizeAngle(filtered_mag_yaw_rad_ + step);
-      }
-      yaw_rad = filtered_mag_yaw_rad_;
-    }
     double qx, qy, qz, qw;
     quatFromEuler(roll_rad, pitch_rad, yaw_rad, qx, qy, qz, qw);
     msg.orientation.x = qx;
@@ -795,12 +735,6 @@ bool ImuNode::publishImu()
     msg.orientation_covariance[8] = orientation_covariance_[2];
   } else {
     msg.orientation_covariance[0] = -1.0;
-    if (use_magnetic_yaw_ && !magnetic_yaw_valid) {
-      RCLCPP_WARN_THROTTLE(
-        this->get_logger(), *this->get_clock(), 5000,
-        "MAG yaw invalid/stale: fresh=%s norm=%.1fuT valid_range=%.1f..%.1fuT; orientation fail-closed",
-        mag_fresh ? "yes" : "no", mag_norm_ut, mag_yaw_min_norm_ut_, mag_yaw_max_norm_ut_);
-    }
   }
 
   // Tanda angular velocity harus konsisten dengan orientasi yang dipublikasikan.
@@ -834,20 +768,8 @@ bool ImuNode::publishImu()
   pub_imu_->publish(msg);
   ++imu_publish_sequence_;
   publishTimingDiagnostics(measurement_stamp, publish_stamp);
-  publishRawSensorVectors();
   publishCalibrationVectors();
   return true;
-}
-
-// Fungsi: Diagnostik sensor-frame sebelum mounting transform. Nilai: accel SI,
-// gyro rad/s, lalu magnetometer raw LSB. Wizard memakai ini untuk mounting sanity-check.
-void ImuNode::publishRawSensorVectors()
-{
-  if (!pub_raw_sensor_vectors_) return;
-  std_msgs::msg::Float64MultiArray msg;
-  msg.data = {ax_, ay_, az_, gx_ * M_PI / 180.0, gy_ * M_PI / 180.0,
-              gz_ * M_PI / 180.0, mx_, my_, mz_};
-  pub_raw_sensor_vectors_->publish(msg);
 }
 
 // Body-frame SI vectors before bias/scale correction. Stage-2 six-position and
@@ -862,31 +784,6 @@ void ImuNode::publishCalibrationVectors()
               vector_y_sign_ * gy_ * M_PI / 180.0,
               vector_z_sign_ * gz_ * M_PI / 180.0};
   pub_calibration_vectors_->publish(msg);
-}
-
-// Raw magnetometer Yahboom in protocol LSB, rotated to REP-103 body frame.
-// Physical Tesla scaling remains unavailable until independently calibrated.
-void ImuNode::publishMagRawLsb()
-{
-  if (!pub_mag_raw_lsb_) return;
-  std_msgs::msg::Float64MultiArray msg;
-  msg.data = {vector_x_sign_ * mx_, vector_y_sign_ * my_, vector_z_sign_ * mz_};
-  pub_mag_raw_lsb_->publish(msg);
-}
-
-// Fungsi: Menerbitkan sensor_msgs/MagneticField hanya jika skala Tesla/LSB sudah
-// benar-benar dikalibrasi. Jangan pernah mengarang unit fisik dari raw LSB.
-void ImuNode::publishMag()
-{
-  publishMagRawLsb();
-  if (!publish_mag_tesla_) return;
-  sensor_msgs::msg::MagneticField msg;
-  msg.header.stamp = last_mag_measurement_stamp_.nanoseconds() > 0 ? last_mag_measurement_stamp_ : this->now();
-  msg.header.frame_id = frame_id_;
-  msg.magnetic_field.x = vector_x_sign_ * mx_ * mag_scale_tesla_per_lsb_;
-  msg.magnetic_field.y = vector_y_sign_ * my_ * mag_scale_tesla_per_lsb_;
-  msg.magnetic_field.z = vector_z_sign_ * mz_ * mag_scale_tesla_per_lsb_;
-  pub_mag_->publish(msg);
 }
 
 // Fungsi: Menerbitkan paket mentah IMU hanya ketika mode diagnostik raw diaktifkan.
@@ -967,17 +864,7 @@ bool ImuNode::parsePacket(const std::vector<uint8_t> & data)
     orientation_recovery_attempted_ = false;
     orientation_recovery_started_time_ = 0.0;
     return true;
-  case 0x54: // mag
-    std::memcpy(&v0, &data[2], 2);
-    std::memcpy(&v1, &data[4], 2);
-    std::memcpy(&v2, &data[6], 2);
-    mx_ = static_cast<double>(v0);
-    my_ = static_cast<double>(v1);
-    mz_ = static_cast<double>(v2);
-    has_mag_ = true;
-    last_mag_packet_time_ = packet_steady_sec;
-    last_mag_measurement_stamp_ = packet_stamp;
-    ++packets_mag_;
+  case 0x54: // legacy magnetometer frame intentionally ignored; RM3100 is the sole MAG source
     return true;
   case 0x59: { // quaternion fallback: q0=w, q1=x, q2=y, q3=z
     int16_t q0i, q1i, q2i, q3i;
@@ -1058,7 +945,6 @@ void ImuNode::pollSerial()
     }
 
     bool published = false;
-    bool published_mag = false;
 
     // Parse complete 11-byte packets
     while (buf_.size() >= 11) {
@@ -1079,9 +965,7 @@ void ImuNode::pollSerial()
       if (parsePacket(packet)) {
         packets_parsed_++;
         last_valid_packet_time_ = nowSec();
-        if (parsed_type == 0x54) {
-          published_mag = true;
-        } else if (parsed_type == 0x52) {
+        if (parsed_type == 0x52) {
           // Gyro is the high-rate EKF measurement. Publish on its fresh packet
           // epoch; accel/orientation are attached only when time-coherent.
           published = true;
@@ -1106,8 +990,8 @@ void ImuNode::pollSerial()
         RCLCPP_INFO(
           this->get_logger(),
           "IMU orientation stale %.1fs; re-apply stream config sekali "
-          "(acc=%zu gyro=%zu angle=%zu quat=%zu mag=%zu)",
-          orientation_age, packets_acc_, packets_gyro_, packets_angle_, packets_quat_, packets_mag_);
+          "(acc=%zu gyro=%zu angle=%zu quat=%zu)",
+          orientation_age, packets_acc_, packets_gyro_, packets_angle_, packets_quat_);
         orientation_recovery_attempted_ = true;
         orientation_recovery_started_time_ = stream_now;
         (void)configureSensorOutput(false);
@@ -1153,13 +1037,12 @@ void ImuNode::pollSerial()
         if (!stream_announced_) {
           RCLCPP_INFO(
             this->get_logger(),
-            "IMU stream valid: /imu/data aktif (acc=%zu gyro=%zu angle=%zu quat=%zu mag=%zu)",
-            packets_acc_, packets_gyro_, packets_angle_, packets_quat_, packets_mag_);
+            "IMU stream valid: /imu/data aktif (acc=%zu gyro=%zu angle=%zu quat=%zu)",
+            packets_acc_, packets_gyro_, packets_angle_, packets_quat_);
           stream_announced_ = true;
         }
       }
     }
-    if (published_mag) publishMag();
 
   } catch (const serial::IOException & e) {
     // EIO pada USB serial berarti descriptor sudah tidak sehat; retry 11 kali

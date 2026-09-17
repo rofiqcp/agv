@@ -31,3 +31,5 @@
 .chart-card .chart-title>div:first-child{flex:1 1 100%}
 .chart-card .chart-engineering-tools{width:100%;max-width:100%;overflow:visible;justify-content:flex-start;flex-wrap:wrap}
 .chart-card .chart-engineering-tools>*{flex:0 0 auto}
+
+.map-toolbar .map-cancel-goal{flex:0 0 auto;min-height:27px;padding:3px 8px;font-size:8px;font-weight:800;border:1px solid #a34846;background:#4b2929;color:#ffd7d5}.map-toolbar .map-cancel-goal:hover{background:#64302f}

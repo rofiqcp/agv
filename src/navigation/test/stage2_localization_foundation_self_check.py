@@ -35,11 +35,11 @@ require(global_.get('odom0')=='/odometry/gnss_map' and enabled(global_.get('odom
 require(global_.get('twist0')=='/gnss/base_velocity_fusion' and enabled(global_.get('twist0_config'))=={6},
         'Global EKF must use GNSS vx only; yaw-rate authority comes from IMU gyro')
 require(global_.get('imu0')=='/imu/data' and enabled(global_.get('imu0_config'))=={11} and global_.get('imu0_relative') is True,
-        'Global EKF must use IMU gyro-Z only; absolute yaw comes from COG/validated consensus')
+        'Global EKF must use IMU gyro-Z only; absolute yaw comes from COG/validated RM3100 heading')
 require(global_.get('pose0')=='/gnss/cog_heading_fusion' and enabled(global_.get('pose0_config'))=={5},
         'Global EKF GNSS COG heading source invalid')
 require(global_.get('pose1')=='/heading/validated_fusion' and enabled(global_.get('pose1_config'))=={5},
-        'Global EKF must fuse only pre-validated magnetic/inertial heading consensus')
+        'Global EKF must fuse only validated RM3100 heading')
 require('pose2' not in global_,
         'Global EKF must not fuse a second raw absolute magnetic heading source directly')
 
@@ -113,4 +113,4 @@ for key in ('steering_calibration_valid','steering_circle_calibration_valid','dr
     require(isinstance(vehicle.get(key),bool),f'vehicle {key} missing/not bool')
 
 print('STAGE2 LOCALIZATION FOUNDATION SELF-CHECK: PASS')
-print('GNSS=vx/COG | validated heading consensus | global IMU=gyro-Z only | ESC vx-only auxiliary')
+print('GNSS=vx/COG | validated RM3100 heading | global IMU=gyro-Z only | ESC vx-only auxiliary')

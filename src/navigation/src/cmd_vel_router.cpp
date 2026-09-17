@@ -40,7 +40,7 @@ public:
     declare_parameter<double>("rate_hz", 50.0);
     declare_parameter<double>("teleop_timeout_sec", 0.30);
     declare_parameter<double>("autonomy_timeout_sec", 0.60);
-    declare_parameter<double>("manual_release_hold_sec", 0.50);
+    declare_parameter<double>("manual_release_hold_sec", 1.00);
 
     const auto teleop_topic = get_parameter("teleop_topic").as_string();
     const auto teleop_source_topic = get_parameter("teleop_source_topic").as_string();
@@ -77,12 +77,21 @@ public:
     teleop_source_sub_ = create_subscription<std_msgs::msg::String>(
       teleop_source_topic, stateQos(), [this](std_msgs::msg::String::SharedPtr msg) {
         std::lock_guard<std::mutex> lock(mutex_);
+        const auto t = now();
         teleop_source_ = msg->data;
-        teleop_source_stamp_ = now();
+        teleop_source_stamp_ = t;
         const bool active = !msg->data.empty() && msg->data != "STOP" &&
           msg->data != "IDLE" && msg->data != "E_STOP";
+        const bool clean_release = teleop_source_active_ &&
+          (msg->data.empty() || msg->data == "STOP" || msg->data == "IDLE");
         if (active) {
-          teleop_hold_until_ = now() + rclcpp::Duration::from_seconds(manual_release_hold_sec_);
+          teleop_source_active_ = true;
+          teleop_hold_until_ = t + rclcpp::Duration::from_seconds(manual_release_hold_sec_);
+        } else {
+          teleop_source_active_ = false;
+          if (clean_release) {
+            teleop_hold_until_ = t + rclcpp::Duration::from_seconds(manual_release_hold_sec_);
+          }
         }
       });
     teleop_estop_sub_ = create_subscription<std_msgs::msg::Bool>(
@@ -138,9 +147,15 @@ private:
       const bool auto_fresh = autonomy_valid_ && fresh(autonomy_stamp_, t, autonomy_timeout_sec_);
       if (estop) {
         source = "E_STOP";
-      } else if (teleop_fresh && (teleop_active || teleop_hold)) {
-        out = teleop_cmd_;
-        source = teleop_active ? "TELEOP" : "TELEOP_RELEASE_HOLD";
+      } else if (teleop_active) {
+        if (teleop_fresh) {
+          out = teleop_cmd_;
+          source = "TELEOP";
+        } else {
+          source = "TELEOP_STALE_STOP";
+        }
+      } else if (teleop_hold) {
+        source = "TELEOP_RELEASE_HOLD";
       } else if (auto_fresh && autonomy_gate_seen_ && autonomy_gate_) {
         out = autonomy_cmd_;
         source = "AUTONOMY";
@@ -162,6 +177,7 @@ private:
   rclcpp::Time teleop_source_stamp_{0, 0, RCL_ROS_TIME};
   rclcpp::Time teleop_hold_until_{0, 0, RCL_ROS_TIME};
   bool teleop_valid_{false};
+  bool teleop_source_active_{false};
   bool autonomy_valid_{false};
   bool teleop_estop_{false};
   bool global_estop_{false};
@@ -170,7 +186,7 @@ private:
   std::string teleop_source_;
   double teleop_timeout_sec_{0.30};
   double autonomy_timeout_sec_{0.60};
-  double manual_release_hold_sec_{0.50};
+  double manual_release_hold_sec_{1.00};
 
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr teleop_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr autonomy_sub_;

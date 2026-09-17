@@ -1,0 +1,14 @@
+{
+  "status": "preliminary_not_certified",
+  "command_level_erpm": 1000,
+  "forward_gnss_speed_mps_median": 0.22343811953555207,
+  "reverse_gnss_speed_mps_median": 0.2388493248891443,
+  "pooled_gnss_speed_mps_median": 0.2267156809750926,
+  "pooled_actual_erpm_median": 1019.0,
+  "drive_erpm_per_mps": 4410.810913912311,
+  "drive_odometry_calibration_valid": false,
+  "evidence": [
+    "/home/sirobo/agv/tools/records/drive_cal_1000erpm_20260917_044200",
+    "/home/sirobo/agv/tools/records/drive_cal_m1000erpm_20260917_044251"
+  ]
+}

@@ -14,14 +14,14 @@ navcpp=(ROOT/'src/navigation_core.cpp').read_text(); loccpp=(ROOT/'src/localizat
 # EKF ownership / source matrix.
 req(lo['world_frame']=='odom' and lo['base_link_frame']=='base_footprint' and lo.get('publish_tf') is True,'local EKF must own odom->base_footprint')
 req(gl['world_frame']=='map' and gl['base_link_frame']=='base_footprint' and gl.get('publish_tf') is False,'global EKF must not own map->odom TF')
-req(lo['odom0']=='/esc/odom' and ena(lo['odom0_config'])=={6},'local ESC input must be vx-only')
-req(lo['twist0']=='/gnss/base_velocity_fusion' and ena(lo['twist0_config'])=={6},'local GNSS input must be qualified vx-only')
+req(lo['odom0']=='/esc/odom' and ena(lo['odom0_config'])=={6,7},'local ESC input must be vx/vy only')
+req('twist0' not in lo,'local EKF must not retain legacy direct GNSS velocity input')
 req(lo['imu0']=='/imu/data' and ena(lo['imu0_config'])=={11},'local IMU must be gyro-Z only')
 req(gl['odom0']=='/odometry/gnss_map' and ena(gl['odom0_config'])=={0,1},'global GNSS position must be map x/y only')
-req(gl['pose0']=='/gnss/cog_heading_fusion' and ena(gl['pose0_config'])=={5},'global pose0 must be qualified COG yaw')
-req(gl['pose1']=='/heading/validated_fusion' and ena(gl['pose1_config'])=={5},'global pose1 must be validated heading only')
+req(gl['odom1']=='/esc/odom' and ena(gl['odom1_config'])=={6},'global ESC input must be vx-only')
+req(gl['pose0']=='/heading/validated_fusion' and ena(gl['pose0_config'])=={5},'global pose0 must be validated RM3100 yaw only')
 req(gl['imu0']=='/imu/data' and ena(gl['imu0_config'])=={11},'global IMU must be gyro-Z only')
-req('pose2' not in gl and '/imu/mag_heading_fusion' not in str(gl) and '/neo3/mag_heading_fusion' not in str(gl),'raw magnetic headings must never enter EKF directly')
+req('pose1' not in gl and 'pose2' not in gl and '/neo3pro/mag_heading_fusion' not in str(gl),'raw RM3100 heading must enter EKF only through /heading/validated_fusion')
 # TF owner remains exactly split.
 for token in ('tf_broadcaster_','tf.header.frame_id = map_frame_','tf.child_frame_id = odom_frame_','tf_broadcaster_->sendTransform(tf)'):
     req(token in loccpp,f'LocalizationCore map->odom contract missing: {token}')
@@ -51,7 +51,8 @@ for token in ("collision_monitor_enabled","trajectory_safety_calibration_valid",
 if st3.get('production_autonomy_certified'):
     req(nc.get('collision_monitor_enabled') is True,'certified production cannot run with collision monitor disabled')
     req(st3.get('trajectory_safety_calibration_valid') and st3.get('collision_monitor_calibration_valid'),'certified production requires trajectory/collision evidence')
-# Yahboom calibrated MAG remains diagnostic only.
-req('/imu/mag_raw_lsb' in mag and '/imu/mag_heading_fusion' in mag,'Yahboom calibrated diagnostic pipeline missing')
+# RM3100 is the sole magnetic source; Yahboom remains gyro/accel IMU only.
+req('/neo3pro/mag' in mag and '/heading/validated_fusion' in mag,'RM3100 validated heading pipeline missing')
+req('/imu/mag' not in mag and 'imu_mag_heading' not in mag,'Yahboom magnetometer path must be absent')
 print('PASS ekf_nav2_gate_chain_self_check')
 print(f'EKF local/global={lo["frequency"]}/{gl["frequency"]} Hz | MPPI={cf} Hz dt={dt:.3f}s | TF ownership and dual actuator gates PASS')

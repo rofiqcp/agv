@@ -3,7 +3,7 @@
 
 APP_MODULES = (
     "core.js", "navigation.js", "perception.js", "sensors.js", "esc.js",
-    "system_views.js", "perception_calibration.js", "imu_calibration.js",
+    "system_views.js", "perception_calibration.js",
     "tuning_catalog.js", "tuning_ui.js", "tuning_charts.js",
     "tuning_trials.js", "tuning_evidence.js", "config.js", "boot.js",
 )

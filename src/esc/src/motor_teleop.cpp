@@ -244,10 +244,9 @@ public:
                 joy_forward_deadzone_, joy_forward_full_scale_threshold_,
                 joy_yaw_deadzone_, joy_yaw_full_scale_threshold_);
     RCLCPP_INFO(get_logger(),
-                "[DRIVE] Teleop speed startup=%.2f m/s max=%.2f m/s | L1 +%.2f m/s | L2 -step | accel=%.2f decel=%.2f m/s^2 smoothing=%s",
-                max_speed_, speed_max_, speed_step_,
-                teleop_accel_limit_mps2_, teleop_decel_limit_mps2_,
-                teleop_velocity_smoothing_enabled_ ? "ON" : "OFF");
+                "[LEVEL] startup velocity=%d/10 limit=%.3f m/s | steering=%d/10 request=%.1f deg | LB/LT=speed +/- | RB/RT=steering +/-",
+                speed_level_, max_speed_, steering_level_,
+                30.0 * max_yaw_deg_s_ / yaw_max_deg_s_);
     RCLCPP_INFO(get_logger(),
                 "[JOY] Auto-detect Rexus/Daxa/Asteria/ShanWan/XInput + hotplug reconnect %.2f s",
                 gamepad_rescan_sec_);
@@ -322,10 +321,10 @@ private:
     declare_parameter<std::string>("output_topic", "/cmd_vel/teleop");
     declare_parameter<double>("publish_rate_hz", 50.0);
 
-    declare_parameter<double>("speed_initial", 0.20);
+    declare_parameter<double>("speed_initial", 1.00);
     declare_parameter<double>("speed_step", 0.10);
     declare_parameter<double>("speed_min", 0.10);
-    declare_parameter<double>("speed_max", 0.50);
+    declare_parameter<double>("speed_max", 1.00);
 
     declare_parameter<double>("yaw_initial_deg_s", 80.0);
     declare_parameter<double>("yaw_step_deg_s", 5.0);
@@ -454,6 +453,16 @@ private:
     if (speed_step_ <= 0.0 || yaw_step_deg_s_ <= 0.0) {
       throw std::runtime_error("speed_step dan yaw_step_deg_s harus > 0");
     }
+    // Manual envelope is exposed as deterministic levels 1..10. The existing
+    // m/s and deg/s fields remain the wire-compatible ROS representation.
+    auto nearest_level = [](double value, double lo, double hi) {
+      if (hi <= lo + 1.0e-12) return 1;
+      return std::clamp(1 + static_cast<int>(std::lround(9.0 * (value - lo) / (hi - lo))), 1, 10);
+    };
+    speed_level_ = nearest_level(max_speed_, speed_min_, speed_max_);
+    steering_level_ = nearest_level(max_yaw_deg_s_, yaw_min_deg_s_, yaw_max_deg_s_);
+    max_speed_ = level_value(speed_level_, speed_min_, speed_max_);
+    max_yaw_deg_s_ = level_value(steering_level_, yaw_min_deg_s_, yaw_max_deg_s_);
   }
 
   // ----------------------------- Keyboard -----------------------------
@@ -827,6 +836,11 @@ private:
 
       dev.fd = fd;
       dev.candidate = best;
+      const bool same_reconnect = reconnect_center_valid_ &&
+        reconnect_vendor_ == best.id.vendor && reconnect_product_ == best.id.product;
+      // Reuse the previously learned center after hotplug, but never re-enable
+      // motion until both axes are observed near that center again. Limit
+      // buttons remain active during WAIT_CENTER because they are control-plane.
       dev.ready = false;
       dev.wait_center_logged = false;
       dev.button_down.clear();
@@ -839,14 +853,29 @@ private:
         continue;
       }
 
-      dev.forward_center = (static_cast<double>(fwd_now.minimum) + static_cast<double>(fwd_now.maximum)) * 0.5;
-      dev.yaw_center = (static_cast<double>(yaw_now.minimum) + static_cast<double>(yaw_now.maximum)) * 0.5;
+      if (same_reconnect) {
+        dev.forward_center = reconnect_forward_center_;
+        dev.yaw_center = reconnect_yaw_center_;
+      } else {
+        dev.forward_center = (static_cast<double>(fwd_now.minimum) + static_cast<double>(fwd_now.maximum)) * 0.5;
+        dev.yaw_center = (static_cast<double>(yaw_now.minimum) + static_cast<double>(yaw_now.maximum)) * 0.5;
+      }
 
       init_button_snapshot(dev);
       set_gamepad_connected(true, 0.0, 0.0);
-      publish_gamepad_status(
-        std::string("state=CONNECTED_WAIT_CENTER;ready=0;device=") + best.path +
-        ";name=" + best.name);
+      if (same_reconnect) {
+        publish_gamepad_status(
+          std::string("state=CONNECTED_WAIT_CENTER;ready=0;device=") + best.path +
+          ";name=" + best.name + ";reason=hotplug_center_reused");
+        RCLCPP_INFO(get_logger(),
+                    "[JOY] RECONNECT center reused %s=%.1f %s=%.1f; motion waits for neutral, limit buttons active",
+                    abs_code_name(best.forward_code), dev.forward_center,
+                    abs_code_name(best.yaw_code), dev.yaw_center);
+      } else {
+        publish_gamepad_status(
+          std::string("state=CONNECTED_WAIT_CENTER;ready=0;device=") + best.path +
+          ";name=" + best.name);
+      }
       gamepad_absent_logged_ = false;
 
       RCLCPP_INFO(get_logger(),
@@ -873,6 +902,21 @@ private:
     if (::ioctl(dev.fd, EVIOCGKEY(key_state.size() * sizeof(unsigned long)), key_state.data()) < 0) return;
     const uint16_t codes[] = {BTN_TL, BTN_TR, BTN_TL2, BTN_TR2};
     for (uint16_t code : codes) dev.button_down[code] = bit_is_set(key_state, code);
+  }
+
+  void sync_limit_buttons_from_kernel(GamepadDevice &dev) {
+    std::vector<unsigned long> key_state(static_cast<size_t>((KEY_MAX + kBitsPerLong) / kBitsPerLong), 0UL);
+    if (::ioctl(dev.fd, EVIOCGKEY(key_state.size() * sizeof(unsigned long)), key_state.data()) < 0) return;
+    const uint16_t codes[] = {BTN_TL, BTN_TL2, BTN_TR, BTN_TR2};
+    for (uint16_t code : codes) {
+      const bool kernel_down = bit_is_set(key_state, code);
+      const auto it = dev.button_down.find(code);
+      const bool known_down = (it != dev.button_down.end()) ? it->second : false;
+      if (kernel_down != known_down) {
+        // Recover a missed wireless EV_KEY edge from authoritative kernel state.
+        handle_gamepad_button(dev, code, kernel_down ? 1 : 0);
+      }
+    }
   }
 
   double normalize_evdev_axis(int raw, const input_absinfo &info, double center,
@@ -965,7 +1009,7 @@ private:
     std::string action;
     std::string label;
     // Physical mapping: left pair changes speed envelope, right pair changes
-    // steering-request envelope. Limit buttons never create motion commands.
+    // steering envelope. Limit buttons never create motion commands.
     if (code == BTN_TL) { action = "speed_up"; label = "JOY LB"; }
     else if (code == BTN_TL2) { action = "speed_down"; label = "JOY LT"; }
     else if (code == BTN_TR) { action = "yaw_up"; label = "JOY RB"; }
@@ -978,15 +1022,56 @@ private:
     // Guard press and release. A few HID firmwares alter analog bytes in the
     // same report as shoulder/trigger buttons, including a release spike.
     arm_limit_axis_guard(dev);
-    if (!pressed || previous || value == 2) return;
+    if (pressed != previous) {
+      // Pair arbitration is performed once per loop after ALL EV_KEY edges and
+      // the EVIOCGKEY snapshot have been consumed. Reset this timestamp so the
+      // surviving direction is applied immediately, even after a simultaneous
+      // opposite-button conflict is released.
+      button_last_trigger_sec_[code] = 0.0;
+    }
+    (void)action;
+    (void)label;
+  }
 
+  void service_limit_button_repeat(GamepadDevice &dev) {
     const double now_sec = std::chrono::duration<double>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
-    double &last = button_last_trigger_sec_[code];
-    if ((now_sec - last) >= button_debounce_sec_) {
-      last = now_sec;
-      adjust_limit(action, label);
-    }
+    const auto down = [&dev](uint16_t code) {
+      const auto it = dev.button_down.find(code);
+      return it != dev.button_down.end() && it->second;
+    };
+
+    const auto service_pair = [&](uint16_t up_code, uint16_t down_code,
+                                  const char *up_action, const char *down_action,
+                                  const char *up_label, const char *down_label) {
+      const bool up = down(up_code);
+      const bool dn = down(down_code);
+
+      // Opposite buttons on one domain are a deliberate HOLD, not two commands
+      // fighting each other. This also makes all four buttons safe together:
+      // velocity and steering remain unchanged until one opposite is released.
+      if (up == dn) {
+        if (up && dn) {
+          button_last_trigger_sec_[up_code] = 0.0;
+          button_last_trigger_sec_[down_code] = 0.0;
+        }
+        return;
+      }
+
+      const uint16_t active_code = up ? up_code : down_code;
+      double &last = button_last_trigger_sec_[active_code];
+      if (last <= 0.0 || (now_sec - last) >= button_debounce_sec_) {
+        last = now_sec;
+        adjust_limit(up ? up_action : down_action, up ? up_label : down_label);
+      }
+    };
+
+    // Independent domains: LB+RB and LT+RT are intentionally processed in the
+    // same loop so velocity and steering levels update together.
+    service_pair(BTN_TL, BTN_TL2, "speed_up", "speed_down",
+                 "JOY LB", "JOY LT");
+    service_pair(BTN_TR, BTN_TR2, "yaw_up", "yaw_down",
+                 "JOY RB", "JOY RT");
   }
 
   bool update_gamepad_axes(GamepadDevice &dev) {
@@ -1072,6 +1157,13 @@ private:
     const std::string path = dev.candidate.path;
     const std::string name = dev.candidate.name;
     const input_id id = dev.candidate.id;
+    if (dev.ready) {
+      reconnect_center_valid_ = true;
+      reconnect_vendor_ = id.vendor;
+      reconnect_product_ = id.product;
+      reconnect_forward_center_ = dev.forward_center;
+      reconnect_yaw_center_ = dev.yaw_center;
+    }
     ::close(dev.fd);
     dev.fd = -1;
     dev.ready = false;
@@ -1150,6 +1242,10 @@ private:
         }
       }
 
+      // Recover any missed shoulder-button edge from EVIOCGKEY, then repeat while held.
+      sync_limit_buttons_from_kernel(dev);
+      service_limit_button_repeat(dev);
+
       // Snapshot axis melalui ioctl setiap loop. Tidak membutuhkan autorepeat /joy;
       // stick diam tetap dianggap konek, event yang terlewat tidak membuat state stale.
       if (!update_gamepad_axes(dev)) {
@@ -1190,26 +1286,26 @@ private:
     RCLCPP_INFO(get_logger(), "[E-STOP] RESET OK.");
   }
 
+  static double level_value(int level, double lo, double hi) {
+    const int l = std::clamp(level, 1, 10);
+    return lo + (hi - lo) * static_cast<double>(l - 1) / 9.0;
+  }
+
   void adjust_limit(const std::string &action, const std::string &source) {
-    double old_value = 0.0;
     double new_value = 0.0;
     std::string unit;
     std::string label;
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       if (action == "speed_up" || action == "speed_down") {
-        old_value = max_speed_;
-        max_speed_ = clamp_value(max_speed_ + (action == "speed_up" ? speed_step_ : -speed_step_),
-                                 speed_min_, speed_max_);
-        max_speed_ = std::round(max_speed_ * 1000.0) / 1000.0;
+        speed_level_ = std::clamp(speed_level_ + (action == "speed_up" ? 1 : -1), 1, 10);
+        max_speed_ = level_value(speed_level_, speed_min_, speed_max_);
         new_value = max_speed_;
         label = "speed";
         unit = "m/s";
       } else if (action == "yaw_up" || action == "yaw_down") {
-        old_value = max_yaw_deg_s_;
-        max_yaw_deg_s_ = clamp_value(max_yaw_deg_s_ + (action == "yaw_up" ? yaw_step_deg_s_ : -yaw_step_deg_s_),
-                                     yaw_min_deg_s_, yaw_max_deg_s_);
-        max_yaw_deg_s_ = std::round(max_yaw_deg_s_ * 1000.0) / 1000.0;
+        steering_level_ = std::clamp(steering_level_ + (action == "yaw_up" ? 1 : -1), 1, 10);
+        max_yaw_deg_s_ = level_value(steering_level_, yaw_min_deg_s_, yaw_max_deg_s_);
         new_value = max_yaw_deg_s_;
         label = "yaw";
         unit = "deg/s";
@@ -1219,12 +1315,15 @@ private:
     }
     if (log_command_changes_) {
       if (label == "speed") {
+        const double request_erpm = new_value * 8000.0;
         RCLCPP_INFO(get_logger(),
-                    "[LIMIT] %s speed %.2f -> %.2f m/s",
-                    source.c_str(), old_value, new_value);
+                    "[LEVEL] %s VELOCITY=%d/10 request=%.0f eRPM (%.3f m/s)",
+                    source.c_str(), speed_level_, request_erpm, new_value);
       } else {
-        RCLCPP_INFO(get_logger(), "[LIMIT] %s %s %.1f -> %.1f %s",
-                    source.c_str(), label.c_str(), old_value, new_value, unit.c_str());
+        const double physical_deg = 30.0 * new_value / yaw_max_deg_s_;
+        RCLCPP_INFO(get_logger(),
+                    "[LEVEL] %s STEERING=%d/10 request=%.2f deg (encoding=%.2f deg/s)",
+                    source.c_str(), steering_level_, physical_deg, new_value);
       }
     }
     publish_limits();
@@ -1423,10 +1522,12 @@ private:
 
   mutable std::mutex state_mutex_;
   std::unordered_map<uint16_t, int> key_press_count_;
+  int speed_level_{1};
+  int steering_level_{1};
   double max_speed_{1.00};
   double speed_step_{0.10};
   double speed_min_{0.10};
-  double speed_max_{0.50};
+  double speed_max_{1.00};
   double max_yaw_deg_s_{80.0};
   double yaw_step_deg_s_{5.0};
   double yaw_min_deg_s_{5.0};
@@ -1448,6 +1549,13 @@ private:
   std::string gamepad_device_;
   double gamepad_rescan_sec_{0.10};
   uint64_t gamepad_disconnect_count_{0};
+  // Preserve a validated center across transient hotplug of the same controller.
+  // This avoids returning to CONNECTED_WAIT_CENTER after a brief USB/radio dropout.
+  bool reconnect_center_valid_{false};
+  uint16_t reconnect_vendor_{0};
+  uint16_t reconnect_product_{0};
+  double reconnect_forward_center_{0.0};
+  double reconnect_yaw_center_{0.0};
   int gamepad_forward_abs_code_{ABS_Y};
   int gamepad_yaw_abs_code_{-1};
   bool gamepad_invert_forward_{true};

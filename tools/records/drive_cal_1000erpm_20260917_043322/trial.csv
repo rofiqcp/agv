@@ -1,0 +1,2 @@
+t_s,command_erpm,actual_erpm,gnss_vx,gnss_vy,gnss_vz,gnss_horizontal_mps,esc_distance_m,steering_rad
+0.004831123999792908,1000.0,,0.032,-0.01,-0.028,0.03352610922848042,0.0,0.0

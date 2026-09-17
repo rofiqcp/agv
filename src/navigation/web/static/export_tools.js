@@ -17,10 +17,10 @@ function expZipStore(files){
   return expCat([...locals,cdir,end])
 }
 function expTableMatrix(tableIndex){
-  const cols=selectedExperiment?.tableColumns?.[tableIndex]||[],srcRows=tableRunRows.get(tableIndex)||[],timed=tableHasTimeAxis(),baseHead=timed?['t [s]',...cols]:cols;
+  const cols=selectedExperiment?.tableColumns?.[tableIndex]||[],srcRows=tableRunRows.get(tableIndex)||[],timed=tableHasTimeAxis(),reportSeconds=timed&&currentExp==='navigation'&&selectedExperiment?.reportMode===true,baseHead=timed?[reportSeconds?'Detik [s]':'t [s]',...cols]:cols;
   const yamlKeys=[...new Set(srcRows.flatMap(r=>(r.yaml||[]).map(x=>x.key)))],yamlLabels=Object.fromEntries(srcRows.flatMap(r=>(r.yaml||[]).map(x=>[x.key,x.label])));
   const head=[...baseHead,...yamlKeys.map(k=>`TUNING • ${yamlLabels[k]||k}`)];
-  const rows=srcRows.map(r=>{const ym=Object.fromEntries((r.yaml||[]).map(x=>[x.key,x.value]));return [...(timed?[r.sec,...r.values]:r.values),...yamlKeys.map(k=>ym[k]??'--')]});
+  const rows=srcRows.map(r=>{const ym=Object.fromEntries((r.yaml||[]).map(x=>[x.key,x.value]));return [...(timed?[reportSeconds?(Number(r.sec)+1):r.sec,...r.values]:r.values),...yamlKeys.map(k=>ym[k]??'--')]});
   return {head,rows,yamlStart:baseHead.length,yamlKeys}
 }
 function expSheetXml(tableIndex){
@@ -43,7 +43,7 @@ async function downloadLastNavigationExcel(){
   try{const r=await readRequest(url,{timeoutMs:8000});if(!r.ok)return false;const blob=await r.blob(),a=document.createElement('a'),u=URL.createObjectURL(blob);a.href=u;a.download=`${reportRunId()}_${stamp()}_server.xlsx`;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),1000);toast('Excel hasil STOP didownload');return true}catch(_){return false}
 }
 function navigationExportContract(){
-  if(currentExp!=='navigation'||!selectedExperiment)return null;const tables=(selectedExperiment.tableColumns||[]).map((cols,i)=>({index:i+1,name:selectedExperiment.tableNames?.[i]||`Tabel ${i+1}`,columns:[...(tableHasTimeAxis()?['t [s]']:[]),...cols],rows:(tableRunRows.get(i)||[]).length}));const graphs=(selectedExperiment.graphCaptions||[]).map((title,i)=>{const m=navigationGraphExportMeta(i);return {index:i+1,title,x:m?.xLabel||'--',y:m?.yLabel||'--'}});return {experiment:selectedExperiment.id,tables,graphs}
+  if(currentExp!=='navigation'||!selectedExperiment)return null;const tables=(selectedExperiment.tableColumns||[]).map((cols,i)=>({index:i+1,name:selectedExperiment.tableNames?.[i]||`Tabel ${i+1}`,columns:[...(tableHasTimeAxis()?[currentExp==='navigation'&&selectedExperiment?.reportMode===true?'Detik [s]':'t [s]']:[]),...cols],rows:(tableRunRows.get(i)||[]).length}));const graphs=(selectedExperiment.graphCaptions||[]).map((title,i)=>{const m=navigationGraphExportMeta(i);return {index:i+1,title,x:m?.xLabel||'--',y:m?.yLabel||'--'}});return {experiment:selectedExperiment.id,tables,graphs}
 }
 async function saveExperimentExcel(){
   if(!selectedExperiment)return;

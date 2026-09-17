@@ -1,0 +1,77 @@
+calibration_apply:
+  applied_at: '2026-09-17T03:57:54+07:00'
+  source_record: /home/sirobo/agv/tools/records/data_direct_20260917_035212
+  calibration_yaml: /home/sirobo/agv/tools/records/data_direct_20260917_035212/heading_360_20260917_035212.yaml
+  calibration_sha256: b7cb29f500d26d19171f04d5c243d80946023e0dbd1fd9ed826826e280042f75
+  mode: partial_strict_apply_neo3_only
+  neo3_applied: true
+  yahboom_applied: false
+  reason_yahboom_not_applied: Yahboom North closure and cross-sensor max error failed strict repeatability gates.
+  neo3_validation:
+    fit_rms_error_deg: 0.20006870654860942
+    fit_max_abs_error_deg: 2.0299753230960595
+    closure_rms_error_deg: 1.1671684236169335
+    closure_max_abs_error_deg: 1.501787422722231
+    closure_mean_error_deg: -1.145988012285062
+    rms_error_deg: 0.20006870654860942
+    max_abs_error_deg: 2.0299753230960595
+    pass: true
+  yahboom_validation:
+    fit_rms_error_deg: 0.1625583125147886
+    fit_max_abs_error_deg: 1.635351710339696
+    closure_rms_error_deg: 3.9465110560390806
+    closure_max_abs_error_deg: 4.2259040744508605
+    closure_mean_error_deg: 3.9443785528028616
+    rms_error_deg: 0.1625583125147886
+    max_abs_error_deg: 1.635351710339696
+    pass: false
+  cross_sensor:
+    pass: false
+    rms_delta_deg: 1.5427486242508186
+    max_abs_delta_deg: 5.48293958160812
+    per_stop:
+    - segment: 1
+      mean_delta_deg: 0.0046782840824767654
+      rms_delta_deg: 0.24476602533871694
+    - segment: 2
+      mean_delta_deg: 0.029766811491148255
+      rms_delta_deg: 0.17329090387994303
+    - segment: 3
+      mean_delta_deg: -0.03241894730618207
+      rms_delta_deg: 0.1898362044203319
+    - segment: 4
+      mean_delta_deg: 0.004281893190990929
+      rms_delta_deg: 0.1688905309296816
+    - segment: 5
+      mean_delta_deg: -0.003903216963795345
+      rms_delta_deg: 0.2462172792954868
+    - segment: 6
+      mean_delta_deg: -0.0012424308670001848
+      rms_delta_deg: 0.1676407389159732
+    - segment: 7
+      mean_delta_deg: 0.0021233024577335105
+      rms_delta_deg: 0.1421019749019793
+    - segment: 8
+      mean_delta_deg: 0.008337909319981239
+      rms_delta_deg: 0.2541277402306968
+    - segment: 9
+      mean_delta_deg: 5.090366956936605
+      rms_delta_deg: 5.0974742583171215
+  gyro:
+    pass: true
+    step_pass: true
+    steps_deg:
+    - -43.04649020199584
+    - -45.58625147503667
+    - -43.373374486877424
+    - -46.87997486437989
+    - -43.26102946319573
+    - -43.608762054595836
+    - -46.75611456445313
+    - -44.797300239288305
+    total_turn_deg: -357.30929734982277
+    expected_turn_deg: -360.0
+    closure_error_deg: 2.6907026501772293
+  runtime_mag_heading_sha256: dcea6953a9113be95926211e052f46509d69c70f8b334baf10c47d87a6afb7a5
+  backup: /home/sirobo/agv/src/navigation/config/mag_heading.yaml.bak_pre_data_direct_20260917_035212
+  field_qualification_valid: false

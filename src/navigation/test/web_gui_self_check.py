@@ -26,12 +26,12 @@ for path in (STATIC/"index.html", STATIC/"styles.css", STATIC/"core.js", STATIC/
         fail(f"web asset missing/too small: {path}")
 for token in ("add_executable(agv_web_gui", "Qt5::Network", "web/static", "agv_web_gui"):
     if token not in cmake: fail(f"CMake web integration missing {token}")
-for token in ("start_web_gui", "web_bind_address", "web_port", "127.0.0.1", "agv_web_gui"):
+for token in ("start_web_gui", "agv_web_gui", "localhost:5000"):
     if token not in auto: fail(f"autonomous launch web contract missing {token}")
-for token in ("choices=['127.0.0.1']", "choices=['5000']", 'ROS Web wajib localhost (127.0.0.1)', 'ROS Web wajib port 5000'):
-    if token not in (auto + cpp): fail(f"strict localhost:5000 web contract missing {token}")
-for token in ("start_web_gui", "web_bind_address", "web_port"):
-    if token not in gui: fail(f"gui launch does not forward {token}")
+for token in ('ROS Web wajib localhost (127.0.0.1)', 'ROS Web wajib port 5000', 'bindAddress_ = "127.0.0.1"', 'port_ = 5000'):
+    if token not in cpp: fail(f"strict localhost:5000 web contract missing {token}")
+if "start_web_gui" not in gui:
+    fail("gui launch does not forward start_web_gui")
 for endpoint in ("/api/events", "/api/state", "/api/health", "/api/camera.jpg", "/api/map.png",
                  "/api/global_costmap.png", "/api/local_costmap.png",
                  "/api/experiment/record/last.csv", "/api/navigation/goal", "/api/navigation/cancel",
@@ -90,10 +90,10 @@ for token in ('NEO-3 GNSS M9N', 'id="gnssChip"', 'id="gnssFixChip"', 'id="gnssRa
               'id="neo3MagY"', 'id="neo3MagZ"', 'id="neo3MagNorm"', 'id="neo3MagHeading"'):
     if token not in html: fail(f"NEO-3 split sensor UI missing {token}")
 for token in ("connected.gnss", "qg.gnss_fix_ok", "gnssFixChip", "pvt_rate_hz",
-              "connected.neo3_mag", "neo3_mag_heading_valid", "neo3MagX", "neo3MagY", "neo3MagZ"):
+              "connected.rm3100", "rm3100_heading_valid", "neo3MagX", "neo3MagY", "neo3MagZ"):
     if token not in js: fail(f"NEO-3 split sensor rendering missing {token}")
-for token in ('/gnss/connected', '/gnss/quality', '/neo3/status', '/neo3/mag_connected',
-              '/neo3pro/rm3100_connected', '/neo3pro/mag', '/neo3/mag', '/neo3/mag_heading_fusion', '/neo3/mag_heading_valid'):
+for token in ('/gnss/connected', '/gnss/quality', '/neo3/status',
+              '/neo3pro/rm3100_connected', '/neo3pro/mag', '/neo3pro/mag_heading_fusion', '/neo3pro/mag_heading_valid'):
     if token not in cpp: fail(f"NEO-3 web ROS binding missing {token}")
 per_start = html.find('id="page-perception"')
 per_end = html.find('id="page-sensors"', per_start)
@@ -141,11 +141,11 @@ if 'src="/vesc_workbench.js' not in html:
     fail("ESC workbench JS module is not loaded")
 for token in ("ESC Motor Workbench", 'id="page-esc-status"', "DIRECT ESC TRANSPORT",
               "vescEnterMaintenance", "vescExitMaintenance",
-              "vescLeftRawEncoder", "vescRightRpm", "vescDualTuning", "vescDualLimits",
+              "vescLeftRawEncoder", "vescRightErpm", "vescDualTuning", "vescDualLimits",
               "vescChartLeft", "vescChartRight", "vescLeftSetDuty", "vescRightSetDuty",
-              "vescLeftSetCurrent", "vescRightSetCurrent", "vescRightSetRpm",
+              "vescLeftSetCurrent", "vescRightSetCurrent", "vescRightSetErpm",
               "vescLeftSetPos", "vescRightSetBrake", "vescDetectHall", "vescDetectEncoder",
-              "1.00 m/s → 8000 eRPM"):
+              "Command at 1.00 m/s [eRPM]"):
     if token not in html: fail(f"VESC Web workbench missing {token}")
 for token in ("ReadMcconf", "WriteMcconf", "ReadAppconf", "WriteAppconf",
               "v5BindMotorEditor", "DUAL RUNTIME LIVE", "v5RuntimeMotor", "v5Freshness"):
@@ -155,7 +155,7 @@ if 'id="vescMotor"' in html:
 for token in ("vescCmd", "vesc_tool_status", "tcp_client", "VESC TOOL TCP",
               "command',{command}", "renderVescTool"):
     if token not in web_js: fail(f"VESC Web behavior missing {token}")
-for token in ("/esc/vesc/tool_command", "/stmf4/vesc/status", "/esc/vesc/tool_telemetry",
+for token in ("/esc/vesc/tool_command", "/esc/vesc/tool_status", "/esc/vesc/tool_telemetry",
               "vesc_tool.yaml"):
     if token not in cpp: fail(f"VESC Web backend integration missing {token}")
 

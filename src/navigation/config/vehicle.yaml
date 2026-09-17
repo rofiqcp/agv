@@ -12,7 +12,7 @@ vehicle:
     wheel_radius_m: 0.145
     # Electrical-to-ground-speed baseline belongs to the same vehicle SSOT.
     # Physical certification still requires drive_odometry_calibration_valid=true.
-    drive_erpm_per_mps: 8000.0
+    drive_erpm_per_mps: 4410.810913912311
     # N2.1 certifies drive_erpm_per_mps directly from measured straight-run trials.
     drive_odometry_calibration_valid: false
     drive_odometry_calibration_saved_at: ''

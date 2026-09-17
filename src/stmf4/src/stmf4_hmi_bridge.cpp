@@ -273,10 +273,30 @@ public:
           }
         } else if (now - last_rx_ > std::chrono::duration<double>(hmi_transport_timeout_sec_)) {
           closeSerial("transport heartbeat timeout");
-        } else if (!awaiting_host_session_ &&
-                   (last_usb_status_request_.time_since_epoch().count() == 0 ||
-                    now - last_usb_status_request_ > std::chrono::seconds(2))) {
-          if (sendLine("USB:STATUS", 0)) last_usb_status_request_ = now;
+        } else if (!awaiting_host_session_) {
+          if (last_usb_status_request_.time_since_epoch().count() == 0 ||
+              now - last_usb_status_request_ > std::chrono::seconds(2)) {
+            if (sendLine("USB:STATUS", 0)) last_usb_status_request_ = now;
+          }
+          if (last_compass_params_request_.time_since_epoch().count() == 0 ||
+              now - last_compass_params_request_ > std::chrono::seconds(15)) {
+            if (sendLine("NEO:COMPASS:PARAMS", 0)) last_compass_params_request_ = now;
+          }
+          // Production GNSS-rate contract: target NEO3 Pro is 10 Hz. If the
+          // measured PVT stream is not near the configured target, retry the
+          // F411->AP_Periph rate request at a slow bounded cadence. Firmware is
+          // idempotent and will not restart the GNSS node when already at target.
+          const bool have_rate = std::isfinite(last_neo3_pvt_rate_hz_) && last_neo3_pvt_rate_hz_ > 0.0;
+          const bool target_mismatch = !have_rate ||
+            std::abs(last_neo3_pvt_rate_hz_ - static_cast<double>(neo3pro_gnss_rate_hz_)) > 0.75;
+          const bool gnss_recent = last_neo3_gnss_time_.time_since_epoch().count() != 0 &&
+            now - last_neo3_gnss_time_ <= std::chrono::duration<double>(neo3_sensor_timeout_sec_);
+          if (gnss_recent && target_mismatch &&
+              (last_neo3_rate_command_.time_since_epoch().count() == 0 ||
+               now - last_neo3_rate_command_ > std::chrono::duration<double>(neo3pro_rate_reapply_sec_))) {
+            if (sendLine("NEO:GPS:RATE:" + std::to_string(neo3pro_gnss_rate_hz_), 0))
+              last_neo3_rate_command_ = now;
+          }
         }
       }
       sensorWatchdogTick();
@@ -401,11 +421,13 @@ private:
     declare_parameter<double>("waypoint_pose_timeout_sec", 2.5);
     declare_parameter<double>("neo3_sensor_timeout_sec", 2.0);
     declare_parameter<std::string>("neo3_gnss_frame_id", "gnss_link");
-    declare_parameter<std::string>("neo3_mag_frame_id", "gnss_link");
+    declare_parameter<std::string>("rm3100_mag_frame_id", "gnss_link");
     declare_parameter<std::string>("neo3pro_baro_frame_id", "gnss_link");
-    declare_parameter<double>("neo3_mag_sigma_ut", 3.0);
+    declare_parameter<double>("rm3100_mag_sigma_ut", 3.0);
     declare_parameter<int>("neo3pro_navsat_service_mask", sensor_msgs::msg::NavSatStatus::SERVICE_GPS);
     declare_parameter<int>("neo3pro_gnss_rate_hz", 10);
+    declare_parameter<double>("neo3pro_min_usable_rate_hz", 7.0);
+    declare_parameter<double>("neo3pro_rate_reapply_sec", 60.0);
     declare_parameter<bool>("neo3_safety_button_as_estop", false);
     declare_parameter<bool>("publish_stm32_gnss", true);
     declare_parameter<bool>("neo3_require_protocol_crc", true);
@@ -434,11 +456,13 @@ private:
     waypoint_pose_timeout_sec_ = std::clamp(get_parameter("waypoint_pose_timeout_sec").as_double(), 0.25, 10.0);
     neo3_sensor_timeout_sec_ = std::clamp(get_parameter("neo3_sensor_timeout_sec").as_double(), 0.5, 10.0);
     neo3_gnss_frame_id_ = get_parameter("neo3_gnss_frame_id").as_string();
-    neo3_mag_frame_id_ = get_parameter("neo3_mag_frame_id").as_string();
+    rm3100_mag_frame_id_ = get_parameter("rm3100_mag_frame_id").as_string();
     neo3pro_baro_frame_id_ = get_parameter("neo3pro_baro_frame_id").as_string();
-    neo3_mag_sigma_ut_ = std::clamp(get_parameter("neo3_mag_sigma_ut").as_double(), 0.1, 100.0);
+    rm3100_mag_sigma_ut_ = std::clamp(get_parameter("rm3100_mag_sigma_ut").as_double(), 0.1, 100.0);
     neo3pro_navsat_service_mask_ = static_cast<std::uint16_t>(std::clamp<std::int64_t>(get_parameter("neo3pro_navsat_service_mask").as_int(), 0, 15));
     neo3pro_gnss_rate_hz_ = static_cast<int>(std::clamp<std::int64_t>(get_parameter("neo3pro_gnss_rate_hz").as_int(), 5, 20));
+    neo3pro_min_usable_rate_hz_ = std::clamp(get_parameter("neo3pro_min_usable_rate_hz").as_double(), 1.0, 20.0);
+    neo3pro_rate_reapply_sec_ = std::clamp(get_parameter("neo3pro_rate_reapply_sec").as_double(), 2.0, 60.0);
     neo3_safety_button_as_estop_ = get_parameter("neo3_safety_button_as_estop").as_bool();
     publish_stm32_gnss_ = get_parameter("publish_stm32_gnss").as_bool();
     neo3_require_protocol_crc_ = get_parameter("neo3_require_protocol_crc").as_bool();
@@ -551,10 +575,7 @@ private:
     neo3_quality_pub_ = create_publisher<std_msgs::msg::Float64MultiArray>("/gnss/quality", rclcpp::SensorDataQoS().keep_last(5));
     neo3_gnss_state_pub_ = create_publisher<std_msgs::msg::String>("/gnss/state", stateQos());
     neo3_gnss_connected_pub_ = create_publisher<std_msgs::msg::Bool>("/gnss/connected", stateQos());
-    neo3_mag_pub_ = create_publisher<sensor_msgs::msg::MagneticField>("/neo3/mag", rclcpp::SensorDataQoS().keep_last(10));
     neo3pro_mag_pub_ = create_publisher<sensor_msgs::msg::MagneticField>("/neo3pro/mag", rclcpp::SensorDataQoS().keep_last(10));
-    neo3_ist_connected_pub_ = create_publisher<std_msgs::msg::Bool>("/neo3/ist8310_connected", stateQos());
-    neo3_mag_connected_pub_ = create_publisher<std_msgs::msg::Bool>("/neo3/mag_connected", stateQos());
     neo3pro_rm3100_connected_pub_ = create_publisher<std_msgs::msg::Bool>("/neo3pro/rm3100_connected", stateQos());
     neo3pro_node_connected_pub_ = create_publisher<std_msgs::msg::Bool>("/neo3pro/node_connected", stateQos());
     neo3pro_gnss_status_connected_pub_ = create_publisher<std_msgs::msg::Bool>("/neo3pro/gnss/status_connected", stateQos());
@@ -570,6 +591,7 @@ private:
     neo3pro_param_pub_ = create_publisher<std_msgs::msg::String>("/neo3pro/param", stateQos());
     neo3pro_gnss_status_pub_ = create_publisher<std_msgs::msg::String>("/neo3pro/gnss/status", stateQos());
     neo3pro_can_status_pub_ = create_publisher<std_msgs::msg::String>("/neo3pro/can/status", stateQos());
+    neo3pro_can_raw_pub_ = create_publisher<std_msgs::msg::String>("/neo3pro/can/raw", stateQos());
     neo3pro_health_pub_ = create_publisher<std_msgs::msg::String>("/neo3pro/health", stateQos());
     neo3pro_dna_status_pub_ = create_publisher<std_msgs::msg::String>("/neo3pro/dna/status", stateQos());
     neo3pro_heading_pub_ = create_publisher<std_msgs::msg::Float64>("/neo3pro/gnss/heading_rad", rclcpp::SensorDataQoS().keep_last(10));
@@ -1074,14 +1096,11 @@ private:
     neo3pro_node_connected_state_ = false;
     neo3pro_gnss_status_connected_state_ = false;
     neo3pro_baro_connected_state_ = false;
-    neo3_ist_connected_state_ = false;
     if (!publish_invalid) return;
 
     std_msgs::msg::Bool b; b.data = false;
     neo3_gnss_connected_pub_->publish(b);
-    neo3_mag_connected_pub_->publish(b);
     neo3pro_rm3100_connected_pub_->publish(b);
-    neo3_ist_connected_pub_->publish(b);
     neo3pro_node_connected_pub_->publish(b);
     neo3pro_gnss_status_connected_pub_->publish(b);
     neo3pro_baro_connected_pub_->publish(b);
@@ -1106,7 +1125,10 @@ private:
     // Do not mutate peripheral indication state on reconnect. LED commands are
     // explicit operator actions only; this also avoids reconnect-triggered load.
     sendLine("NEO:STATUS");
-    sendLine("NEO:GPS:RATE:" + std::to_string(neo3pro_gnss_rate_hz_));
+    if (sendLine("NEO:COMPASS:PARAMS"))
+      last_compass_params_request_ = std::chrono::steady_clock::now();
+    if (sendLine("NEO:GPS:RATE:" + std::to_string(neo3pro_gnss_rate_hz_)))
+      last_neo3_rate_command_ = std::chrono::steady_clock::now();
     sendLine("USB:STATUS");
     last_usb_status_request_ = std::chrono::steady_clock::now();
   }
@@ -1488,12 +1510,9 @@ private:
     return true;
   }
 
-  void publishMagConnected(bool connected, bool pro) {
+  void publishRm3100Connected(bool connected) {
     std_msgs::msg::Bool b; b.data = connected;
-    neo3_mag_connected_pub_->publish(b);
-    if (pro) neo3pro_rm3100_connected_pub_->publish(b);
-    else neo3_ist_connected_pub_->publish(b);
-    neo3_ist_connected_state_ = connected;
+    neo3pro_rm3100_connected_pub_->publish(b);
   }
 
   void publishNeo3Connected(bool connected) {
@@ -1561,7 +1580,7 @@ private:
   }
 
   void publishGnssState(const char *source, bool receiver_valid, int fix_type, int satellites,
-                        double hacc_m, double pdop) {
+                        double hacc_m, double pdop, double pvt_rate_hz, bool rate_usable) {
     std_msgs::msg::String state;
     std::ostringstream out;
     out << std::fixed << std::setprecision(3)
@@ -1569,6 +1588,9 @@ private:
         << ",\"receiver_valid\":" << (receiver_valid ? "true" : "false")
         << ",\"fix_type\":" << fix_type << ",\"satellites\":" << satellites
         << ",\"hacc_m\":" << hacc_m << ",\"dop\":" << pdop
+        << ",\"pvt_rate_hz\":" << pvt_rate_hz
+        << ",\"min_usable_rate_hz\":" << neo3pro_min_usable_rate_hz_
+        << ",\"rate_usable\":" << (rate_usable ? "true" : "false")
         << ",\"protocol_version\":" << neo3_protocol_version_
         << ",\"sequence\":" << neo3_last_sequence_
         << ",\"sequence_gaps\":" << neo3_sequence_gaps_
@@ -1591,8 +1613,10 @@ private:
     const bool coordinates_valid = std::isfinite(lat) && std::isfinite(lon) &&
       std::abs(lat) <= 90.0 && std::abs(lon) <= 180.0 &&
       !(std::abs(lat) < 1.0e-12 && std::abs(lon) < 1.0e-12);
-    const bool qualified_fix = receiver_valid && coordinates_valid;
+    const bool rate_usable = std::isfinite(pvt_rate_hz) && pvt_rate_hz > neo3pro_min_usable_rate_hz_;
+    const bool qualified_fix = receiver_valid && coordinates_valid && rate_usable;
     const bool pro_source = source_id == 4;
+    last_neo3_pvt_rate_hz_ = pvt_rate_hz;
     const bool pro_sample = pro_source && pro_enriched && neo3pro_gnss_meta_.valid;
     const bool pro_cov_match = pro_sample && neo3pro_gnss_cov_.valid &&
       neo3pro_gnss_cov_.mcu_ms == neo3pro_gnss_meta_.mcu_ms &&
@@ -1633,8 +1657,10 @@ private:
         fix.position_covariance[8] = v_sigma * v_sigma;
       }
       fix.position_covariance_type = sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_DIAGONAL_KNOWN;
+      // Raw fix remains visible for diagnostics even below the rate gate. Only
+      // the qualified /gnss/fix stream is allowed downstream when rate >= gate.
       neo3_fix_raw_pub_->publish(fix);
-      neo3_fix_pub_->publish(fix);
+      if (qualified_fix) neo3_fix_pub_->publish(fix);
     }
 
     const double course_ned_rad = course_ned_deg * kPi / 180.0;
@@ -1728,7 +1754,8 @@ private:
     publishNeo3Connected(true);
     const char *source_name = source_id == 4 ? "STM32_DRONECAN_NEO3PRO" :
       (source_id == 1 ? "STM32_UBX_NAV_PVT" : "STM32_NMEA_FALLBACK");
-    publishGnssState(source_name, qualified_fix, fix_type, satellites, h_sigma, effective_dop);
+    publishGnssState(source_name, qualified_fix, fix_type, satellites, h_sigma, effective_dop,
+                     pvt_rate_hz, rate_usable);
   }
 
   void handleNeo3Gnss(const std::string &payload) {
@@ -1904,7 +1931,7 @@ private:
     neo3pro_mag_meta_ = m; neo3pro_active_ = true;
 
     sensor_msgs::msg::MagneticField mag;
-    mag.header.stamp = stampFromMcuMillis(v[1]); mag.header.frame_id = neo3_mag_frame_id_;
+    mag.header.stamp = stampFromMcuMillis(v[1]); mag.header.frame_id = rm3100_mag_frame_id_;
     mag.magnetic_field.x = m.x_ut * 1.0e-6; mag.magnetic_field.y = m.y_ut * 1.0e-6; mag.magnetic_field.z = m.z_ut * 1.0e-6;
     mag.magnetic_field_covariance.fill(0.0);
     bool actual_cov = len == 9;
@@ -1937,13 +1964,13 @@ private:
     if (actual_cov) {
       for (int i = 0; i < 9; ++i) mag.magnetic_field_covariance[static_cast<size_t>(i)] = m.covariance_t2[static_cast<size_t>(i)];
     } else {
-      const double sigma_t = neo3_mag_sigma_ut_ * 1.0e-6;
+      const double sigma_t = rm3100_mag_sigma_ut_ * 1.0e-6;
       mag.magnetic_field_covariance[0] = sigma_t * sigma_t;
       mag.magnetic_field_covariance[4] = sigma_t * sigma_t;
       mag.magnetic_field_covariance[8] = sigma_t * sigma_t;
     }
-    neo3_mag_pub_->publish(mag); neo3pro_mag_pub_->publish(mag);
-    last_neo3_mag_time_ = std::chrono::steady_clock::now(); publishMagConnected(true, true);
+    neo3pro_mag_pub_->publish(mag);
+    last_neo3_mag_time_ = std::chrono::steady_clock::now(); publishRm3100Connected(true);
     std_msgs::msg::Float64MultiArray meta; meta.data = v; neo3pro_mag_meta_pub_->publish(meta);
   }
 
@@ -2076,31 +2103,27 @@ private:
     msg.data = o.str(); neo3pro_can_status_pub_->publish(msg);
   }
 
-  void handleNeo3Mag(const std::string &payload) {
-    if (neo3pro_active_) return;  // MAGPRO already publishes /neo3/mag exactly once.
+  void handleNeo3ProCanRaw(const std::string &payload) {
+    std::string body; int version = 0; std::uint32_t sequence = 0U;
+    if (!validateNeo3ProProtocol("CANRAW", payload, body, version, sequence)) return;
     std::vector<double> v;
-    if (!parseCsvNumbers(payload, 7, v)) {
-      ++neo3_parse_errors_;
-      return;
-    }
-    if (v[6] <= 0.5) return;
-    sensor_msgs::msg::MagneticField mag;
-    mag.header.stamp = stampFromMcuMillis(v[1]);
-    mag.header.frame_id = neo3_mag_frame_id_;
-    mag.magnetic_field.x = v[2] * 1.0e-6;
-    mag.magnetic_field.y = v[3] * 1.0e-6;
-    mag.magnetic_field.z = v[4] * 1.0e-6;
-    const double sigma_t = neo3_mag_sigma_ut_ * 1.0e-6;
-    mag.magnetic_field_covariance.fill(0.0);
-    mag.magnetic_field_covariance[0] = sigma_t * sigma_t;
-    mag.magnetic_field_covariance[4] = sigma_t * sigma_t;
-    mag.magnetic_field_covariance[8] = sigma_t * sigma_t;
-    neo3_mag_pub_->publish(mag);
-    last_neo3_mag_time_ = std::chrono::steady_clock::now();
-    if (!neo3_ist_connected_state_) {
-      neo3_ist_connected_state_ = true;
-      std_msgs::msg::Bool b; b.data = true; neo3_ist_connected_pub_->publish(b);
-    }
+    if (!parseCsvNumbers(body, 12U, v)) { ++neo3_parse_errors_; return; }
+    markNeo3ProActive();
+    std_msgs::msg::String msg; std::ostringstream o;
+    o << "{\"raw_frames\":" << static_cast<std::uint64_t>(v[0])
+      << ",\"raw_allocation_frames\":" << static_cast<std::uint64_t>(v[1])
+      << ",\"raw_fix2_frames\":" << static_cast<std::uint64_t>(v[2])
+      << ",\"raw_node_frames\":" << static_cast<std::uint64_t>(v[3])
+      << ",\"raw_mag_frames\":" << static_cast<std::uint64_t>(v[4])
+      << ",\"raw_other_frames\":" << static_cast<std::uint64_t>(v[5])
+      << ",\"oscillator_mhz\":" << static_cast<int>(std::lround(v[6]))
+      << ",\"oscillator_locked\":" << (v[7] > 0.5 ? "true" : "false")
+      << ",\"host_node_id\":" << static_cast<int>(std::lround(v[8]))
+      << ",\"allocated_node_id\":" << static_cast<int>(std::lround(v[9]))
+      << ",\"can_tx_frames\":" << static_cast<std::uint64_t>(v[10])
+      << ",\"can_tx_errors\":" << static_cast<std::uint64_t>(v[11]) << "}";
+    msg.data = o.str();
+    neo3pro_can_raw_pub_->publish(msg);
   }
 
   void handleNeo3Hardware(const std::string &payload) {
@@ -2112,35 +2135,20 @@ private:
     }
     const bool gnss_alive = v[2] > 0.5;
     const bool gnss_ready = v[3] > 0.5;
-    const bool ist_ok = v[4] > 0.5;
     const bool sw = v[5] > 0.5;
     const bool led = v[6] > 0.5;
     // Host freshness of actual GNSS measurement frames is authoritative.
     // A 1-Hz hardware snapshot may briefly report not-alive between UART bursts;
     // never let that low-rate diagnostic flap /gnss/connected false.
     if (publish_stm32_gnss_ && gnss_alive) publishNeo3Connected(true);
-    if (neo3_ist_connected_state_ != ist_ok) {
-      neo3_ist_connected_state_ = ist_ok;
-      std_msgs::msg::Bool b; b.data = ist_ok; neo3_ist_connected_pub_->publish(b);
-    }
     publishNeo3SafetyState(sw);
     std_msgs::msg::String status;
     std::ostringstream out;
     out << "{\"gnss_alive\":" << (gnss_alive ? "true" : "false")
         << ",\"gnss_ready\":" << (gnss_ready ? "true" : "false")
-        << ",\"ist8310\":" << (ist_ok ? "true" : "false")
         << ",\"safety_switch\":" << (sw ? "true" : "false")
         << ",\"safety_led\":" << (led ? "true" : "false")
         << ",\"gnss_config_attempts\":" << static_cast<int>(std::lround(v[7]));
-    if (v.size() >= 11U) {
-      out << ",\"ist_i2c_addr\":" << static_cast<int>(std::lround(v[8]))
-          << ",\"ist_whoami\":" << static_cast<int>(std::lround(v[9]))
-          << ",\"ist_init_error\":" << static_cast<int>(std::lround(v[10]));
-    }
-    if (v.size() >= 13U) {
-      out << ",\"ist_sda_level\":" << static_cast<int>(std::lround(v[11]))
-          << ",\"ist_scl_level\":" << static_cast<int>(std::lround(v[12]));
-    }
     out << ",\"parse_errors\":" << neo3_parse_errors_ << "}";
     status.data = out.str();
     neo3_status_pub_->publish(status);
@@ -2158,13 +2166,9 @@ private:
         t - last_neo3_gnss_time_ > std::chrono::duration<double>(neo3_sensor_timeout_sec_)) {
       publishNeo3Connected(false);
     }
-    if (neo3_ist_connected_state_ && last_neo3_mag_time_.time_since_epoch().count() != 0 &&
+    if (neo3pro_active_ && last_neo3_mag_time_.time_since_epoch().count() != 0 &&
         t - last_neo3_mag_time_ > std::chrono::duration<double>(neo3_sensor_timeout_sec_)) {
-      neo3_ist_connected_state_ = false;
-      std_msgs::msg::Bool b; b.data = false;
-      neo3_mag_connected_pub_->publish(b);
-      if (neo3pro_active_) neo3pro_rm3100_connected_pub_->publish(b);
-      else neo3_ist_connected_pub_->publish(b);
+      publishRm3100Connected(false);
     }
     if (neo3pro_baro_connected_state_ && last_neo3pro_baro_time_.time_since_epoch().count() != 0 &&
         t - last_neo3pro_baro_time_ > std::chrono::duration<double>(neo3_sensor_timeout_sec_)) {
@@ -2539,12 +2543,12 @@ private:
     if (line.rfind("SENS:GNSSHEAD:", 0) == 0) { handleNeo3ProHeading(line.substr(sizeof("SENS:GNSSHEAD:") - 1U)); return; }
     if (line.rfind("SENS:BUTTON:", 0) == 0) { handleNeo3ProButton(line.substr(sizeof("SENS:BUTTON:") - 1U)); return; }
     if (line.rfind("SENS:HWPRO:", 0) == 0) { handleNeo3ProHardware(line.substr(sizeof("SENS:HWPRO:") - 1U)); return; }
+    if (line.rfind("SENS:CANRAW:", 0) == 0) { handleNeo3ProCanRaw(line.substr(sizeof("SENS:CANRAW:") - 1U)); return; }
     if (line.rfind("SENS:NEOHEALTH:", 0) == 0) { handleNeo3ProTextDiagnostic("NEOHEALTH", line.substr(sizeof("SENS:NEOHEALTH:") - 1U), neo3pro_health_pub_); return; }
     if (line.rfind("SENS:CANRX:", 0) == 0) { handleNeo3ProTextDiagnostic("CANRX", line.substr(sizeof("SENS:CANRX:") - 1U), neo3pro_can_status_pub_); return; }
     if (line.rfind("SENS:DNASRV:", 0) == 0) { handleNeo3ProTextDiagnostic("DNASRV", line.substr(sizeof("SENS:DNASRV:") - 1U), neo3pro_dna_status_pub_); return; }
     if (line.rfind("SENS:GNSS:", 0) == 0) { handleNeo3Gnss(line.substr(10)); return; }
     if (line.rfind("SENS:GNSSF:", 0) == 0) { handleNeo3GnssFallback(line.substr(11)); return; }
-    if (line.rfind("SENS:MAG:", 0) == 0) { handleNeo3Mag(line.substr(9)); return; }
     if (line.rfind("SENS:HW:", 0) == 0) { handleNeo3Hardware(line.substr(8)); return; }
     if (line.rfind("SENS:SW:", 0) == 0) { handleNeo3Switch(line.substr(8)); return; }
     if (line.rfind("[TOUCH]", 0) == 0) {
@@ -2980,7 +2984,9 @@ private:
     sendState("HEAD", fixed(heading_deg_, 1), force);
     sendState("IMU", imu_ready_ ? "1" : "0", force);
     sendState("GYROZ", fixed(gyro_z_rps_, 3), force);
-    sendState("MAG", neo3_ist_connected_state_ ? "1" : "0", force);
+    const bool rm3100_fresh = neo3pro_active_ && last_neo3_mag_time_.time_since_epoch().count() != 0 &&
+      std::chrono::steady_clock::now() - last_neo3_mag_time_ <= std::chrono::duration<double>(neo3_sensor_timeout_sec_);
+    sendState("MAG", rm3100_fresh ? "1" : "0", force);
     sendState("GNSSSTATUS", gnss_source.substr(0, 19), force);
     sendState("IMUSTATUS", imu_ready_ ? "READY" : "OFFLINE", force);
     sendState("EKFLOCAL", ekf_local_fresh ? "READY" : "STALE", force);
@@ -3043,9 +3049,11 @@ private:
   double reconnect_sec_{0.5}, telemetry_rate_hz_{20.0}, serial_poll_hz_{1000.0}, command_rate_hz_{30.0}, heartbeat_sec_{5.0};
   double hmi_transport_timeout_sec_{2.0};
   double waypoint_pose_timeout_sec_{2.5};
-  double neo3_sensor_timeout_sec_{2.0}, neo3_mag_sigma_ut_{3.0};
+  double neo3_sensor_timeout_sec_{2.0}, rm3100_mag_sigma_ut_{3.0};
   std::uint16_t neo3pro_navsat_service_mask_{sensor_msgs::msg::NavSatStatus::SERVICE_GPS};
   int neo3pro_gnss_rate_hz_{10};
+  double neo3pro_min_usable_rate_hz_{7.0}, neo3pro_rate_reapply_sec_{60.0};
+  double last_neo3_pvt_rate_hz_{std::numeric_limits<double>::quiet_NaN()};
   bool publish_stm32_gnss_{true};
   bool neo3_require_protocol_crc_{true};
   bool neo3_sequence_initialized_{false};
@@ -3054,7 +3062,7 @@ private:
   std::uint64_t neo3_sequence_gaps_{0U};
   std::uint64_t neo3_crc_errors_{0U};
   std::uint64_t neo3_duplicate_sequences_{0U};
-  std::string neo3_gnss_frame_id_{"gnss_link"}, neo3_mag_frame_id_{"gnss_link"}, neo3pro_baro_frame_id_{"gnss_link"};
+  std::string neo3_gnss_frame_id_{"gnss_link"}, rm3100_mag_frame_id_{"gnss_link"}, neo3pro_baro_frame_id_{"gnss_link"};
   bool neo3_safety_button_as_estop_{false};
   double manual_speed_max_mps_{1.0}, manual_command_lease_sec_{0.30}, steering_test_angle_deg_{20.0},
          hmi_steer_full_scale_deg_{90.0}, teleop_yaw_max_rps_{80.0 * kPi / 180.0};
@@ -3072,8 +3080,8 @@ private:
   double steering_hmi_target_deg_{0.0};
   std::unordered_map<std::string, std::string> tx_cache_;
   std::chrono::steady_clock::time_point last_reconnect_try_{}, last_forced_tx_{}, last_rx_{}, serial_opened_at_{},
-      last_usb_status_request_{}, last_usb_recovery_request_{}, last_map_pose_{},
-      last_drive_command_time_{}, last_steer_command_time_{};
+      last_usb_status_request_{}, last_compass_params_request_{}, last_usb_recovery_request_{}, last_map_pose_{},
+      last_drive_command_time_{}, last_steer_command_time_{}, last_neo3_rate_command_{};
   std::uint32_t silent_open_failures_{0U};
   std::uint32_t usb_recovery_requests_{0U};
   std::uint64_t manual_lease_expirations_{0U};
@@ -3099,7 +3107,6 @@ private:
   int satellites_{0}, fix_type_{0}, obstacle_count_{0};
   bool drivable_valid_{false};
   bool neo3_gnss_connected_state_{false}, neo3_gnss_connected_initialized_{false};
-  bool neo3_ist_connected_state_{false};
   bool neo3_switch_state_{false}, neo3_switch_initialized_{false};
   uint64_t neo3_parse_errors_{0};
   bool neo3pro_active_{false};
@@ -3169,15 +3176,15 @@ private:
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr neo3_quality_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr neo3_gnss_state_pub_, neo3_status_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr usb_status_pub_;
-  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr neo3_gnss_connected_pub_, neo3_ist_connected_pub_;
-  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr neo3_mag_connected_pub_, neo3pro_rm3100_connected_pub_, neo3pro_baro_connected_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr neo3_gnss_connected_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr neo3pro_rm3100_connected_pub_, neo3pro_baro_connected_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr neo3pro_node_connected_pub_, neo3pro_gnss_status_connected_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr neo3_safety_switch_pub_, neo3_estop_pub_, neo3pro_safety_button_pub_;
-  rclcpp::Publisher<sensor_msgs::msg::MagneticField>::SharedPtr neo3_mag_pub_, neo3pro_mag_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::MagneticField>::SharedPtr neo3pro_mag_pub_;
   rclcpp::Publisher<sensor_msgs::msg::FluidPressure>::SharedPtr neo3pro_pressure_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Temperature>::SharedPtr neo3pro_temperature_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr neo3pro_gnss_meta_pub_, neo3pro_gnss_cov_pub_, neo3pro_ecef_pub_, neo3pro_mag_meta_pub_;
-  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr neo3pro_node_status_pub_, neo3pro_node_info_pub_, neo3pro_param_pub_, neo3pro_gnss_status_pub_, neo3pro_can_status_pub_, neo3pro_health_pub_, neo3pro_dna_status_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr neo3pro_node_status_pub_, neo3pro_node_info_pub_, neo3pro_param_pub_, neo3pro_gnss_status_pub_, neo3pro_can_status_pub_, neo3pro_can_raw_pub_, neo3pro_health_pub_, neo3pro_dna_status_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr neo3pro_heading_pub_, neo3pro_heading_accuracy_pub_;
   rclcpp::Publisher<sensor_msgs::msg::TimeReference>::SharedPtr neo3pro_time_reference_pub_;
   rclcpp::Publisher<std_msgs::msg::UInt8MultiArray>::SharedPtr neo3pro_safety_button_raw_pub_;

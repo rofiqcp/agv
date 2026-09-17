@@ -1,10 +1,10 @@
 # ESC serial may be disabled while keeping ROS interfaces alive; disabled always reports READY=false.
 esc_ackermann:
   ros__parameters:
-    teleop_source_topic: /teleop/active_source
     teleop_estop_topic: /teleop/emergency_stop_latched
     hmi_topic: /hmi/cmd_vel
     hmi_source_topic: /hmi/active_source
+    router_source_topic: /navigation/cmd_mux/source
     hmi_timeout_sec: 0.30
     output_topic: /cmd_vel/actuator
     autonomy_gate_topic: /system/autonomy_motion_allowed
@@ -12,8 +12,8 @@ esc_ackermann:
     command_rate_hz: 50.0
     teleop_timeout_sec: 0.3
     nav2_timeout_sec: 0.6
-    manual_release_hold_sec: 0.5
-    speed_max: 1.0
+    manual_release_hold_sec: 1.0
+    speed_max: 1.00
     serial_left_max_deg: 90.0
     drive_erpm_per_mps: 8000.0
     # Applied live after N2.1 GNSS/RPM calibration: V_ground = V_raw_ESC * scale.
@@ -32,6 +32,13 @@ esc_ackermann:
     yaw_rate_feedback_deadband_rps: 0.01
     invert_steering: false
     invert_drive: false
+    # ROS-side steering calibration. F103/VESC external LEFT position remains raw 0..360.
+    # These are raw VESC POS readings at physical -30/0/+30 deg (operational references).
+    steering_vesc_pos_left_deg: 0.0
+    steering_vesc_pos_center_deg: 180.0
+    steering_vesc_pos_right_deg: 360.0
+    steering_vesc_pos_reference_deg: 30.0
+    steering_vesc_pos_calibration_saved_at: ''
     steering_feedback_calibration_enabled: true
     steering_feedback_center_deg: -25.84
     steering_feedback_right_stop_deg: 90.0
@@ -57,7 +64,11 @@ esc_ackermann:
     steering_feedback_left_reference_deg: -155.78
     steering_feedback_center_reference_deg: -14.14
     steering_feedback_right_reference_deg: 60.56000000000001
-    steering_physical_calibration_enabled: false
+    steering_physical_calibration_enabled: true
+    # Hardware span calibration 2026-09-17: measured hard-stop span=4457 counts.
+    # F103 runtime-safe span=3762 counts (~84.4% of hard-stop); that safe span is
+    # deliberately exposed to ROS as -30..+30 deg. Extrapolated hard-stop is
+    # about +/-35.5 deg and is COMMISSIONING REFERENCE ONLY, never a motion limit.
     steering_physical_left_limit_deg: -30.0
     steering_physical_right_limit_deg: 30.0
     steering_physical_operational_limit_deg: 30.0
@@ -121,21 +132,13 @@ esc_ackermann:
     odom_yaw_rate_variance_base: 0.05
 
     # Runtime routing and commissioning authority. These were previously hidden in launch/C++ defaults.
-    teleop_topic: /cmd_vel/ackermann_direct_teleop_disabled
-    teleop_source_topic: /navigation/cmd_mux/source
-    nav2_topic: /cmd_vel
-    active_source_topic: /esc/mux/active_source
     maintenance_owner_topic: /esc/vesc/maintenance_owner
     perception_state_topic: /navigation/trajectory_safety_state
     perception_state_timeout_sec: 0.75
-    require_autonomy_gate: true
     raw_commissioning_enabled: false
     raw_commissioning_topic: /esc/commissioning/raw_actuator
     raw_commissioning_timeout_sec: 0.25
     raw_commissioning_max_erpm: 8000.0
     raw_commissioning_max_steering_deg: 30.0
-    transport_mode: direct_vesc
-    serial_device: auto
-    serial_enabled: true
     integration_bypass: false
     yaw_max_deg_s: 80.0

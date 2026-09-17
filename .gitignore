@@ -39,3 +39,5 @@ referensi/hmi/
 
 # High-volume telemetry captures stay local; commit summaries/metadata instead.
 tools/records/**/raw.jsonl
+backups/
+backup/

@@ -55,7 +55,7 @@ constexpr std::uint8_t kVescSetPos = 9;
 constexpr std::uint8_t kVescCustomAppData = 36;
 constexpr std::uint8_t kHbMagic0 = 0x48;
 constexpr std::uint8_t kHbMagic1 = 0x42;
-constexpr std::uint8_t kHbVersion = 1;
+constexpr std::uint8_t kHbVersion = 2;
 constexpr std::uint8_t kHbGetSteeringCal = 10;
 constexpr std::uint8_t kVescForwardCan = 34;
 constexpr std::uint8_t kVescRightMotorId = 2;
@@ -262,7 +262,8 @@ private:
 
   struct SerialCommand
   {
-    std::int16_t left_cdeg{0};
+    std::int16_t left_cdeg{0};       // legacy frame only; physical steering deg x100
+    double left_vesc_pos_deg{180.0}; // native VESC LEFT actuator coordinate 0..360
     std::int16_t right_erpm_x10{0};  // legacy direct-serial frame only
     double stm32_right_erpm{0.0};   // native VESC COMM_SET_RPM; no int16 truncation
     std::uint8_t flags{0};
@@ -272,6 +273,7 @@ private:
   {
     declare_parameter<std::string>("teleop_topic", "/cmd_vel/teleop");
     declare_parameter<std::string>("teleop_source_topic", "/teleop/active_source");
+    declare_parameter<std::string>("router_source_topic", "/navigation/cmd_mux/source");
     declare_parameter<std::string>("teleop_estop_topic", "/teleop/emergency_stop_latched");
     declare_parameter<std::string>("hmi_topic", "/hmi/cmd_vel");
     declare_parameter<std::string>("hmi_source_topic", "/hmi/active_source");
@@ -288,7 +290,7 @@ private:
     declare_parameter<double>("teleop_timeout_sec", 0.30);
     declare_parameter<double>("nav2_timeout_sec", 0.60);
     declare_parameter<double>("perception_state_timeout_sec", 0.75);
-    declare_parameter<double>("manual_release_hold_sec", 0.50);
+    declare_parameter<double>("manual_release_hold_sec", 1.00);
     declare_parameter<bool>("require_autonomy_gate", true);
     declare_parameter<bool>("raw_commissioning_enabled", false);
     declare_parameter<std::string>("raw_commissioning_topic", "/esc/commissioning/raw_actuator");
@@ -298,11 +300,17 @@ private:
 
     // Injected by esc.launch.py from the single esc/config/teleop.yaml source of truth.
     declare_parameter<double>("speed_max", 0.5);
+    declare_parameter<double>("manual_speed_max_mps", 1.0);
     declare_parameter<double>("yaw_max_deg_s", 80.0);
     declare_parameter<double>("serial_left_max_deg", 90.0);
     // Single longitudinal calibration authority: VESC electrical speed <-> ground speed.
     // Nav2 remains SI (m/s); VESC remains eRPM. N2.1 updates this value directly.
     declare_parameter<double>("drive_erpm_per_mps", 8000.0);
+    // Hard actuator-boundary clamp applied AFTER source mux. This is the single
+    // eRPM authority for commissioning and low-speed validation.
+    declare_parameter<bool>("drive_erpm_lock_enabled", false);
+    declare_parameter<double>("drive_erpm_lock_abs", 8000.0);
+    declare_parameter<double>("zero_hold_feedback_deadband_erpm", 1100.0);
     declare_parameter<double>("wheelbase_m", 0.70);
     declare_parameter<double>("track_width_m", 0.48);
     declare_parameter<double>("min_speed_for_nav_steering_mps", 0.05);
@@ -323,6 +331,16 @@ private:
 
     declare_parameter<bool>("invert_steering", false);
     declare_parameter<bool>("invert_drive", false);
+
+    // ROS owns the vehicle-angle calibration. F103/VESC remains in a raw
+    // 0..360 LEFT actuator coordinate. These are the raw VESC POS readings that
+    // correspond to physical -operational/0/+operational wheel angles. Defaults
+    // implement the canonical -30/0/+30 -> 0/180/360 mapping.
+    declare_parameter<double>("steering_vesc_pos_left_deg", 0.0);
+    declare_parameter<double>("steering_vesc_pos_center_deg", 180.0);
+    declare_parameter<double>("steering_vesc_pos_right_deg", 360.0);
+    declare_parameter<double>("steering_vesc_pos_reference_deg", 30.0);
+    declare_parameter<std::string>("steering_vesc_pos_calibration_saved_at", "");
 
     // Persistent 3-point feedback calibration written by the GUI. The stored
     // readings use the legacy/un-calibrated steering convention after
@@ -441,6 +459,7 @@ private:
   {
     teleop_topic_ = get_parameter("teleop_topic").as_string();
     teleop_source_topic_ = get_parameter("teleop_source_topic").as_string();
+    router_source_topic_ = get_parameter("router_source_topic").as_string();
     teleop_estop_topic_ = get_parameter("teleop_estop_topic").as_string();
     hmi_topic_ = get_parameter("hmi_topic").as_string();
     hmi_source_topic_ = get_parameter("hmi_source_topic").as_string();
@@ -466,9 +485,14 @@ private:
     raw_commissioning_max_steering_deg_ = std::clamp(get_parameter("raw_commissioning_max_steering_deg").as_double(), 1.0, 30.0);
 
     speed_max_mps_ = std::max(0.01, get_parameter("speed_max").as_double());
+    manual_speed_max_mps_ = std::max(speed_max_mps_, get_parameter("manual_speed_max_mps").as_double());
     yaw_max_deg_s_ = std::clamp(get_parameter("yaw_max_deg_s").as_double(), 1.0, 180.0);
     steering_max_deg_ = std::clamp(get_parameter("serial_left_max_deg").as_double(), 1.0, 90.0);
     drive_erpm_per_mps_ = std::clamp(get_parameter("drive_erpm_per_mps").as_double(), 100.0, 50000.0);
+    drive_erpm_lock_enabled_ = get_parameter("drive_erpm_lock_enabled").as_bool();
+    drive_erpm_lock_abs_ = std::clamp(get_parameter("drive_erpm_lock_abs").as_double(), 100.0, 20000.0);
+    zero_hold_feedback_deadband_erpm_ = std::clamp(
+      get_parameter("zero_hold_feedback_deadband_erpm").as_double(), 0.0, 5000.0);
     wheelbase_m_ = std::max(0.05, get_parameter("wheelbase_m").as_double());
     track_width_m_ = std::max(0.0, get_parameter("track_width_m").as_double());
     min_speed_for_nav_steering_mps_ = std::max(
@@ -493,6 +517,22 @@ private:
       get_parameter("yaw_rate_feedback_deadband_rps").as_double(), 0.0, 0.5);
     invert_steering_ = get_parameter("invert_steering").as_bool();
     invert_drive_ = get_parameter("invert_drive").as_bool();
+
+    steering_vesc_pos_left_deg_ = get_parameter("steering_vesc_pos_left_deg").as_double();
+    steering_vesc_pos_center_deg_ = get_parameter("steering_vesc_pos_center_deg").as_double();
+    steering_vesc_pos_right_deg_ = get_parameter("steering_vesc_pos_right_deg").as_double();
+    steering_vesc_pos_reference_deg_ = std::clamp(get_parameter("steering_vesc_pos_reference_deg").as_double(), 1.0, 90.0);
+    steering_vesc_pos_calibration_saved_at_ =
+      get_parameter("steering_vesc_pos_calibration_saved_at").as_string();
+    steering_vesc_pos_calibration_valid_ = validateVescPositionCalibration(
+      steering_vesc_pos_left_deg_, steering_vesc_pos_center_deg_, steering_vesc_pos_right_deg_);
+    if (!steering_vesc_pos_calibration_valid_) {
+      RCLCPP_ERROR(get_logger(),
+        "Invalid VESC steering POS calibration L/C/R=%.3f/%.3f/%.3f; falling back to 0/180/360",
+        steering_vesc_pos_left_deg_, steering_vesc_pos_center_deg_, steering_vesc_pos_right_deg_);
+      steering_vesc_pos_left_deg_=0.0; steering_vesc_pos_center_deg_=180.0; steering_vesc_pos_right_deg_=360.0;
+      steering_vesc_pos_calibration_valid_=true;
+    }
 
     steering_feedback_calibration_enabled_ =
       get_parameter("steering_feedback_calibration_enabled").as_bool();
@@ -611,7 +651,7 @@ private:
       std::isfinite(steering_physical_operational_limit_deg_) &&
       steering_physical_left_limit_deg_ < -1.0 &&
       steering_physical_right_limit_deg_ > 1.0 &&
-      physical_common_max > 1.0 &&
+      physical_common_max + 1.0e-9 >= steering_vesc_pos_reference_deg_ &&
       steering_physical_operational_limit_deg_ >= 1.0 &&
       steering_physical_operational_limit_deg_ <= physical_common_max + 1.0e-9;
     steering_physical_lut_valid_ = validateSteeringLut(
@@ -684,6 +724,10 @@ private:
 
     bool enabled = steering_feedback_calibration_enabled_;
     bool cal_mode = steering_calibration_mode_enabled_;
+    double vesc_pos_left = steering_vesc_pos_left_deg_;
+    double vesc_pos_center = steering_vesc_pos_center_deg_;
+    double vesc_pos_right = steering_vesc_pos_right_deg_;
+    std::string vesc_pos_saved_at = steering_vesc_pos_calibration_saved_at_;
     double center_cmd = steering_feedback_center_deg_;
     double right_cmd = steering_feedback_right_stop_deg_;
     double left_cmd = steering_feedback_left_stop_deg_;
@@ -715,6 +759,9 @@ private:
     bool serial_enabled_touched = false;
     double drive_erpm_per_mps = drive_erpm_per_mps_;
     bool drive_erpm_per_mps_touched = false;
+    bool drive_erpm_lock_enabled = drive_erpm_lock_enabled_;
+    double drive_erpm_lock_abs = drive_erpm_lock_abs_;
+    bool drive_erpm_lock_touched = false;
     bool raw_commissioning_requested = raw_commissioning_enabled_;
     bool raw_commissioning_touched = false;
 
@@ -727,6 +774,18 @@ private:
           raw_commissioning_requested = parameter.as_bool(); raw_commissioning_touched = true;
         } else if (name == "drive_erpm_per_mps") {
           drive_erpm_per_mps = parameter.as_double(); drive_erpm_per_mps_touched = true;
+        } else if (name == "drive_erpm_lock_enabled") {
+          drive_erpm_lock_enabled = parameter.as_bool(); drive_erpm_lock_touched = true;
+        } else if (name == "drive_erpm_lock_abs") {
+          drive_erpm_lock_abs = parameter.as_double(); drive_erpm_lock_touched = true;
+        } else if (name == "steering_vesc_pos_left_deg") {
+          vesc_pos_left = parameter.as_double(); touched = true;
+        } else if (name == "steering_vesc_pos_center_deg") {
+          vesc_pos_center = parameter.as_double(); touched = true;
+        } else if (name == "steering_vesc_pos_right_deg") {
+          vesc_pos_right = parameter.as_double(); touched = true;
+        } else if (name == "steering_vesc_pos_calibration_saved_at") {
+          vesc_pos_saved_at = parameter.as_string(); touched = true;
         } else if (name == "steering_feedback_calibration_enabled") {
           enabled = parameter.as_bool(); touched = true;
         } else if (name == "steering_calibration_mode_enabled") {
@@ -802,6 +861,17 @@ private:
         raw_commissioning_enabled_ ? "ENABLED" : "DISABLED");
     }
 
+    if (drive_erpm_lock_touched) {
+      if (!std::isfinite(drive_erpm_lock_abs) || drive_erpm_lock_abs < 100.0 || drive_erpm_lock_abs > 20000.0) {
+        result.reason = "drive_erpm_lock_abs harus finite dan 100..20000 eRPM";
+        return result;
+      }
+      drive_erpm_lock_enabled_ = drive_erpm_lock_enabled;
+      drive_erpm_lock_abs_ = drive_erpm_lock_abs;
+      RCLCPP_WARN(get_logger(), "Drive eRPM hard lock %s at +/-%.1f eRPM",
+        drive_erpm_lock_enabled_ ? "ENABLED" : "DISABLED", drive_erpm_lock_abs_);
+    }
+
     if (drive_erpm_per_mps_touched) {
       if (!std::isfinite(drive_erpm_per_mps) || drive_erpm_per_mps < 100.0 || drive_erpm_per_mps > 50000.0) {
         result.reason = "drive_erpm_per_mps harus finite dan 100..50000 eRPM/(m/s)";
@@ -823,7 +893,13 @@ private:
       result.successful = true;
       result.reason = drive_erpm_per_mps_touched ?
         "drive_erpm_per_mps diterapkan live" :
-        "parameter tidak terkait steering calibration/serial";
+        (drive_erpm_lock_touched ? "drive eRPM hard lock diterapkan live" :
+         "parameter tidak terkait steering calibration/serial");
+      return result;
+    }
+    const bool vesc_pos_geometry_valid=validateVescPositionCalibration(vesc_pos_left,vesc_pos_center,vesc_pos_right);
+    if(!vesc_pos_geometry_valid){
+      result.reason="VESC POS calibration invalid: L/C/R harus 0..360 dan CENTER berada di antara LEFT/RIGHT";
       return result;
     }
     if (force_symmetric) {
@@ -858,11 +934,11 @@ private:
       std::isfinite(physical_left_deg) && std::isfinite(physical_right_deg) &&
       std::isfinite(physical_operational_deg) &&
       physical_left_deg < -1.0 && physical_right_deg > 1.0 &&
-      physical_common_max > 1.0 && physical_operational_deg >= 1.0 &&
+      physical_common_max + 1.0e-9 >= steering_vesc_pos_reference_deg_ && physical_operational_deg >= 1.0 &&
       physical_operational_deg <= physical_common_max + 1.0e-9;
     if (physical_enabled && !physical_geometry_valid) {
       result.reason =
-        "kalibrasi fisik invalid: LEFT harus negatif, RIGHT positif, dan operational <= sisi mekanik terkecil";
+        "kalibrasi fisik invalid: hard LEFT/RIGHT harus memuat reference +/-30 deg dan operational <= sisi mekanik terkecil";
       return result;
     }
     const bool lut_geometry_valid = validateSteeringLut(
@@ -896,15 +972,20 @@ private:
       return result;
     }
 
-    // Entering direct calibration mode must not jump the steering. Latch the
-    // currently measured protocol feedback (display convention) as the first hold command.
+    // Entering calibration mode must not jump the steering. The latch is now
+    // explicitly the raw VESC POS coordinate (0..360), not physical degrees.
     if (cal_mode && !steering_calibration_mode_enabled_) {
-      // Hold the command that was already being sent, not the measured feedback,
-      // so entering calibration mode does not intentionally create a position step.
       calibration_latched_command_deg_ = std::clamp(
-        diagnostic_steering_raw_target_deg_, -direct_limit, direct_limit);
+        diagnostic_steering_raw_target_deg_, 0.0, 360.0);
+      if (!std::isfinite(calibration_latched_command_deg_))
+        calibration_latched_command_deg_ = vesc_pos_center;
     }
 
+    steering_vesc_pos_left_deg_=vesc_pos_left;
+    steering_vesc_pos_center_deg_=vesc_pos_center;
+    steering_vesc_pos_right_deg_=vesc_pos_right;
+    steering_vesc_pos_calibration_saved_at_=vesc_pos_saved_at;
+    steering_vesc_pos_calibration_valid_=vesc_pos_geometry_valid;
     steering_feedback_calibration_enabled_ = enabled;
     steering_calibration_mode_enabled_ = cal_mode;
     steering_calibration_direct_limit_deg_ = direct_limit;
@@ -947,18 +1028,19 @@ private:
 
     result.successful = true;
     std::ostringstream message;
-    message << "LIVE steering calibration applied: CMD L/C/R="
-            << left_cmd << "/" << center_cmd << "/" << right_cmd
+    message << "LIVE steering calibration applied: VESC_POS L/C/R="
+            << vesc_pos_left << "/" << vesc_pos_center << "/" << vesc_pos_right
+            << " legacy_CMD L/C/R=" << left_cmd << "/" << center_cmd << "/" << right_cmd
             << " FB L/C/R=" << left_fb << "/" << center_fb << "/" << right_fb
             << " physical L/R=" << physical_left_deg << "/" << physical_right_deg
-            << " operational +/-" << (physical_enabled ? physical_operational_deg : steering_max_deg_)
+            << " operational +/-" << operationalPhysicalLimitDeg()
             << " cal_mode=" << (cal_mode ? "ON" : "OFF");
     result.reason = message.str();
     RCLCPP_WARN(
       get_logger(),
-      "[CAL-APPLY] %s | CMD L/C/R=%+.3f/%+.3f/%+.3f | FB L/C/R=%+.3f/%+.3f/%+.3f | logical +/-%.1f",
-      enabled ? "ACTIVE" : "OFF", left_cmd, center_cmd, right_cmd,
-      left_fb, center_fb, right_fb, steering_max_deg_);
+      "[CAL-APPLY] %s | VESC POS L/C/R=%.3f/%.3f/%.3f | physical operational +/-%.1f deg",
+      enabled ? "ACTIVE" : "OFF", vesc_pos_left, vesc_pos_center, vesc_pos_right,
+      operationalPhysicalLimitDeg());
     return result;
   }
 
@@ -986,10 +1068,27 @@ private:
         const auto t = now();
         teleop_source_ = msg->data;
         teleop_source_received_ = t;
-        const bool active = msg->data != "STOP" && msg->data != "IDLE" && msg->data != "";
-        if (active && msg->data != "E_STOP") {
+        const bool active = !msg->data.empty() && msg->data != "STOP" &&
+          msg->data != "IDLE" && msg->data != "E_STOP";
+        const bool clean_release = teleop_source_active_ &&
+          (msg->data.empty() || msg->data == "STOP" || msg->data == "IDLE");
+        if (active) {
+          teleop_source_active_ = true;
           teleop_takeover_until_ = t + rclcpp::Duration::from_seconds(manual_release_hold_sec_);
+        } else {
+          teleop_source_active_ = false;
+          if (clean_release) {
+            teleop_takeover_until_ = t + rclcpp::Duration::from_seconds(manual_release_hold_sec_);
+          }
         }
+      });
+
+    router_source_sub_ = create_subscription<std_msgs::msg::String>(
+      router_source_topic_, stateQos(),
+      [this](std_msgs::msg::String::SharedPtr msg) {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        router_source_ = msg->data;
+        router_source_received_ = now();
       });
 
     hmi_sub_ = create_subscription<geometry_msgs::msg::Twist>(
@@ -1066,6 +1165,9 @@ private:
         raw_commissioning_steering_deg_ = steering_deg;
         raw_commissioning_received_ = now();
         raw_commissioning_valid_ = true;
+        RCLCPP_INFO_THROTTLE(
+          get_logger(), *get_clock(), 1000,
+          "[RAW-COMMISSIONING] RX erpm=%.1f steering=%+.2f deg", erpm, steering_deg);
       });
 
     perception_state_sub_ = create_subscription<std_msgs::msg::String>(
@@ -1199,6 +1301,8 @@ private:
     };
     const bool source_fresh =
       fresh_stamp(teleop_source_received_, teleop_timeout_sec_);
+    const bool router_source_fresh =
+      fresh_stamp(router_source_received_, nav2_timeout_sec_);
     const bool teleop_fresh = teleop_.valid && fresh_stamp(teleop_.received, teleop_timeout_sec_);
     const bool hmi_source_fresh = fresh_stamp(hmi_source_received_, hmi_timeout_sec_);
     const bool hmi_fresh = hmi_.valid && fresh_stamp(hmi_.received, hmi_timeout_sec_);
@@ -1211,14 +1315,17 @@ private:
       teleop_source_ != "";
     const bool teleop_hold = teleop_takeover_until_.nanoseconds() > 0 &&
       t.nanoseconds() >= 0 && t <= teleop_takeover_until_;
-    const bool estop = global_estop_ || teleop_estop_ || (source_fresh && teleop_source_ == "E_STOP");
+    const bool router_estop = router_source_fresh && router_source_ == "E_STOP";
+    const bool estop = global_estop_ || teleop_estop_ || router_estop ||
+      (source_fresh && teleop_source_ == "E_STOP");
     const bool gate_ok = !require_autonomy_gate_ || (autonomy_gate_seen_ && autonomy_gate_);
-    // /cmd_vel is unified after the router/smoother. Routed TELEOP must remain usable
-    // even when the autonomy gate is closed, while routed AUTONOMY is checked again
-    // here as a second independent interlock at the actuator boundary.
-    const bool routed_teleop = source_fresh &&
-      (teleop_source_ == "TELEOP" || teleop_source_ == "TELEOP_RELEASE_HOLD");
-    const bool unified_cmd_gate_ok = routed_teleop || gate_ok;
+    // /cmd_vel is unified after the router/smoother. Classify it from the router's
+    // own source metadata, never from /teleop/active_source (JOYSTICK/KEYBOARD/STOP).
+    const bool routed_teleop = router_source_fresh &&
+      (router_source_ == "TELEOP" || router_source_ == "TELEOP_RELEASE_HOLD" ||
+       router_source_ == "TELEOP_STALE_STOP");
+    const bool routed_autonomy = router_source_fresh && router_source_ == "AUTONOMY";
+    const bool unified_cmd_gate_ok = routed_teleop || (routed_autonomy && gate_ok);
 
     if (estop) {
       selected.estop = true;
@@ -1226,35 +1333,36 @@ private:
       return selected;
     }
 
-    // TELEOP, physical HMI and ROS Web all belong to the same MANUAL tier.
-    // When more than one manual source is active, the freshest command wins;
-    // this avoids an arbitrary permanent priority inside the operator tier.
+    // Joystick/keyboard is the takeover authority. While active it cuts Nav2
+    // immediately. On release, force an exact 0,0 actuator command for one full
+    // second before any autonomous command may be considered again.
+    if (teleop_active) {
+      selected.twist = teleop_fresh ? clampManualTwist(teleop_.cmd) : geometry_msgs::msg::Twist{};
+      selected.source = teleop_fresh ? "TELEOP" : "TELEOP_STALE_STOP";
+      selected.teleop = true;
+      return selected;
+    }
+    if (teleop_hold) {
+      selected.twist = geometry_msgs::msg::Twist{};
+      selected.source = "TELEOP_RELEASE_HOLD";
+      selected.teleop = true;
+      return selected;
+    }
+
     const bool hmi_manual = hmi_fresh && hmi_active;
-    const bool teleop_manual = teleop_fresh && (teleop_active || teleop_hold);
-    if (hmi_manual || teleop_manual) {
-      const bool choose_hmi = hmi_manual &&
-        (!teleop_manual || hmi_.received.nanoseconds() >= teleop_.received.nanoseconds());
-      if (choose_hmi) {
-        selected.twist = clampTwist(hmi_.cmd);
-        selected.source = hmi_source_;
-      } else {
-        selected.twist = clampTwist(teleop_.cmd);
-        selected.source = teleop_active ? "TELEOP" : "TELEOP_RELEASE_HOLD";
-      }
+    if (hmi_manual) {
+      selected.twist = clampManualTwist(hmi_.cmd);
+      selected.source = hmi_source_;
       selected.teleop = true;
       return selected;
     }
 
     if (nav2_fresh && unified_cmd_gate_ok) {
-      selected.twist = clampTwist(nav2_.cmd);
-      // In the main stack /cmd_vel is the unified, smoothed command. The router
-      // source tells us whether angular.z still represents manual normalized
-      // steering or an autonomous yaw-rate request. This preserves steering
-      // semantics while guaranteeing joystick commands pass the velocity smoother.
+      selected.twist = routed_teleop ? clampManualTwist(nav2_.cmd) : clampTwist(nav2_.cmd);
       if (routed_teleop) {
         selected.teleop = true;
-        selected.source = teleop_source_;
-      } else {
+        selected.source = router_source_;
+      } else if (routed_autonomy) {
         selected.nav2 = true;
         selected.source = perception_state_fresh ?
           (std::string("PERCEPTION:") + perception_decision_) : "NAV2";
@@ -1262,7 +1370,8 @@ private:
       return selected;
     }
 
-    selected.source = unified_cmd_gate_ok ? "IDLE" : "NAV2_GATE_CLOSED";
+    selected.source = !router_source_fresh ? "CMD_ROUTER_STALE" :
+      (routed_autonomy && !gate_ok ? "NAV2_GATE_CLOSED" : "IDLE");
     return selected;
   }
 
@@ -1270,6 +1379,15 @@ private:
   {
     geometry_msgs::msg::Twist out{};
     out.linear.x = std::clamp(in.linear.x, -speed_max_mps_, speed_max_mps_);
+    const double max_yaw_rps = yaw_max_deg_s_ * kPi / 180.0;
+    out.angular.z = std::clamp(in.angular.z, -max_yaw_rps, max_yaw_rps);
+    return out;
+  }
+
+  geometry_msgs::msg::Twist clampManualTwist(const geometry_msgs::msg::Twist & in) const
+  {
+    geometry_msgs::msg::Twist out{};
+    out.linear.x = std::clamp(in.linear.x, -manual_speed_max_mps_, manual_speed_max_mps_);
     const double max_yaw_rps = yaw_max_deg_s_ * kPi / 180.0;
     out.angular.z = std::clamp(in.angular.z, -max_yaw_rps, max_yaw_rps);
     return out;
@@ -1340,6 +1458,49 @@ private:
     return steering_lut_motion_direction_;
   }
 
+  static bool validateVescPositionCalibration(double left, double center, double right)
+  {
+    const auto in_range=[](double v){return std::isfinite(v) && v>=0.0 && v<=360.0;};
+    if(!in_range(left)||!in_range(center)||!in_range(right)) return false;
+    const double ls=left-center, rs=right-center;
+    return std::abs(ls)>=1.0 && std::abs(rs)>=1.0 && ls*rs<0.0;
+  }
+
+  double physicalToVescPositionDeg(double physical_deg) const
+  {
+    physical_deg=clampPhysicalSteeringDeg(physical_deg);
+    const double ref=std::max(1.0e-9,steering_vesc_pos_reference_deg_);
+    double pos=steering_vesc_pos_center_deg_;
+    if(physical_deg>0.0){
+      const double r=std::clamp(physical_deg/ref,0.0,1.0);
+      pos=steering_vesc_pos_center_deg_+r*(steering_vesc_pos_right_deg_-steering_vesc_pos_center_deg_);
+    }else if(physical_deg<0.0){
+      const double r=std::clamp((-physical_deg)/ref,0.0,1.0);
+      pos=steering_vesc_pos_center_deg_+r*(steering_vesc_pos_left_deg_-steering_vesc_pos_center_deg_);
+    }
+    return std::clamp(pos,0.0,360.0);
+  }
+
+  double vescPositionToPhysicalDeg(double pos_deg) const
+  {
+    pos_deg=std::clamp(pos_deg,0.0,360.0);
+    const double d=pos_deg-steering_vesc_pos_center_deg_;
+    if(std::abs(d)<=1.0e-9) return 0.0;
+    const double rs=steering_vesc_pos_right_deg_-steering_vesc_pos_center_deg_;
+    const double ls=steering_vesc_pos_left_deg_-steering_vesc_pos_center_deg_;
+    const double ref=std::max(1.0e-9,steering_vesc_pos_reference_deg_);
+    double physical=0.0;
+    if(d*rs>0.0 && std::abs(rs)>1.0e-9){
+      physical=(d/rs)*ref;
+    }else if(d*ls>0.0 && std::abs(ls)>1.0e-9){
+      physical=-(d/ls)*ref;
+    }else{
+      return 0.0;
+    }
+    physical=std::clamp(physical,leftPhysicalLimitDeg(),rightPhysicalLimitDeg());
+    return std::abs(physical)<=steering_straight_deadband_deg_?0.0:physical;
+  }
+
   double leftPhysicalLimitDeg() const
   {
     if (steering_physical_calibration_enabled_ && steering_physical_calibration_valid_) {
@@ -1397,6 +1558,11 @@ private:
       const double fraction = max_yaw_rps > 1.0e-9
         ? std::clamp(selected.twist.angular.z / max_yaw_rps, -1.0, 1.0)
         : 0.0;
+      steering_deg = fraction * operationalPhysicalLimitDeg();
+    } else if (selected.source.rfind("HMI_", 0) == 0) {
+      const double max_yaw_rps = yaw_max_deg_s_ * kPi / 180.0;
+      const double fraction = max_yaw_rps > 1.0e-9
+        ? std::clamp(selected.twist.angular.z / max_yaw_rps, -1.0, 1.0) : 0.0;
       steering_deg = fraction * operationalPhysicalLimitDeg();
     } else if (selected.nav2) {
       // ROS/Nav2 uses REP-103: +angular.z = CCW/left turn. The deployed steering
@@ -1526,71 +1692,6 @@ private:
     std_msgs::msg::String status; status.data = ss.str(); yaw_rate_feedback_status_pub_->publish(status);
   }
 
-  double uncalibratedSteeringTargetDeg(double physical_deg)
-  {
-    physical_deg = clampPhysicalSteeringDeg(physical_deg);
-
-    if (steering_physical_lut_enabled_ && steering_physical_lut_valid_) {
-      const int direction = updateSteeringLutDirection(physical_deg);
-      if (std::abs(physical_deg) <= steering_center_hold_request_deadband_deg_) {
-        const auto avg_cmd = averageLut(
-          steering_lut_command_increasing_deg_, steering_lut_command_decreasing_deg_);
-        return interpolateMonotonic(physical_deg, steering_lut_physical_deg_, avg_cmd);
-      }
-      const auto & lut = direction < 0 ?
-        steering_lut_command_decreasing_deg_ : steering_lut_command_increasing_deg_;
-      return interpolateMonotonic(physical_deg, steering_lut_physical_deg_, lut);
-    }
-    if (!steering_feedback_calibration_enabled_ || !steering_feedback_calibration_valid_) {
-      return physical_deg;
-    }
-
-    if (std::abs(physical_deg) <= 1.0e-9) {
-      return steering_feedback_center_deg_;
-    }
-
-    // Convert REAL wheel angle to STM protocol command. Protocol
-    // endpoints and physical wheel endpoints are deliberately separate domains.
-    if (steering_physical_calibration_enabled_ && steering_physical_calibration_valid_) {
-      if (physical_deg > 0.0) {
-        const double ratio = std::clamp(
-          physical_deg / steering_physical_right_limit_deg_, 0.0, 1.0);
-        return steering_feedback_center_deg_ +
-               ratio * (steering_feedback_effective_right_stop_deg_ - steering_feedback_center_deg_);
-      }
-      const double ratio = std::clamp(
-        physical_deg / steering_physical_left_limit_deg_, 0.0, 1.0);
-      return steering_feedback_center_deg_ +
-             ratio * (steering_feedback_effective_left_stop_deg_ - steering_feedback_center_deg_);
-    }
-
-    // Uncalibrated fallback keeps the Ackermann wheel-angle domain separate from
-    // the STM/FOC protocol domain. The full SAFE operational wheel span maps to
-    // the configured STM endpoints (normally -90..+90 deg), so a 28 deg wheel
-    // safety limit no longer truncates the motor protocol command to about 28 deg.
-    const double operational_deg = std::max(1.0e-9, operationalPhysicalLimitDeg());
-    if (physical_deg > 0.0) {
-      const double ratio = std::clamp(physical_deg / operational_deg, 0.0, 1.0);
-      return steering_feedback_center_deg_ +
-             ratio * (steering_feedback_effective_right_stop_deg_ - steering_feedback_center_deg_);
-    }
-    const double ratio = std::clamp((-physical_deg) / operational_deg, 0.0, 1.0);
-    return steering_feedback_center_deg_ +
-           ratio * (steering_feedback_effective_left_stop_deg_ - steering_feedback_center_deg_);
-  }
-
-  double stmFromUncalibratedDeg(double uncalibrated_deg) const
-  {
-    // Saved GUI points use the legacy DISPLAY convention (feedback after
-    // invert_steering). Convert that convention back to STM hardware polarity.
-    return uncalibrated_deg * (invert_steering_ ? -1.0 : 1.0);
-  }
-
-  double stmSteeringCommandDeg(double calibrated_deg)
-  {
-    return stmFromUncalibratedDeg(uncalibratedSteeringTargetDeg(calibrated_deg));
-  }
-
   void resetCenterHold()
   {
     steering_center_hold_active_ = false;
@@ -1600,125 +1701,6 @@ private:
     last_center_hold_p_deg_ = 0.0;
     last_center_hold_error_deg_ = 0.0;
     last_center_hold_measured_uncal_deg_ = steering_feedback_center_reference_deg_;
-  }
-
-  void pauseCenterHoldPreserveTrim()
-  {
-    // A turn must pause center adaptation, but must NOT erase the bounded trim
-    // that was learned while the wheel was physically centered. Erasing it made
-    // the return-to-center command jump back to the raw 3-point center and could
-    // leave the wheel near its operational limit after every Nav2 turn.
-    steering_center_hold_active_ = false;
-    steering_center_hold_last_update_ = std::chrono::steady_clock::now();
-    last_center_hold_p_deg_ = 0.0;
-    last_center_hold_trim_deg_ = steering_center_hold_trim_state_deg_;
-  }
-
-  double centerHeldUncalibratedTargetDeg(double calibrated_target_deg, double base_protocol_cmd_deg)
-  {
-    const auto now_steady = std::chrono::steady_clock::now();
-    last_center_hold_p_deg_ = 0.0;
-
-    // Remember the direction from which the mechanism will later return to center.
-    if (calibrated_target_deg < -steering_center_hold_request_deadband_deg_) {
-      last_steering_direction_ = -1;
-      pauseCenterHoldPreserveTrim();
-      return base_protocol_cmd_deg;
-    }
-    if (calibrated_target_deg > steering_center_hold_request_deadband_deg_) {
-      last_steering_direction_ = +1;
-      pauseCenterHoldPreserveTrim();
-      return base_protocol_cmd_deg;
-    }
-
-    if (!steering_center_hold_enabled_ || !steering_feedback_calibration_enabled_ ||
-        !steering_feedback_calibration_valid_ || steering_calibration_mode_enabled_) {
-      resetCenterHold();
-      return base_protocol_cmd_deg;
-    }
-
-    bool feedback_ok = false;
-    double measured_hw_deg = 0.0;
-    std::chrono::steady_clock::time_point ack_time;
-    {
-      std::lock_guard<std::mutex> lock(feedback_mutex_);
-      feedback_ok = ack_seen_;
-      measured_hw_deg = measured_steering_deg_;
-      ack_time = last_ack_time_;
-    }
-    if (!feedback_ok) {
-      pauseCenterHoldPreserveTrim();
-      return base_protocol_cmd_deg;
-    }
-
-    const double age = std::chrono::duration<double>(now_steady - ack_time).count();
-    if (age > steering_center_hold_feedback_timeout_sec_) {
-      pauseCenterHoldPreserveTrim();
-      return base_protocol_cmd_deg;
-    }
-
-    const double measured_protocol_deg = measured_hw_deg * (invert_steering_ ? -1.0 : 1.0);
-    const double error_deg = steering_feedback_center_reference_deg_ - measured_protocol_deg;
-    last_center_hold_error_deg_ = error_deg;
-    last_center_hold_measured_uncal_deg_ = measured_protocol_deg;
-
-    // Direction-specific feed-forward is optional and defaults to zero. It can be
-    // populated later without changing the 3-point calibration geometry.
-    double direction_bias = 0.0;
-    if (last_steering_direction_ < 0) direction_bias = steering_center_bias_from_left_deg_;
-    if (last_steering_direction_ > 0) direction_bias = steering_center_bias_from_right_deg_;
-    const double biased_base = base_protocol_cmd_deg + direction_bias;
-
-    if (std::abs(error_deg) > steering_center_hold_capture_deg_) {
-      // Outside the adaptation capture window, retain the previously learned
-      // bounded center trim instead of discarding it. This gives the actuator a
-      // deterministic path back toward center after a full steering excursion.
-      pauseCenterHoldPreserveTrim();
-      last_center_hold_error_deg_ = error_deg;
-      last_center_hold_measured_uncal_deg_ = measured_protocol_deg;
-      return std::clamp(
-        biased_base + steering_center_hold_trim_state_deg_, -90.0, 90.0);
-    }
-
-    double dt = 0.0;
-    if (!steering_center_hold_active_) {
-      steering_center_hold_active_ = true;
-      steering_center_hold_last_update_ = now_steady;
-      // Keep the retained trim from the previous centered episode. Adaptation
-      // below may refine it, but a normal steering turn never resets it to zero.
-    } else {
-      dt = std::clamp(
-        std::chrono::duration<double>(now_steady - steering_center_hold_last_update_).count(),
-        0.0, 0.10);
-      steering_center_hold_last_update_ = now_steady;
-    }
-
-    const bool inside_deadband =
-      std::abs(error_deg) <= steering_center_hold_feedback_deadband_deg_;
-
-    // Bounded center take-up. This is deliberately NOT an unbounded PI
-    // integrator: trim_state is clamped and survives normal steering turns so
-    // return-to-center remains repeatable. It is cleared only when center-hold
-    // itself is disabled/invalidated, not on each commanded turn.
-    if (!inside_deadband && dt > 0.0) {
-      const double requested_delta = steering_center_hold_adapt_gain_per_sec_ * error_deg * dt;
-      const double max_delta = steering_center_hold_trim_rate_deg_s_ * dt;
-      steering_center_hold_trim_state_deg_ += std::clamp(requested_delta, -max_delta, max_delta);
-    } else if (inside_deadband && !steering_center_hold_latch_inside_deadband_) {
-      steering_center_hold_trim_state_deg_ = 0.0;
-    }
-    steering_center_hold_trim_state_deg_ = std::clamp(
-      steering_center_hold_trim_state_deg_,
-      -steering_center_hold_max_trim_deg_,
-      steering_center_hold_max_trim_deg_);
-
-    const double p_term = inside_deadband ? 0.0 : std::clamp(
-      steering_center_hold_kp_ * error_deg, -3.0, 3.0);
-    last_center_hold_p_deg_ = p_term;
-    last_center_hold_trim_deg_ = steering_center_hold_trim_state_deg_;
-
-    return std::clamp(
-      biased_base + steering_center_hold_trim_state_deg_ + p_term, -90.0, 90.0);
   }
 
   double driveErpmPerMps() const
@@ -1731,15 +1713,21 @@ private:
     return erpm / driveErpmPerMps();
   }
 
-  double rightCommandLimitErpm() const
+  double rightCommandLimitErpm(bool manual_override = false) const
   {
-    return speed_max_mps_ * driveErpmPerMps();
+    double limit = (manual_override ? manual_speed_max_mps_ : speed_max_mps_) * driveErpmPerMps();
+    // Commissioning/NAV2 lock must never cripple a human takeover. Manual
+    // TELEOP/HMI commands keep the calibrated manual envelope, while autonomous
+    // and raw commissioning remain bounded by drive_erpm_lock_abs_.
+    if (drive_erpm_lock_enabled_ && !manual_override)
+      limit = std::min(limit, drive_erpm_lock_abs_);
+    return std::max(0.0, limit);
   }
 
   double rightErpmFor(const Selected & selected) const
   {
     if (selected.estop) return 0.0;
-    const double limit_erpm = rightCommandLimitErpm();
+    const double limit_erpm = rightCommandLimitErpm(selected.teleop);
     double erpm = selected.twist.linear.x * driveErpmPerMps();
     erpm = std::clamp(erpm, -limit_erpm, limit_erpm);
     if (invert_drive_) erpm = -erpm;
@@ -1752,7 +1740,16 @@ private:
     std::lock_guard<std::mutex> lock(raw_commissioning_mutex_);
     if (!raw_commissioning_valid_ || raw_commissioning_received_.nanoseconds() <= 0) return false;
     const double age = (t - raw_commissioning_received_).seconds();
-    if (age < 0.0 || age > raw_commissioning_timeout_sec_) return false;
+    if (age < 0.0 || age > raw_commissioning_timeout_sec_) {
+      raw_commissioning_valid_ = false;
+      raw_commissioning_erpm_ = 0.0;
+      raw_commissioning_steering_deg_ = 0.0;
+      RCLCPP_WARN(
+        get_logger(),
+        "[RAW-COMMISSIONING] expired age=%.3f sec timeout=%.3f; command invalidated",
+        age, raw_commissioning_timeout_sec_);
+      return false;
+    }
     erpm = raw_commissioning_erpm_;
     steering_deg = raw_commissioning_steering_deg_;
     return std::isfinite(erpm) && std::isfinite(steering_deg);
@@ -1779,19 +1776,22 @@ private:
       (raw_commissioning_active ? steering_feedforward_deg :
        applyYawRateFeedback(selected, steering_feedforward_deg, t));
 
-    double protocol_cmd_deg = 0.0;  // display convention; converted to STM polarity below
+    double protocol_cmd_deg = physicalToVescPositionDeg(steering_deg);
+    if (raw_commissioning_active) {
+      const double lock = rightCommandLimitErpm();
+      raw_erpm = std::clamp(raw_erpm, -lock, lock);
+    }
     double right_erpm = maintenance_active ? 0.0 :
       (raw_commissioning_active ? raw_erpm : rightErpmFor(selected));
     std::string effective_source = maintenance_active ? maintenance_owner :
       (raw_commissioning_active ? "RAW_COMMISSIONING" : selected.source);
 
     if (maintenance_active) {
-      resetCenterHold();
-    } else if (raw_commissioning_active) {
-      protocol_cmd_deg = steering_deg;
+      protocol_cmd_deg = steering_vesc_pos_center_deg_;
       resetCenterHold();
     } else if (steering_calibration_mode_enabled_ && !selected.estop) {
-      // Direct calibration uses the freshest teleop Twist directly, not mux labels.
+      // Calibration mode intentionally drives the raw VESC 0..360 coordinate.
+      // The drive motor is forced to zero; operator can sweep LEFT position only.
       double teleop_yaw = 0.0;
       bool teleop_fresh_direct = false;
       {
@@ -1802,49 +1802,30 @@ private:
         if (teleop_fresh_direct) teleop_yaw = teleop_.cmd.angular.z;
       }
       const double yaw_scale = yaw_max_deg_s_ * kPi / 180.0;
-      const double direct_fraction = (teleop_fresh_direct && yaw_scale > 1.0e-9)
+      const double fraction = (teleop_fresh_direct && yaw_scale > 1.0e-9)
         ? std::clamp(teleop_yaw / yaw_scale, -1.0, 1.0) : 0.0;
-      if (std::abs(direct_fraction) > 0.02) {
-        calibration_latched_command_deg_ = std::clamp(
-          direct_fraction * steering_calibration_direct_limit_deg_,
-          -steering_calibration_direct_limit_deg_, steering_calibration_direct_limit_deg_);
+      if (std::abs(fraction) > 0.02) {
+        calibration_latched_command_deg_ = fraction >= 0.0
+          ? steering_vesc_pos_center_deg_ + fraction * (360.0 - steering_vesc_pos_center_deg_)
+          : steering_vesc_pos_center_deg_ + (-fraction) * (0.0 - steering_vesc_pos_center_deg_);
       }
-      protocol_cmd_deg = calibration_latched_command_deg_;
+      protocol_cmd_deg = std::clamp(calibration_latched_command_deg_, 0.0, 360.0);
       right_erpm = 0.0;
-      effective_source = "STEERING_CALIBRATION_DIRECT";
-      resetCenterHold();
-    } else if (selected.source.rfind("HMI_", 0) == 0) {
-      // HMI/Web steering is intentionally a full-scale STM protocol request.
-      // The operator-visible command domain is -90..+90 deg, while
-      // steering_deg above remains the separate calibrated PHYSICAL wheel target.
-      // This prevents the historical +/-30 physical fallback from silently
-      // shrinking a full LEFT/RIGHT HMI command before it reaches the STM.
-      const double yaw_scale = yaw_max_deg_s_ * kPi / 180.0;
-      const double fraction = yaw_scale > 1.0e-9
-        ? std::clamp(selected.twist.angular.z / yaw_scale, -1.0, 1.0)
-        : 0.0;
-      if (fraction > 0.0) {
-        protocol_cmd_deg = steering_feedback_center_deg_ +
-          fraction * (steering_feedback_effective_right_stop_deg_ - steering_feedback_center_deg_);
-      } else if (fraction < 0.0) {
-        protocol_cmd_deg = steering_feedback_center_deg_ +
-          (-fraction) * (steering_feedback_effective_left_stop_deg_ - steering_feedback_center_deg_);
-      } else {
-        protocol_cmd_deg = steering_feedback_center_deg_;
-      }
-      protocol_cmd_deg = std::clamp(protocol_cmd_deg, -steering_max_deg_, steering_max_deg_);
+      effective_source = "STEERING_CALIBRATION_RAW_POS";
       resetCenterHold();
     } else {
-      const double base_protocol_cmd_deg = uncalibratedSteeringTargetDeg(steering_deg);
-      protocol_cmd_deg = centerHeldUncalibratedTargetDeg(steering_deg, base_protocol_cmd_deg);
+      // Normal ROS/ROS Web/HMI/Nav2 path: physical wheel degrees are converted
+      // exactly once to the calibrated raw VESC POS coordinate.
+      protocol_cmd_deg = physicalToVescPositionDeg(steering_deg);
+      resetCenterHold();
     }
 
-    const double steering_stm_deg = stmFromUncalibratedDeg(protocol_cmd_deg);
 
     geometry_msgs::msg::Twist actuator = selected.twist;
+    // Publish the actuator-boundary command, not the pre-lock request.
+    actuator.linear.x = driveMpsFromErpm(right_erpm);
     if (raw_commissioning_active) {
-      actuator = geometry_msgs::msg::Twist{};
-      actuator.linear.x = driveMpsFromErpm(right_erpm);
+      actuator.angular.z = 0.0;
     }
     if (maintenance_active || selected.estop || (steering_calibration_mode_enabled_ && !raw_commissioning_active))
       actuator = geometry_msgs::msg::Twist{};
@@ -1856,23 +1837,22 @@ private:
 
     std_msgs::msg::Float64 drive_target;
     drive_target.data = (maintenance_active || selected.estop || (steering_calibration_mode_enabled_ && !raw_commissioning_active)) ?
-      0.0 : (raw_commissioning_active ? driveMpsFromErpm(right_erpm) : selected.twist.linear.x);
+      0.0 : driveMpsFromErpm(right_erpm);
     drive_target_pub_->publish(drive_target);
     std_msgs::msg::Float64 steering_target;
     steering_target.data = steering_deg * kPi / 180.0;
     steering_target_pub_->publish(steering_target);
     std_msgs::msg::Float64 steering_uncal_target;
-    // For STM32/VESC the externally useful protocol-domain value is the standard
-    // VESC position 0..360 deg. Legacy transports retain their historical signed
-    // command domain. Physical steering remains on /esc/steering_target_rad.
-    const double protocol_visible_deg = vescPositionDegFromPhysicalSteering(steering_deg);
-    steering_uncal_target.data = protocol_visible_deg * kPi / 180.0;
+    // Existing *_rad topic names are retained for compatibility, but their value
+    // is the raw VESC POS angle converted to radians. Physical target remains on
+    // /esc/steering_target_rad and physical feedback on /esc/steering_actual_rad.
+    steering_uncal_target.data = protocol_cmd_deg * kPi / 180.0;
     steering_uncal_target_pub_->publish(steering_uncal_target);
     steering_protocol_command_pub_->publish(steering_uncal_target);
 
     SerialCommand serial_cmd;
-    const double transport_steering_deg = steering_deg;
-    serial_cmd.left_cdeg = static_cast<std::int16_t>(std::lround(transport_steering_deg * 100.0));
+    serial_cmd.left_cdeg = static_cast<std::int16_t>(std::lround(steering_deg * 100.0));
+    serial_cmd.left_vesc_pos_deg = protocol_cmd_deg;
     serial_cmd.stm32_right_erpm = right_erpm;
     const double legacy_right_x10 = std::clamp(right_erpm * 10.0, -32768.0, 32767.0);
     serial_cmd.right_erpm_x10 = static_cast<std::int16_t>(std::lround(legacy_right_x10));
@@ -1888,11 +1868,9 @@ private:
       last_logged_source_ = source;
       RCLCPP_INFO(
         get_logger(),
-        "MUX -> %s | v=%.3f m/s yaw=%.3f rad/s | steer_target=%.2f deg uncal_target=%.2f deg "
-        "center_fb=%+.2f err=%+.2f P=%+.2f trim_state=%+.2f deg STM=%.2f deg right_target=%.1f eRPM",
+        "MUX -> %s | v=%.3f m/s yaw=%.3f rad/s | physical_target=%+.2f deg VESC_POS=%.2f deg right_target=%.1f eRPM",
         effective_source.c_str(), actuator.linear.x, actuator.angular.z, steering_deg,
-        protocol_cmd_deg, last_center_hold_measured_uncal_deg_, last_center_hold_error_deg_,
-        last_center_hold_p_deg_, last_center_hold_trim_deg_, steering_stm_deg, right_erpm);
+        protocol_cmd_deg, right_erpm);
     }
 
     diagnostic_source_ = effective_source;
@@ -2100,7 +2078,7 @@ private:
   std::vector<std::uint8_t> buildNativeRuntimeBatch(const SerialCommand &cmd, bool include_calibration)
   {
     std::vector<std::uint8_t> batch; batch.reserve(96U);
-    appendVescSetPos(batch, static_cast<double>(cmd.left_cdeg) * 0.01);
+    appendVescSetPos(batch, cmd.left_vesc_pos_deg);
     appendVescSetErpm(batch, cmd.stm32_right_erpm);
     appendVescValuesRequest(batch, false);
     appendVescValuesRequest(batch, true);
@@ -2108,10 +2086,10 @@ private:
     return batch;
   }
 
-  std::vector<std::uint8_t> buildNativeSafeStopBatch(double steering_deg)
+  std::vector<std::uint8_t> buildNativeSafeStopBatch(double vesc_pos_deg)
   {
     std::vector<std::uint8_t> batch; batch.reserve(72U);
-    for (int i=0; i<3; ++i) { appendVescSetErpm(batch, 0.0); appendVescSetPos(batch, steering_deg); }
+    for (int i=0; i<3; ++i) { appendVescSetErpm(batch, 0.0); appendVescSetPos(batch, vesc_pos_deg); }
     return batch;
   }
 
@@ -2207,11 +2185,14 @@ private:
     batch.insert(batch.end(), frame.begin(), frame.end());
   }
 
-  void appendVescSetPos(std::vector<std::uint8_t> &batch, double physical_deg)
+  void appendVescSetPos(std::vector<std::uint8_t> &batch, double pos_deg)
   {
-    const double vesc_pos_deg = vescPositionDegFromPhysicalSteering(physical_deg);
+    /* All external owners use the same VESC Tool-compatible LEFT position wire
+     * contract: COMM_SET_POS, float32 scale 1e6, actuator coordinate 0..360.
+     * Only ROS performs physical wheel-degree calibration before reaching here. */
+    pos_deg=std::clamp(pos_deg,0.0,360.0);
     std::vector<std::uint8_t> payload{kVescSetPos};
-    appendI32Be(payload, static_cast<std::int32_t>(std::lround(vesc_pos_deg * 1000000.0)));
+    appendI32Be(payload, static_cast<std::int32_t>(std::lround(pos_deg * 1000000.0)));
     appendVescFrame(batch, payload);
   }
 
@@ -2250,32 +2231,10 @@ private:
       : std::chrono::duration<double>(now_steady - command_stamp).count();
     if (!std::isfinite(age) || age > command_watchdog_sec_) {
       cmd = SerialCommand{};
-      cmd.left_cdeg = static_cast<std::int16_t>(
-        0);
+      cmd.left_cdeg = 0;
+      cmd.left_vesc_pos_deg = steering_vesc_pos_center_deg_;
     }
     return cmd;
-  }
-
-  static double vescPositionDegFromPhysicalSteering(double physical_deg)
-  {
-    // Canonical Ackermann -> VESC steering scale. Do not insert another center
-    // offset, LUT, or electrical-encoder inversion in this layer.
-    //   -30 deg physical = VESC POS   0 deg
-    //     0 deg physical = VESC POS 180 deg
-    //   +30 deg physical = VESC POS 360 deg
-    physical_deg = std::clamp(physical_deg, -30.0, 30.0);
-    return std::clamp((physical_deg + 30.0) * 6.0, 0.0, 360.0);
-  }
-
-  static double signedPositionDeg(double vesc_position_deg)
-  {
-    /* LEFT VESC position is intentionally the standard 0..360 widget:
-     *   0 -> -30 deg physical, 180 -> 0 deg center, 360 -> +30 deg.
-     * ROS/Nav2 must always see signed physical steering centered at zero. */
-    if (!std::isfinite(vesc_position_deg)) return 0.0;
-    while (vesc_position_deg < 0.0) vesc_position_deg += 360.0;
-    while (vesc_position_deg > 360.0) vesc_position_deg -= 360.0;
-    return std::clamp(-30.0 + (vesc_position_deg / 6.0), -30.0, 30.0);
   }
 
   void handleVescValues(const std::vector<std::uint8_t> &p)
@@ -2317,7 +2276,10 @@ private:
     {
       std::lock_guard<std::mutex> lock(feedback_mutex_);
       if (vesc_id == 1U) {
-        measured_steering_deg_ = signedPositionDeg(position_deg);
+        /* LEFT GET_VALUES.position is the public raw steering actuator coordinate
+         * 0..360. Convert it back to vehicle physical degrees only inside ROS. */
+        measured_steering_vesc_pos_deg_ = std::clamp(position_deg, 0.0, 360.0);
+        measured_steering_deg_ = vescPositionToPhysicalDeg(measured_steering_vesc_pos_deg_);
         left_fault_code_ = fault;
         left_values_seen_ = true;
         left_values_time_ = t;
@@ -2388,7 +2350,8 @@ private:
       steering_span_counts_=readI32Be(&payload[7]);
       steering_raw_count_=readI32Be(&payload[11]);
       steering_raw_target_=readI32Be(&payload[15]);
-      measured_steering_deg_=static_cast<double>(readI32Be(&payload[19]))/1000.0;
+      // payload[19] remains F103-internal normalized steering diagnostics.
+      // Runtime physical feedback authority is GET_VALUES.position -> ROS calibration.
     }
   }
 
@@ -2608,7 +2571,7 @@ private:
       if (maintenance != previous_maintenance) {
         if (maintenance && direct_enter_safe_stop_pending_.exchange(false)) {
           const SerialCommand safe = currentSafeCommand(std::chrono::steady_clock::now());
-          const auto stop = buildNativeSafeStopBatch(static_cast<double>(safe.left_cdeg) * 0.01);
+          const auto stop = buildNativeSafeStopBatch(safe.left_vesc_pos_deg);
           if (!writeDirectBytes(fd, stop)) {
             ::close(fd); fd = -1; serial_connected_.store(false); publishDirectConnected(false);
             { std::lock_guard<std::mutex> lock(serial_state_mutex_); serial_active_path_.clear(); }
@@ -2675,7 +2638,7 @@ private:
     if (fd >= 0) {
       if (safe_stop_requested_.load()) {
         const SerialCommand safe = currentSafeCommand(std::chrono::steady_clock::now());
-        const auto stop = buildNativeSafeStopBatch(static_cast<double>(safe.left_cdeg) * 0.01);
+        const auto stop = buildNativeSafeStopBatch(safe.left_vesc_pos_deg);
         (void)writeDirectBytes(fd, stop);
         RCLCPP_INFO(get_logger(), "[ESC] SAFE SHUTDOWN native VESC drive=0; closing %s", active_path.c_str());
       }
@@ -2691,7 +2654,9 @@ private:
      * Do not apply the obsolete three-point STM protocol calibration again;
      * doing so moves a true 0-degree center away from ROS zero. */
     if (transport_mode_ == "direct_vesc") {
-      const double physical_deg = clampPhysicalSteeringDeg(measured_raw_deg);
+      // Commands are limited to the operational envelope, but measured feedback
+      // may legitimately extend beyond +/-30 when the mechanical travel is wider.
+      const double physical_deg = std::clamp(measured_raw_deg, leftPhysicalLimitDeg(), rightPhysicalLimitDeg());
       return std::abs(physical_deg) <= steering_straight_deadband_deg_ ? 0.0 : physical_deg;
     }
 
@@ -2796,6 +2761,7 @@ private:
     bool ack_seen = false;
     bool feedback_updated = false;
     double steering_deg = 0.0;
+    double steering_vesc_pos_deg = steering_vesc_pos_center_deg_;
     double erpm = 0.0;
     std::uint8_t status = 0U;
     std::uint16_t ack_seq = 0U;
@@ -2806,6 +2772,7 @@ private:
       feedback_updated = feedback_updated_;
       feedback_updated_ = false;
       steering_deg = measured_steering_deg_;
+      steering_vesc_pos_deg = measured_steering_vesc_pos_deg_;
       erpm = measured_erpm_;
       status = feedback_status_;
       ack_seq = last_ack_seq_;
@@ -2839,7 +2806,7 @@ private:
     boolean.data = ack_fresh && left_ready;
     steer_connected_pub_->publish(boolean);
 
-    const double steering_uncalibrated_deg = steering_deg;
+    const double steering_uncalibrated_deg = steering_vesc_pos_deg;
     const double steering_calibrated_deg = calibratedSteeringDeg(steering_deg);
 
     const auto diag_now = std::chrono::steady_clock::now();
@@ -2849,7 +2816,7 @@ private:
       RCLCPP_INFO(
         get_logger(),
         "[ESC-TRACE] src=%s drive_cmd=%.3f m/s target=%.1f eRPM actual=%.1f eRPM err=%+.1f eRPM | "
-        "steer_target=%+.2f deg protocol_cmd=%+.2f deg protocol_fb=%+.2f deg cal_fb=%+.2f deg",
+        "steer_target=%+.2f deg vesc_pos_cmd=%.2f deg vesc_pos_fb=%.2f deg physical_fb=%+.2f deg",
         diagnostic_source_.c_str(), diagnostic_drive_target_mps_, diagnostic_drive_target_erpm_,
         erpm, diagnostic_drive_target_erpm_ - erpm, diagnostic_steering_target_deg_,
         diagnostic_steering_raw_target_deg_, steering_uncalibrated_deg, steering_calibrated_deg);
@@ -2863,8 +2830,11 @@ private:
         << " path=" << (active_path.empty() ? "-" : active_path)
         << " ack=" << (ack_fresh ? "fresh" : "stale")
         << " seq=" << ack_seq
-        << " protocol_fb=" << steering_uncalibrated_deg << "deg"
+        << " vesc_pos_fb=" << steering_uncalibrated_deg << "deg"
         << " steer=" << steering_calibrated_deg << "deg"
+        << " vesc_pos_cal=" << (steering_vesc_pos_calibration_valid_ ? "valid" : "invalid")
+        << " vesc_pos_LCR=" << steering_vesc_pos_left_deg_ << "/"
+        << steering_vesc_pos_center_deg_ << "/" << steering_vesc_pos_right_deg_
         << " cal=" << ((steering_feedback_calibration_enabled_ &&
                          steering_feedback_calibration_valid_) ? "on" : "off")
         << " physical_cal=" << ((steering_physical_calibration_enabled_ &&
@@ -2884,8 +2854,13 @@ private:
     if (!ack_fresh || !feedback_updated) return;
 
     // Direct command mapping defines speed_max_mps <-> calibrated eRPM limit.
-    const double drive_mps = driveMpsFromErpm(erpm) * (invert_drive_ ? -1.0 : 1.0);
-    const double drive_raw_mps = drive_mps;
+    const double drive_raw_mps = driveMpsFromErpm(erpm) * (invert_drive_ ? -1.0 : 1.0);
+    // During active zero-speed hold the Hall/FOC estimator can dither around zero
+    // while braking torque is applied. Do not integrate that estimator dither as
+    // vehicle motion. Preserve raw feedback on /esc/drive_raw_mps and FOC telemetry.
+    const bool zero_hold_feedback = std::abs(diagnostic_drive_target_mps_) < 1.0e-4 &&
+      std::abs(static_cast<double>(erpm)) <= zero_hold_feedback_deadband_erpm_;
+    const double drive_mps = zero_hold_feedback ? 0.0 : drive_raw_mps;
     const double steering_rad = steering_calibrated_deg * kPi / 180.0;
     // steering_rad adalah sudut roda DALAM Ackermann (RIGHT-positive).
     // R_center = track/2 + L/tan(|delta_inner|).
@@ -2976,6 +2951,7 @@ private:
   // ROS parameters
   std::string teleop_topic_;
   std::string teleop_source_topic_;
+  std::string router_source_topic_{"/navigation/cmd_mux/source"};
   std::string teleop_estop_topic_;
   std::string hmi_topic_{"/hmi/cmd_vel"};
   std::string hmi_source_topic_{"/hmi/active_source"};
@@ -2991,17 +2967,27 @@ private:
   double hmi_timeout_sec_{0.30};
   double nav2_timeout_sec_{0.60};
   double perception_state_timeout_sec_{0.75};
-  double manual_release_hold_sec_{0.50};
+  double manual_release_hold_sec_{1.00};
   bool require_autonomy_gate_{true};
   double speed_max_mps_{0.5};
+  double manual_speed_max_mps_{1.0};
   double yaw_max_deg_s_{80.0};
   double steering_max_deg_{90.0};
   double drive_erpm_per_mps_{8000.0};
+  bool drive_erpm_lock_enabled_{false};
+  double drive_erpm_lock_abs_{8000.0};
+  double zero_hold_feedback_deadband_erpm_{1100.0};
   double wheelbase_m_{0.70};
   double track_width_m_{0.48};
   double min_speed_for_nav_steering_mps_{0.05};
   bool invert_steering_{false};
   bool invert_drive_{false};
+  bool steering_vesc_pos_calibration_valid_{true};
+  double steering_vesc_pos_left_deg_{0.0};
+  double steering_vesc_pos_center_deg_{180.0};
+  double steering_vesc_pos_right_deg_{360.0};
+  double steering_vesc_pos_reference_deg_{30.0};
+  std::string steering_vesc_pos_calibration_saved_at_;
   bool steering_feedback_calibration_enabled_{false};
   bool steering_feedback_calibration_valid_{false};
   double steering_feedback_center_deg_{0.0};
@@ -3145,8 +3131,11 @@ private:
   Sample hmi_{};
   Sample nav2_{};
   std::string teleop_source_{"STOP"};
+  bool teleop_source_active_{false};
   rclcpp::Time teleop_source_received_{0, 0, RCL_ROS_TIME};
   rclcpp::Time teleop_takeover_until_{0, 0, RCL_ROS_TIME};
+  std::string router_source_{"IDLE"};
+  rclcpp::Time router_source_received_{0, 0, RCL_ROS_TIME};
   std::string hmi_source_{"STOP"};
   rclcpp::Time hmi_source_received_{0, 0, RCL_ROS_TIME};
   std::string maintenance_owner_{"RUNTIME"};
@@ -3177,6 +3166,7 @@ private:
   std::chrono::steady_clock::time_point last_ack_time_{};
   std::uint16_t last_ack_seq_{0U};
   double measured_steering_deg_{0.0};
+  double measured_steering_vesc_pos_deg_{180.0};
   double measured_erpm_{0.0};
   std::uint8_t feedback_status_{0U};
   bool left_values_seen_{false}, right_values_seen_{false};
@@ -3207,6 +3197,7 @@ private:
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr parameter_callback_handle_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr teleop_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr teleop_source_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr router_source_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr teleop_estop_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr hmi_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr hmi_source_sub_;

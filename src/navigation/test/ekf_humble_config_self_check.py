@@ -58,13 +58,13 @@ def main() -> None:
     if global_.get("pose0") != "/gnss/cog_heading_fusion" or enabled(global_.get("pose0_config", [])) != {5}:
         fail("global EKF GNSS COG heading source invalid")
     if global_.get("pose1") != "/heading/validated_fusion" or enabled(global_.get("pose1_config", [])) != {5}:
-        fail("global EKF validated heading consensus source invalid")
+        fail("global EKF validated RM3100 heading source invalid")
     if "pose2" in global_:
         fail("global EKF must not fuse raw second magnetic heading directly")
     if (global_.get("imu0") != "/imu/data" or enabled(global_.get("imu0_config", [])) != {11} or
             global_.get("imu0_relative") is not True):
-        fail("global EKF must fuse IMU gyro-Z only; absolute yaw comes from COG/validated consensus")
-    print("PASS EKF sensor ownership: ESC/GNSS=vx; COG+validated-consensus=absolute yaw; global IMU=gyro-Z only")
+        fail("global EKF must fuse IMU gyro-Z only; absolute yaw comes from COG/validated RM3100 heading")
+    print("PASS EKF sensor ownership: ESC/GNSS=vx; COG+validated-RM3100=absolute yaw; global IMU=gyro-Z only")
 
 if __name__ == "__main__":
     main()

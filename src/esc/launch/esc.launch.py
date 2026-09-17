@@ -43,6 +43,7 @@ def generate_launch_description():
         DeclareLaunchArgument("nav2_topic", default_value="/cmd_vel"),
         DeclareLaunchArgument("teleop_topic", default_value="/cmd_vel/teleop"),
         DeclareLaunchArgument("teleop_source_topic", default_value="/teleop/active_source"),
+        DeclareLaunchArgument("router_source_topic", default_value="/navigation/cmd_mux/source"),
         DeclareLaunchArgument("active_source_topic", default_value="/esc/mux/active_source"),
         DeclareLaunchArgument("require_autonomy_gate", default_value="true"),
         # Runtime vehicle SSOT values. Autonomous launch always supplies these from vehicle.yaml.
@@ -94,6 +95,7 @@ def generate_launch_description():
                 "nav2_topic": LaunchConfiguration("nav2_topic"),
                 "teleop_topic": LaunchConfiguration("teleop_topic"),
                 "teleop_source_topic": LaunchConfiguration("teleop_source_topic"),
+                "router_source_topic": LaunchConfiguration("router_source_topic"),
                 "active_source_topic": LaunchConfiguration("active_source_topic"),
                 "require_autonomy_gate": ParameterValue(
                     LaunchConfiguration("require_autonomy_gate"), value_type=bool),

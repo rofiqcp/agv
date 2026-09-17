@@ -33,11 +33,11 @@ for token in ('packetStampNow(', '/imu/timing_status', 'msg.header.stamp = measu
 vehicle=params('src/navigation/config/vehicle.yaml','vehicle')
 ack=params('src/esc/config/ackermann.yaml','esc_ackermann')
 need(vehicle['drive_odometry_calibration_valid'] is False, 'uncertified drive calibration must remain fail-closed')
-need(abs(float(vehicle['drive_odometry_calibration_scale'])-float(ack['drive_odometry_calibration_scale']))<1e-12,
+need(abs(float(vehicle['drive_erpm_per_mps'])-float(ack['drive_erpm_per_mps']))<1e-12,
      'ESC and vehicle drive scales split-brain')
 need('_materialize_nav2_vehicle_ssot' in navlaunch and '_validate_vehicle_runtime_contract' in navlaunch,
      'vehicle SSOT launch materialization/validation missing')
-need('vehicle_drive_odometry_scale' in navlaunch and 'vehicle_speed_max_mps' in navlaunch and
+need('vehicle_drive_erpm_per_mps' in navlaunch and 'vehicle_speed_max_mps' in navlaunch and
      'vehicle_wheelbase_m' in navlaunch and 'vehicle_track_width_m' in navlaunch,
      'ESC vehicle SSOT launch overrides missing')
 

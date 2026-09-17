@@ -1,0 +1,22 @@
+{
+  "goal_state": "ACTIVE",
+  "start_map": [
+    125.99115258017623,
+    101.51785800184537
+  ],
+  "goal_map": [
+    127.49115258017623,
+    101.51785800184537
+  ],
+  "map_displacement_m": 0.4696059207150477,
+  "local_displacement_m": 0.0,
+  "esc_displacement_m": 0.0,
+  "max_abs_actual_erpm": 0.0,
+  "max_abs_drive_target_mps": 0.0,
+  "median_gnss_speed_mps_moving": null,
+  "median_actual_erpm_moving": null,
+  "mux_sources": [
+    "NAV2"
+  ],
+  "gate_false_samples": 0
+}

@@ -1,0 +1,777 @@
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <functional>
+#include <cmath>
+#include <limits>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
+#include "rclcpp/rclcpp.hpp"
+#include "sensor_msgs/msg/imu.hpp"
+#include "sensor_msgs/msg/magnetic_field.hpp"
+#include "std_msgs/msg/bool.hpp"
+#include "std_msgs/msg/float64.hpp"
+#include "std_msgs/msg/float64_multi_array.hpp"
+#include "std_msgs/msg/string.hpp"
+
+namespace {
+constexpr double kPi = 3.14159265358979323846;
+
+double normalizeAngle(double a) {
+  while (a > kPi) a -= 2.0 * kPi;
+  while (a <= -kPi) a += 2.0 * kPi;
+  return a;
+}
+
+bool finiteQuaternion(const geometry_msgs::msg::Quaternion &q) {
+  return std::isfinite(q.x) && std::isfinite(q.y) && std::isfinite(q.z) && std::isfinite(q.w) &&
+         (q.x*q.x + q.y*q.y + q.z*q.z + q.w*q.w) > 1.0e-8;
+}
+
+void quaternionToRollPitch(const geometry_msgs::msg::Quaternion &q, double &roll, double &pitch) {
+  const double sinr_cosp = 2.0 * (q.w * q.x + q.y * q.z);
+  const double cosr_cosp = 1.0 - 2.0 * (q.x * q.x + q.y * q.y);
+  roll = std::atan2(sinr_cosp, cosr_cosp);
+  const double sinp = 2.0 * (q.w * q.y - q.z * q.x);
+  pitch = std::abs(sinp) >= 1.0 ? std::copysign(0.5 * kPi, sinp) : std::asin(sinp);
+}
+
+geometry_msgs::msg::Quaternion yawQuaternion(double yaw) {
+  geometry_msgs::msg::Quaternion q;
+  q.z = std::sin(0.5 * yaw);
+  q.w = std::cos(0.5 * yaw);
+  return q;
+}
+}
+
+class MagHeadingFusionNode final : public rclcpp::Node {
+public:
+  MagHeadingFusionNode() : Node("mag_heading_fusion") {
+    declare_parameter<std::string>("imu_topic", "/imu/data");
+    declare_parameter<std::string>("imu_mag_topic", "/imu/mag");
+    declare_parameter<std::string>("imu_raw_mag_topic", "/imu/mag_raw_lsb");
+    declare_parameter<std::string>("neo3_mag_topic", "/neo3/mag");
+    declare_parameter<std::string>("map_yaw_topic", "/localization/map_yaw_from_enu");
+    declare_parameter<std::string>("imu_heading_topic", "/imu/mag_heading_fusion");
+    declare_parameter<std::string>("neo3_heading_topic", "/neo3/mag_heading_fusion");
+    declare_parameter<std::string>("imu_inertial_heading_topic", "/imu/inertial_heading");
+    declare_parameter<std::string>("validated_heading_topic", "/heading/validated_fusion");
+    declare_parameter<std::string>("output_frame", "map");
+    declare_parameter<double>("tilt_timeout_sec", 0.75);
+    declare_parameter<double>("max_tilt_rad", 0.7853981634);
+    declare_parameter<double>("magnetic_declination_rad", 0.0);
+    declare_parameter<double>("min_field_norm_ut", 15.0);
+    declare_parameter<double>("max_field_norm_ut", 100.0);
+    declare_parameter<double>("imu_mag_yaw_sign", -1.0);
+    declare_parameter<double>("imu_mag_yaw_offset_rad", 1.5451826276);
+    declare_parameter<bool>("imu_planar_calibration_enabled", false);
+    declare_parameter<std::vector<double>>("imu_mag_bias_xy_lsb", std::vector<double>{0.0, 0.0});
+    declare_parameter<std::vector<double>>("imu_mag_matrix_xy_per_lsb", std::vector<double>{1.0, 0.0, 0.0, 1.0});
+    declare_parameter<bool>("imu_heading_lut_enabled", false);
+    declare_parameter<std::vector<double>>("imu_heading_lut_input_rad", std::vector<double>{});
+    declare_parameter<std::vector<double>>("imu_heading_lut_correction_rad", std::vector<double>{});
+    declare_parameter<double>("imu_corrected_norm_min", 0.70);
+    declare_parameter<double>("imu_corrected_norm_max", 1.30);
+    declare_parameter<double>("imu_planar_max_tilt_rad", 0.2617993878);
+    declare_parameter<double>("neo3_mag_yaw_sign", -1.0);
+    declare_parameter<double>("neo3_mag_yaw_offset_rad", 1.5707963268);
+    declare_parameter<std::string>("neo3_calibration_owner", "ros_host");
+    declare_parameter<bool>("neo3_calibration_ownership_verified", false);
+    declare_parameter<bool>("neo3_planar_calibration_enabled", false);
+    declare_parameter<double>("neo3_planar_max_tilt_rad", 0.2617993878);
+    declare_parameter<std::vector<double>>("neo3_mag_bias_xy_ut", std::vector<double>{0.0, 0.0});
+    declare_parameter<std::vector<double>>("neo3_mag_matrix_xy", std::vector<double>{1.0, 0.0, 0.0, 1.0});
+    declare_parameter<bool>("neo3_full_calibration_enabled", false);
+    declare_parameter<std::vector<double>>("neo3_mag_bias_xyz_ut", std::vector<double>{0.0, 0.0, 0.0});
+    declare_parameter<std::vector<double>>("neo3_mag_matrix_3x3", std::vector<double>{
+      1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0});
+    declare_parameter<bool>("neo3_heading_lut_enabled", false);
+    declare_parameter<std::vector<double>>("neo3_heading_lut_input_rad", std::vector<double>{});
+    declare_parameter<std::vector<double>>("neo3_heading_lut_correction_rad", std::vector<double>{});
+    declare_parameter<double>("imu_heading_variance_rad2", 0.08);
+    declare_parameter<double>("neo3_heading_variance_rad2", 0.06);
+    declare_parameter<double>("max_heading_rate_rps", 3.0);
+    declare_parameter<double>("rate_gate_margin_rad", 0.35);
+    declare_parameter<double>("consensus_max_error_rad", 0.0872664626);
+    declare_parameter<double>("consensus_hold_sec", 2.0);
+    declare_parameter<double>("consensus_timeout_sec", 0.5);
+    declare_parameter<double>("validated_heading_variance_rad2", 0.01);
+    declare_parameter<bool>("field_qualification_valid", false);
+    declare_parameter<std::string>("field_qualification_saved_at", "");
+    declare_parameter<std::string>("field_qualification_evidence_sha256", "");
+    declare_parameter<bool>("enable_imu_mag_heading", true);
+    declare_parameter<bool>("enable_neo3_mag_heading", true);
+    declare_parameter<bool>("enable_current_emi_gate", false);
+    declare_parameter<std::string>("motor_current_topic", "/esc/motor_current_abs_a");
+    declare_parameter<double>("current_emi_gate_threshold_a", 1.0e6);
+    declare_parameter<double>("current_emi_gate_timeout_sec", 0.35);
+
+    imu_topic_ = get_parameter("imu_topic").as_string();
+    imu_mag_topic_ = get_parameter("imu_mag_topic").as_string();
+    imu_raw_mag_topic_ = get_parameter("imu_raw_mag_topic").as_string();
+    neo3_mag_topic_ = get_parameter("neo3_mag_topic").as_string();
+    map_yaw_topic_ = get_parameter("map_yaw_topic").as_string();
+    output_frame_ = get_parameter("output_frame").as_string();
+    tilt_timeout_sec_ = std::clamp(get_parameter("tilt_timeout_sec").as_double(), 0.1, 5.0);
+    max_tilt_rad_ = std::clamp(get_parameter("max_tilt_rad").as_double(), 0.1, 1.4);
+    declination_rad_ = get_parameter("magnetic_declination_rad").as_double();
+    min_norm_ut_ = std::max(1.0, get_parameter("min_field_norm_ut").as_double());
+    max_norm_ut_ = std::max(min_norm_ut_ + 1.0, get_parameter("max_field_norm_ut").as_double());
+    imu_sign_ = get_parameter("imu_mag_yaw_sign").as_double() >= 0.0 ? 1.0 : -1.0;
+    imu_offset_ = get_parameter("imu_mag_yaw_offset_rad").as_double();
+    imu_planar_calibration_enabled_ = get_parameter("imu_planar_calibration_enabled").as_bool();
+    const auto imu_bias = get_parameter("imu_mag_bias_xy_lsb").as_double_array();
+    const auto imu_matrix = get_parameter("imu_mag_matrix_xy_per_lsb").as_double_array();
+    if (imu_bias.size() == 2) { imu_bias_x_lsb_ = imu_bias[0]; imu_bias_y_lsb_ = imu_bias[1]; }
+    else { RCLCPP_WARN(get_logger(), "Yahboom bias XY invalid size=%zu; calibration disabled", imu_bias.size()); imu_planar_calibration_enabled_ = false; }
+    if (imu_matrix.size() == 4) {
+      imu_m00_ = imu_matrix[0]; imu_m01_ = imu_matrix[1]; imu_m10_ = imu_matrix[2]; imu_m11_ = imu_matrix[3];
+      const double det = imu_m00_ * imu_m11_ - imu_m01_ * imu_m10_;
+      if (!std::isfinite(det) || std::abs(det) < 1.0e-12) { RCLCPP_WARN(get_logger(), "Yahboom XY matrix singular; calibration disabled"); imu_planar_calibration_enabled_ = false; }
+    } else { RCLCPP_WARN(get_logger(), "Yahboom matrix XY invalid size=%zu; calibration disabled", imu_matrix.size()); imu_planar_calibration_enabled_ = false; }
+    imu_heading_lut_enabled_ = get_parameter("imu_heading_lut_enabled").as_bool();
+    const auto imu_lut_in = get_parameter("imu_heading_lut_input_rad").as_double_array();
+    const auto imu_lut_corr = get_parameter("imu_heading_lut_correction_rad").as_double_array();
+    if (imu_heading_lut_enabled_) {
+      if (imu_lut_in.size() != imu_lut_corr.size() || imu_lut_in.size() < 4) { imu_heading_lut_enabled_ = false; }
+      else {
+        for (size_t i = 0; i < imu_lut_in.size(); ++i) if (std::isfinite(imu_lut_in[i]) && std::isfinite(imu_lut_corr[i])) imu_heading_lut_.emplace_back(normalizeAngle(imu_lut_in[i]), normalizeAngle(imu_lut_corr[i]));
+        std::sort(imu_heading_lut_.begin(), imu_heading_lut_.end(), [](const auto &a, const auto &b){ return a.first < b.first; });
+        if (imu_heading_lut_.size() < 4) imu_heading_lut_enabled_ = false;
+      }
+    }
+    imu_corrected_norm_min_ = std::max(0.05, get_parameter("imu_corrected_norm_min").as_double());
+    imu_corrected_norm_max_ = std::max(imu_corrected_norm_min_ + 0.05, get_parameter("imu_corrected_norm_max").as_double());
+    imu_planar_max_tilt_rad_ = std::clamp(get_parameter("imu_planar_max_tilt_rad").as_double(), 0.05, 0.7);
+    neo_sign_ = get_parameter("neo3_mag_yaw_sign").as_double() >= 0.0 ? 1.0 : -1.0;
+    neo_offset_ = get_parameter("neo3_mag_yaw_offset_rad").as_double();
+    neo_calibration_owner_ = get_parameter("neo3_calibration_owner").as_string();
+    neo_calibration_ownership_verified_ = get_parameter("neo3_calibration_ownership_verified").as_bool();
+    if (neo_calibration_owner_ != "ros_host" && neo_calibration_owner_ != "ap_periph") {
+      RCLCPP_ERROR(get_logger(), "Invalid neo3_calibration_owner='%s'; NEO3 heading disabled", neo_calibration_owner_.c_str());
+      neo_calibration_ownership_verified_ = false;
+    }
+    neo_planar_calibration_enabled_ = get_parameter("neo3_planar_calibration_enabled").as_bool();
+    neo_planar_max_tilt_rad_ = std::clamp(get_parameter("neo3_planar_max_tilt_rad").as_double(), 0.05, 0.7);
+    const auto neo_bias = get_parameter("neo3_mag_bias_xy_ut").as_double_array();
+    const auto neo_matrix = get_parameter("neo3_mag_matrix_xy").as_double_array();
+    if (neo_bias.size() == 2) { neo_bias_x_ut_ = neo_bias[0]; neo_bias_y_ut_ = neo_bias[1]; }
+    else { RCLCPP_WARN(get_logger(), "NEO3 bias XY invalid size=%zu; calibration disabled", neo_bias.size()); neo_planar_calibration_enabled_ = false; }
+    if (neo_matrix.size() == 4) {
+      neo_m00_ = neo_matrix[0]; neo_m01_ = neo_matrix[1]; neo_m10_ = neo_matrix[2]; neo_m11_ = neo_matrix[3];
+      const double det = neo_m00_ * neo_m11_ - neo_m01_ * neo_m10_;
+      if (!std::isfinite(det) || std::abs(det) < 1.0e-6) {
+        RCLCPP_WARN(get_logger(), "NEO3 XY matrix singular; calibration disabled");
+        neo_planar_calibration_enabled_ = false;
+      }
+    } else { RCLCPP_WARN(get_logger(), "NEO3 matrix XY invalid size=%zu; calibration disabled", neo_matrix.size()); neo_planar_calibration_enabled_ = false; }
+    neo_full_calibration_enabled_ = get_parameter("neo3_full_calibration_enabled").as_bool();
+    const auto neo_bias3 = get_parameter("neo3_mag_bias_xyz_ut").as_double_array();
+    const auto neo_matrix3 = get_parameter("neo3_mag_matrix_3x3").as_double_array();
+    if (neo_bias3.size() == 3U) {
+      for (size_t i = 0; i < 3U; ++i) neo_bias_xyz_ut_[i] = neo_bias3[i];
+    } else {
+      RCLCPP_WARN(get_logger(), "NEO3 3D bias invalid size=%zu; full calibration disabled", neo_bias3.size());
+      neo_full_calibration_enabled_ = false;
+    }
+    if (neo_matrix3.size() == 9U) {
+      for (size_t i = 0; i < 9U; ++i) neo_matrix_3x3_[i] = neo_matrix3[i];
+      const double det3 =
+        neo_matrix_3x3_[0] * (neo_matrix_3x3_[4] * neo_matrix_3x3_[8] - neo_matrix_3x3_[5] * neo_matrix_3x3_[7]) -
+        neo_matrix_3x3_[1] * (neo_matrix_3x3_[3] * neo_matrix_3x3_[8] - neo_matrix_3x3_[5] * neo_matrix_3x3_[6]) +
+        neo_matrix_3x3_[2] * (neo_matrix_3x3_[3] * neo_matrix_3x3_[7] - neo_matrix_3x3_[4] * neo_matrix_3x3_[6]);
+      const bool finite3 = std::all_of(neo_matrix_3x3_.begin(), neo_matrix_3x3_.end(), [](double v){ return std::isfinite(v); }) &&
+                           std::all_of(neo_bias_xyz_ut_.begin(), neo_bias_xyz_ut_.end(), [](double v){ return std::isfinite(v); });
+      if (!finite3 || !std::isfinite(det3) || std::abs(det3) < 1.0e-6) {
+        RCLCPP_WARN(get_logger(), "NEO3 3D calibration invalid/singular; full calibration disabled");
+        neo_full_calibration_enabled_ = false;
+      }
+    } else {
+      RCLCPP_WARN(get_logger(), "NEO3 3D matrix invalid size=%zu; full calibration disabled", neo_matrix3.size());
+      neo_full_calibration_enabled_ = false;
+    }
+    if (neo_calibration_owner_ == "ap_periph" && (neo_planar_calibration_enabled_ || neo_full_calibration_enabled_)) {
+      RCLCPP_ERROR(get_logger(), "NEO3 calibration owner is AP_Periph but ROS host calibration is enabled; host correction disabled to prevent double calibration");
+      neo_planar_calibration_enabled_ = false;
+      neo_full_calibration_enabled_ = false;
+    }
+    if (neo_full_calibration_enabled_) neo_planar_calibration_enabled_ = false;
+    neo_heading_lut_enabled_ = get_parameter("neo3_heading_lut_enabled").as_bool();
+    const auto lut_in = get_parameter("neo3_heading_lut_input_rad").as_double_array();
+    const auto lut_corr = get_parameter("neo3_heading_lut_correction_rad").as_double_array();
+    if (neo_heading_lut_enabled_) {
+      if (lut_in.size() != lut_corr.size() || lut_in.size() < 4) {
+        RCLCPP_WARN(get_logger(), "NEO3 heading LUT invalid sizes %zu/%zu; LUT disabled", lut_in.size(), lut_corr.size());
+        neo_heading_lut_enabled_ = false;
+      } else {
+        for (size_t i = 0; i < lut_in.size(); ++i) {
+          if (std::isfinite(lut_in[i]) && std::isfinite(lut_corr[i]))
+            neo_heading_lut_.emplace_back(normalizeAngle(lut_in[i]), normalizeAngle(lut_corr[i]));
+        }
+        std::sort(neo_heading_lut_.begin(), neo_heading_lut_.end(),
+          [](const auto &a, const auto &b) { return a.first < b.first; });
+        if (neo_heading_lut_.size() < 4) neo_heading_lut_enabled_ = false;
+      }
+    }
+    imu_variance_ = std::clamp(get_parameter("imu_heading_variance_rad2").as_double(), 1.0e-4, 10.0);
+    neo_variance_ = std::clamp(get_parameter("neo3_heading_variance_rad2").as_double(), 1.0e-4, 10.0);
+    max_heading_rate_rps_ = std::clamp(get_parameter("max_heading_rate_rps").as_double(), 0.2, 10.0);
+    rate_gate_margin_rad_ = std::clamp(get_parameter("rate_gate_margin_rad").as_double(), 0.05, kPi);
+    consensus_max_error_rad_ = std::clamp(get_parameter("consensus_max_error_rad").as_double(), 0.0087266463, 0.5235987756);
+    consensus_hold_sec_ = std::clamp(get_parameter("consensus_hold_sec").as_double(), 0.2, 30.0);
+    consensus_timeout_sec_ = std::clamp(get_parameter("consensus_timeout_sec").as_double(), 0.1, 2.0);
+    validated_variance_ = std::clamp(get_parameter("validated_heading_variance_rad2").as_double(), 1.0e-4, 1.0);
+    field_qualification_valid_ = get_parameter("field_qualification_valid").as_bool();
+    enable_imu_ = get_parameter("enable_imu_mag_heading").as_bool();
+    enable_neo_ = get_parameter("enable_neo3_mag_heading").as_bool();
+    enable_current_emi_gate_ = get_parameter("enable_current_emi_gate").as_bool();
+    motor_current_topic_ = get_parameter("motor_current_topic").as_string();
+    current_emi_gate_threshold_a_ = std::max(0.0, get_parameter("current_emi_gate_threshold_a").as_double());
+    current_emi_gate_timeout_sec_ = std::clamp(get_parameter("current_emi_gate_timeout_sec").as_double(), 0.05, 2.0);
+
+    const auto sensor_qos = rclcpp::SensorDataQoS().keep_last(10);
+    const auto state_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
+    imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
+      imu_topic_, sensor_qos, std::bind(&MagHeadingFusionNode::onImu, this, std::placeholders::_1));
+    imu_mag_sub_ = create_subscription<sensor_msgs::msg::MagneticField>(
+      imu_mag_topic_, sensor_qos,
+      [this](sensor_msgs::msg::MagneticField::ConstSharedPtr msg) { onMag(*msg, Source::IMU); });
+    imu_raw_mag_sub_ = create_subscription<std_msgs::msg::Float64MultiArray>(
+      imu_raw_mag_topic_, sensor_qos,
+      [this](std_msgs::msg::Float64MultiArray::ConstSharedPtr msg) { onImuRawMag(*msg); });
+    neo_mag_sub_ = create_subscription<sensor_msgs::msg::MagneticField>(
+      neo3_mag_topic_, sensor_qos,
+      [this](sensor_msgs::msg::MagneticField::ConstSharedPtr msg) { onMag(*msg, Source::NEO3); });
+    motor_current_sub_ = create_subscription<std_msgs::msg::Float64>(
+      motor_current_topic_, sensor_qos,
+      [this](std_msgs::msg::Float64::ConstSharedPtr msg) {
+        if (!std::isfinite(msg->data) || msg->data < 0.0) return;
+        motor_current_abs_a_ = msg->data;
+        last_motor_current_time_ = now();
+      });
+    map_yaw_sub_ = create_subscription<std_msgs::msg::Float64>(
+      map_yaw_topic_, state_qos, [this](std_msgs::msg::Float64::ConstSharedPtr msg) {
+        if (std::isfinite(msg->data)) {
+          map_yaw_from_enu_ = normalizeAngle(msg->data);
+          have_map_yaw_ = true;
+          last_map_yaw_time_ = now();
+        }
+      });
+
+    imu_heading_pub_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
+      get_parameter("imu_heading_topic").as_string(), sensor_qos);
+    neo_heading_pub_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
+      get_parameter("neo3_heading_topic").as_string(), sensor_qos);
+    inertial_heading_pub_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
+      get_parameter("imu_inertial_heading_topic").as_string(), sensor_qos);
+    validated_heading_pub_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
+      get_parameter("validated_heading_topic").as_string(), sensor_qos);
+    consensus_valid_pub_ = create_publisher<std_msgs::msg::Bool>("/heading/validated", state_qos);
+    imu_valid_pub_ = create_publisher<std_msgs::msg::Bool>("/imu/mag_heading_valid", state_qos);
+    neo_valid_pub_ = create_publisher<std_msgs::msg::Bool>("/neo3/mag_heading_valid", state_qos);
+    status_pub_ = create_publisher<std_msgs::msg::String>("/system/magnetic_heading_status", state_qos);
+
+    status_timer_ = create_wall_timer(std::chrono::seconds(1), std::bind(&MagHeadingFusionNode::publishStatus, this));
+    RCLCPP_INFO(get_logger(), "Magnetic heading fusion: IMU=%s NEO3=%s norm=[%.1f, %.1f]uT",
+                enable_imu_ ? "ON" : "OFF", enable_neo_ ? "ON" : "OFF", min_norm_ut_, max_norm_ut_);
+  }
+
+private:
+  enum class Source { IMU, NEO3 };
+  struct HeadingState {
+    bool valid{false};
+    double heading_rad{0.0};
+    double norm_ut{0.0};
+    rclcpp::Time stamp{0, 0, RCL_ROS_TIME};
+    uint64_t accepted{0};
+    uint64_t rejected{0};
+    std::string reject_reason{"no_sample"};
+  };
+
+  void onImu(sensor_msgs::msg::Imu::ConstSharedPtr msg) {
+    if (!finiteQuaternion(msg->orientation)) return;
+    double roll = 0.0, pitch = 0.0;
+    quaternionToRollPitch(msg->orientation, roll, pitch);
+    if (!std::isfinite(roll) || !std::isfinite(pitch)) return;
+    roll_rad_ = roll;
+    pitch_rad_ = pitch;
+    const auto t = now();
+    const double wz = msg->angular_velocity.z;
+    const double an = std::sqrt(msg->linear_acceleration.x*msg->linear_acceleration.x +
+                                msg->linear_acceleration.y*msg->linear_acceleration.y +
+                                msg->linear_acceleration.z*msg->linear_acceleration.z);
+    const bool stationary = std::isfinite(wz) && std::isfinite(an) &&
+      std::abs(wz) <= 0.03 && std::abs(an - 9.80665) <= 0.15;
+    if (stationary) {
+      if (stationary_since_.nanoseconds() == 0) stationary_since_ = t;
+      if ((t - stationary_since_).seconds() >= 2.0)
+        gyro_bias_z_rps_ = 0.98 * gyro_bias_z_rps_ + 0.02 * wz;
+    } else {
+      stationary_since_ = rclcpp::Time(0,0,RCL_ROS_TIME);
+    }
+    if (have_inertial_heading_ && last_inertial_time_.nanoseconds() != 0) {
+      const double dt = (t - last_inertial_time_).seconds();
+      if (dt > 0.0 && dt < 0.25 && std::isfinite(wz))
+        inertial_heading_rad_ = normalizeAngle(inertial_heading_rad_ + (wz - gyro_bias_z_rps_) * dt);
+    }
+    last_inertial_time_ = t;
+    if (have_inertial_heading_) {
+      geometry_msgs::msg::PoseWithCovarianceStamped pose;
+      pose.header.stamp = t; pose.header.frame_id = output_frame_;
+      pose.pose.pose.orientation = yawQuaternion(inertial_heading_rad_);
+      pose.pose.covariance.fill(0.0);
+      pose.pose.covariance[0]=pose.pose.covariance[7]=pose.pose.covariance[14]=pose.pose.covariance[21]=pose.pose.covariance[28]=1.0e6;
+      pose.pose.covariance[35] = 0.02;
+      inertial_heading_pub_->publish(pose);
+    }
+    last_tilt_time_ = t;
+    have_tilt_ = true;
+    publishConsensusIfValid();
+  }
+
+  void setValid(Source source, bool valid) {
+    auto &state = source == Source::IMU ? imu_state_ : neo_state_;
+    if (state.valid == valid) return;
+    state.valid = valid;
+    std_msgs::msg::Bool b; b.data = valid;
+    (source == Source::IMU ? imu_valid_pub_ : neo_valid_pub_)->publish(b);
+  }
+
+  bool temporalGate(HeadingState &state, double heading, const rclcpp::Time &stamp) {
+    if (state.stamp.nanoseconds() == 0) return true;
+    const double dt = (stamp - state.stamp).seconds();
+    if (dt <= 0.0 || dt > 2.0) return true;
+    const double delta = std::abs(normalizeAngle(heading - state.heading_rad));
+    return delta <= max_heading_rate_rps_ * dt + rate_gate_margin_rad_;
+  }
+
+  bool currentEmiGate(const rclcpp::Time &t, const char *&reason) const {
+    if (!enable_current_emi_gate_) return true;
+    if (last_motor_current_time_.nanoseconds() == 0) { reason = "motor_current_missing"; return false; }
+    const double age = (t - last_motor_current_time_).seconds();
+    if (age < 0.0 || age > current_emi_gate_timeout_sec_) { reason = "motor_current_stale"; return false; }
+    if (motor_current_abs_a_ > current_emi_gate_threshold_a_) { reason = "current_emi_gate"; return false; }
+    return true;
+  }
+
+  double applyImuHeadingLut(double yaw_enu) const {
+    if (!imu_heading_lut_enabled_ || imu_heading_lut_.size() < 2) return normalizeAngle(yaw_enu);
+    const double y = normalizeAngle(yaw_enu);
+    size_t hi = 0;
+    while (hi < imu_heading_lut_.size() && imu_heading_lut_[hi].first < y) ++hi;
+    double x0, x1, c0, c1, yy = y;
+    if (hi == 0) { x0=imu_heading_lut_.back().first; c0=imu_heading_lut_.back().second; x1=imu_heading_lut_.front().first+2.0*kPi; c1=imu_heading_lut_.front().second; yy+=2.0*kPi; }
+    else if (hi == imu_heading_lut_.size()) { x0=imu_heading_lut_.back().first; c0=imu_heading_lut_.back().second; x1=imu_heading_lut_.front().first+2.0*kPi; c1=imu_heading_lut_.front().second; }
+    else { x0=imu_heading_lut_[hi-1].first; c0=imu_heading_lut_[hi-1].second; x1=imu_heading_lut_[hi].first; c1=imu_heading_lut_[hi].second; }
+    const double f=std::clamp((yy-x0)/std::max(1.0e-9,x1-x0),0.0,1.0);
+    return normalizeAngle(y + c0 + f*normalizeAngle(c1-c0));
+  }
+
+  void onImuRawMag(const std_msgs::msg::Float64MultiArray &msg) {
+    if (!enable_imu_ || !imu_planar_calibration_enabled_) return;
+    HeadingState &state = imu_state_;
+    const auto reject = [&](const char *reason) { ++state.rejected; state.reject_reason=reason; setValid(Source::IMU,false); };
+    const auto t=now();
+    if (msg.data.size() < 3) { reject("raw_lsb_size"); return; }
+    const char *emi_reason = nullptr;
+    if (!currentEmiGate(t, emi_reason)) { reject(emi_reason); return; }
+    if (!have_map_yaw_) { reject("map_yaw_unavailable"); return; }
+    if (!have_tilt_ || (t-last_tilt_time_).seconds() < 0.0 || (t-last_tilt_time_).seconds() > tilt_timeout_sec_) { reject("tilt_stale"); return; }
+    if (std::abs(roll_rad_) > imu_planar_max_tilt_rad_ || std::abs(pitch_rad_) > imu_planar_max_tilt_rad_) { reject("planar_tilt_out_of_range"); return; }
+    // Calibration YAML is fitted in Yahboom sensor-native MAG coordinates.
+    // /imu/raw_sensor_vectors layout is ax,ay,az,gx,gy,gz,mx,my,mz (native),
+    // while legacy /imu/mag_raw_lsb is already rotated to REP-103 body frame.
+    // Accept both layouts, but prefer the native 9-vector contract so the
+    // calibration is never silently applied in a different frame.
+    const bool native_vector = msg.data.size() >= 9;
+    const double x = native_vector ? msg.data[6] : msg.data[0];
+    const double y = native_vector ? msg.data[7] : msg.data[1];
+    if (!std::isfinite(x) || !std::isfinite(y)) { reject("non_finite_raw_lsb"); return; }
+    const double bx=x-imu_bias_x_lsb_, by=y-imu_bias_y_lsb_;
+    const double qx=imu_m00_*bx + imu_m01_*by;
+    const double qy=imu_m10_*bx + imu_m11_*by;
+    const double cn=std::hypot(qx,qy); imu_corrected_norm_=cn; state.norm_ut=std::numeric_limits<double>::quiet_NaN();
+    if (!std::isfinite(cn) || cn < imu_corrected_norm_min_ || cn > imu_corrected_norm_max_) { reject("corrected_norm_gate"); return; }
+    double yaw_enu=normalizeAngle(imu_sign_*std::atan2(qy,qx)+imu_offset_-declination_rad_);
+    yaw_enu=applyImuHeadingLut(yaw_enu);
+    const double yaw_map=normalizeAngle(yaw_enu+map_yaw_from_enu_);
+    if (!temporalGate(state,yaw_map,t)) { reject("heading_rate_gate"); return; }
+    geometry_msgs::msg::PoseWithCovarianceStamped pose; pose.header.stamp=t; pose.header.frame_id=output_frame_; pose.pose.pose.orientation=yawQuaternion(yaw_map); pose.pose.covariance.fill(0.0);
+    pose.pose.covariance[0]=pose.pose.covariance[7]=pose.pose.covariance[14]=pose.pose.covariance[21]=pose.pose.covariance[28]=1.0e6; pose.pose.covariance[35]=imu_variance_; imu_heading_pub_->publish(pose);
+    state.heading_rad=yaw_map; state.stamp=t; state.reject_reason.clear(); ++state.accepted; setValid(Source::IMU,true);
+  }
+
+  double applyNeoHeadingLut(double yaw_enu) const {
+    if (!neo_heading_lut_enabled_ || neo_heading_lut_.size() < 2) return normalizeAngle(yaw_enu);
+    const double y = normalizeAngle(yaw_enu);
+    size_t hi = 0;
+    while (hi < neo_heading_lut_.size() && neo_heading_lut_[hi].first < y) ++hi;
+    double x0, x1, c0, c1, yy = y;
+    if (hi == 0) {
+      x0 = neo_heading_lut_.back().first; c0 = neo_heading_lut_.back().second;
+      x1 = neo_heading_lut_.front().first + 2.0 * kPi; c1 = neo_heading_lut_.front().second;
+      yy += 2.0 * kPi;
+    } else if (hi == neo_heading_lut_.size()) {
+      x0 = neo_heading_lut_.back().first; c0 = neo_heading_lut_.back().second;
+      x1 = neo_heading_lut_.front().first + 2.0 * kPi; c1 = neo_heading_lut_.front().second;
+    } else {
+      x0 = neo_heading_lut_[hi - 1].first; c0 = neo_heading_lut_[hi - 1].second;
+      x1 = neo_heading_lut_[hi].first; c1 = neo_heading_lut_[hi].second;
+    }
+    const double span = std::max(1.0e-9, x1 - x0);
+    const double f = std::clamp((yy - x0) / span, 0.0, 1.0);
+    const double dc = normalizeAngle(c1 - c0);
+    return normalizeAngle(y + c0 + f * dc);
+  }
+
+  void onMag(const sensor_msgs::msg::MagneticField &msg, Source source) {
+    if ((source == Source::IMU && !enable_imu_) || (source == Source::NEO3 && !enable_neo_)) return;
+    HeadingState &state = source == Source::IMU ? imu_state_ : neo_state_;
+    const auto reject = [&](const char *reason) {
+      ++state.rejected;
+      state.reject_reason = reason;
+      setValid(source, false);
+    };
+
+    const auto t = now();
+    if (source == Source::NEO3 && !neo_calibration_ownership_verified_) {
+      reject("calibration_ownership_unverified");
+      return;
+    }
+    const char *emi_reason = nullptr;
+    if (!currentEmiGate(t, emi_reason)) { reject(emi_reason); return; }
+    if (!have_map_yaw_) { reject("map_yaw_unavailable"); return; }
+    if (!have_tilt_ || (t - last_tilt_time_).seconds() < 0.0 ||
+        (t - last_tilt_time_).seconds() > tilt_timeout_sec_) { reject("tilt_stale"); return; }
+    if (std::abs(roll_rad_) > max_tilt_rad_ || std::abs(pitch_rad_) > max_tilt_rad_) {
+      reject("tilt_out_of_range"); return;
+    }
+
+    const double mx = msg.magnetic_field.x * 1.0e6;
+    const double my = msg.magnetic_field.y * 1.0e6;
+    const double mz = msg.magnetic_field.z * 1.0e6;
+    if (!std::isfinite(mx) || !std::isfinite(my) || !std::isfinite(mz)) { reject("non_finite_field"); return; }
+    const double norm = std::sqrt(mx*mx + my*my + mz*mz);
+    state.norm_ut = norm;
+    if (!std::isfinite(norm) || norm < min_norm_ut_ || norm > max_norm_ut_) { reject("field_norm_gate"); return; }
+
+    double mx_heading = mx;
+    double my_heading = my;
+    double mz_heading = mz;
+    if (source == Source::NEO3 && neo_full_calibration_enabled_) {
+      const std::array<double, 3> b{{
+        mx - neo_bias_xyz_ut_[0], my - neo_bias_xyz_ut_[1], mz - neo_bias_xyz_ut_[2]}};
+      mx_heading = neo_matrix_3x3_[0]*b[0] + neo_matrix_3x3_[1]*b[1] + neo_matrix_3x3_[2]*b[2];
+      my_heading = neo_matrix_3x3_[3]*b[0] + neo_matrix_3x3_[4]*b[1] + neo_matrix_3x3_[5]*b[2];
+      mz_heading = neo_matrix_3x3_[6]*b[0] + neo_matrix_3x3_[7]*b[1] + neo_matrix_3x3_[8]*b[2];
+    } else if (source == Source::NEO3 && neo_planar_calibration_enabled_) {
+      if (std::abs(roll_rad_) > neo_planar_max_tilt_rad_ || std::abs(pitch_rad_) > neo_planar_max_tilt_rad_) {
+        reject("neo3_planar_tilt_out_of_range"); return;
+      }
+      const double bx = mx - neo_bias_x_ut_;
+      const double by = my - neo_bias_y_ut_;
+      mx_heading = neo_m00_ * bx + neo_m01_ * by;
+      my_heading = neo_m10_ * bx + neo_m11_ * by;
+    }
+    double xh = mx_heading;
+    double yh = my_heading;
+    if (!(source == Source::NEO3 && neo_planar_calibration_enabled_ && !neo_full_calibration_enabled_)) {
+      const double cr = std::cos(roll_rad_), sr = std::sin(roll_rad_);
+      const double cp = std::cos(pitch_rad_), sp = std::sin(pitch_rad_);
+      xh = mx_heading * cp + mz_heading * sp;
+      yh = mx_heading * sr * sp + my_heading * cr - mz_heading * sr * cp;
+    }
+    // A planar XY fit normalizes/scales X and Y while Z remains raw uT.
+    // Mixing those units during tilt compensation corrupts heading. In planar
+    // mode the tilt gate above guarantees near-horizontal operation, so use
+    // calibrated XY directly. Full 3-D calibration keeps tilt compensation.
+    if (std::hypot(xh, yh) < 1.0e-9) { reject("horizontal_field_too_small"); return; }
+
+    const double raw_north_in_body = std::atan2(yh, xh);
+    const double sign = source == Source::IMU ? imu_sign_ : neo_sign_;
+    const double offset = source == Source::IMU ? imu_offset_ : neo_offset_;
+    double yaw_enu = normalizeAngle(sign * raw_north_in_body + offset - declination_rad_);
+    if (source == Source::NEO3) yaw_enu = applyNeoHeadingLut(yaw_enu);
+    const double yaw_map = normalizeAngle(yaw_enu + map_yaw_from_enu_);
+    const rclcpp::Time stamp = msg.header.stamp.sec == 0 && msg.header.stamp.nanosec == 0 ? t : rclcpp::Time(msg.header.stamp);
+    if (!temporalGate(state, yaw_map, stamp)) { reject("heading_rate_gate"); return; }
+
+    geometry_msgs::msg::PoseWithCovarianceStamped pose;
+    pose.header.stamp = stamp;
+    pose.header.frame_id = output_frame_;
+    pose.pose.pose.orientation = yawQuaternion(yaw_map);
+    pose.pose.covariance.fill(0.0);
+    pose.pose.covariance[0] = 1.0e6;
+    pose.pose.covariance[7] = 1.0e6;
+    pose.pose.covariance[14] = 1.0e6;
+    pose.pose.covariance[21] = 1.0e6;
+    pose.pose.covariance[28] = 1.0e6;
+    pose.pose.covariance[35] = source == Source::IMU ? imu_variance_ : neo_variance_;
+    (source == Source::IMU ? imu_heading_pub_ : neo_heading_pub_)->publish(pose);
+
+    state.heading_rad = yaw_map;
+    state.stamp = stamp;
+    state.reject_reason.clear();
+    ++state.accepted;
+    setValid(source, true);
+    // Bootstrap inertia is centralized so RM and Yahboom MAG are compared first.
+    publishConsensusIfValid();
+  }
+
+  void publishConsensusIfValid() {
+    const auto t = now();
+    const auto fresh = [&](const HeadingState &state) {
+      if (!state.valid || state.stamp.nanoseconds() == 0) return false;
+      const double age = (t - state.stamp).seconds();
+      return age >= 0.0 && age <= consensus_timeout_sec_;
+    };
+    const bool imu_fresh = enable_imu_ && fresh(imu_state_);
+    const bool neo_fresh = enable_neo_ && neo_calibration_ownership_verified_ && fresh(neo_state_);
+    const bool inertial_fresh = have_inertial_heading_ && last_inertial_time_.nanoseconds() != 0 &&
+      (t - last_inertial_time_).seconds() >= 0.0 &&
+      (t - last_inertial_time_).seconds() <= consensus_timeout_sec_;
+
+    // No absolute magnetic heading may reach the global EKF until the field
+    // campaign is explicitly certified. A stale source is treated exactly like
+    // a missing source: it contributes neither angle nor weight.
+    if (!field_qualification_valid_ || (!imu_fresh && !neo_fresh)) {
+      consensus_since_ = rclcpp::Time(0,0,RCL_ROS_TIME);
+      consensus_source_mask_ = 0u;
+      validated_source_mask_ = 0u;
+      if (consensus_valid_) {
+        consensus_valid_ = false;
+        std_msgs::msg::Bool b; b.data=false; consensus_valid_pub_->publish(b);
+      }
+      return;
+    }
+
+    // Bootstrap inertial yaw only from absolute sensors that are currently
+    // fresh. If both magnetometers are present they must already agree; never
+    // average two contradictory headings into a plausible-looking seed.
+    if (!inertial_fresh) {
+      if (imu_fresh && neo_fresh &&
+          std::abs(normalizeAngle(imu_state_.heading_rad - neo_state_.heading_rad)) > consensus_max_error_rad_) {
+        consensus_since_ = rclcpp::Time(0,0,RCL_ROS_TIME);
+        consensus_source_mask_ = 0u;
+      validated_source_mask_ = 0u;
+        if (consensus_valid_) {
+          consensus_valid_ = false;
+          std_msgs::msg::Bool b; b.data=false; consensus_valid_pub_->publish(b);
+        }
+        return;
+      }
+      double sx=0.0, sy=0.0, sw=0.0;
+      if (imu_fresh) {
+        const double w=1.0/std::max(imu_variance_,1.0e-4);
+        sx+=w*std::cos(imu_state_.heading_rad); sy+=w*std::sin(imu_state_.heading_rad); sw+=w;
+      }
+      if (neo_fresh) {
+        const double w=1.0/std::max(neo_variance_,1.0e-4);
+        sx+=w*std::cos(neo_state_.heading_rad); sy+=w*std::sin(neo_state_.heading_rad); sw+=w;
+      }
+      if (sw <= 0.0) return;
+      inertial_heading_rad_=std::atan2(sy,sx);
+      have_inertial_heading_=true;
+      last_inertial_time_=t;
+      last_correction_time_=t;
+      consensus_since_=rclcpp::Time(0,0,RCL_ROS_TIME);
+      consensus_source_mask_=0u;
+      validated_source_mask_=0u;
+      return;
+    }
+
+    const double imu_err = imu_fresh ?
+      std::abs(normalizeAngle(imu_state_.heading_rad - inertial_heading_rad_)) : kPi;
+    const double neo_err = neo_fresh ?
+      std::abs(normalizeAngle(neo_state_.heading_rad - inertial_heading_rad_)) : kPi;
+    bool imu_inlier = imu_fresh && imu_err <= consensus_max_error_rad_;
+    bool neo_inlier = neo_fresh && neo_err <= consensus_max_error_rad_;
+
+    // When both absolute sensors individually look plausible but disagree with
+    // each other, keep only the one closest to the short-term inertial predictor.
+    // This prevents one EMI-disturbed magnetometer from dragging the consensus.
+    if (imu_inlier && neo_inlier &&
+        std::abs(normalizeAngle(imu_state_.heading_rad - neo_state_.heading_rad)) > consensus_max_error_rad_) {
+      if (imu_err < neo_err) neo_inlier=false;
+      else if (neo_err < imu_err) imu_inlier=false;
+      else { imu_inlier=false; neo_inlier=false; }
+    }
+
+    uint8_t source_mask=0u;
+    double sx_abs=0.0, sy_abs=0.0, sw_abs=0.0;
+    double max_err=0.0;
+    if (imu_inlier) {
+      const double w=1.0/std::max(imu_variance_,1.0e-4);
+      sx_abs+=w*std::cos(imu_state_.heading_rad); sy_abs+=w*std::sin(imu_state_.heading_rad); sw_abs+=w;
+      max_err=std::max(max_err,imu_err); source_mask|=0x01u;
+    }
+    if (neo_inlier) {
+      const double w=1.0/std::max(neo_variance_,1.0e-4);
+      sx_abs+=w*std::cos(neo_state_.heading_rad); sy_abs+=w*std::sin(neo_state_.heading_rad); sw_abs+=w;
+      max_err=std::max(max_err,neo_err); source_mask|=0x02u;
+    }
+    if (source_mask==0u || sw_abs<=0.0) {
+      consensus_since_=rclcpp::Time(0,0,RCL_ROS_TIME);
+      consensus_source_mask_=0u;
+      validated_source_mask_=0u;
+      consensus_error_rad_=std::min(imu_err,neo_err);
+      if (consensus_valid_) {
+        consensus_valid_=false;
+        std_msgs::msg::Bool b; b.data=false; consensus_valid_pub_->publish(b);
+      }
+      return;
+    }
+
+    // Switching from RM to Yahboom (or vice versa) must earn a fresh hold time;
+    // a newly-recovered sensor never inherits the previous source's validation.
+    if (source_mask != consensus_source_mask_) {
+      consensus_source_mask_=source_mask;
+      validated_source_mask_=0u;
+      consensus_since_=t;
+      if (consensus_valid_) {
+        consensus_valid_=false;
+        std_msgs::msg::Bool b; b.data=false; consensus_valid_pub_->publish(b);
+      }
+    } else if (consensus_since_.nanoseconds()==0) {
+      consensus_since_=t;
+    }
+    consensus_error_rad_=max_err;
+    if ((t-consensus_since_).seconds() < consensus_hold_sec_) return;
+
+    const double absolute_heading=std::atan2(sy_abs, sx_abs);
+    if (last_correction_time_.nanoseconds()==0) last_correction_time_=t;
+    const double corr_dt=std::clamp((t-last_correction_time_).seconds(),0.0,0.25);
+    const double correction=normalizeAngle(absolute_heading-inertial_heading_rad_);
+    const double max_step=0.01745329252*corr_dt; // maksimum 1 deg/s, tanpa heading jump
+    inertial_heading_rad_=normalizeAngle(
+      inertial_heading_rad_+std::clamp(correction,-max_step,max_step));
+    last_correction_time_=t;
+
+    // Inertia is a predictor/bridge, not another independent absolute sensor.
+    // The global EKF still receives raw gyro-Z separately, so keep this weight
+    // deliberately softer than the qualified absolute magnetic measurements.
+    const double w_inertial=1.0/0.05;
+    const double sx=sx_abs+w_inertial*std::cos(inertial_heading_rad_);
+    const double sy=sy_abs+w_inertial*std::sin(inertial_heading_rad_);
+    const double yaw=std::atan2(sy,sx);
+
+    geometry_msgs::msg::PoseWithCovarianceStamped pose;
+    pose.header.stamp=t; pose.header.frame_id=output_frame_;
+    pose.pose.pose.orientation=yawQuaternion(yaw);
+    pose.pose.covariance.fill(0.0);
+    pose.pose.covariance[0]=pose.pose.covariance[7]=pose.pose.covariance[14]=pose.pose.covariance[21]=pose.pose.covariance[28]=1.0e6;
+    pose.pose.covariance[35]=std::max(validated_variance_,max_err*max_err);
+    validated_heading_pub_->publish(pose);
+    validated_heading_rad_=yaw;
+    validated_source_mask_=source_mask;
+    if (!consensus_valid_) {
+      consensus_valid_=true;
+      std_msgs::msg::Bool b; b.data=true; consensus_valid_pub_->publish(b);
+    }
+  }
+
+  void publishStatus() {
+    std_msgs::msg::String msg;
+    const auto t = now();
+    const double tilt_age = have_tilt_ ? (t - last_tilt_time_).seconds() : 999.0;
+    const double map_age = have_map_yaw_ ? (t - last_map_yaw_time_).seconds() : 999.0;
+    msg.data = std::string("imu_valid=") + (imu_state_.valid ? "true" : "false") +
+      ";neo3_valid=" + (neo_state_.valid ? "true" : "false") +
+      ";imu_norm_ut=" + std::to_string(imu_state_.norm_ut) +
+      ";imu_corrected_norm=" + std::to_string(imu_corrected_norm_) +
+      ";neo3_norm_ut=" + std::to_string(neo_state_.norm_ut) +
+      ";imu_reject=" + imu_state_.reject_reason +
+      ";neo3_reject=" + neo_state_.reject_reason +
+      ";imu_mag_age_sec=" + std::to_string(imu_state_.stamp.nanoseconds() == 0 ? 999.0 : (t - imu_state_.stamp).seconds()) +
+      ";neo3_mag_age_sec=" + std::to_string(neo_state_.stamp.nanoseconds() == 0 ? 999.0 : (t - neo_state_.stamp).seconds()) +
+      ";inertial_age_sec=" + std::to_string(last_inertial_time_.nanoseconds() == 0 ? 999.0 : (t - last_inertial_time_).seconds()) +
+      ";consensus_source_mask=" + std::to_string(static_cast<unsigned>(consensus_source_mask_)) +
+      ";validated_source_mask=" + std::to_string(static_cast<unsigned>(validated_source_mask_)) +
+      ";tilt_age_sec=" + std::to_string(tilt_age) +
+      ";map_yaw_age_sec=" + std::to_string(map_age) +
+      ";inertial_heading_deg=" + std::to_string(inertial_heading_rad_ * 180.0 / kPi) +
+      ";consensus_error_deg=" + std::to_string(consensus_error_rad_ * 180.0 / kPi) +
+      ";field_qualified=" + (field_qualification_valid_ ? "true" : "false") +
+      // Expose the exact calibration path that is active at runtime. The Web
+      // dashboard uses these flags to distinguish raw field telemetry from
+      // calibrated headings and must never label an uncalibrated source READY.
+      ";imu_planar=" + (imu_planar_calibration_enabled_ ? "true" : "false") +
+      ";imu_lut=" + (imu_heading_lut_enabled_ ? "true" : "false") +
+      ";imu_yaw_sign=" + std::to_string(imu_sign_) +
+      ";imu_yaw_offset_rad=" + std::to_string(imu_offset_) +
+      ";neo3_cal_owner=" + neo_calibration_owner_ +
+      ";neo3_cal_owner_verified=" + (neo_calibration_ownership_verified_ ? "true" : "false") +
+      ";neo3_full3d=" + (neo_full_calibration_enabled_ ? "true" : "false") +
+      ";neo3_planar=" + (neo_planar_calibration_enabled_ ? "true" : "false") +
+      ";neo3_lut=" + (neo_heading_lut_enabled_ ? "true" : "false") +
+      ";neo3_yaw_sign=" + std::to_string(neo_sign_) +
+      ";neo3_yaw_offset_rad=" + std::to_string(neo_offset_) +
+      ";consensus_valid=" + (consensus_valid_ ? "true" : "false") +
+      ";validated_heading_deg=" + std::to_string(validated_heading_rad_ * 180.0 / kPi) +
+      ";gyro_bias_z_rps=" + std::to_string(gyro_bias_z_rps_) +
+      ";current_emi_gate=" + (enable_current_emi_gate_ ? "true" : "false") +
+      ";motor_current_abs_a=" + std::to_string(motor_current_abs_a_) +
+      ";motor_current_age_sec=" + std::to_string(last_motor_current_time_.nanoseconds() == 0 ? 999.0 : (t - last_motor_current_time_).seconds()) +
+      ";current_emi_threshold_a=" + std::to_string(current_emi_gate_threshold_a_);
+    status_pub_->publish(msg);
+  }
+
+  std::string imu_topic_, imu_mag_topic_, imu_raw_mag_topic_, neo3_mag_topic_, map_yaw_topic_, output_frame_;
+  double tilt_timeout_sec_{0.75}, max_tilt_rad_{0.7853981634}, declination_rad_{0.0};
+  double min_norm_ut_{15.0}, max_norm_ut_{100.0};
+  double imu_sign_{-1.0}, imu_offset_{1.5451826276}, neo_sign_{-1.0}, neo_offset_{1.5707963268};
+  bool imu_planar_calibration_enabled_{false}, imu_heading_lut_enabled_{false};
+  double imu_bias_x_lsb_{0.0}, imu_bias_y_lsb_{0.0};
+  double imu_m00_{1.0}, imu_m01_{0.0}, imu_m10_{0.0}, imu_m11_{1.0};
+  double imu_corrected_norm_min_{0.70}, imu_corrected_norm_max_{1.30}, imu_planar_max_tilt_rad_{0.2617993878}, imu_corrected_norm_{0.0};
+  std::vector<std::pair<double,double>> imu_heading_lut_;
+  std::string neo_calibration_owner_{"ros_host"};
+  bool neo_calibration_ownership_verified_{false};
+  bool neo_planar_calibration_enabled_{false}, neo_full_calibration_enabled_{false}, neo_heading_lut_enabled_{false};
+  double neo_planar_max_tilt_rad_{0.2617993878};
+  double neo_bias_x_ut_{0.0}, neo_bias_y_ut_{0.0};
+  double neo_m00_{1.0}, neo_m01_{0.0}, neo_m10_{0.0}, neo_m11_{1.0};
+  std::array<double, 3> neo_bias_xyz_ut_{{0.0, 0.0, 0.0}};
+  std::array<double, 9> neo_matrix_3x3_{{1.0,0.0,0.0, 0.0,1.0,0.0, 0.0,0.0,1.0}};
+  std::vector<std::pair<double, double>> neo_heading_lut_;
+  double imu_variance_{0.08}, neo_variance_{0.06};
+  double max_heading_rate_rps_{3.0}, rate_gate_margin_rad_{0.35};
+  double consensus_max_error_rad_{0.0872664626}, consensus_hold_sec_{2.0}, consensus_timeout_sec_{0.5};
+  double validated_variance_{0.01}, inertial_heading_rad_{0.0}, validated_heading_rad_{0.0}, consensus_error_rad_{kPi};
+  bool enable_imu_{true}, enable_neo_{true};
+  bool field_qualification_valid_{false};
+  bool enable_current_emi_gate_{false};
+  std::string motor_current_topic_{"/esc/motor_current_abs_a"};
+  double current_emi_gate_threshold_a_{1.0e6}, current_emi_gate_timeout_sec_{0.35};
+  double motor_current_abs_a_{0.0};
+  bool have_tilt_{false}, have_map_yaw_{false}, have_inertial_heading_{false}, consensus_valid_{false};
+  uint8_t consensus_source_mask_{0u}, validated_source_mask_{0u};
+  double roll_rad_{0.0}, pitch_rad_{0.0}, map_yaw_from_enu_{0.0};
+  rclcpp::Time last_tilt_time_{0, 0, RCL_ROS_TIME}, last_map_yaw_time_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time last_motor_current_time_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time last_inertial_time_{0,0,RCL_ROS_TIME}, consensus_since_{0,0,RCL_ROS_TIME};
+  rclcpp::Time stationary_since_{0,0,RCL_ROS_TIME}, last_correction_time_{0,0,RCL_ROS_TIME};
+  double gyro_bias_z_rps_{0.0};
+  HeadingState imu_state_, neo_state_;
+
+  rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::MagneticField>::SharedPtr imu_mag_sub_, neo_mag_sub_;
+  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr imu_raw_mag_sub_;
+  rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr motor_current_sub_;
+  rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr map_yaw_sub_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr imu_heading_pub_, neo_heading_pub_, inertial_heading_pub_, validated_heading_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr imu_valid_pub_, neo_valid_pub_, consensus_valid_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
+  rclcpp::TimerBase::SharedPtr status_timer_;
+};
+
+int main(int argc, char **argv) {
+  rclcpp::init(argc, argv);
+  rclcpp::spin(std::make_shared<MagHeadingFusionNode>());
+  rclcpp::shutdown();
+  return 0;
+}

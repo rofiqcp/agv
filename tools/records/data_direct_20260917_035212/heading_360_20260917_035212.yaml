@@ -1,0 +1,462 @@
+heading_360_calibration:
+  stage1_only: true
+  runtime_yaml_written: false
+  ready_for_stage2: false
+  valid: false
+  source: operator-referenced physical North 0deg, 45deg static stops, full 360deg closure
+  direction: CW
+  created_at: '2026-09-17T03:56:24.150+07:00'
+  raw_csv: tools/records/data_direct_20260917_035212/heading_360_raw_20260917_035212.csv
+  segment_count: 9
+  fit_segment_count: 8
+  closure_segment: 9
+  calibration_owner: ros_host
+  ground_truth:
+    convention: compass_deg_0_North_90_East_CW
+    ros_conversion: yaw_enu = pi/2 - compass_heading
+    ros_rep: REP-103 ENU, yaw positive CCW about +Z
+    cardinal_enu_deg:
+      N: 90.0
+      NE: 45.0
+      E: 0.0
+      SE: -45.0
+      S: -90.0
+      SW: -135.0
+      W: 180.0
+      NW: 135.0
+    north_reference: operator_physical_alignment
+  transition_check_pass: true
+  gyro:
+    pass: true
+    step_pass: true
+    steps_deg:
+    - -43.04649020199584
+    - -45.58625147503667
+    - -43.373374486877424
+    - -46.87997486437989
+    - -43.26102946319573
+    - -43.608762054595836
+    - -46.75611456445313
+    - -44.797300239288305
+    total_turn_deg: -357.30929734982277
+    expected_turn_deg: -360.0
+    closure_error_deg: 2.6907026501772293
+  yahboom:
+    valid: false
+    sensor: Yahboom MAG
+    unit: LSB
+    sample_count: 466
+    fit_sample_count: 424
+    closure_sample_count: 42
+    bias: &id001
+    - -3101.483066502463
+    - 891.8194444444443
+    matrix: &id002
+    - 0.0002691111861857588
+    - -2.585878653536159e-07
+    - -2.585878653536166e-07
+    - 0.0002617167875814777
+    yaw_sign: -1.0
+    yaw_offset_rad: 1.3605501108816738
+    heading_lut_input_rad: &id003
+    - 1.587243908148825
+    - 0.7800734750548015
+    - -0.04182729198087198
+    - -0.7644440868200986
+    - -1.5920037878869537
+    - -2.3550702208677454
+    - 3.1225133059505112
+    - 2.405114169137808
+    heading_lut_correction_rad: &id004
+    - -0.01644758135392843
+    - 0.005324688342646766
+    - 0.04182729198087198
+    - -0.020954076577349712
+    - 0.021207461092057178
+    - -0.001124269324599414
+    - 0.01907934763928256
+    - -0.048919678945462675
+    corrected_norm_mean: 1.0024969317682524
+    corrected_norm_std: 0.024217497917045146
+    corrected_norm_p05: 0.9743381302769878
+    corrected_norm_p95: 1.0506637221570898
+    norm_gate_pass: true
+    per_stop:
+    - segment: 1
+      target_compass_deg: 0.0
+      target_enu_deg: 90.0
+      predicted_enu_deg: 89.99940280697693
+      mean_error_deg: -0.000597193023061549
+      samples: 56
+      corrected_norm_mean: 1.0216656881067872
+    - segment: 2
+      target_compass_deg: 45.0
+      target_enu_deg: 45.0
+      predicted_enu_deg: 45.000831319385064
+      mean_error_deg: 0.0008313193850643086
+      samples: 44
+      corrected_norm_mean: 0.9901534619540509
+    - segment: 3
+      target_compass_deg: 90.0
+      target_enu_deg: 0.0
+      predicted_enu_deg: -0.00864803196382147
+      mean_error_deg: -0.00864803196382147
+      samples: 36
+      corrected_norm_mean: 0.9796260327353506
+    - segment: 4
+      target_compass_deg: 135.0
+      target_enu_deg: -45.0
+      predicted_enu_deg: -44.989999777824686
+      mean_error_deg: 0.010000222175312124
+      samples: 58
+      corrected_norm_mean: 0.9797065510092545
+    - segment: 5
+      target_compass_deg: 180.0
+      target_enu_deg: -90.0
+      predicted_enu_deg: -90.00408363986305
+      mean_error_deg: -0.004083639863061795
+      samples: 58
+      corrected_norm_mean: 1.0135438965183692
+    - segment: 6
+      target_compass_deg: 225.0
+      target_enu_deg: -135.0
+      predicted_enu_deg: -134.99753836079978
+      mean_error_deg: 0.002461639200232804
+      samples: 57
+      corrected_norm_mean: 1.05036817253052
+    - segment: 7
+      target_compass_deg: 270.0
+      target_enu_deg: -180.0
+      predicted_enu_deg: 179.99163453803487
+      mean_error_deg: -0.008365461965121323
+      samples: 54
+      corrected_norm_mean: 0.9836631284958318
+    - segment: 8
+      target_compass_deg: 315.0
+      target_enu_deg: 135.00000000000003
+      predicted_enu_deg: 135.00730315385874
+      mean_error_deg: 0.007303153858718699
+      samples: 61
+      corrected_norm_mean: 1.009851785326542
+    - segment: 9
+      target_compass_deg: 0.0
+      target_enu_deg: 90.0
+      predicted_enu_deg: 93.94437855280286
+      mean_error_deg: 3.9443785528028634
+      samples: 42
+      corrected_norm_mean: 0.9742552983580679
+    validation: &id005
+      fit_rms_error_deg: 0.1625583125147886
+      fit_max_abs_error_deg: 1.635351710339696
+      closure_rms_error_deg: 3.9465110560390806
+      closure_max_abs_error_deg: 4.2259040744508605
+      closure_mean_error_deg: 3.9443785528028616
+      rms_error_deg: 0.1625583125147886
+      max_abs_error_deg: 1.635351710339696
+      pass: false
+  neo3:
+    valid: true
+    sensor: NEO3 IST8310 diagnostic full-fit
+    unit: uT
+    sample_count: 466
+    fit_sample_count: 424
+    closure_sample_count: 42
+    bias: &id006
+    - -13.876793349753695
+    - 1.9115564814814796
+    matrix: &id007
+    - 0.03652314949169245
+    - -0.00045890339887859127
+    - -0.0004589033988785904
+    - 0.04150194919231958
+    yaw_sign: 1.0
+    yaw_offset_rad: 1.5404193957978243
+    heading_lut_input_rad: &id008
+    - 1.4229333951861647
+    - 0.7003688219043257
+    - 0.25191914473139354
+    - -0.576254362848672
+    - -1.4687284707664956
+    - -2.359534869345018
+    - 2.976791413366419
+    - 2.196387289784848
+    heading_lut_correction_rad: &id009
+    - 0.14786293160873187
+    - 0.08502934149312256
+    - -0.25191914473139354
+    - -0.20914380054877624
+    - -0.10206785602840095
+    - 0.0033403791526733784
+    - 0.1648012402233745
+    - 0.15980720040749707
+    corrected_norm_mean: 1.0076296411212995
+    corrected_norm_std: 0.05251770206494622
+    corrected_norm_p05: 0.937453748941399
+    corrected_norm_p95: 1.119444056698176
+    norm_gate_pass: true
+    per_stop:
+    - segment: 1
+      target_compass_deg: 0.0
+      target_enu_deg: 90.0
+      predicted_enu_deg: 89.99472474826761
+      mean_error_deg: -0.005275251732384804
+      samples: 56
+      corrected_norm_mean: 1.033592599262215
+    - segment: 2
+      target_compass_deg: 45.0
+      target_enu_deg: 45.0
+      predicted_enu_deg: 44.97106452940843
+      mean_error_deg: -0.028935470591567435
+      samples: 44
+      corrected_norm_mean: 1.0234837889120492
+    - segment: 3
+      target_compass_deg: 90.0
+      target_enu_deg: 0.0
+      predicted_enu_deg: 0.023771119936403882
+      mean_error_deg: 0.02377111993640388
+      samples: 36
+      corrected_norm_mean: 0.960322851721581
+    - segment: 4
+      target_compass_deg: 135.0
+      target_enu_deg: -45.0
+      predicted_enu_deg: -44.99428563977874
+      mean_error_deg: 0.005714360221263239
+      samples: 58
+      corrected_norm_mean: 1.1178175026224593
+    - segment: 5
+      target_compass_deg: 180.0
+      target_enu_deg: -90.0
+      predicted_enu_deg: -90.00018046769046
+      mean_error_deg: -0.00018046769045102168
+      samples: 58
+      corrected_norm_mean: 1.032666673909404
+    - segment: 6
+      target_compass_deg: 225.0
+      target_enu_deg: -135.0
+      predicted_enu_deg: -134.99629593988502
+      mean_error_deg: 0.0037040601149921117
+      samples: 57
+      corrected_norm_mean: 0.9386116162414445
+    - segment: 7
+      target_compass_deg: 270.0
+      target_enu_deg: -180.0
+      predicted_enu_deg: 179.98951137531452
+      mean_error_deg: -0.010488624685527954
+      samples: 54
+      corrected_norm_mean: 0.9697599731696755
+    - segment: 8
+      target_compass_deg: 315.0
+      target_enu_deg: 135.00000000000003
+      predicted_enu_deg: 134.99896549248953
+      mean_error_deg: -0.0010345075104920755
+      samples: 61
+      corrected_norm_mean: 0.976524073529051
+    - segment: 9
+      target_compass_deg: 0.0
+      target_enu_deg: 90.0
+      predicted_enu_deg: 88.85401198771494
+      mean_error_deg: -1.1459880122850639
+      samples: 42
+      corrected_norm_mean: 0.9977468197307021
+    validation: &id010
+      fit_rms_error_deg: 0.20006870654860942
+      fit_max_abs_error_deg: 2.0299753230960595
+      closure_rms_error_deg: 1.1671684236169335
+      closure_max_abs_error_deg: 1.501787422722231
+      closure_mean_error_deg: -1.145988012285062
+      rms_error_deg: 0.20006870654860942
+      max_abs_error_deg: 2.0299753230960595
+      pass: true
+  neo3_ap_periph_residual:
+    valid: false
+    sensor: NEO3 AP_Periph corrected field
+    unit: uT
+    owner: ap_periph
+    host_hard_soft_iron: false
+    sample_count: 466
+    fit_sample_count: 424
+    closure_sample_count: 42
+    yaw_sign: 1.0
+    yaw_offset_rad: 1.5671164609937305
+    heading_lut_input_rad: &id011
+    - 1.5180358105408527
+    - 0.2720966744466497
+    - -0.32925370399373843
+    - -0.9582673613323253
+    - -1.534335870921664
+    - -2.064744459628959
+    - -2.7653535271057765
+    - 2.711545350726864
+    heading_lut_correction_rad: &id012
+    - 0.05276051625404387
+    - 0.5133014889507985
+    - 0.32925370399373843
+    - 0.17286919793487698
+    - -0.036460455873232656
+    - -0.29145003056338575
+    - -0.3762391264840166
+    - -0.3553508605345188
+    field_norm_mean_ut: 25.9401396927021
+    field_norm_std_ut: 10.465692442919185
+    field_norm_p05_ut: 13.192940169914879
+    field_norm_p95_ut: 41.994994983406094
+    field_norm_gate_pass: false
+    per_stop:
+    - segment: 1
+      target_compass_deg: 0.0
+      target_enu_deg: 90.0
+      predicted_enu_deg: 90.0040064824791
+      mean_error_deg: 0.004006482479102867
+      samples: 56
+      field_norm_mean_ut: 14.212211285596556
+    - segment: 2
+      target_compass_deg: 45.0
+      target_enu_deg: 45.0
+      predicted_enu_deg: 44.98315840076291
+      mean_error_deg: -0.016841599237087813
+      samples: 44
+      field_norm_mean_ut: 16.8867668688324
+    - segment: 3
+      target_compass_deg: 90.0
+      target_enu_deg: 0.0
+      predicted_enu_deg: 0.003405614026856869
+      mean_error_deg: 0.0034056140268568695
+      samples: 36
+      field_norm_mean_ut: 21.355842265854328
+    - segment: 4
+      target_compass_deg: 135.0
+      target_enu_deg: -45.0
+      predicted_enu_deg: -45.007049934519614
+      mean_error_deg: -0.007049934519613032
+      samples: 58
+      field_norm_mean_ut: 36.8321053503781
+    - segment: 5
+      target_compass_deg: 180.0
+      target_enu_deg: -90.0
+      predicted_enu_deg: -90.00646020720788
+      mean_error_deg: -0.006460207207879868
+      samples: 58
+      field_norm_mean_ut: 41.98236350844664
+    - segment: 6
+      target_compass_deg: 225.0
+      target_enu_deg: -135.0
+      predicted_enu_deg: -134.98188415277696
+      mean_error_deg: 0.018115847223052844
+      samples: 57
+      field_norm_mean_ut: 36.658693197384814
+    - segment: 7
+      target_compass_deg: 270.0
+      target_enu_deg: -180.0
+      predicted_enu_deg: -179.99378959237004
+      mean_error_deg: 0.006210407629964452
+      samples: 54
+      field_norm_mean_ut: 27.037853551932013
+    - segment: 8
+      target_compass_deg: 315.0
+      target_enu_deg: 135.00000000000003
+      predicted_enu_deg: 135.0206085462082
+      mean_error_deg: 0.020608546208167343
+      samples: 61
+      field_norm_mean_ut: 18.12152833746561
+    - segment: 9
+      target_compass_deg: 0.0
+      target_enu_deg: 90.0
+      predicted_enu_deg: 88.90538814706898
+      mean_error_deg: -1.0946118529310251
+      samples: 42
+      field_norm_mean_ut: 13.19407558461649
+    validation: &id013
+      fit_rms_error_deg: 0.19867860235437693
+      fit_max_abs_error_deg: 1.759000819027506
+      closure_rms_error_deg: 1.119907423408155
+      closure_max_abs_error_deg: 1.47240413541097
+      closure_mean_error_deg: -1.094611852931027
+      rms_error_deg: 0.19867860235437693
+      max_abs_error_deg: 1.759000819027506
+      pass: false
+  cross_sensor:
+    pass: false
+    rms_delta_deg: 1.5427486242508186
+    max_abs_delta_deg: 5.48293958160812
+    per_stop:
+    - segment: 1
+      mean_delta_deg: 0.0046782840824767654
+      rms_delta_deg: 0.24476602533871694
+    - segment: 2
+      mean_delta_deg: 0.029766811491148255
+      rms_delta_deg: 0.17329090387994303
+    - segment: 3
+      mean_delta_deg: -0.03241894730618207
+      rms_delta_deg: 0.1898362044203319
+    - segment: 4
+      mean_delta_deg: 0.004281893190990929
+      rms_delta_deg: 0.1688905309296816
+    - segment: 5
+      mean_delta_deg: -0.003903216963795345
+      rms_delta_deg: 0.2462172792954868
+    - segment: 6
+      mean_delta_deg: -0.0012424308670001848
+      rms_delta_deg: 0.1676407389159732
+    - segment: 7
+      mean_delta_deg: 0.0021233024577335105
+      rms_delta_deg: 0.1421019749019793
+    - segment: 8
+      mean_delta_deg: 0.008337909319981239
+      rms_delta_deg: 0.2541277402306968
+    - segment: 9
+      mean_delta_deg: 5.090366956936605
+      rms_delta_deg: 5.0974742583171215
+  gates:
+    fit_rms_max_deg: 3.0
+    fit_max_error_deg: 5.0
+    north_closure_max_deg: 2.0
+    cross_rms_max_deg: 3.0
+    cross_max_deg: 5.0
+    gyro_closure_max_deg: 20.0
+    corrected_norm_p05_min: 0.75
+    corrected_norm_p95_max: 1.25
+    min_samples_per_stop: 15
+yahboom_mag_planar_calibration:
+  valid: false
+  stage1_only: true
+  source: 9-stop North-referenced Stage-1 fit; YAML/runtime apply intentionally locked until Stage 2
+  direction: CW
+  created_at: '2026-09-17T03:56:24.150+07:00'
+  raw_csv: tools/records/data_direct_20260917_035212/heading_360_raw_20260917_035212.csv
+  sample_count: 424
+  segment_count: 9
+  transition_check_pass: true
+  bias_xy_lsb: *id001
+  matrix_xy_per_lsb: *id002
+  yaw_sign: -1.0
+  yaw_offset_rad: 1.3605501108816738
+  heading_lut_input_rad: *id003
+  heading_lut_correction_rad: *id004
+  corrected_norm_mean: 1.0024969317682524
+  corrected_norm_std: 0.024217497917045146
+  validation: *id005
+  scope: planar XY; stop 9 is validation-only North closure
+neo3_planar_candidate:
+  valid: true
+  stage1_only: true
+  diagnostic_only: true
+  bias_xy_ut: *id006
+  matrix_xy: *id007
+  yaw_sign: 1.0
+  yaw_offset_rad: 1.5404193957978243
+  heading_lut_input_rad: *id008
+  heading_lut_correction_rad: *id009
+  validation: *id010
+  requires_calibration_owner_verification: true
+neo3_ap_periph_residual_candidate:
+  valid: false
+  stage1_only: true
+  owner: ap_periph
+  host_hard_soft_iron: false
+  yaw_sign: 1.0
+  yaw_offset_rad: 1.5671164609937305
+  heading_lut_input_rad: *id011
+  heading_lut_correction_rad: *id012
+  validation: *id013
+  field_norm_p05_ut: 13.192940169914879
+  field_norm_p95_ut: 41.994994983406094

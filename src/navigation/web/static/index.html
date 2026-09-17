@@ -16,7 +16,8 @@
   <link rel="stylesheet" href="/workspaces.css?v=20260913-stage6-v1">
   <link rel="stylesheet" href="/perception_bab4.css?v=20260914-bab4-v1">
   <link rel="stylesheet" href="/single-navigation.css?v=20260914-single-nav-v1">
-  <link rel="stylesheet" href="/ui-polish.css?v=20260916-r41-summary-graph-v1">
+  <link rel="stylesheet" href="/rm3100-calibration.css?v=20260917-rm3100-v1">
+  <link rel="stylesheet" href="/ui-polish.css?v=20260917-n0-clarity-v1">
 </head>
 <body>
   <div class="app-shell">
@@ -90,15 +91,15 @@
             <article class="health-card" data-health="nav2"><div class="health-icon">N</div><div><span>NAV2</span><b id="healthNav2">WAIT</b><small id="healthNav2Detail">planner / controller</small></div><i class="health-led"></i></article>
           </div>
 
-          <div class="section-title" id="overviewEstimatorSection"><div><span class="eyebrow">HEADING & STATE ESTIMATION</span><h2>Magnetometer + EKF Live</h2></div><span class="muted">RM3100 • Yahboom MAG • inertial heading • EKF local/global</span></div>
+          <div class="section-title" id="overviewEstimatorSection"><div><span class="eyebrow">HEADING & STATE ESTIMATION</span><h2>RM3100 + EKF Live</h2></div><span class="muted">NEO3 Pro RM3100 • Yahboom gyro/accel • EKF local/global</span></div>
           <div class="two-col" id="overviewEstimatorGrid">
             <article class="panel compact">
               <div class="panel-head"><div><span class="eyebrow">ABSOLUTE / INERTIAL YAW</span><h2>Heading Sources</h2></div><span class="status-chip waiting" id="overviewHeadingChip">WAIT</span></div>
               <div class="metric-grid">
-                <div><span>RM3100 raw |B|</span><b id="overviewRmField">--</b></div><div><span>RM3100 calibrated yaw</span><b id="overviewRmHeading">--</b></div>
-                <div><span>IMU MAG raw |B|</span><b id="overviewImuMagField">--</b></div><div><span>IMU MAG calibrated yaw</span><b id="overviewImuMagHeading">--</b></div>
-                <div><span>Inertial yaw</span><b id="overviewInertialHeading">--</b></div><div><span>Validated yaw</span><b id="overviewValidatedHeading">--</b></div>
-                <div><span>Consensus</span><b id="overviewHeadingConsensus">--</b></div><div><span>Calibration</span><b id="overviewHeadingCalibration">--</b></div><div><span>Source mask</span><b id="overviewHeadingSources">--</b></div>
+                <div><span>RM3100 wire |B|</span><b id="overviewRmField">--</b></div><div><span>RM3100 calibrated |B|</span><b id="overviewRmCalField">--</b></div>
+                <div><span>RM3100 absolute yaw</span><b id="overviewRmHeading">--</b></div><div><span>Yahboom inertial yaw</span><b id="overviewInertialHeading">--</b></div>
+                <div><span>Validated yaw</span><b id="overviewValidatedHeading">--</b></div><div><span>Calibration</span><b id="overviewHeadingCalibration">--</b></div>
+                <div><span>Mag source</span><b id="overviewHeadingSource">RM3100</b></div>
               </div>
             </article>
             <article class="panel compact">
@@ -146,6 +147,8 @@
                 <div><span class="eyebrow">NAV2 / MAP FRAME</span><h2>Navigation Workspace</h2></div>
                 <div class="toolbar map-toolbar" role="toolbar" aria-label="Map tools">
                   <button class="soft-btn active" id="mapGoalTool" title="Set Goal Pose">◎ Goal</button>
+                  <button class="danger-btn map-cancel-goal" id="mapCancelGoalBtn" title="Cancel active Nav2 goal">✕ Cancel Goal</button>
+                  <button class="soft-btn" id="mapClearGoalBtn" title="Clear goal marker/path visual only">⌫ Clear Goal</button>
                   <button class="soft-btn" id="mapInitialTool" title="Set Initial Pose">⊕ Initial</button>
                   <button class="soft-btn" id="mapPanTool" title="Pan map">✋ Pan</button>
                   <button class="soft-btn" id="mapMeasureTool" title="Measure distance and bearing">⌁ Measure</button>
@@ -192,7 +195,7 @@
                 <label>X <input type="number" step="0.01" id="goalX" value="0"></label>
                 <label>Y <input type="number" step="0.01" id="goalY" value="0"></label>
                 <label>Yaw <input type="number" step="1" id="goalYaw" value="0"><small>deg</small></label>
-                <div class="nav-rail-actions"><button class="primary-btn" id="sendGoalBtn">SEND GOAL</button><button class="danger-btn" id="cancelGoalBtn">CANCEL</button></div>
+                <div class="nav-rail-actions nav-goal-actions"><button class="primary-btn" id="sendGoalBtn">SEND GOAL</button><button class="danger-btn" id="cancelGoalBtn">CANCEL GOAL</button><button class="soft-btn" id="clearGoalBtn">CLEAR GOAL</button></div><div class="nav-goal-block-reason" id="navGoalBlockReason">Checking navigation readiness…</div>
               </section>
               <section class="nav-rail-section nav-initial-section" id="navInitialSection">
                 <div class="nav-rail-head"><span>INITIAL POSE</span><b id="initialPoseState">CURRENT</b></div>
@@ -240,12 +243,12 @@
           </div>
           <div class="two-col" id="navEstimatorLiveSection">
             <article class="panel compact">
-              <div class="panel-head"><div><span class="eyebrow">LIVE HEADING SOURCES</span><h2>RM3100 + IMU MAG + Inertial</h2></div><span class="status-chip waiting" id="navHeadingChip">WAIT</span></div>
+              <div class="panel-head"><div><span class="eyebrow">LIVE HEADING PIPELINE</span><h2>RM3100 + Yahboom Gyro Inertial</h2></div><span class="status-chip waiting" id="navHeadingChip">WAIT</span></div>
               <div class="metric-grid">
-                <div><span>RM3100 raw XYZ / |B|</span><b id="navRmField">--</b></div><div><span>RM3100 calibrated yaw</span><b id="navRmHeading">--</b></div>
-                <div><span>IMU MAG raw XYZ / |B|</span><b id="navImuMagField">--</b></div><div><span>IMU MAG calibrated yaw</span><b id="navImuMagHeading">--</b></div>
-                <div><span>Inertial yaw</span><b id="navInertialHeading">--</b></div><div><span>Validated yaw</span><b id="navValidatedHeading">--</b></div>
-                <div><span>Consensus</span><b id="navHeadingConsensus">--</b></div><div><span>Calibration</span><b id="navHeadingCalibration">--</b></div><div><span>Map yaw offset</span><b id="navMapYawOffset">--</b></div>
+                <div><span>RM3100 wire XYZ / |B|</span><b id="navRmField">--</b></div><div><span>RM3100 calibrated XYZ / |B|</span><b id="navRmCalField">--</b></div>
+                <div><span>RM3100 absolute yaw</span><b id="navRmHeading">--</b></div><div><span>Yahboom inertial yaw</span><b id="navInertialHeading">--</b></div>
+                <div><span>Validated yaw</span><b id="navValidatedHeading">--</b></div><div><span>Calibration</span><b id="navHeadingCalibration">--</b></div>
+                <div><span>Map yaw offset</span><b id="navMapYawOffset">--</b></div><div><span>Mag source</span><b id="navHeadingSource">RM3100</b></div>
               </div>
             </article>
             <article class="panel compact">
@@ -260,7 +263,7 @@
           </div>
           <details class="mission-draft-dock" id="missionDraftDock">
             <summary><span>Mission Draft / Goal List</span><b id="missionDraftSummary">0 points • local draft</b><i>▾</i></summary>
-            <div class="mission-draft-toolbar"><button class="soft-btn" id="missionAddGoalBtn">+ Add Current Goal</button><button class="soft-btn" id="missionClearBtn">Clear</button><button class="soft-btn" id="missionExportBtn">Export JSON</button><span>Draft only • Send Goal remains explicit.</span></div>
+            <div class="mission-draft-toolbar"><button class="soft-btn" id="missionAddGoalBtn">+ Add Current Goal</button><button class="soft-btn" id="missionClearBtn">Clear Draft</button><button class="soft-btn" id="missionExportBtn">Export JSON</button><span>Draft only • Send Goal remains explicit.</span></div>
             <div class="mission-table-wrap"><table class="engineering-table mission-table"><thead><tr><th>#</th><th>X</th><th>Y</th><th>Yaw</th><th>Status</th><th>Action</th></tr></thead><tbody id="missionDraftRows"><tr><td colspan="6" class="empty-state">No mission draft points.</td></tr></tbody></table></div>
           </details>
           <details class="nav-inspector" id="navInspector">
@@ -357,11 +360,11 @@
         <section class="page" id="page-sensors">
           <div class="sensor-hero neo3-sensor-grid">
             <article class="panel" id="sensorGnssSection"><div class="panel-head"><div><span class="eyebrow">CUAV NEO-3 • u-blox NEO-M9N • F411 UART</span><h2>NEO-3 GNSS M9N</h2></div><div class="status-pair"><span class="status-chip waiting" id="gnssChip">LINK WAIT</span><span class="status-chip waiting" id="gnssFixChip">FIX WAIT</span></div></div><div class="big-coordinates"><div><span>LATITUDE</span><b id="gnssLat">--</b></div><div><span>LONGITUDE</span><b id="gnssLon">--</b></div></div><div class="metric-grid"><div><span>Satellites</span><b id="gnssSat">--</b></div><div><span>hAcc</span><b id="gnssHacc">--</b></div><div><span>DOP</span><b id="gnssDop">--</b></div><div><span>NAV-PVT rate</span><b id="gnssRate">--</b></div><div><span>Speed</span><b id="gnssSpeed">--</b></div><div><span>COG</span><b id="gnssCog">--</b></div><div><span>Fix type</span><b id="gnssFix">--</b></div><div><span>Transport</span><b id="gnssTransport">F411 UART → CDC</b></div></div><p class="hint">CONNECTED berarti M9N aktif mengirim data ke F411. FIX hanya VALID bila solusi GNSS memenuhi gate receiver; indoor dapat CONNECTED tetapi NO FIX.</p></article>
-            <article class="panel" id="sensorNeo3MagSection"><div class="panel-head"><div><span class="eyebrow">CUAV NEO-3 PRO • RM3100 • DroneCAN/F411</span><h2>NEO-3 Pro Magnetometer RM3100</h2></div><span class="status-chip waiting" id="neo3MagChip">MAG WAIT</span></div><div class="metric-grid"><div><span>Mag X</span><b id="neo3MagX">--</b></div><div><span>Mag Y</span><b id="neo3MagY">--</b></div><div><span>Mag Z</span><b id="neo3MagZ">--</b></div><div><span>Field norm</span><b id="neo3MagNorm">--</b></div><div><span>Map heading</span><b id="neo3MagHeading">--</b></div><div><span>Heading gate</span><b id="neo3MagValid">WAIT</b></div></div><p class="hint">RM3100 diterima dari NEO-3 Pro melalui F411, diterbitkan pada /neo3pro/mag dan dimirror ke /neo3/mag untuk fusion. Field norm, tilt compensation, calibration gate, dan freshness diperiksa sebelum yaw absolut boleh ikut fusion global.</p></article>
+            <article class="panel" id="sensorNeo3MagSection"><div class="panel-head"><div><span class="eyebrow">CUAV NEO-3 PRO • RM3100 • DroneCAN/F411</span><h2>NEO-3 Pro Magnetometer RM3100</h2></div><span class="status-chip waiting" id="neo3MagChip">MAG WAIT</span></div><div class="metric-grid"><div><span>Mag X</span><b id="neo3MagX">--</b></div><div><span>Mag Y</span><b id="neo3MagY">--</b></div><div><span>Mag Z</span><b id="neo3MagZ">--</b></div><div><span>Field norm</span><b id="neo3MagNorm">--</b></div><div><span>Absolute heading</span><b id="neo3MagHeading">--</b></div><div><span>Heading status</span><b id="neo3MagValid">WAIT</b></div><div><span>Calibrated |B|</span><b id="neo3MagCalNorm">--</b></div></div><p class="hint">RM3100 diterima dari NEO-3 Pro melalui DroneCAN → F411 dan hanya diterbitkan sebagai raw wire pada <b>/neo3pro/mag</b>. Koreksi host menghasilkan <b>/neo3pro/mag_calibrated</b>; heading absolut RM3100 diterbitkan ke <b>/heading/validated_fusion</b> untuk global EKF.</p></article>
           </div>
           <div class="two-col magnetic-health-grid">
-            <article class="panel" id="sensorImuSection"><div class="panel-head"><div><span class="eyebrow">IMU CP2102</span><h2>Orientation & Motion</h2></div><span class="status-chip waiting" id="imuChip">WAIT</span></div><div class="orientation-display"><div class="compass"><div class="needle" id="imuNeedle"></div><span>N</span></div><div class="orientation-values"><div><span>Roll</span><b id="imuRoll">--</b></div><div><span>Pitch</span><b id="imuPitch">--</b></div><div><span>Yaw</span><b id="imuYaw">--</b></div></div></div><div class="metric-grid"><div><span>Gyro X</span><b id="imuGx">--</b></div><div><span>Gyro Y</span><b id="imuGy">--</b></div><div><span>Gyro Z</span><b id="imuGz">--</b></div><div><span>Accel X</span><b id="imuAx">--</b></div><div><span>Accel Y</span><b id="imuAy">--</b></div><div><span>Accel Z</span><b id="imuAz">--</b></div><div><span>IMU mag norm</span><b id="imuMagNorm">--</b></div><div><span>IMU mag gate</span><b id="imuMagValid">WAIT</b></div></div></article>
-            <article class="panel" id="sensorFusionSection"><div class="panel-head"><div><span class="eyebrow">ABSOLUTE HEADING FUSION</span><h2>F411 / Magnetometer Diagnostics</h2></div></div><div id="magFusionDetail" class="json-pretty">Waiting...</div></article>
+            <article class="panel" id="sensorImuSection"><div class="panel-head"><div><span class="eyebrow">IMU CP2102</span><h2>Orientation & Motion</h2></div><span class="status-chip waiting" id="imuChip">WAIT</span></div><div class="orientation-display"><div class="compass"><div class="needle" id="imuNeedle"></div><span>N</span></div><div class="orientation-values"><div><span>Roll</span><b id="imuRoll">--</b></div><div><span>Pitch</span><b id="imuPitch">--</b></div><div><span>Yaw</span><b id="imuYaw">--</b></div></div></div><div class="metric-grid"><div><span>Gyro X</span><b id="imuGx">--</b></div><div><span>Gyro Y</span><b id="imuGy">--</b></div><div><span>Gyro Z</span><b id="imuGz">--</b></div><div><span>Accel X</span><b id="imuAx">--</b></div><div><span>Accel Y</span><b id="imuAy">--</b></div><div><span>Accel Z</span><b id="imuAz">--</b></div><div><span>Role</span><b>GYRO / ACCEL / ORIENTATION</b></div></div></article>
+            <article class="panel" id="sensorFusionSection"><div class="panel-head"><div><span class="eyebrow">RM3100 HEADING PIPELINE</span><h2>F411 / NEO3 Pro Diagnostics</h2></div></div><div id="magFusionDetail" class="json-pretty">Waiting...</div></article>
           </div>
           <article class="panel hmi-waypoint-panel">
             <div class="panel-head"><div><span class="eyebrow">TFT GPS / NAVIGATION • SHARED ROS STATE</span><h2>Waypoint & Active Target</h2></div><span class="status-chip waiting" id="hmiWpStatus">BELUM ADA TARGET</span></div>
@@ -519,34 +522,44 @@
         <!-- ESC ACKERMANN SCALING -->
         <section class="page" id="page-esc-ackermann">
           <article class="panel">
-            <div class="panel-head"><div><span class="eyebrow">ACKERMANN → VESC POSITION</span><h2>Steering Scaling & Calibration</h2></div><span class="status-chip waiting" id="calSteerChip">WAIT</span></div>
-            <p class="info-box">Kontrak tunggal steering: ROS/Nav2 memakai sudut roda fisik −30°…+30°. Ackermann memetakan linear ke VESC COMM_SET_POS 0°…360°. Electrical encoder inversion F103 tidak boleh dipakai untuk membalik arah kendaraan.</p>
+            <div class="panel-head"><div><span class="eyebrow">ACKERMANN → STEERING COMMAND</span><h2>Steering Scaling & Calibration</h2></div><span class="status-chip waiting" id="calSteerChip">WAIT</span></div>
+            <p class="info-box">Satu kontrak wire untuk semua owner: LEFT selalu memakai VESC COMM_SET_POS 0°…360°. VESC Tool/TCP/Python memakai raw POS langsung. ROS/Nav2/ROS Web mengkalibrasi sudut roda fisik −30°/0°/+30° ke raw VESC POS LEFT/CENTER/RIGHT, lalu mengubah feedback raw POS kembali menjadi derajat fisik.</p>
             <div class="metric-grid">
               <div><span>Physical LEFT</span><b>−30°</b><small>mechanical endpoint</small></div>
-              <div><span>VESC LEFT</span><b>0°</b><small>COMM_SET_POS</small></div>
+              <div><span>Default VESC POS @ −30°</span><b>0°</b><small>COMM_SET_POS</small></div>
               <div><span>Physical CENTER</span><b>0°</b><small>straight</small></div>
-              <div><span>VESC CENTER</span><b>180°</b><small>startup center</small></div>
+              <div><span>Default VESC POS @ 0°</span><b>180°</b><small>COMM_SET_POS</small></div>
               <div><span>Physical RIGHT</span><b>+30°</b><small>mechanical endpoint</small></div>
-              <div><span>VESC RIGHT</span><b>360°</b><small>COMM_SET_POS</small></div>
+              <div><span>Default VESC POS @ +30°</span><b>360°</b><small>COMM_SET_POS</small></div>
             </div>
             <div class="kv-list spaced">
               <div><span>Controller</span><b id="calSteerController">--</b></div>
               <div><span>Physical target</span><b id="calSteerTarget">--</b></div>
               <div><span>Physical actual</span><b id="calSteerActual">--</b></div>
-              <div><span>VESC protocol position</span><b id="calSteerProtocol">--</b></div>
+              <div><span>Raw VESC POS feedback</span><b id="calSteerProtocol">--</b></div>
               <div><span>Mechanical limits</span><b id="ackScaleMechanical">−30° / +30°</b></div>
               <div><span>Nav2 operational limit</span><b id="ackScaleOperational">±30°</b></div>
-              <div><span>Mapping formula</span><b>POS = (deg + 30) × 6</b></div>
+              <div><span>Wire contract</span><b>COMM_SET_POS = VESC POS × 10⁶</b></div>
               <div><span>Drive native scale</span><b id="ackScaleErpmPerMps">--</b></div>
               <div><span>Encoder measured / safe</span><b id="ackScaleEncoderSpan">--</b></div>
-              <div><span>Raw TIM4 / POS</span><b id="ackScaleEncoderRaw">--</b></div>
+              <div><span>Raw TIM4 / F103 POS</span><b id="ackScaleEncoderRaw">--</b></div>
             </div>
             <div class="vesc-form-row">
               <label>Drive eRPM / (m/s)<input id="ackScaleErpmPerMpsInput" type="number" min="100" max="50000" step="1"></label>
             </div>
             <div class="vesc-form-row">
-              <label>Physical LEFT (deg)<input id="ackScaleLeftLimit" type="number" min="-45" max="-1" step="0.1"></label>
-              <label>Physical RIGHT (deg)<input id="ackScaleRightLimit" type="number" min="1" max="45" step="0.1"></label>
+              <label>VESC POS @ physical −30°<input id="ackScaleVescLeftPos" type="number" min="0" max="360" step="0.1"></label>
+              <label>VESC POS @ physical 0°<input id="ackScaleVescCenterPos" type="number" min="0" max="360" step="0.1"></label>
+              <label>VESC POS @ physical +30°<input id="ackScaleVescRightPos" type="number" min="0" max="360" step="0.1"></label>
+            </div>
+            <div class="button-row">
+              <button class="soft-btn grow" id="ackCaptureLeftPos">Capture live POS @ −30°</button>
+              <button class="soft-btn grow" id="ackCaptureCenterPos">Capture live POS @ 0°</button>
+              <button class="soft-btn grow" id="ackCaptureRightPos">Capture live POS @ +30°</button>
+            </div>
+            <div class="vesc-form-row">
+              <label>Mechanical hard LEFT (deg)<input id="ackScaleLeftLimit" type="number" min="-90" max="-1" step="0.1"></label>
+              <label>Mechanical hard RIGHT (deg)<input id="ackScaleRightLimit" type="number" min="1" max="90" step="0.1"></label>
               <label>Nav2 operational ±deg<input id="ackScaleOperationalLimit" type="number" min="1" max="30" step="0.1"></label>
             </div>
             <div class="button-row">
@@ -555,11 +568,69 @@
               <button class="soft-btn grow" id="calModeOff2">Disable</button>
               <button class="soft-btn grow" id="ackScaleApplyCanonical">Stage Canonical Ackermann</button>
             </div>
-            <p class="hint">Nav2 dan teleop dibatasi langsung ±30°. Domain VESC tetap 0/180/360 untuk fisik −30/0/+30°. Scaling VESC tetap 0/180/360.</p>
+            <p class="hint">Default canonical adalah physical −30/0/+30° → VESC Position 0/180/360°. Jika hard mekanik lebih lebar atau hubungan linkage tidak ideal, tempatkan roda nyata di −30°, 0°, +30° lalu Capture raw POS. Hanya ROS/ROS Web yang memakai hasil kalibrasi tersebut; firmware dan VESC Tool tetap domain 0…360.</p>
           </article>
           <article class="panel">
             <div class="panel-head"><div><span class="eyebrow">LIVE CONTRACT</span><h2>Command Domain Verification</h2></div><span class="status-chip waiting" id="ackScaleContractChip">WAIT</span></div>
             <div class="json-pretty" id="ackScaleContractDetail">Waiting for ESC telemetry...</div>
+          </article>
+        </section>
+
+        <!-- RM3100 CALIBRATION -->
+        <section class="page" id="page-rm3100-calibration">
+          <div class="rm3100-workflow" aria-label="Urutan kalibrasi RM3100">
+            <div class="rm3100-step" id="rm3100PreflightStep"><i>0</i><b>Preflight</b><small>link + vehicle safe</small></div>
+            <div class="rm3100-step" data-rm-step="LEVEL"><i>1</i><b>Level</b><small>360°</small></div>
+            <div class="rm3100-step" data-rm-step="LEFT_SIDE"><i>2</i><b>Left side</b><small>360°</small></div>
+            <div class="rm3100-step" data-rm-step="RIGHT_SIDE"><i>3</i><b>Right side</b><small>360°</small></div>
+            <div class="rm3100-step" data-rm-step="NOSE_UP"><i>4</i><b>Nose up</b><small>360°</small></div>
+            <div class="rm3100-step" data-rm-step="NOSE_DOWN"><i>5</i><b>Nose down</b><small>360°</small></div>
+            <div class="rm3100-step" data-rm-step="INVERTED"><i>6</i><b>Inverted</b><small>360°</small></div>
+            <div class="rm3100-step" data-rm-step="REVIEW"><i>7</i><b>Review</b><small>fit + diff</small></div>
+          </div>
+
+          <div class="rm3100-hero">
+            <article class="panel">
+              <div class="panel-head"><div><span class="eyebrow">ARDUPILOT-STYLE FULL 3D</span><h2>RM3100 Orientation Wizard</h2></div><span class="status-chip waiting" id="rm3100CalChip">IDLE</span></div>
+              <div class="rm3100-visual">
+                <div class="rm3100-orbit">
+                  <div class="rm3100-axis x">+X →</div><div class="rm3100-axis y">+Y ↑</div><div class="rm3100-axis z">+Z ⊙</div>
+                  <div class="rm3100-cube" id="rm3100Cube"><div class="face front">FRONT</div><div class="face back">BACK</div><div class="face left">L</div><div class="face right">R</div><div class="face top">TOP</div><div class="face bottom">BOT</div></div>
+                </div>
+                <div class="rm3100-instruction"><b id="rm3100InstructionTitle">Mulai dari posisi LEVEL</b><span id="rm3100InstructionText">Tekan START FULL 3D, lalu ikuti enam orientasi secara berurutan.</span></div>
+              </div>
+            </article>
+            <article class="panel">
+              <div class="panel-head"><div><span class="eyebrow">3D COVERAGE</span><h2>Collection Progress</h2></div><span class="status-chip" id="rm3100FitState">WAIT</span></div>
+              <div class="four-metrics"><div><span>Samples</span><b id="rm3100Samples">0</b></div><div><span>Sphere coverage</span><b id="rm3100Coverage">0%</b></div><div><span>Elapsed</span><b id="rm3100Elapsed">0 s</b></div><div><span>Current face</span><b id="rm3100CurrentFace">--</b></div></div>
+              <div class="rm3100-progress"><i id="rm3100Progress"></i></div><div class="rm3100-face-grid" id="rm3100FaceGrid"></div>
+              <p class="info-box" id="rm3100PreflightReason">Preflight menunggu status kendaraan dan RM3100.</p><div class="rm3100-actions"><button class="primary-btn" id="rm3100StartBtn">START FULL 3D</button><button class="soft-btn" id="rm3100NextBtn" disabled>NEXT ORIENTATION</button><button class="warning-btn" id="rm3100StopBtn" disabled>STOP & FIT</button><button class="soft-btn" id="rm3100ClearPlotBtn">Clear Live Plot</button></div>
+              <p class="hint">Kriteria fit full-3D: ≥360 sample, sphere coverage ≥45%, keenam fase wajib terisi ≥30 sample/fase, corrected-norm CV <6%, dan condition matrix <6. Klik NEXT setelah satu putaran 360° selesai. Untuk kendaraan besar, putar modul NEO3 Pro/mounting secara aman pada bench; IMU Yahboom hanya ditampilkan sebagai referensi dan tidak menentukan fase.</p>
+            </article>
+          </div>
+
+          <article class="panel">
+            <div class="panel-head"><div><span class="eyebrow">REAL DATA PIPELINE</span><h2>Wire → Calibration → Real Output</h2></div><span class="muted" id="rm3100RawSemantics">DroneCAN/AP_Periph pre-ROS correction field</span></div>
+            <div class="rm3100-flow"><div><span>SOURCE</span><b>/neo3pro/mag</b></div><em>→</em><div><span>HOST FULL 3D</span><b>bias + 3×3 matrix</b></div><em>→</em><div><span>OUTPUT</span><b>/neo3pro/mag_calibrated</b></div></div>
+            <div class="rm3100-stream-grid">
+              <section class="rm3100-stream-card"><b>RM3100 WIRE / PRE-ROS CORRECTION</b><div class="rm3100-vector"><div><span>X</span><b id="rm3100WireX">--</b></div><div><span>Y</span><b id="rm3100WireY">--</b></div><div><span>Z</span><b id="rm3100WireZ">--</b></div><div><span>|B|</span><b id="rm3100WireNorm">--</b></div></div><small id="rm3100WireRate">--</small></section>
+              <section class="rm3100-stream-card"><b>RM3100 CALIBRATED OUTPUT</b><div class="rm3100-vector"><div><span>Xc</span><b id="rm3100CalX">--</b></div><div><span>Yc</span><b id="rm3100CalY">--</b></div><div><span>Zc</span><b id="rm3100CalZ">--</b></div><div><span>|Bc|</span><b id="rm3100CalNorm">--</b></div></div><small id="rm3100CalRate">--</small></section>
+            </div>
+            <div class="metric-grid"><div><span>Calibrated heading output</span><b id="rm3100HeadingOut">--</b></div><div><span>Calibration owner</span><b id="rm3100Owner">--</b></div><div><span>Raw CSV</span><b id="rm3100CsvPath">--</b></div><div><span>Fit YAML</span><b id="rm3100FitPath">--</b></div></div>
+          </article>
+
+          <div class="rm3100-chart-grid">
+            <article class="panel"><div class="panel-head"><div><span class="eyebrow">XY CLOUD</span><h2>Raw vs Calibrated</h2></div><span class="muted">amber = wire • cyan = calibrated</span></div><canvas class="rm3100-chart" id="rm3100XYCanvas"></canvas></article>
+            <article class="panel"><div class="panel-head"><div><span class="eyebrow">FIELD MAGNITUDE</span><h2>|B| Stability</h2></div><span class="muted">live browser history</span></div><canvas class="rm3100-chart" id="rm3100NormCanvas"></canvas></article>
+          </div>
+
+          <article class="panel">
+            <div class="panel-head"><div><span class="eyebrow">CALIBRATION RESULT</span><h2>Hard-Iron + Soft-Iron Parameters</h2></div><button class="primary-btn" id="rm3100StageBtn" disabled>STAGE FULL 3D → DIFF REVIEW</button></div>
+            <div class="rm3100-owner-warning"><b>Single calibration owner.</b> AP_Periph readback: <strong id="rm3100ApReadback">WAIT</strong>. Pada NEO3 Pro ini DIA/ODI dapat tidak diekspos oleh AP_Periph; kondisi aman host adalah OFS=0 dan soft-iron AP_Periph tidak aktif/unsupported. ROS menjadi pemilik full 3D seperti sisi flight-controller. Wizard mematikan planar/LUT lama dan mengembalikan field qualification ke WAIT; yaw mounting/offset tidak diubah oleh ellipsoid fit.</div>
+            <div class="rm3100-param-grid">
+              <section><div class="kv-list"><div><span>Bias XYZ</span><b id="rm3100Bias">--</b></div><div><span>Validation</span><b id="rm3100Validation">Belum ada fit 3D</b></div></div><h3>ROS correction matrix 3×3</h3><div class="rm3100-matrix"><span id="rm3100M0">--</span><span id="rm3100M1">--</span><span id="rm3100M2">--</span><span id="rm3100M3">--</span><span id="rm3100M4">--</span><span id="rm3100M5">--</span><span id="rm3100M6">--</span><span id="rm3100M7">--</span><span id="rm3100M8">--</span></div></section>
+              <section><h3>ArduPilot-equivalent parameter view</h3><table class="rm3100-ap-table"><thead><tr><th>Parameter</th><th>Fit host</th><th>AP_Periph live</th></tr></thead><tbody id="rm3100ApParams"><tr><td colspan="3">Belum ada fit/readback.</td></tr></tbody></table><p class="hint">OFS ditampilkan dalam mGauss; DIA/ODI mengikuti matrix ArduPilot [[DIA_X, ODI_X, ODI_Y],[ODI_X,DIA_Y,ODI_Z],[ODI_Y,ODI_Z,DIA_Z]]. Tampilan ini adalah padanan hasil fit host; bukan klaim bahwa nilai tersebut sudah tersimpan di AP_Periph.</p></section>
+            </div>
           </article>
         </section>
 
@@ -575,23 +646,6 @@
             <article class="panel"><div class="panel-head"><div><span class="eyebrow">IMU</span><h2>Orientation Calibration</h2></div><span class="status-chip waiting" id="calImuChip">WAIT</span></div><div class="kv-list"><div><span>Serial IMU</span><b id="calImuUsb">--</b></div><div><span>Stationary validated</span><b id="calImuStationary">--</b></div><div><span>Samples / duration</span><b id="calImuEvidence">--</b></div><div><span>Gyro-Z std</span><b id="calImuStd">--</b></div><div><span>|a|-g error</span><b id="calImuAccelErr">--</b></div><div><span>Saved at</span><b id="calImuSaved">--</b></div><div><span>Yaw</span><b id="calImuYaw">--</b></div><div><span>Gyro Z</span><b id="calImuGz">--</b></div></div></article>
           </div>
 
-          <article class="panel imu-mp-wizard" id="yahboomCalibrationWizard">
-            <div class="panel-head"><div><span class="eyebrow">HEADING 360 • NEO3 + YAHBOOM</span><h2>Absolute North 9-Stop Heading Calibration</h2></div><span class="status-chip waiting" id="imuWizardChip">IDLE</span></div>
-            <div class="imu-wizard-grid">
-              <div class="imu-hud">
-                <div class="imu-compass-ring" id="imuCalRing"><div class="imu-cardinal north">N</div><div class="imu-cardinal east">E</div><div class="imu-cardinal south">S</div><div class="imu-cardinal west">W</div><div class="imu-target-arrow" id="imuTargetArrow"><i></i></div><div class="imu-vehicle-arrow" id="imuVehicleArrow"><i></i></div><div class="imu-hud-center"><span>POS</span><b id="imuWizardPosition">0 / 9</b><small id="imuWizardDirection">CW / CCW</small></div></div>
-                <div class="imu-hud-instruction"><b id="imuWizardInstruction">Hadapkan depan AGV tepat ke UTARA 0°, lalu pilih CW atau CCW.</b><span id="imuWizardHeading">Actual --° • Target --°</span></div>
-                <div class="imu-progress-track"><i id="imuWizardProgress"></i></div>
-              </div>
-              <div class="imu-wizard-console">
-                <div class="imu-profile-strip"><div><span>Serial Profile</span><b id="imuProfileState">WAIT</b><small id="imuProfileDetail">921600 • 50 Hz • AXIS6=1</small></div><button class="primary-btn" id="imuOptimalProfileBtn">Set Optimal 921600</button></div>
-                <div class="metric-grid imu-wizard-metrics"><div><span>Mounting</span><b id="imuMountingState">WAIT</b></div><div><span>Raw gravity</span><b id="imuMountingGravity">--</b></div><div><span>Gyro Z</span><b id="imuWizardGyro">--</b></div><div><span>Static</span><b id="imuWizardStatic">WAIT</b></div><div><span>Yahboom heading</span><b id="imuWizardYahHeading">--</b></div><div><span>IST8310 heading</span><b id="imuWizardNeoHeading">--</b></div><div><span>Yah / NEO RMS</span><b id="imuWizardRms">--</b></div><div><span>Yah / NEO max</span><b id="imuWizardMax">--</b></div></div>
-                <div class="imu-direction-row"><button class="primary-btn" id="imuCalStartCw">Start 360° CW</button><button class="primary-btn" id="imuCalStartCcw">Start 360° CCW</button><button class="warning-btn" id="imuCalStop">Stop</button><button class="success-btn" id="imuCalApply" disabled>Generate Stage-1 Preview</button></div>
-                <div class="imu-gate-box" id="imuWizardGateDetail">Fail-closed Tahap 1: N→NE→E→SE→S→SW→W→NW→N, dual MAG fit, gyro ±360°, closure, RMS &lt;3°, max &lt;5°. YAML/runtime tetap terkunci.</div>
-                <p class="hint">Tahap 1 memakai Utara fisik operator sebagai ground truth, bukan heading NEO3 lama. Delapan arah pertama dipakai untuk fit independen IST8310/NEO3 dan MAG Yahboom; stop ke-9 Utara hanya untuk closure. Gyro Yahboom memverifikasi arah dan total putaran relatif. Tidak ada YAML/runtime yang ditulis sampai Tahap 2.</p>
-              </div>
-            </div>
-          </article>
         </section>
 
         <!-- TUNING -->
@@ -656,6 +710,25 @@
                 <div id="experimentDetail" class="sr-only">Metadata source catalog.</div>
               </article>
 
+              <article class="panel n0-timing-guide" id="n0TimingGuide" hidden>
+                <div class="panel-head n0-timing-head">
+                  <div><span class="eyebrow">N0 TIMING CONTRACT</span><h2>Target Konfigurasi ≠ Rate Aktual</h2><small>GNSS production target = 10 Hz dengan fail-closed usable gate >7 Hz. ESC command 50 Hz adalah loop perintah; <code>/esc/odom</code> adalah feedback aktual dan tidak dipaksa sama dengan 50 Hz.</small></div>
+                  <span class="status-chip waiting" id="n0TimingState">WAIT DATA</span>
+                </div>
+                <div class="n0-rate-grid">
+                  <section class="n0-rate-card" data-n0-card="gnss"><header><span>GNSS / NEO3</span><b id="n0GnssStatus">WAIT</b></header><div><span>Target production</span><strong id="n0GnssTarget">--</strong><small>Hz</small></div><div><span>Usable gate ></span><strong id="n0GnssGate">--</strong><small>Hz</small></div><div><span>Actual source</span><strong id="n0GnssActual">--</strong><small>Hz</small></div><p>Target tetap 10 Hz. Data GNSS baru dianggap usable untuk aliran navigation/fusion saat actual rate >7 Hz; raw diagnostic tetap terlihat.</p></section>
+                  <section class="n0-rate-card" data-n0-card="imu"><header><span>IMU</span><b id="n0ImuStatus">WAIT</b></header><div><span>Target publish</span><strong id="n0ImuTarget">--</strong><small>Hz</small></div><div><span>Actual /imu/data</span><strong id="n0ImuActual">--</strong><small>Hz</small></div><p>Actual IMU dibandingkan langsung dengan publish-rate.</p></section>
+                  <section class="n0-rate-card n0-rate-card-esc" data-n0-card="esc"><header><span>ESC</span><b id="n0EscStatus">WAIT</b></header><div><span>Command target</span><strong id="n0EscCmdTarget">--</strong><small>Hz</small></div><div><span>Feedback /esc/odom</span><strong id="n0EscFeedbackActual">--</strong><small>Hz</small></div><p>Jangan bandingkan 1:1. Feedback dinilai dari kestabilan, freshness, ACK, dan tidak ada dropout berat.</p></section>
+                  <section class="n0-rate-card" data-n0-card="local"><header><span>EKF LOCAL</span><b id="n0LocalStatus">WAIT</b></header><div><span>Target filter</span><strong id="n0LocalTarget">--</strong><small>Hz</small></div><div><span>Actual output</span><strong id="n0LocalActual">--</strong><small>Hz</small></div><p><code>/odometry/filtered</code> dibandingkan dengan frequency EKF Local.</p></section>
+                  <section class="n0-rate-card" data-n0-card="global"><header><span>EKF GLOBAL</span><b id="n0GlobalStatus">WAIT</b></header><div><span>Target filter</span><strong id="n0GlobalTarget">--</strong><small>Hz</small></div><div><span>Actual output</span><strong id="n0GlobalActual">--</strong><small>Hz</small></div><p><code>/odometry/filtered_map</code> dibandingkan dengan frequency EKF Global.</p></section>
+                </div>
+                <div class="n0-interpretation">
+                  <div><span>RATE READINESS</span><b id="n0RateReadiness">Belum ada cukup data aktual.</b></div>
+                  <div><span>AGE / FRESHNESS</span><b id="n0FreshnessSummary">Menunggu stream sensor.</b></div>
+                  <div><span>LANJUT N1</span><b id="n0NextStepSummary">Record N0 dahulu; PASS qualification tetap berdasarkan evidence aktual.</b></div>
+                </div>
+              </article>
+
               <article class="panel trial-guide" id="trialGuidePanel">
                 <div class="panel-head"><div><span class="eyebrow">PANDUAN PERCOBAAN</span><h2 id="trialGuideTitle">Procedure & Recommended Variation</h2></div><span class="status-chip waiting" id="trialGuideSafety">GUIDE</span></div>
                 <div id="trialGuideBody" class="trial-guide-body"></div>
@@ -698,8 +771,14 @@
 
               <div class="lab-two-col">
                 <article class="panel tuning-editor">
-                  <div class="panel-head"><div><span class="eyebrow">PARAMETER TUNING</span><h2>YAML Aktual</h2><small class="hint">Baseline immutable: <code>*.web.baseline</code> • backup setiap apply: <code>.web.bak.*</code></small></div><div class="panel-actions"><button class="soft-btn" id="tuningValidateDraft" data-help-key="action.tuning.validate">Validate Draft</button><button class="primary-btn" id="tuningApplyDraft" data-help-key="action.tuning.apply" disabled>Apply Validated + Save</button><button class="soft-btn" id="tuningRevertDraft" data-help-key="action.tuning.revert" disabled>Revert Draft</button><button class="warning-btn" id="resetExperimentYaml" hidden data-help-key="action.tuning.baseline">Stage Baseline</button><button class="soft-btn" id="refreshExperimentConfig">Reload Runtime/YAML</button></div></div>
-                  <div class="tuning-note" id="tuningNote">STAGED by default: perubahan input masuk DRAFT browser terlebih dahulu. Validate memeriksa tipe/range/dependency; Apply + Save baru menulis YAML atomik, menerapkan runtime sesuai capability, lalu melakukan read-back verification.</div>
+                  <div class="panel-head"><div><span class="eyebrow">PARAMETER TUNING</span><h2>YAML Aktual</h2><small class="hint">Baseline immutable: <code>*.web.baseline</code> • backup setiap apply: <code>.web.bak.*</code></small></div><div class="panel-actions"><button class="soft-btn" id="tuningValidateDraft" data-help-key="action.tuning.validate">Validate Draft</button><button class="primary-btn" id="tuningApplyDraft" data-help-key="action.tuning.apply" disabled>Apply Validated + Save</button><button class="soft-btn" id="tuningRevertDraft" data-help-key="action.tuning.revert" disabled>Revert Draft</button><button class="warning-btn" id="restoreStepEntryYaml" hidden>↶ Stage Step Entry</button><button class="warning-btn" id="resetExperimentYaml" hidden data-help-key="action.tuning.baseline">↶ Stage Baseline Awal</button><button class="soft-btn" id="refreshExperimentConfig">Reload Runtime/YAML</button></div></div>
+                  <div class="tuning-note" id="tuningNote">CURRENT YAML diteruskan ke step berikutnya. Candidate hanya menjadi BEST setelah evidence direview dan qualification PASS; step yang belum diriset tidak mengubah YAML.</div>
+                  <div class="navigation-tuning-policy" id="navigationTuningPolicy" hidden>
+                    <div><span>URUTAN</span><b id="tuningStepOrder">STEP --</b><small id="tuningStepPrereq">--</small></div>
+                    <div><span>CARRY FORWARD</span><b id="tuningCarryState">INHERIT CURRENT YAML</b><small id="tuningCarryDetail">--</small></div>
+                    <div><span>YAML YANG DITUNING</span><b id="tuningEditableCount">0 YAML TUNABLE</b><small id="tuningEditableList">--</small></div>
+                    <div><span>RESET / ROLLBACK</span><b>STEP ENTRY ≠ BASELINE AWAL</b><small id="tuningResetDetail">--</small></div>
+                  </div>
                   <div id="tuningFields" class="tuning-fields"><div class="empty-state">Pilih subpengujian.</div></div>
                 </article>
 
@@ -777,7 +856,7 @@
               </article>
 
               <article class="panel trial-recap" id="trialRecapPanel">
-                <div class="panel-head"><div><span class="eyebrow">PERSISTENT TRIALS</span><h2>Rekap Pengujian & Kalibrasi</h2></div><div class="panel-actions"><button class="soft-btn" id="trialCompareBtn">Compare Selected</button><button class="soft-btn" id="trialCompareClear">Clear Compare</button><button class="soft-btn" id="refreshTrialsBtn">Reload Trials</button><button class="primary-btn" id="optimalScaleBtn" hidden>Hitung + Review Scale Optimal</button></div></div>
+                <div class="panel-head"><div><span class="eyebrow">PERSISTENT TRIALS</span><h2>Rekap Pengujian & Kalibrasi</h2></div><div class="panel-actions"><button class="soft-btn" id="trialCompareBtn">Compare Selected</button><button class="soft-btn" id="trialCompareClear">Clear Compare</button><button class="soft-btn" id="refreshTrialsBtn">Reload Trials</button><button class="primary-btn" id="optimalScaleBtn" hidden>Hitung Proposal eRPM/(m/s)</button></div></div>
                 <div id="trialOptimalState" class="tuning-note">Setiap STOP menambah satu trial ke YAML. Tandai beberapa run untuk side-by-side comparison sebelum memilih konfigurasi final.</div>
                 <div id="trialComparePanel" class="trial-compare-panel" hidden></div>
                 <div class="table-scroll"><table class="data-table"><thead id="trialRecapHead"></thead><tbody id="trialRecapBody"><tr><td>Belum ada trial.</td></tr></tbody></table></div>
@@ -880,25 +959,26 @@
   <script src="/camera_geometry.js?v=20260910-stage2-v1" defer></script>
   <script src="/analysis_session.js?v=20260910-stage2-v2" defer></script>
   <script src="/diagnostics.js?v=20260910-stage2-v1" defer></script>
-  <script src="/core.js?v=20260914-mag-ekf-v1" defer></script>
+  <script src="/core.js?v=20260916-yellow-flow-v1" defer></script>
   <script src="/navigation.js?v=20260914-mag-ekf-v1" defer></script>
   <script src="/perception.js?v=20260914-single-nav-v1" defer></script>
   <script src="/sensors.js?v=20260914-mag-ekf-v1" defer></script>
+  <script src="/rm3100_calibration.js?v=20260917-rm3100-v1" defer></script>
   <script src="/esc.js?v=20260913-stage6-v1" defer></script>
   <script src="/system_views.js?v=20260913-stage6-v1" defer></script>
   <script src="/perception_calibration.js?v=20260914-single-nav-v1" defer></script>
-  <script src="/imu_calibration.js?v=20260913-stage6-v1" defer></script>
-  <script src="/tuning_catalog.js?v=20260916-r414-heading-v1" defer></script>
-  <script src="/tuning_ui.js?v=20260915-report-lifecycle-v1" defer></script>
-  <script src="/tuning_charts.js?v=20260916-r414-inertia-fallback-v1" defer></script>
-  <script src="/tuning_trials.js?v=20260915-raw41-v1" defer></script>
-  <script src="/tuning_evidence.js?v=20260916-r41-timed-v1" defer></script>
+  <script src="/tuning_catalog.js?v=20260916-yellow-flow-v1" defer></script>
+  <script src="/tuning_ui.js?v=20260917-n0-clarity-v1" defer></script>
+  <script src="/tuning_charts.js?v=20260917-n0-clarity-v1" defer></script>
+  <script src="/tuning_trials.js?v=20260916-yellow-flow-v1" defer></script>
+  <script src="/navigation_tuning_policy.js?v=20260916-yellow-flow-v1" defer></script>
+  <script src="/tuning_evidence.js?v=20260916-yellow-flow-v1" defer></script>
   <script src="/report_41_timed.js?v=20260916-r41-summary-graph-v1" defer></script>
-  <script src="/imu_heading_validation.js?v=20260916-r412-60s50hz-v1" defer></script>
+  <script src="/imu_heading_validation.js?v=20260916-report-integer-seconds-v1" defer></script>
   <script src="/perception_bab4.js?v=20260914-single-nav-v1" defer></script>
-  <script src="/config.js?v=20260913-stage6-v1" defer></script>
-  <script src="/export_tools.js?v=20260915-bab4-report-v4" defer></script>
-  <script src="/report_dual_export.js?v=20260915-report-lifecycle-v1" defer></script>
+  <script src="/config.js?v=20260916-yellow-flow-v1" defer></script>
+  <script src="/export_tools.js?v=20260916-report-integer-seconds-v1" defer></script>
+  <script src="/report_dual_export.js?v=20260916-report-integer-seconds-v1" defer></script>
   <script src="/boot.js?v=20260913-stage6-v1" defer></script>
   <script src="/vesc_workbench.js?v=20260914-robust-v2" defer></script>
   <script src="/replay.js?v=20260908-final-v5" defer></script>

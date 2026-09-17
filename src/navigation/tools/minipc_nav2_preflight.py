@@ -2,12 +2,12 @@
 """Read-only preflight for the production Mini-PC AGV profile.
 
 Production data ownership:
-  * F411 CDC -> CUAV NEO-3 GNSS + IST8310 magnetometer.
+  * F411 CDC -> CUAV NEO3 Pro GNSS + RM3100 magnetometer.
   * IMU -> direct CP2102.
   * F411 CDC <-> F103 VESC UART transport.
-  * Local EKF -> ESC vx + independent GNSS vx + relative IMU yaw/gyro-Z.
-  * Global EKF -> GNSS x/y + GNSS COG + NEO3/IMU magnetic absolute yaw +
-    relative IMU yaw/gyro-Z. LocalizationCore owns map->odom.
+  * Local EKF -> ESC vx/vy + Yahboom gyro-Z.
+  * Global EKF -> GNSS x/y + ESC vx + validated RM3100 absolute heading +
+    Yahboom gyro-Z. LocalizationCore owns map->odom.
 """
 from __future__ import annotations
 
@@ -113,28 +113,26 @@ def main() -> int:
 
     if local.get("publish_tf") is not True or local.get("world_frame") != "odom":
         errors.append("EKF lokal harus menjadi owner odom→base_footprint")
-    if local.get("odom0") != "/esc/odom" or enabled_indices(local.get("odom0_config")) != {6}:
-        errors.append("EKF lokal harus memakai ESC longitudinal vx saja")
-    if local.get("twist0") != "/gnss/base_velocity_fusion" or enabled_indices(local.get("twist0_config")) != {6}:
-        errors.append("EKF lokal harus memakai GNSS longitudinal vx independen")
-    if (local.get("imu0") != "/imu/data" or enabled_indices(local.get("imu0_config")) != {5, 11}
+    if local.get("odom0") != "/esc/odom" or enabled_indices(local.get("odom0_config")) != {6, 7}:
+        errors.append("EKF lokal harus memakai ESC vx/vy dari /esc/odom")
+    if (local.get("imu0") != "/imu/data" or enabled_indices(local.get("imu0_config")) != {11}
             or local.get("imu0_relative") is not True):
-        errors.append("EKF lokal harus memakai relative IMU yaw + gyro-Z")
+        errors.append("EKF lokal harus memakai Yahboom gyro-Z tanpa magnetometer")
 
     if global_.get("publish_tf") is not False or global_.get("world_frame") != "map":
         errors.append("EKF global tidak boleh publish map→odom TF")
     if global_.get("odom0") != "/odometry/gnss_map" or enabled_indices(global_.get("odom0_config")) != {0, 1}:
         errors.append("EKF global harus memakai GNSS map x/y")
-    if global_.get("twist0") != "/gnss/base_velocity_fusion" or enabled_indices(global_.get("twist0_config")) != {6}:
-        errors.append("EKF global harus memakai GNSS longitudinal vx")
-    for key, topic in (("pose0", "/gnss/cog_heading_fusion"),
-                       ("pose1", "/neo3/mag_heading_fusion"),
-                       ("pose2", "/imu/mag_heading_fusion")):
-        if global_.get(key) != topic or enabled_indices(global_.get(key + "_config")) != {5}:
-            errors.append(f"EKF global absolute heading invalid: {key} -> {topic}")
-    if (global_.get("imu0") != "/imu/data" or enabled_indices(global_.get("imu0_config")) != {5, 11}
+    if global_.get("odom1") != "/esc/odom" or enabled_indices(global_.get("odom1_config")) != {6}:
+        errors.append("EKF global harus memakai ESC longitudinal vx")
+    if global_.get("pose0") != "/heading/validated_fusion" or enabled_indices(global_.get("pose0_config")) != {5}:
+        errors.append("EKF global absolute yaw harus hanya dari /heading/validated_fusion (RM3100 authority)")
+    for legacy_pose in ("pose1", "pose2"):
+        if global_.get(legacy_pose):
+            errors.append(f"EKF global tidak boleh punya legacy direct heading input {legacy_pose}")
+    if (global_.get("imu0") != "/imu/data" or enabled_indices(global_.get("imu0_config")) != {11}
             or global_.get("imu0_relative") is not True):
-        errors.append("EKF global harus memakai relative IMU yaw + gyro-Z")
+        errors.append("EKF global harus memakai Yahboom gyro-Z tanpa magnetometer")
 
     vehicle = load_params(nav / "config/vehicle.yaml", "vehicle")
     imu = load_params(nav / "config/imu.yaml", "data_imu_node")
@@ -151,18 +149,14 @@ def main() -> int:
     if str(imu.get("auto_port_path_contains", "")).strip():
         errors.append("IMU tidak boleh memakai topology-dependent by-path fallback")
 
-    if loc.get("enable_global_gnss_velocity_fusion") is not True:
-        errors.append("GNSS velocity fusion harus ON agar vx tersedia tanpa ESC")
-    if loc.get("enable_global_gnss_cog_fusion") is not True:
-        errors.append("GNSS COG absolute yaw harus ON untuk heading global yang sesuai arah gerak")
+    if loc.get("enable_global_gnss_velocity_fusion") is not False:
+        errors.append("legacy GNSS velocity fusion direct harus OFF; global EKF memakai ESC vx")
+    if loc.get("enable_global_gnss_cog_fusion") is not False:
+        errors.append("legacy direct COG absolute-yaw fusion harus OFF; authority absolut adalah RM3100 validated heading")
     if loc.get("enable_gnss_course_yaw_correction") is not False:
         errors.append("legacy direct GNSS COG yaw correction harus OFF")
-    if float(loc.get("gnss_yaw_rate_min_speed_mps", 0.0)) <= 0.0:
-        errors.append("GNSS vyaw low-speed gate tidak valid")
-    if float(loc.get("gnss_yaw_rate_max_variance", 0.0)) <= float(loc.get("gnss_yaw_rate_min_variance", 0.0)):
-        errors.append("GNSS vyaw covariance range tidak valid")
-    if imu.get("require_fresh_gyro_for_imu_publish") is not False:
-        errors.append("IMU absolute yaw masih dipaksa bergantung pada gyro freshness")
+    if imu.get("require_fresh_gyro_for_imu_publish") is not True:
+        errors.append("Yahboom IMU publish harus memerlukan gyro fresh; magnetometer tidak dipakai")
     if float(imu.get("orientation_publish_timeout_sec", 999.0)) >= float(imu.get("orientation_packet_timeout_sec", 0.0)):
         errors.append("freshness heading IMU tidak lebih ketat dari recovery timeout")
 
@@ -184,8 +178,8 @@ def main() -> int:
 
     print("MINI-PC AGV PREFLIGHT")
     print(f"workspace: {workspace}")
-    print("profile  : NEO-3/IST8310 + VESC via F411 CDC; IMU via CP2102; perception OFF=camera-only")
-    print("fusion   : local=ESC vx + GNSS vx + relative IMU yaw/gyro | global=GNSS x/y + COG + dual-mag + relative IMU")
+    print("profile  : NEO3 Pro/RM3100 via F411 CDC; Yahboom IMU gyro+accel via CP2102; perception OFF=camera-only")
+    print("fusion   : local=ESC vx/vy + Yahboom gyro-Z | global=GNSS x/y + ESC vx + validated RM3100 yaw + Yahboom gyro-Z")
     print("TF       : LocalizationCore map→odom | local EKF odom→base_footprint")
     print("\nCALIBRATION GATES")
     for name, ready in gates.items():
@@ -227,8 +221,8 @@ def main() -> int:
             if args.expect_esc_node:
                 required_nodes.add("/esc_ackermann")
             required_topics = {
-                "/map", "/imu/data", "/imu/mag", "/gnss/fix_raw", "/neo3/mag",
-                "/neo3/mag_heading_fusion", "/imu/mag_heading_fusion",
+                "/map", "/imu/data", "/gnss/fix_raw", "/neo3pro/mag",
+                "/neo3pro/mag_heading_fusion", "/heading/validated_fusion",
                 "/gnss/base_velocity_fusion", "/odometry/filtered", "/odometry/filtered_map",
                 "/robot_description", "/system/localization_state",
                 "/system/magnetic_heading_status", "/system/autonomy_motion_allowed",

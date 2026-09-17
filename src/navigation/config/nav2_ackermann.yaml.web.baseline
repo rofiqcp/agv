@@ -205,8 +205,8 @@ velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: true
     feedback: OPEN_LOOP
-    max_velocity: [1.0, 0.0, 1.396263401595]
-    min_velocity: [-1.0, 0.0, -1.396263401595]
+    max_velocity: [1.0, 0.0, 0.625907910003]
+    min_velocity: [-1.0, 0.0, -0.625907910003]
     max_accel:
     - 0.18
     - 0.0

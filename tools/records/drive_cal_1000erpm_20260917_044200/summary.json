@@ -1,0 +1,12 @@
+{
+  "reason": "distance_limit",
+  "command_erpm": 1000.0,
+  "baseline_gnss_speed_mps_median": 0.029698484809835,
+  "actual_erpm_median": 1022.0,
+  "gnss_speed_xy_mps_median": 0.22343811953555207,
+  "gnss_speed_xy_mps_mean": 0.22539035702774712,
+  "odom_displacement_m": 1.0809957875861251,
+  "command_erpm_per_mps": 4475.512066063939,
+  "actual_erpm_per_mps": 4573.973331517345,
+  "steady_sample_count": 146
+}

@@ -85,7 +85,7 @@ ament_target_dependencies(imu_node rclcpp sensor_msgs std_msgs std_srvs)
 add_executable(imu_speed_diagnostic src/imu_speed_diagnostic.cpp)
 ament_target_dependencies(imu_speed_diagnostic rclcpp sensor_msgs std_msgs geometry_msgs)
 
-# Tilt-compensated independent heading observations from Yahboom MAG + NEO3 IST8310.
+# NEO3 Pro RM3100 absolute heading with Yahboom gyro/accel inertial prediction.
 add_executable(mag_heading_fusion src/mag_heading_fusion_node.cpp)
 ament_target_dependencies(mag_heading_fusion rclcpp sensor_msgs std_msgs geometry_msgs)
 
@@ -173,7 +173,7 @@ if(BUILD_TESTING)
     gnss_provisional_tf_self_check
     gnss_ubx_fixture_self_check
     full_stack_reaudit_self_check
-    heading_360_stage1_self_check
+    f411_mag_pipeline_self_check
     heading_runtime_calibration_self_check
     gui_cpp_migration_self_check
     gui_floating_menu_self_check
@@ -263,13 +263,21 @@ install(TARGETS
 
 install(DIRECTORY
   launch config rviz urdf maps behavior_trees
-  DESTINATION share/${PROJECT_NAME})
+  DESTINATION share/${PROJECT_NAME}
+  PATTERN "*.bak*" EXCLUDE
+  PATTERN "__pycache__" EXCLUDE)
 
-install(DIRECTORY docs tools DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY docs tools DESTINATION share/${PROJECT_NAME}
+  PATTERN "*.bak*" EXCLUDE
+  PATTERN "__pycache__" EXCLUDE)
 
-# Static browser assets untuk agv_web_gui.
-install(DIRECTORY web/static DESTINATION share/${PROJECT_NAME}/web)
-install(DIRECTORY web/config DESTINATION share/${PROJECT_NAME}/web)
+# Static browser assets untuk agv_web_gui. Development backups/cache are not runtime assets.
+install(DIRECTORY web/static DESTINATION share/${PROJECT_NAME}/web
+  PATTERN "*.bak*" EXCLUDE
+  PATTERN "__pycache__" EXCLUDE)
+install(DIRECTORY web/config DESTINATION share/${PROJECT_NAME}/web
+  PATTERN "*.bak*" EXCLUDE
+  PATTERN "__pycache__" EXCLUDE)
 
 # GUI assets are shared resources for the native C++/Qt HMI.
 install(
@@ -293,6 +301,7 @@ install(
     tools/stage3_commissioning_check.py
     tools/stage3_nav2_csv_analyzer.py
     tools/stage3_certify.py
+    tools/rm3100_ardupilot_calibration.py
   DESTINATION lib/${PROJECT_NAME})
 
 # Unified AGV data recorder. Source lives at workspace tools/data.py so the

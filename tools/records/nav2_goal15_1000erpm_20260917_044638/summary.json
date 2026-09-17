@@ -1,0 +1,25 @@
+{
+  "result_status": null,
+  "start_map": [
+    129.63034445028563,
+    101.43144221949701
+  ],
+  "goal_map": [
+    131.1303064743007,
+    101.44211585583118
+  ],
+  "requested_distance_m": 1.5,
+  "speed_limit_mps": 0.2267156809750926,
+  "map_displacement_m": 8.817637418076867,
+  "local_displacement_m": 10.351792772283591,
+  "esc_displacement_m": 9.84984715061641,
+  "gnss_speed_mps_median_moving": 0.4174937125275062,
+  "actual_erpm_median_moving": 2077.0,
+  "drive_actual_mps_median_moving": 0.4772365084525699,
+  "mux_sources": [
+    "NAV2",
+    "TELEOP",
+    "TELEOP_RELEASE_HOLD"
+  ],
+  "autonomy_gate_all_true": false
+}

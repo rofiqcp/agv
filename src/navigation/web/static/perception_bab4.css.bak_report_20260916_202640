@@ -1,0 +1,51 @@
+.per-bab4-panel{margin:12px 0;border:1px solid rgba(85,184,255,.28);border-radius:12px;padding:12px;background:linear-gradient(180deg,rgba(25,78,91,.18),rgba(3,12,14,.24))}
+.per-bab4-head{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:start}.per-bab4-head b{font-size:14px}.per-bab4-head p{margin:5px 0 0;color:var(--muted);font-size:10px;line-height:1.45;max-width:900px}.per-bab4-live{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.per-bab4-live span{border:1px solid var(--border2);border-radius:8px;padding:6px 8px;font:9px ui-monospace;color:var(--muted)}.per-bab4-live b{color:var(--text);font-size:9px}
+.per-bab4-controls{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:8px;align-items:end;margin-top:12px}.per-bab4-controls label{display:grid;gap:4px;font-size:8px;color:var(--muted)}.per-bab4-controls label.wide{grid-column:span 2}.per-bab4-controls input,.per-bab4-controls select{height:36px;border:1px solid var(--border2);border-radius:8px;background:var(--input);color:var(--text);padding:5px 8px}.per-bab4-actions{display:flex;gap:7px;flex-wrap:wrap;grid-column:1/-1}.per-bab4-note{grid-column:span 3;border:1px solid var(--border);border-radius:8px;padding:9px}.per-bab4-note b,.per-bab4-note span{display:block}.per-bab4-note span{margin-top:3px;color:var(--muted);font-size:9px;line-height:1.45}
+.per-bab4-progress{display:flex;flex-direction:column;gap:6px;margin-top:10px}.per-bab4-progress-row{display:grid;grid-template-columns:110px repeat(5,minmax(70px,1fr));gap:5px;align-items:center}.per-bab4-progress-row>b{font-size:9px}.per-bab4-progress span{display:inline-flex;justify-content:space-between;gap:8px;border:1px solid var(--border);border-radius:7px;padding:6px 8px;font:8px ui-monospace;color:var(--muted)}.per-bab4-progress span.done{border-color:rgba(54,230,161,.45);color:var(--green)}.per-bab4-progress em{font-style:normal;font-weight:800}
+#perBab4SummaryCanvas{display:block;width:100%;height:220px;margin-top:10px;border:1px solid var(--border);border-radius:9px;background:#071113}.per-bab4-detection-overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:4}
+.per-lane-point-cards{display:grid;grid-template-columns:minmax(220px,1.4fr) repeat(4,minmax(110px,1fr));gap:7px;margin:10px 0}.per-lane-point-note{border:1px solid rgba(85,184,255,.25);border-radius:8px;padding:8px;background:rgba(85,184,255,.04)}.per-lane-point-note b,.per-lane-point-note span{display:block}.per-lane-point-note span{font-size:8px;color:var(--muted);line-height:1.4;margin-top:3px}.per-lane-point-cards button{min-width:0;border:1px solid var(--border2);border-radius:8px;background:var(--input);color:var(--text);padding:7px;text-align:left;cursor:pointer}.per-lane-point-cards button:hover,.per-lane-point-cards button:focus-visible{border-color:var(--green)}.per-lane-point-cards button b{display:block;color:var(--green);font:900 11px ui-monospace}.per-lane-point-cards button span{display:block;font-size:8px;margin:2px 0}.per-lane-point-cards button code{display:block;color:var(--muted);font:8px ui-monospace;white-space:nowrap}
+@media(max-width:1000px){.per-bab4-head{grid-template-columns:1fr}.per-bab4-live{justify-content:flex-start}.per-bab4-controls{grid-template-columns:repeat(2,minmax(120px,1fr))}.per-bab4-note,.per-bab4-controls label.wide{grid-column:1/-1}.per-lane-point-cards{grid-template-columns:repeat(2,minmax(0,1fr))}.per-lane-point-note{grid-column:1/-1}.per-bab4-progress-row{grid-template-columns:1fr repeat(5,minmax(48px,1fr))}}
+@media(max-width:620px){.per-bab4-controls{grid-template-columns:1fr}.per-bab4-controls label.wide,.per-bab4-note{grid-column:auto}.per-bab4-progress-row{grid-template-columns:1fr 1fr}.per-bab4-progress-row>b{grid-column:1/-1}.per-lane-point-cards{grid-template-columns:1fr}#perBab4SummaryCanvas{height:190px}}
+
+/* FINAL BAB IV simplified report-acquisition mode */
+.per-bab4-final-mode #page-experiments .lab-hero,
+.per-bab4-final-mode #page-experiments #tuningModebar,
+.per-bab4-final-mode #page-experiments #tuningModeGuide,
+.per-bab4-final-mode #page-experiments #commissioningRoadmap,
+.per-bab4-final-mode #page-experiments #trialGuidePanel,
+.per-bab4-final-mode #page-experiments #qualificationPanel,
+.per-bab4-final-mode #page-experiments .tuning-editor,
+.per-bab4-final-mode #page-experiments #trialRecapPanel,
+.per-bab4-final-mode #page-experiments .audit-ribbon,
+.per-bab4-final-mode #page-experiments #perceptionEngineeringPanel{display:none!important}
+.per-bab4-final-mode #page-experiments .chapter-progress{display:none}
+.per-bab4-final-mode #page-experiments .chapter-tools h2{font-size:14px}
+.per-bab4-final-mode #page-experiments .chapter-search{display:none}
+.per-bab4-final-mode #page-experiments .chapter-browser{max-height:440px;position:sticky;top:86px}
+.per-bab4-final-mode #page-experiments .chapter-list{max-height:none}
+.per-bab4-final-mode #page-experiments .chapter-group{position:static}
+.per-bab4-final-mode #page-experiments .experiment-item{padding:12px 10px}
+.per-bab4-final-mode #page-experiments .experiment-item b{font-size:10px}
+.per-bab4-final-mode #page-experiments .graph-workspace{display:none}
+.per-bab4-final-mode #page-experiments:has(.experiment-item.active[data-id="F4.4"]) .graph-workspace{display:block}
+.per-bab4-final-nav{margin-bottom:12px;border:1px solid rgba(74,168,255,.30);background:linear-gradient(135deg,rgba(17,38,45,.98),rgba(7,18,21,.98));border-radius:12px;padding:16px}
+.per-final-title{display:flex;align-items:flex-start;justify-content:space-between;gap:18px}
+.per-final-title h2{font-size:19px;margin:3px 0 4px}.per-final-title p{font-size:9px;color:var(--muted);margin:0;max-width:720px}
+.per-final-flow{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;max-width:540px}.per-final-flow span{font:800 7px ui-monospace;color:var(--green);border:1px solid rgba(54,230,161,.22);padding:5px 7px;border-radius:6px;background:rgba(54,230,161,.05)}.per-final-flow i{font-style:normal;color:var(--dim)}
+.per-final-cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:14px}.per-final-cards button{text-align:left;background:#071214;border:1px solid var(--border);border-radius:9px;color:var(--text);padding:11px;cursor:pointer}.per-final-cards button.active{border-color:var(--green);box-shadow:0 0 0 1px rgba(54,230,161,.12) inset;background:rgba(54,230,161,.07)}.per-final-cards em{font-style:normal;font:900 8px ui-monospace;color:var(--gold);display:block}.per-final-cards b{font-size:11px;display:block;margin:4px 0}.per-final-cards small{font-size:8px;color:var(--muted);line-height:1.4}
+.per-bab4-now{display:grid;grid-template-columns:1fr 1.6fr 1fr;gap:8px;margin:12px 0}.per-bab4-now>div{background:#061012;border:1px solid var(--border);border-radius:8px;padding:10px}.per-bab4-now span{display:block;font:800 7px ui-monospace;color:var(--gold);text-transform:uppercase;margin-bottom:5px}.per-bab4-now b{display:block;font-size:9px;line-height:1.45}
+.per-bab4-final-mode #perceptionBab4Acquisition{margin:0;border-color:rgba(54,230,161,.30)}
+.per-bab4-final-mode #page-experiments .run-console .panel-head h2:after{content:' • FINAL BAB IV';color:var(--green);font-size:8px;margin-left:8px}
+@media(max-width:1100px){.per-final-title{display:block}.per-final-flow{margin-top:10px;justify-content:flex-start}.per-final-cards{grid-template-columns:1fr 1fr}.per-bab4-now{grid-template-columns:1fr}}
+.per-bab4-final-mode #page-experiments .table-workspace{display:block!important}
+.per-bab4-final-mode #page-experiments .graph-workspace{display:none!important}
+.per-bab4-final-mode[data-bab4="F4.4"] #page-experiments .graph-workspace{display:block!important}
+.per-bab4-final-mode #page-experiments .run-grid{grid-template-columns:1fr!important}
+.per-bab4-final-mode #page-experiments .run-grid>label{display:none!important}
+.per-bab4-final-mode #page-experiments .record-actions{grid-column:1/-1!important;display:block!important}
+.per-bab4-final-mode #page-experiments #recordToggleBtn{width:100%;height:42px;font-size:10px}
+.per-bab4-final-mode[data-bab4="F4.1"] #page-experiments .run-console{display:none!important}
+.per-bab4-final-mode #page-experiments .experiment-item small{display:none}
+.per-bab4-summary-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:12px 0 6px;padding-top:10px;border-top:1px solid var(--border)}
+.per-bab4-summary-head>b{font-size:10px}.per-bab4-summary-head>div{display:flex;gap:6px}
+#perBab4SummaryCanvas,#perBab4ConfidenceCanvas{display:block;width:100%;height:260px;background:#071113;border:1px solid var(--border);border-radius:8px;margin-top:6px}

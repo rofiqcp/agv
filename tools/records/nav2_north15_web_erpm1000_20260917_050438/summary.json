@@ -1,0 +1,16 @@
+{
+  "goal_state": "CANCELED",
+  "tf_displacement_m": 3.6655460773979023,
+  "local_displacement_m": 1.685371020373018,
+  "global_displacement_m": 1.4739982063667398,
+  "esc_displacement_m": 1.8847695659475083,
+  "max_abs_target_mps": 0.2267156809750926,
+  "max_abs_actual_erpm": 1467.0,
+  "median_gnss_speed_moving": 0.21346307478413634,
+  "gate_false_samples": 0,
+  "mux_sources": [
+    "NAV2",
+    "TELEOP",
+    "TELEOP_RELEASE_HOLD"
+  ]
+}

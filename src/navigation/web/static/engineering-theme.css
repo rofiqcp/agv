@@ -126,3 +126,13 @@ input[type=number]{font-variant-numeric:tabular-nums}
   .config-toolbar .config-filter-btn{flex:0 0 auto}
   .config-toolbar #configRowCount{margin-left:auto}
 }
+
+/* Mission safety controls: cancel must remain visible even when the rail is compact. */
+.nav-goal-section{position:sticky;top:0;z-index:8;background:#292929}
+.nav-goal-actions{position:sticky;bottom:0;z-index:9;background:#292929;padding-top:4px}
+#cancelGoalBtn{display:block!important;visibility:visible!important;opacity:1!important;min-width:0;font-weight:800;border-color:#b94a48}
+.nav-goal-block-reason{margin-top:5px;padding:5px 6px;border:1px solid #4c5659;background:#222;color:#b9c4c7;font:7.5px/1.35 "Roboto Mono",ui-monospace,monospace;white-space:normal;overflow-wrap:anywhere}
+
+.nav-goal-actions{grid-template-columns:repeat(3,minmax(0,1fr));align-items:stretch}
+.nav-goal-actions button{min-width:0;white-space:normal;line-height:1.15}
+@media(max-width:560px){.nav-goal-actions{grid-template-columns:1fr 1fr}.nav-goal-actions #clearGoalBtn{grid-column:1/-1}}
