@@ -21,6 +21,7 @@ perception:
     camera_retry_interval_sec: 2.0
     camera_read_fail_threshold: 5
     camera_online_good_frames: 3
+    camera_block_watchdog_sec: 2.5
     camera_retry_log_interval_sec: 30.0
     v4l2_pixel_format: MJPEG
     allow_mjpeg_cpu_fallback: true

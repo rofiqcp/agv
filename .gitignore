@@ -39,5 +39,16 @@ referensi/hmi/
 
 # High-volume telemetry captures stay local; commit summaries/metadata instead.
 tools/records/**/raw.jsonl
-backups/
+.backup/
+.backup_firda_42_live_20260918_083713/
+.backup_firda_42_source_20260918_082433/
+.backup_firda_421_onepage_20260918_090743/
+.backup_firda_gui_20260918_031546/
+.backup_firda_sidebar_20260918_034536/
+.backup_firda_valid_20260918_041255/
+.playwright/
+.preview_v3/
+.pytest_cache/
+.ui_audit/
 backup/
+backups/

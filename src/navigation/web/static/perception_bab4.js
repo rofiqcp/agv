@@ -39,10 +39,31 @@ tableHasTimeAxis=function(){if(perBab4Is()&&selectedExperiment?.bab4NoTimeAxis)r
 const perBab4BaseCaptureTemplateRows=captureTemplateRows;
 captureTemplateRows=function(sec){if(perBab4Is()&&selectedExperiment?.bab4ManualCapture)return;return perBab4BaseCaptureTemplateRows(sec)};
 function perBab4InferenceOn(){const p=obj('perception_performance');return p.inference_enabled===true||String(p.backend||'').toLowerCase()==='cpu'}
+const PER_BAB4_CPU_TARGET_HZ=1.2;
+const PER_BAB4_CPU_MIN_FRAME_HZ=0.9;
+const PER_BAB4_CPU_MAX_FRAME_AGE_SEC=1.2;
+function perBab4CpuFramePolicy(){
+  const perf=obj('perception_performance'),backend=String(perf.backend||'').toLowerCase();
+  const rate=channelRate('camera_frame'),frameAge=age('camera_frame');
+  const activeCpu=backend==='cpu';
+  return {
+    activeCpu,rate,frameAge,
+    rateOk:Number.isFinite(rate)&&rate>=PER_BAB4_CPU_MIN_FRAME_HZ,
+    fresh:Number.isFinite(frameAge)&&frameAge<=PER_BAB4_CPU_MAX_FRAME_AGE_SEC
+  };
+}
 const perBab4BasePreflight=testPreflightStatus;
 testPreflightStatus=function(){
   const p=perBab4BasePreflight();if(!perBab4Is()||!selectedExperiment?.reportMode)return p;
-  const items=p.items.map(i=>i.label==='Commissioning prerequisite'?{...i,ok:true,critical:false,detail:'Tidak diperlukan untuk pengujian visual standalone BAB IV'}:i);
+  const cpuPolicy=perBab4CpuFramePolicy();
+  const items=p.items.map(i=>{
+    if(i.label==='Commissioning prerequisite')return {...i,ok:true,critical:false,detail:'Tidak diperlukan untuk pengujian visual standalone BAB IV'};
+    if(i.label==='Camera Frame'&&cpuPolicy.activeCpu){
+      const rateText=Number.isFinite(cpuPolicy.rate)?cpuPolicy.rate.toFixed(1):'--',ageText=Number.isFinite(cpuPolicy.frameAge)?cpuPolicy.frameAge.toFixed(2):'--';
+      return {...i,ok:cpuPolicy.rateOk&&cpuPolicy.fresh,critical:true,detail:`${rateText} Hz • age ${ageText} s • CPU target ${PER_BAB4_CPU_TARGET_HZ.toFixed(1)} Hz • minimum ${PER_BAB4_CPU_MIN_FRAME_HZ.toFixed(1)} Hz • max age ${PER_BAB4_CPU_MAX_FRAME_AGE_SEC.toFixed(1)} s`};
+    }
+    return i;
+  });
   const add=(label,ok,detail)=>{if(!items.some(i=>i.label===label))items.push({label,ok:!!ok,detail,critical:true})};
   add('YOLOPv2 CPU inference',perBab4InferenceOn(),perBab4InferenceOn()?'inference aktif':'aktifkan YOLOPv2 pada tab Live');
   if(selectedExperiment.id==='F4.2')add('Raw detection stream',channelFresh('raw_detections',2.5),`age ${Number.isFinite(age('raw_detections'))?age('raw_detections').toFixed(2):'--'} s`);

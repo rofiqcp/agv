@@ -110,7 +110,7 @@ foc_thesis:
   # make commissioning/tuning values reviewable and reproducible from ROS logs.
   vesc_runtime_mirror:
     left:
-      foc_q_kp: 0.400130208
+      foc_q_kp: 0.800130208
       foc_q_ki: 266.710069
       foc_d_kp: 0.800130208
       foc_d_ki: 266.710069

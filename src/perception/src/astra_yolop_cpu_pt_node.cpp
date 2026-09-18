@@ -371,6 +371,7 @@ private:
     declare_parameter<double>("camera_retry_interval_sec", 2.0);
     declare_parameter<int>("camera_read_fail_threshold", 5);
     declare_parameter<int>("camera_online_good_frames", 3);
+    declare_parameter<double>("camera_block_watchdog_sec", 2.5);
     declare_parameter<double>("confidence_threshold", 0.10);
     declare_parameter<double>("iou_threshold", 0.45);
     declare_parameter<double>("lane_threshold", 0.50);
@@ -560,6 +561,8 @@ private:
       std::clamp<std::int64_t>(get_parameter("camera_read_fail_threshold").as_int(), 2, 30));
     camera_online_good_frames_ = static_cast<int>(
       std::clamp<std::int64_t>(get_parameter("camera_online_good_frames").as_int(), 1, 30));
+    camera_block_watchdog_sec_ = std::clamp(
+      get_parameter("camera_block_watchdog_sec").as_double(), 1.0, 15.0);
     confidence_threshold_ = static_cast<float>(get_parameter("confidence_threshold").as_double());
     iou_threshold_ = static_cast<float>(get_parameter("iou_threshold").as_double());
     lane_threshold_ = static_cast<float>(get_parameter("lane_threshold").as_double());
@@ -1115,7 +1118,14 @@ private:
     cv::Mat probe;
     bool frame_ok = false;
     for (int attempt = 0; attempt < 4; ++attempt) {
-      if (candidate.read(probe) && !probe.empty() && probe.cols > 0 && probe.rows > 0 &&
+      capture_read_started_ns_.store(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count(),
+        std::memory_order_release);
+      capture_read_in_progress_.store(true, std::memory_order_release);
+      const bool probe_ok = candidate.read(probe);
+      capture_read_in_progress_.store(false, std::memory_order_release);
+      if (probe_ok && !probe.empty() && probe.cols > 0 && probe.rows > 0 &&
         probe.type() == CV_8UC3)
       {
         frame_ok = true;
@@ -2506,7 +2516,14 @@ private:
     while (rclcpp::ok() && !capture_stop_.load()) {
       if (!openCamera()) {std::this_thread::sleep_for(50ms); continue;}
       cv::Mat frame;
-      if (!capture_.read(frame) || frame.empty() || frame.type() != CV_8UC3) {
+      capture_read_started_ns_.store(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count(),
+        std::memory_order_release);
+      capture_read_in_progress_.store(true, std::memory_order_release);
+      const bool read_ok = capture_.read(frame);
+      capture_read_in_progress_.store(false, std::memory_order_release);
+      if (!read_ok || frame.empty() || frame.type() != CV_8UC3) {
         ++capture_dropped_total_;
         ++camera_read_fail_streak_;
         camera_good_frame_streak_ = 0;
@@ -2529,6 +2546,9 @@ private:
       if (camera_good_frame_streak_ == camera_online_good_frames_) publishConnected(true);
       if (flip_horizontal_) cv::flip(frame, frame, 1);
       const auto steady_now = std::chrono::steady_clock::now();
+      last_good_capture_ns_.store(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(steady_now.time_since_epoch()).count(),
+        std::memory_order_release);
       const auto ros_stamp = now();
       {
         std::lock_guard<std::mutex> lock(frame_mutex_);
@@ -2824,6 +2844,27 @@ private:
   void controlTick()
   {
     ++control_sequence_;
+    if (capture_read_in_progress_.load(std::memory_order_acquire)) {
+      const auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+      const auto started_ns = capture_read_started_ns_.load(std::memory_order_acquire);
+      const auto last_good_ns = last_good_capture_ns_.load(std::memory_order_acquire);
+      const auto reference_ns = std::max(started_ns, last_good_ns);
+      const double blocked_sec = reference_ns > 0 ?
+        static_cast<double>(now_ns - reference_ns) / 1.0e9 : 0.0;
+      if (reference_ns > 0 && blocked_sec >= camera_block_watchdog_sec_) {
+        publishConnected(false);
+        publishHealth(false, "FRAME_STALE_CAPTURE_BLOCKED");
+        publishEmergency(inference_enabled_.load());
+        RCLCPP_FATAL(
+          get_logger(),
+          "Camera capture blocked %.3f s (limit %.3f s); terminating perception node for launch respawn/reopen",
+          blocked_sec, camera_block_watchdog_sec_);
+        std::fflush(stdout);
+        std::fflush(stderr);
+        ::_exit(86);
+      }
+    }
     geometry_msgs::msg::Twist nav;
     geometry_msgs::msg::Twist desired;
     geometry_msgs::msg::Twist output;
@@ -3099,6 +3140,10 @@ private:
   std::atomic<uint64_t> capture_frames_total_{0U};
   std::atomic<uint64_t> capture_overwrite_total_{0U};
   std::atomic<uint64_t> web_preview_published_total_{0U};
+  std::atomic_bool capture_read_in_progress_{false};
+  std::atomic<int64_t> capture_read_started_ns_{0};
+  std::atomic<int64_t> last_good_capture_ns_{0};
+  double camera_block_watchdog_sec_{2.5};
   std::chrono::steady_clock::time_point last_capture_time_{};
   std::chrono::steady_clock::time_point last_raw_publish_time_{};
   std::chrono::steady_clock::time_point last_web_preview_publish_time_{};
