@@ -84,7 +84,11 @@ assert CFG["commissioning_bypass_enabled"] is False
 # Lane safety is an independent opt-in. Its default must never alter obstacle-
 # only trajectory safety, and every lane-driven command branch is source-gated.
 assert CFG["lane_safety_enabled"] is False
+# When lane safety is explicitly enabled, loss/gray evidence must fail closed.
+assert CFG["stop_on_lane_lost"] is True
 source = (ROOT / "src" / "trajectory_safety_supervisor.cpp").read_text()
+assert 'lane_recommendation == "WARNING"' in source
+assert 'decision = "LANE_WARNING_SLOW"' in source
 for guarded_branch in (
     "lane_safety_enabled_ && lane_control_fresh && lane_recenter_blocked",
     "lane_safety_enabled_ && !path_obstacle_near && lane_fresh && lane_valid",

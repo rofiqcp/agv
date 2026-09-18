@@ -144,7 +144,24 @@ private:
     declare_parameter<double>("max_yaw_rate_rps", 0.292028888392);
     declare_parameter<double>("linear_deadband_mps", 0.08);
     declare_parameter<double>("angular_deadband_rps", 0.02);
+    // MPPI/velocity-smoother deadbands are stateless. This Schmitt-trigger style
+    // yaw hysteresis prevents small near-zero Nav2 corrections from repeatedly
+    // waking the Ackermann steering actuator when the vehicle is already straight.
+    declare_parameter<bool>("yaw_hysteresis_enabled", false);
+    declare_parameter<double>("yaw_hysteresis_enter_rps", 0.04);
+    declare_parameter<double>("yaw_hysteresis_exit_rps", 0.02);
     declare_parameter<double>("min_speed_for_yaw_mps", 0.08);
+    // Terminal goal braking: shape Nav2 linear speed before the 1 m goal radius
+    // so the physical vehicle is nearly stopped when the goal checker succeeds.
+    declare_parameter<bool>("goal_braking_enabled", true);
+    declare_parameter<double>("goal_stop_radius_m", 1.0);
+    declare_parameter<double>("goal_braking_deceleration_mps2", 0.60);
+    declare_parameter<double>("goal_braking_pose_timeout_sec", 0.50);
+    // SMAC Hybrid DUBIN otherwise tries to satisfy the clicked terminal yaw and can
+    // create a full loop close to an XY-only goal. For Ackermann standard mode,
+    // plan the terminal pose along the line-of-sight approach while keeping X/Y exact.
+    declare_parameter<bool>("relax_goal_orientation_for_ackermann", true);
+    declare_parameter<double>("goal_orientation_pose_timeout_sec", 1.0);
     declare_parameter<bool>("require_perception_for_autonomy_motion", false);
     declare_parameter<double>("perception_timeout_sec", 1.5);
     declare_parameter<bool>("require_sensor_publisher_contract", true);
@@ -161,6 +178,11 @@ private:
     // /esc/ready and /esc/feedback_valid are transient-local state, so the
     // boolean alone is not proof the actuator process/link is still alive.
     declare_parameter<double>("esc_state_timeout_sec", 0.75);
+    // ACTIVE missions ignore ordinary readiness flapping, but persistent loss of
+    // control/localization remains an emergency stop rather than a normal gate.
+    declare_parameter<double>("runtime_localization_loss_grace_sec", 3.0);
+    declare_parameter<double>("runtime_esc_loss_grace_sec", 1.5);
+    declare_parameter<double>("runtime_wheel_slip_stop_sec", 0.75);
     declare_parameter<bool>("require_camera_metric_calibration", false);
     declare_parameter<bool>("camera_metric_calibration_validated", false);
     // Stage-1 commissioning interlocks. Autonomous motion must stay fail-closed
@@ -220,7 +242,22 @@ private:
     max_yaw_rate_rps_ = std::max(0.01, get_parameter("max_yaw_rate_rps").as_double());
     linear_deadband_mps_ = std::max(0.0, get_parameter("linear_deadband_mps").as_double());
     angular_deadband_rps_ = std::max(0.0, get_parameter("angular_deadband_rps").as_double());
+    yaw_hysteresis_enabled_ = get_parameter("yaw_hysteresis_enabled").as_bool();
+    yaw_hysteresis_enter_rps_ = std::max(
+      angular_deadband_rps_, get_parameter("yaw_hysteresis_enter_rps").as_double());
+    yaw_hysteresis_exit_rps_ = std::clamp(
+      get_parameter("yaw_hysteresis_exit_rps").as_double(), 0.0, yaw_hysteresis_enter_rps_);
     min_speed_for_yaw_mps_ = std::max(0.0, get_parameter("min_speed_for_yaw_mps").as_double());
+    goal_braking_enabled_ = get_parameter("goal_braking_enabled").as_bool();
+    goal_stop_radius_m_ = std::max(0.05, get_parameter("goal_stop_radius_m").as_double());
+    goal_braking_deceleration_mps2_ = std::clamp(
+      get_parameter("goal_braking_deceleration_mps2").as_double(), 0.10, 4.0);
+    goal_braking_pose_timeout_sec_ = std::clamp(
+      get_parameter("goal_braking_pose_timeout_sec").as_double(), 0.10, 2.0);
+    relax_goal_orientation_for_ackermann_ =
+      get_parameter("relax_goal_orientation_for_ackermann").as_bool();
+    goal_orientation_pose_timeout_sec_ = std::clamp(
+      get_parameter("goal_orientation_pose_timeout_sec").as_double(), 0.10, 3.0);
     require_perception_for_motion_ = get_parameter("require_perception_for_autonomy_motion").as_bool();
     perception_timeout_sec_ = std::clamp(get_parameter("perception_timeout_sec").as_double(), 0.2, 10.0);
     require_sensor_publisher_contract_ = get_parameter("require_sensor_publisher_contract").as_bool();
@@ -236,6 +273,12 @@ private:
       get_parameter("esc_integration_bypass_timeout_sec").as_double(), 0.1, 5.0);
     esc_state_timeout_sec_ = std::clamp(
       get_parameter("esc_state_timeout_sec").as_double(), 0.1, 5.0);
+    runtime_localization_loss_grace_sec_ = std::clamp(
+      get_parameter("runtime_localization_loss_grace_sec").as_double(), 0.5, 10.0);
+    runtime_esc_loss_grace_sec_ = std::clamp(
+      get_parameter("runtime_esc_loss_grace_sec").as_double(), 0.25, 10.0);
+    runtime_wheel_slip_stop_sec_ = std::clamp(
+      get_parameter("runtime_wheel_slip_stop_sec").as_double(), 0.0, 5.0);
     require_camera_calibration_ = get_parameter("require_camera_metric_calibration").as_bool();
     camera_calibration_validated_ = get_parameter("camera_metric_calibration_validated").as_bool();
     require_steering_calibration_ =
@@ -341,6 +384,23 @@ private:
       [this](std_msgs::msg::Bool::SharedPtr msg) {
         std::lock_guard<std::mutex> lock(mutex_);
         motion_localization_ready_ = msg->data;
+        if (msg->data) last_motion_localization_good_time_ = now();
+      });
+    wheel_slip_sub_ = create_subscription<std_msgs::msg::Bool>(
+      "/localization/wheel_slip", stateQos(),
+      [this](std_msgs::msg::Bool::SharedPtr msg) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const bool was_active = wheel_slip_active_;
+        wheel_slip_active_ = msg->data;
+        // Start admission uses the last-TRUE latch. ACTIVE runtime only escalates
+        // continuous/persistent slip, so a one-sample residual cannot create stop/go.
+        if (msg->data) {
+          const auto t = now();
+          last_wheel_slip_true_time_ = t;
+          if (!was_active) wheel_slip_started_time_ = t;
+        } else {
+          wheel_slip_started_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+        }
       });
     sensor_contract_sub_ = create_subscription<std_msgs::msg::Bool>(
       sensor_publisher_contract_topic_, stateQos(),
@@ -443,6 +503,7 @@ private:
         std::lock_guard<std::mutex> lock(mutex_);
         esc_feedback_valid_ = msg->data;
         last_esc_feedback_valid_time_ = now();
+        if (msg->data) last_esc_feedback_good_time_ = last_esc_feedback_valid_time_;
       });
     gnss_connected_sub_ = create_subscription<std_msgs::msg::Bool>(
       "/gnss/connected", stateQos(), [this](std_msgs::msg::Bool::SharedPtr msg) {
@@ -491,6 +552,7 @@ private:
         std::lock_guard<std::mutex> lock(mutex_);
         esc_ready_ = msg->data;
         last_esc_ready_time_ = now();
+        if (msg->data) last_esc_ready_good_time_ = last_esc_ready_time_;
       });
     esc_integration_bypass_sub_ = create_subscription<std_msgs::msg::Bool>(
       "/esc/integration_bypass_active", stateQos(),
@@ -531,6 +593,12 @@ private:
 
     autonomy_motion_allowed_pub_ = create_publisher<std_msgs::msg::Bool>(
       "/system/autonomy_motion_allowed", stateQos());
+    autonomy_start_ready_pub_ = create_publisher<std_msgs::msg::Bool>(
+      "/system/autonomy_start_ready", stateQos());
+    autonomy_mission_active_pub_ = create_publisher<std_msgs::msg::Bool>(
+      "/system/autonomy_mission_active", stateQos());
+    autonomy_hard_stop_pub_ = create_publisher<std_msgs::msg::Bool>(
+      "/system/autonomy_hard_stop", stateQos());
     planning_ready_pub_ = create_publisher<std_msgs::msg::Bool>("/system/nav2_ready", stateQos());
     motion_ready_pub_ = create_publisher<std_msgs::msg::Bool>("/system/motion_ready", stateQos());
     autonomy_ready_pub_ = create_publisher<std_msgs::msg::Bool>("/system/autonomy_ready", stateQos());
@@ -567,7 +635,7 @@ private:
       std::bind(&NavigationCore::onStatusTimer, this));
   }
 
-  geometry_msgs::msg::Twist clampCommand(const geometry_msgs::msg::Twist & in) const
+  geometry_msgs::msg::Twist clampCommand(const geometry_msgs::msg::Twist & in)
   {
     geometry_msgs::msg::Twist out{};
     out.linear.x = std::clamp(in.linear.x, -max_reverse_speed_mps_, max_forward_speed_mps_);
@@ -580,8 +648,38 @@ private:
     const double yaw_cap = std::min(max_yaw_rate_rps_, curvature_yaw_cap);
     out.angular.z = std::clamp(in.angular.z, -yaw_cap, yaw_cap);
     if (std::abs(out.linear.x) < linear_deadband_mps_) out.linear.x = 0.0;
-    if (std::abs(out.angular.z) < angular_deadband_rps_) out.angular.z = 0.0;
-    if (std::abs(out.linear.x) < min_speed_for_yaw_mps_) out.angular.z = 0.0;
+
+    if (std::abs(out.linear.x) < min_speed_for_yaw_mps_) {
+      out.angular.z = 0.0;
+      yaw_hysteresis_active_ = false;
+      yaw_hysteresis_sign_ = 0;
+      return out;
+    }
+
+    if (yaw_hysteresis_enabled_) {
+      const double abs_wz = std::abs(out.angular.z);
+      const int sign = out.angular.z > 0.0 ? 1 : (out.angular.z < 0.0 ? -1 : 0);
+      if (!yaw_hysteresis_active_) {
+        if (abs_wz < yaw_hysteresis_enter_rps_) {
+          out.angular.z = 0.0;
+        } else {
+          yaw_hysteresis_active_ = true;
+          yaw_hysteresis_sign_ = sign;
+        }
+      } else {
+        const bool sign_change = sign != 0 && yaw_hysteresis_sign_ != 0 && sign != yaw_hysteresis_sign_;
+        if (abs_wz <= yaw_hysteresis_exit_rps_ ||
+            (sign_change && abs_wz < yaw_hysteresis_enter_rps_)) {
+          out.angular.z = 0.0;
+          yaw_hysteresis_active_ = false;
+          yaw_hysteresis_sign_ = 0;
+        } else if (sign_change) {
+          yaw_hysteresis_sign_ = sign;
+        }
+      }
+    } else if (std::abs(out.angular.z) < angular_deadband_rps_) {
+      out.angular.z = 0.0;
+    }
     return out;
   }
 
@@ -620,10 +718,11 @@ private:
     return age >= 0.0 && age <= timeout_sec;
   }
 
-  bool autonomousMotionReadyUnlocked(const rclcpp::Time & t) const
+  bool autonomyStartReadyUnlocked(const rclcpp::Time & t) const
   {
-    // The autonomous gate is the last software interlock before the ESC mux.
-    // Do not open it merely because localization is ready: the STM link must
+    // Strict mission-admission precheck. This decides whether a NEW Goal may
+    // start now; it is intentionally stricter than the runtime hard-stop policy.
+    // Do not admit merely because localization is ready: the STM link must
     // also have a fresh ACK with both actuator-ready status bits.
     // Commissioning mode is intentionally a bounded pre-certification mode: it
     // keeps hard E-stop, ESC-ready ACK, map, smoother, and planning-localization
@@ -644,8 +743,8 @@ private:
     const bool esc_ready_fresh = esc_ready_ && esc_feedback_valid_ &&
       esc_state_fresh(last_esc_ready_time_) && esc_state_fresh(last_esc_feedback_valid_time_);
     const bool esc_gate_ok = esc_ready_fresh || bypass_fresh;
-    if (estop_ || !esc_gate_ok || !map_ready_ || !velocity_smoother_active_ ||
-        !planning_localization_ready_) return false;
+    if (estop_ || !esc_gate_ok || !map_ready_ || !nav2_action_ready_ ||
+        !velocity_smoother_active_ || !planning_localization_ready_) return false;
     if (require_sensor_publisher_contract_) {
       if (!sensor_publisher_contract_ok_ || last_sensor_publisher_contract_time_.nanoseconds() == 0) return false;
       const double publisher_contract_age = (t - last_sensor_publisher_contract_time_).seconds();
@@ -657,7 +756,10 @@ private:
       if (integrity_age < 0.0 || integrity_age > sensor_integrity_timeout_sec_) return false;
     }
     if (precision_mode_ && !precision_localization_ready_) return false;
-    if (!commissioning && !motion_localization_ready_) return false;
+    // Wheel-slip is estimator/diagnostic evidence, not an autonomy admission gate.
+    // GNSS/wheel residual noise must not create stop/rearm cycles.
+    // Commissioning bypasses certification only; it never bypasses live localization health.
+    if (!motion_localization_ready_) return false;
     if (!commissioning) {
       if (require_camera_calibration_ && !camera_calibration_validated_) return false;
       if (require_steering_calibration_ && !steering_calibration_validated_) return false;
@@ -685,6 +787,53 @@ private:
       if (age < 0.0 || age > perception_timeout_sec_) return false;
     }
     return true;
+  }
+
+  bool autonomyHardStopActiveUnlocked(const rclcpp::Time & t) const
+  {
+    // Normal readiness/quality gates are start-only once a Goal is admitted.
+    // Teleop is the only normal runtime takeover. The cases below are emergency
+    // safety faults, not ordinary gates, and therefore remain fail-safe.
+    if (estop_) return true;
+
+    const std::string fw_token = "fw_status=0x";
+    const auto fw_pos = esc_status_.find(fw_token);
+    if (fw_pos != std::string::npos) {
+      try {
+        const auto begin = fw_pos + fw_token.size();
+        const auto end_hex = esc_status_.find_first_not_of("0123456789abcdefABCDEF", begin);
+        const auto value = std::stoul(esc_status_.substr(begin, end_hex - begin), nullptr, 16);
+        if ((value & 0x20U) != 0U) return true;
+      } catch (...) {
+        // Malformed diagnostics do not synthesize a fault; link freshness below
+        // still catches a real communication loss.
+      }
+    }
+
+    const auto good_within = [&t](const rclcpp::Time & stamp, double grace) {
+      if (stamp.nanoseconds() == 0) return false;
+      const double age = (t - stamp).seconds();
+      return age >= 0.0 && age <= grace;
+    };
+    bool bypass_fresh = false;
+    if (allow_esc_integration_bypass_ && esc_integration_bypass_active_ &&
+        last_esc_integration_bypass_time_.nanoseconds() > 0) {
+      const double age = (t - last_esc_integration_bypass_time_).seconds();
+      bypass_fresh = age >= 0.0 && age <= esc_integration_bypass_timeout_sec_;
+    }
+    if (!bypass_fresh &&
+        (!good_within(last_esc_ready_good_time_, runtime_esc_loss_grace_sec_) ||
+         !good_within(last_esc_feedback_good_time_, runtime_esc_loss_grace_sec_))) {
+      return true;
+    }
+    if (!motion_localization_ready_ &&
+        !good_within(last_motion_localization_good_time_, runtime_localization_loss_grace_sec_)) {
+      return true;
+    }
+    // Wheel-slip is intentionally not a mission hard-stop. Estimator gating and
+    // covariance handle slip while E-stop, firmware/link faults and persistent
+    // localization loss remain the physical autonomy hard-stop mechanisms.
+    return false;
   }
 
   void requestSmootherTransition(uint8_t transition_id, const char * transition_name)
@@ -887,20 +1036,59 @@ private:
       RCLCPP_WARN(get_logger(), "GOAL frame '%s' bukan map; Nav2 akan melakukan transform", goal.header.frame_id.c_str());
     }
 
+    const double requested_goal_yaw = yawFromQuaternion(goal.pose.orientation);
+    double planner_goal_yaw = requested_goal_yaw;
+    bool goal_yaw_relaxed = false;
+
     uint64_t count = 0;
+    bool admitted = false;
+    bool hard_stop = false;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      queued_goal_ = goal;
-      last_goal_pose_ = goal;
-      goal_state_ = "QUEUED";
+      const auto t = now();
+      nav2_action_ready_ = nav_client_->action_server_is_ready();
+      hard_stop = autonomyHardStopActiveUnlocked(t);
+      // A new goal never waits silently for a future gate transition. When idle,
+      // the full start precheck must pass now. While an already admitted mission
+      // is active, retargeting is allowed as long as no hard-stop condition exists.
+      admitted = mission_active_ ? !hard_stop : autonomyStartReadyUnlocked(t);
+      if (admitted && relax_goal_orientation_for_ackermann_ &&
+          goal.header.frame_id == "map" && have_gnss_map_ &&
+          gnss_map_received_.nanoseconds() > 0) {
+        const double pose_age = (t - gnss_map_received_).seconds();
+        const double dx = goal.pose.position.x - gnss_map_odom_.pose.pose.position.x;
+        const double dy = goal.pose.position.y - gnss_map_odom_.pose.pose.position.y;
+        const double distance = std::hypot(dx, dy);
+        if (pose_age >= 0.0 && pose_age <= goal_orientation_pose_timeout_sec_ &&
+            distance > goal_stop_radius_m_) {
+          planner_goal_yaw = std::atan2(dy, dx);
+          goal.pose.orientation.x = 0.0;
+          goal.pose.orientation.y = 0.0;
+          goal.pose.orientation.z = std::sin(0.5 * planner_goal_yaw);
+          goal.pose.orientation.w = std::cos(0.5 * planner_goal_yaw);
+          goal_yaw_relaxed = true;
+        }
+      }
       count = ++goal_rx_count_;
-      publishGoalStateUnlocked();
+      if (!admitted) {
+        queued_goal_.reset();
+        goal_state_ = hard_stop ? "BLOCKED_HARD_STOP" : "BLOCKED_NOT_READY";
+        publishGoalStateUnlocked();
+      } else {
+        safety_stop_latched_ = false;
+        queued_goal_ = goal;
+        last_goal_pose_ = goal;
+        goal_state_ = "QUEUED";
+        publishGoalStateUnlocked();
+      }
     }
     RCLCPP_INFO(
-      get_logger(), "GOAL RX #%lu frame=%s x=%.3f y=%.3f yaw=%.3f",
+      get_logger(),
+      "GOAL RX #%lu frame=%s x=%.3f y=%.3f requested_yaw=%.3f planner_yaw=%.3f relaxed=%s admitted=%s",
       static_cast<unsigned long>(count), goal.header.frame_id.c_str(),
-      p.x, p.y, yawFromQuaternion(q));
-    trySendQueuedGoal();
+      p.x, p.y, requested_goal_yaw, planner_goal_yaw,
+      goal_yaw_relaxed ? "true" : "false", admitted ? "true" : "false");
+    if (admitted) trySendQueuedGoal();
   }
 
   void trySendQueuedGoal()
@@ -911,18 +1099,15 @@ private:
       std::lock_guard<std::mutex> lock(mutex_);
       nav2_action_ready_ = nav_client_->action_server_is_ready();
       if (!queued_goal_.has_value() || goal_send_in_flight_) return;
-      if (!map_ready_) {
-        goal_state_ = "QUEUED_MAP";
-        publishGoalStateUnlocked();
-        return;
-      }
-      if (!planning_localization_ready_) {
-        goal_state_ = "QUEUED_LOCALIZATION";
-        publishGoalStateUnlocked();
-        return;
-      }
-      if (!nav2_action_ready_) {
-        goal_state_ = "QUEUED_NAV2";
+      // No delayed auto-start: if any admission prerequisite disappears between
+      // the button press and action send, discard this request instead of starting
+      // it later when a gate happens to recover.
+      const auto t = now();
+      const bool can_send = mission_active_ ? !autonomyHardStopActiveUnlocked(t) :
+        autonomyStartReadyUnlocked(t);
+      if (!can_send) {
+        queued_goal_.reset();
+        goal_state_ = "BLOCKED_START_LOST";
         publishGoalStateUnlocked();
         return;
       }
@@ -942,18 +1127,32 @@ private:
       std::lock_guard<std::mutex> lock(mutex_);
       if (request_id != current_goal_request_id_) return;
       goal_send_in_flight_ = false;
-      active_goal_handle_ = handle;
-      goal_state_ = handle ? "ACTIVE" : "REJECTED";
+      if (handle) {
+        active_goal_handle_ = handle;
+        mission_active_ = true;
+        safety_stop_latched_ = false;
+        goal_state_ = "ACTIVE";
+      } else if (mission_active_ && active_goal_handle_) {
+        // A rejected retarget request must not kill the already admitted mission.
+        goal_state_ = "ACTIVE";
+      } else {
+        active_goal_handle_.reset();
+        mission_active_ = false;
+        goal_state_ = "REJECTED";
+      }
       publishGoalStateUnlocked();
     };
     options.result_callback = [this, request_id](const GoalHandleNavigate::WrappedResult & result) {
       std::lock_guard<std::mutex> lock(mutex_);
       if (request_id != current_goal_request_id_) return;
-      switch (result.code) {
-        case rclcpp_action::ResultCode::SUCCEEDED: goal_state_ = "SUCCEEDED"; break;
-        case rclcpp_action::ResultCode::ABORTED: goal_state_ = "ABORTED"; break;
-        case rclcpp_action::ResultCode::CANCELED: goal_state_ = "CANCELED"; break;
-        default: goal_state_ = "UNKNOWN"; break;
+      mission_active_ = false;
+      if (!safety_stop_latched_) {
+        switch (result.code) {
+          case rclcpp_action::ResultCode::SUCCEEDED: goal_state_ = "SUCCEEDED"; break;
+          case rclcpp_action::ResultCode::ABORTED: goal_state_ = "ABORTED"; break;
+          case rclcpp_action::ResultCode::CANCELED: goal_state_ = "CANCELED"; break;
+          default: goal_state_ = "UNKNOWN"; break;
+        }
       }
       active_goal_handle_.reset();
       goal_send_in_flight_ = false;
@@ -976,24 +1175,62 @@ private:
     {
       std::lock_guard<std::mutex> lock(mutex_);
       const auto t = now();
-      if (map_ready_ && planning_localization_ready_ &&
-          fresh(autonomy_cmd_, autonomy_timeout_sec_, t)) {
+      if (fresh(autonomy_cmd_, autonomy_timeout_sec_, t)) {
         command = autonomy_cmd_.cmd;
+      } else {
+        yaw_hysteresis_active_ = false;
+        yaw_hysteresis_sign_ = 0;
+      }
+
+      // Shape terminal speed using the global map odometry only as a speed cap.
+      // Nav2 remains the authority for goal success. The cap follows
+      // v <= sqrt(2*a*(distance-stop_radius)), preventing the MPPI command from
+      // re-accelerating inside the braking zone. At the goal radius the command
+      // is zero so StoppedGoalChecker can certify an actually stopped vehicle.
+      if (goal_braking_enabled_ && mission_active_ && have_gnss_map_ &&
+          last_goal_pose_.header.frame_id == "map" && gnss_map_received_.nanoseconds() > 0) {
+        const double pose_age = (t - gnss_map_received_).seconds();
+        if (pose_age >= 0.0 && pose_age <= goal_braking_pose_timeout_sec_) {
+          const double dx = last_goal_pose_.pose.position.x - gnss_map_odom_.pose.pose.position.x;
+          const double dy = last_goal_pose_.pose.position.y - gnss_map_odom_.pose.pose.position.y;
+          const double distance = std::hypot(dx, dy);
+          const double remaining = std::max(0.0, distance - goal_stop_radius_m_);
+          const double speed_cap = std::sqrt(2.0 * goal_braking_deceleration_mps2_ * remaining);
+          command.linear.x = std::clamp(command.linear.x, -speed_cap, speed_cap);
+          if (distance <= goal_stop_radius_m_) {
+            command.linear.x = 0.0;
+            command.angular.z = 0.0;
+            yaw_hysteresis_active_ = false;
+            yaw_hysteresis_sign_ = 0;
+          }
+        }
       }
 
       // Goal success/stop sengaja TIDAK dihitung dari raw /odometry/gnss_map.
-      // Nav2 SimpleGoalChecker menggunakan TF map->base_footprint yang sama dengan
+      // Nav2 goal checker menggunakan TF map->base_footprint yang sama dengan
       // URDF di RViz. Dengan tolerance commissioning yang ketat, kendaraan baru dianggap selesai
       // ketika pose yang terlihat oleh planner/URDF memang sudah masuk radius itu.
 
-      motion_allowed = autonomousMotionReadyUnlocked(t);
+      const bool hard_stop = autonomyHardStopActiveUnlocked(t);
+      if (mission_active_ && hard_stop) {
+        // Only true hard safety faults break the admitted mission latch. Ordinary
+        // readiness/localization/sensor gates are start-only and cannot stop an
+        // ACTIVE mission. Teleop takeover is handled by cmd_vel_router and does not
+        // cancel the Nav2 goal, so releasing teleop returns to the same mission.
+        mission_active_ = false;
+        safety_stop_latched_ = true;
+        goal_state_ = "SAFETY_STOP_REARM_REQUIRED";
+        publishGoalStateUnlocked();
+      }
+      motion_allowed = mission_active_ && !hard_stop;
       routed_cmd_.cmd = command;
       routed_cmd_.received = t;
       routed_cmd_.valid = true;
     }
 
-    // Publish the physical-autonomy gate at command rate, not only HUD rate.
-    // A localization/perception interlock therefore closes in <= 1 command period.
+    // Publish the physical-autonomy runtime gate at command rate. After strict
+    // admission it is mission-latched: ordinary readiness gates cannot flap it.
+    // Teleop preempts downstream; E-stop/firmware failsafe remain hard safety stops.
     std_msgs::msg::Bool gate_msg;
     gate_msg.data = motion_allowed;
     autonomy_motion_allowed_pub_->publish(gate_msg);
@@ -1010,6 +1247,9 @@ private:
     bool planning_loc = false;
     bool motion_loc = false;
     bool nav2_action = false;
+    bool start_ready = false;
+    bool mission_active = false;
+    bool hard_stop = false;
     bool motion_allowed = false;
     bool smoother_active = false;
     bool perception_fresh = false;
@@ -1063,7 +1303,10 @@ private:
       map_ready = map_ready_;
       planning_loc = planning_localization_ready_;
       motion_loc = motion_localization_ready_;
-      motion_allowed = autonomousMotionReadyUnlocked(snapshot_time);
+      start_ready = autonomyStartReadyUnlocked(snapshot_time);
+      mission_active = mission_active_;
+      hard_stop = autonomyHardStopActiveUnlocked(snapshot_time);
+      motion_allowed = mission_active && !hard_stop;
       smoother_active = velocity_smoother_active_;
       perception_fresh = last_perception_time_.nanoseconds() > 0 &&
         (snapshot_time - last_perception_time_).seconds() >= 0.0 &&
@@ -1147,9 +1390,15 @@ private:
     std_msgs::msg::Bool b;
     b.data = nav2_ready;
     planning_ready_pub_->publish(b);
-    b.data = motion_allowed;
+    b.data = start_ready;
     motion_ready_pub_->publish(b);
     autonomy_ready_pub_->publish(b);
+    autonomy_start_ready_pub_->publish(b);
+    b.data = mission_active;
+    autonomy_mission_active_pub_->publish(b);
+    b.data = hard_stop;
+    autonomy_hard_stop_pub_->publish(b);
+    b.data = motion_allowed;
     autonomy_motion_allowed_pub_->publish(b);
 
     std::ostringstream ss;
@@ -1161,6 +1410,9 @@ private:
        << ";velocity_smoother_active=" << smoother_active
        << ";sensor_publishers=" << sensor_publisher_contract_ok_
        << ";sensor_transport=" << sensor_integrity_ok_
+       << ";autonomy_start_ready=" << start_ready
+       << ";mission_active=" << mission_active
+       << ";hard_stop=" << hard_stop
        << ";autonomy_motion_allowed=" << motion_allowed
        << ";perception=" << perception_fresh
        << ";camera_usb=" << camera_connected
@@ -1209,7 +1461,10 @@ private:
                 << " | NAV2 " << (nav2_action ? "ACTIVE" : "WAIT")
                 << " | LOC " << loc_mode << "\n"
                 << "PLANNING " << (planning_loc ? "READY" : "WAIT")
-                << " | MOTION " << (motion_allowed ? "OPEN" : "BLOCKED")
+                << " | START " << (start_ready ? "READY" : "WAIT")
+                << " | MISSION " << (mission_active ? "ACTIVE" : "IDLE") << "\n"
+                << "DRIVE " << (motion_allowed ? "OPEN" : "BLOCKED")
+                << " | HARDSTOP " << (hard_stop ? "YES" : "NO")
                 << " | GOAL " << goal_state << "\n"
                 << "CAL STEER " << (steering_calibration_validated_ ? "PASS" : "WAIT")
                 << " | CIRCLE " << (steering_circle_calibration_validated_ ? "PASS" : "WAIT")
@@ -1404,6 +1659,15 @@ private:
   double command_rate_hz_{20.0}, status_rate_hz_{10.0}, autonomy_timeout_sec_{0.60};
   double max_forward_speed_mps_{0.5}, max_reverse_speed_mps_{0.3}, max_yaw_rate_rps_{0.292028888392};
   double linear_deadband_mps_{0.08}, angular_deadband_rps_{0.02}, min_speed_for_yaw_mps_{0.08};
+  bool yaw_hysteresis_enabled_{false};
+  double yaw_hysteresis_enter_rps_{0.04}, yaw_hysteresis_exit_rps_{0.02};
+  bool goal_braking_enabled_{true};
+  double goal_stop_radius_m_{1.0}, goal_braking_deceleration_mps2_{0.60};
+  double goal_braking_pose_timeout_sec_{0.50};
+  bool relax_goal_orientation_for_ackermann_{true};
+  double goal_orientation_pose_timeout_sec_{1.0};
+  bool yaw_hysteresis_active_{false};
+  int yaw_hysteresis_sign_{0};
   bool require_perception_for_motion_{true};
   double perception_timeout_sec_{1.5};
   bool require_sensor_publisher_contract_{true};
@@ -1415,6 +1679,9 @@ private:
   bool allow_esc_integration_bypass_{false};
   double esc_integration_bypass_timeout_sec_{1.0};
   double esc_state_timeout_sec_{0.75};
+  double runtime_localization_loss_grace_sec_{3.0};
+  double runtime_esc_loss_grace_sec_{1.5};
+  double runtime_wheel_slip_stop_sec_{0.75};
   bool require_camera_calibration_{true}, camera_calibration_validated_{false};
   bool require_steering_calibration_{true};
   bool steering_calibration_validated_{false};
@@ -1444,6 +1711,10 @@ private:
   uint32_t map_width_{0}, map_height_{0};
   float map_resolution_{0.0F};
   bool planning_localization_ready_{false}, motion_localization_ready_{false};
+  rclcpp::Time last_motion_localization_good_time_{0, 0, RCL_ROS_TIME};
+  bool wheel_slip_active_{false};
+  rclcpp::Time last_wheel_slip_true_time_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time wheel_slip_started_time_{0, 0, RCL_ROS_TIME};
   bool sensor_publisher_contract_ok_{false};
   rclcpp::Time last_sensor_publisher_contract_time_{0, 0, RCL_ROS_TIME};
   bool sensor_integrity_ok_{false};
@@ -1454,6 +1725,8 @@ private:
   bool estop_{false}, esc_ready_{false};
   rclcpp::Time last_esc_ready_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_esc_feedback_valid_time_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time last_esc_ready_good_time_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time last_esc_feedback_good_time_{0, 0, RCL_ROS_TIME};
   bool esc_integration_bypass_active_{false};
   rclcpp::Time last_esc_integration_bypass_time_{0, 0, RCL_ROS_TIME};
   bool gnss_connected_{false}, imu_connected_{false}, camera_connected_{false};
@@ -1482,6 +1755,8 @@ private:
   geometry_msgs::msg::PoseStamped last_goal_pose_;
   uint64_t goal_rx_count_{0}, goal_send_sequence_{0}, current_goal_request_id_{0};
   bool goal_send_in_flight_{false};
+  bool mission_active_{false};
+  bool safety_stop_latched_{false};
   GoalHandleNavigate::SharedPtr active_goal_handle_;
 
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr autonomy_sub_, teleop_sub_, mppi_raw_sub_, smoothed_sub_, final_sub_;
@@ -1489,7 +1764,7 @@ private:
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr gnss_map_sub_, esc_odom_sub_;
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr esc_steering_actual_sub_, esc_drive_target_sub_, esc_drive_actual_sub_, esc_steering_target_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
-  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr planning_loc_sub_, motion_loc_sub_, sensor_contract_sub_, sensor_integrity_sub_, precision_localization_sub_, esc_ready_sub_, esc_integration_bypass_sub_, estop_sub_, esc_feedback_valid_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr planning_loc_sub_, motion_loc_sub_, wheel_slip_sub_, sensor_contract_sub_, sensor_integrity_sub_, precision_localization_sub_, esc_ready_sub_, esc_integration_bypass_sub_, estop_sub_, esc_feedback_valid_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr gnss_connected_sub_, imu_connected_sub_, camera_connected_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr esc_drive_connected_sub_, esc_steer_connected_sub_, esc_armed_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr localization_state_sub_, gnss_status_sub_, imu_status_sub_;
@@ -1499,7 +1774,8 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr goal_sub_, legacy_goal_sub_;
 
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr pre_collision_pub_, final_pub_;
-  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr autonomy_motion_allowed_pub_, planning_ready_pub_, motion_ready_pub_, autonomy_ready_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr autonomy_motion_allowed_pub_, autonomy_start_ready_pub_,
+    autonomy_mission_active_pub_, autonomy_hard_stop_pub_, planning_ready_pub_, motion_ready_pub_, autonomy_ready_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr sensor_status_pub_, goal_state_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr hud_nav_pub_, hud_sensor_pub_, hud_drive_pub_;
 

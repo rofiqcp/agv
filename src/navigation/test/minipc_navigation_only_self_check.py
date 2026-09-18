@@ -25,7 +25,7 @@ if "DeclareLaunchArgument('esc_serial_enabled', default_value='true')" not in au
 if 'serial_enabled' not in (WS/'esc/launch/esc.launch.py').read_text(): fail('ESC launch does not forward serial_enabled')
 
 ekf=yaml.safe_load((ROOT/'config/ekf.yaml').read_text()); local=ekf['ekf_filter_node_odom']['ros__parameters']; global_=ekf['ekf_filter_node_map']['ros__parameters']
-if local.get('odom0')!='/esc/odom' or enabled(local.get('odom0_config'))!={6}: fail('local EKF ESC odom must remain vx-only')
+if local.get('odom0')!='/esc/odom' or enabled(local.get('odom0_config'))!={6,7}: fail('local EKF ESC odom must provide vx plus explicit non-holonomic vy=0')
 if local.get('twist0')!='/gnss/base_velocity_fusion' or enabled(local.get('twist0_config'))!={6}: fail('local EKF must use independent GNSS vx')
 if local.get('imu0')!='/imu/data' or enabled(local.get('imu0_config'))!={11} or local.get('imu0_relative') is not True: fail('local EKF must use IMU gyro-Z only')
 if global_.get('odom0')!='/odometry/gnss_map' or enabled(global_.get('odom0_config'))!={0,1}: fail('global GNSS x/y missing')

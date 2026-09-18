@@ -13,3 +13,34 @@ function renderPerception(){
 function updateCamera(){/* CameraFrameStore owns the only JPEG scheduler. */}
 if($('yoloToggleBtn'))$('yoloToggleBtn').onclick=()=>requestPerceptionInference(!bool(raw('perception_inference_enabled')));
 if($('perceptionSafetyBypassBtn'))$('perceptionSafetyBypassBtn').onclick=()=>{const ts=configData('trajectory_safety')?.trajectory_safety_supervisor?.ros__parameters||{};requestPerceptionSafetyBypass(!(ts.commissioning_bypass_enabled===true))};
+
+/* Perception workspace cleanup 2026-09-18: Overview / Calibration / Final Dataset only. */
+if(typeof WORKSPACE_TABS!=='undefined'&&typeof WORKSPACE_PANES!=='undefined'){
+  WORKSPACE_TABS.perception=[
+    ['overview','Overview','pane:perception:overview'],
+    ['calibration','Calibration','pane:perception:calibration'],
+    ['bab4','Final Dataset','exp:perception:F4.1']
+  ];
+  WORKSPACE_PANES.perception={
+    overview:['#perceptionCameraSection','#perceptionLaneSection','#perceptionPlanningSection','#perceptionPerformanceSection','#perceptionDetectionsSection','#perceptionSafetySection','#perceptionEvidenceSection'],
+    calibration:['#perceptionCameraSection','#perceptionCalibrationSection']
+  };
+  if(typeof activeWorkspaceTab==='object'&&!['overview','calibration','bab4'].includes(activeWorkspaceTab.perception))activeWorkspaceTab.perception='overview';
+}
+
+/* Keep Perception page scoped to the selected simplified workspace tab. */
+const perceptionWorkspaceActivateBase=activatePage;
+activatePage=function(page,syncHmi=false,domainOverride=null,source='ui'){
+  const r=perceptionWorkspaceActivateBase(page,syncHmi,domainOverride,source);
+  document.body.classList.toggle('perception-workspace-tabs',activeDomain==='perception'&&(page==='perception'||page==='experiments'));
+  if(page==='perception'&&activeDomain==='perception'&&['overview','calibration'].includes(activeWorkspaceTab.perception))setWorkspacePaneVisibility('perception',activeWorkspaceTab.perception);
+  return r;
+};
+
+const perceptionWorkspaceSwitchBase=switchDomain;
+switchDomain=function(domain,syncHmi=true){
+  const r=perceptionWorkspaceSwitchBase(domain,syncHmi);
+  document.body.classList.toggle('perception-workspace-tabs',domain==='perception');
+  if(domain==='perception'&&activePage==='perception'&&['overview','calibration'].includes(activeWorkspaceTab.perception))setWorkspacePaneVisibility('perception',activeWorkspaceTab.perception);
+  return r;
+};

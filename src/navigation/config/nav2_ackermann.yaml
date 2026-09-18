@@ -23,7 +23,7 @@ planner_server:
       max_planning_time: 2.5
       motion_model_for_search: DUBIN
       angle_quantization_bins: 48
-      minimum_turning_radius: 1.597679121829
+      minimum_turning_radius: 1.452435565298
       reverse_penalty: 3.0
       change_penalty: 0.0
       non_straight_penalty: 1.2
@@ -58,12 +58,14 @@ controller_server:
       required_movement_radius: 0.2
       movement_time_allowance: 30.0
     goal_checker:
-      plugin: nav2_controller::SimpleGoalChecker
+      plugin: nav2_controller::StoppedGoalChecker
       # Standard tier: standalone GNSS/local odometry must not advertise centimeter accuracy.
       # Precision mode materializes 0.08 m only behind /system/precision_localization_ready.
-      xy_goal_tolerance: 0.35
-      yaw_goal_tolerance: 0.0872664626
-      stateful: false
+      xy_goal_tolerance: 1.0
+      yaw_goal_tolerance: 3.14159265359
+      stateful: true
+      trans_stopped_velocity: 0.08
+      rot_stopped_velocity: 0.08
     FollowPath:
       plugin: nav2_mppi_controller::MPPIController
       # Horizon lokal diperpanjang agar MPPI mulai membentuk bypass sebelum
@@ -72,17 +74,17 @@ controller_server:
       model_dt: 0.125
       batch_size: 1000
       iteration_count: 1
-      vx_std: 0.1
+      vx_std: 0.35
       vy_std: 0.0
       wz_std: 0.25
-      vx_max: 1.0
+      vx_max: 1.9
       vx_min: 0.0
       vy_max: 0.0
-      wz_max: 0.625907910003
-      ax_max: 0.75
-      ax_min: -1.0
+      wz_max: 1.308147531908
+      ax_max: 2.5
+      ax_min: -4.0
       ay_max: 0.0
-      az_max: 0.75
+      az_max: 2.0
       temperature: 0.3
       gamma: 0.015
       motion_model: Ackermann
@@ -97,7 +99,7 @@ controller_server:
         trajectory_step: 20
         time_step: 4
       AckermannConstraints:
-        min_turning_r: 1.597679121829
+        min_turning_r: 1.452435565298
       critics:
       - ConstraintCritic
       - CostCritic
@@ -205,8 +207,8 @@ velocity_smoother:
     smoothing_frequency: 50.0
     scale_velocities: true
     feedback: OPEN_LOOP
-    max_velocity: [1.0, 0.0, 0.625907910003]
-    min_velocity: [-1.0, 0.0, -0.625907910003]
+    max_velocity: [1.9, 0.0, 1.308147531908]
+    min_velocity: [-1.0, 0.0, -1.308147531908]
     max_accel:
     - 0.45
     - 0.0
@@ -300,8 +302,8 @@ global_costmap:
   global_costmap:
     ros__parameters:
       use_sim_time: false
-      update_frequency: 0.5
-      publish_frequency: 0.2
+      update_frequency: 1.0
+      publish_frequency: 0.5
       global_frame: map
       robot_base_frame: base_footprint
       resolution: 0.1

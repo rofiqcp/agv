@@ -14,17 +14,23 @@ esc_ackermann:
     teleop_timeout_sec: 0.3
     nav2_timeout_sec: 0.6
     manual_release_hold_sec: 1.0
-    speed_max: 1.00
+    speed_max: 1.90
     serial_left_max_deg: 90.0
     # Single drive conversion authority. Nav2 uses m/s; VESC uses eRPM.
     # N2.1 overwrites this directly from measured robot motion.
-    drive_erpm_per_mps: 4410.810913912311
+    drive_erpm_per_mps: 4441.148449
     # Post-mux hard limit for all actuator sources. Current commissioning trial: 1000 eRPM.
     drive_erpm_lock_enabled: true
-    drive_erpm_lock_abs: 1000.0
+    drive_erpm_lock_abs: 9000.0
+    # Safety quiet band for RIGHT velocity command: +/-75 eRPM (~0.017 m/s at
+    # the current calibration) is forced to exact zero before COMM_SET_RPM.
+    # This matches the firmware low-speed release threshold and blocks command
+    # noise without hiding raw Hall/FOC telemetry.
+    drive_zero_command_deadband_erpm: 75.0
     # Zero-speed braking can dither Hall eRPM while the vehicle is physically stationary.
     # Ignore only for filtered speed/odom when commanded target is exactly zero; raw stays visible.
     zero_hold_feedback_deadband_erpm: 1100.0
+    zero_hold_feedback_release_samples: 3
     wheelbase_m: 0.7
     track_width_m: 0.48
     min_speed_for_nav_steering_mps: 0.05
@@ -53,16 +59,16 @@ esc_ackermann:
     steering_feedback_left_stop_deg: -90.0
     steering_feedback_force_symmetric_span: false
     steering_straight_deadband_deg: 1.0
-    steering_center_hold_enabled: false
-    steering_center_hold_request_deadband_deg: 0.75
+    steering_center_hold_enabled: true
+    steering_center_hold_request_deadband_deg: 1.0
     steering_center_hold_capture_deg: 35.0
-    steering_center_hold_feedback_deadband_deg: 1.0
+    steering_center_hold_feedback_deadband_deg: 0.8
     steering_center_hold_kp: 0.18
-    steering_center_hold_adapt_gain_per_sec: 1.5
+    steering_center_hold_adapt_gain_per_sec: 0.8
     steering_center_hold_ki: 0.0
     steering_center_hold_integral_limit_deg_s: 0.0
-    steering_center_hold_max_trim_deg: 18.0
-    steering_center_hold_trim_rate_deg_s: 60.0
+    steering_center_hold_max_trim_deg: 8.0
+    steering_center_hold_trim_rate_deg_s: 12.0
     steering_center_hold_latch_inside_deadband: true
     steering_center_hold_feedback_timeout_sec: 0.3
     diagnostic_trace_hz: 2.0
@@ -134,7 +140,7 @@ esc_ackermann:
     odom_v_variance_erpm_error_gain: 0.2
     wheel_slip_topic: /localization/wheel_slip
     wheel_slip_timeout_sec: 0.75
-    wheel_slip_covariance_multiplier: 25.0
+    wheel_slip_covariance_multiplier: 1000.0
     odom_yaw_variance_base: 0.08
     odom_yaw_variance_steer_gain: 0.3
     odom_yaw_rate_variance_base: 0.05

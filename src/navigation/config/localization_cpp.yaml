@@ -24,7 +24,11 @@ localization_core:
     gnss_cog_velocity_course_max_rad: 0.1745329252
     gnss_cog_fit_course_max_rad: 0.3490658504
     gnss_lateral_velocity_warn_mps: 0.15
-    wheel_gnss_slip_residual_mps: 0.25
+    wheel_gnss_slip_residual_mps: 0.20
+    wheel_slip_assert_samples: 6
+    wheel_slip_clear_samples: 4
+    wheel_slip_clear_residual_mps: 0.15
+    wheel_slip_clear_stationary_speed_mps: 0.12
     wheel_gnss_nis_gate: 6.634896601
     cog_nis_gate: 6.634896601
     innovation_min_variance: 1.0e-06
@@ -38,7 +42,7 @@ localization_core:
     gnss_min_usable_rate_hz: 7.0
     gnss_velocity_covariance_min_variance: 1.0e-06
     gnss_velocity_covariance_max_variance: 1.0
-    require_gnss_velocity_certification_for_fusion: true
+    require_gnss_velocity_certification_for_fusion: false
     require_gnss_cog_certification_for_fusion: true
     gnss_velocity_calibration_valid: false
     gnss_cog_calibration_valid: false
@@ -60,8 +64,8 @@ localization_core:
     stage2_max_wheel_gnss_residual_p95_mps: 0.25
     stage2_max_lateral_velocity_p95_mps: 0.15
     stage2_max_cog_doppler_residual_p95_rad: 0.1745329252
-    enable_global_gnss_velocity_fusion: false
-    enable_global_gnss_cog_fusion: false
+    enable_global_gnss_velocity_fusion: true
+    enable_global_gnss_cog_fusion: true
     gnss_velocity_fusion_topic: /gnss/base_velocity_fusion
     gnss_cog_fusion_topic: /gnss/cog_heading_fusion
     gnss_velocity_fusion_min_variance: 0.0025
@@ -70,9 +74,9 @@ localization_core:
     gnss_cog_fusion_max_variance_rad2: 0.2741556778
     gnss_fusion_measurement_timeout_sec: 1.0
     use_global_ekf_yaw_for_map_correction: false
-    global_ekf_yaw_correction_alpha: 0.05
-    global_ekf_yaw_max_step_rad: 0.00872664626
-    global_ekf_yaw_max_innovation_rad: 2.3561944902
+    global_ekf_yaw_correction_alpha: 0.12
+    global_ekf_yaw_max_step_rad: 0.01745329252
+    global_ekf_yaw_max_innovation_rad: 0.7853981634
     enable_gnss_course_yaw_correction: false
     cog_min_forward_speed_mps: 0.15
     cog_max_sacc_mps: 0.3
@@ -97,7 +101,7 @@ localization_core:
     startup_gnss_samples: 5
     startup_imu_samples: 50
     startup_max_spread_m: 5.0
-    global_odom_map_reference_max_error_m: 15.0
+    global_odom_map_reference_max_error_m: 2.0
     strict_min_satellites: 8
     strict_max_dop: 2.0
     strict_max_hacc_m: 2.5
@@ -109,18 +113,22 @@ localization_core:
     motion_critical_max_hacc_m: 6.0
     motion_critical_max_dop: 4.0
     motion_critical_min_satellites: 6
-    strict_correction_alpha: 0.08
-    freeze_stationary_map_translation: true
-    strict_moving_correction_alpha: 0.01
+    strict_correction_alpha: 0.15
+    freeze_stationary_map_translation: false
+    strict_moving_correction_alpha: 0.10
     enable_wheel_slip_pose_correction: false
-    strict_slip_correction_alpha: 0.1
-    strict_max_correction_m: 0.08
+    strict_slip_correction_alpha: 0.6
+    slip_map_hold_enabled: false
+    slip_map_hold_enter_gnss_speed_mps: 0.12
+    slip_map_hold_exit_gnss_speed_mps: 0.25
+    slip_map_hold_exit_samples: 3
+    strict_max_correction_m: 0.12
     strict_max_yaw_correction_rad: 0.017453292519943295
     strict_stationary_speed_mps: 0.04
     strict_stationary_yaw_rate_rps: 0.08
-    slip_min_wheel_speed_mps: 0.25
-    slip_speed_difference_mps: 0.2
-    slip_sacc_multiplier: 0.5
+    slip_min_wheel_speed_mps: 0.15
+    slip_speed_difference_mps: 0.12
+    slip_sacc_multiplier: 2.0
     slip_yaw_rate_difference_rps: 0.2
     esc_kinematic_yaw_rate_topic: /esc/kinematic_yaw_rate_rps
     esc_kinematic_yaw_timeout_sec: 0.5
@@ -164,5 +172,5 @@ localization_core:
     validated_heading_topic: /heading/validated_fusion
     validated_heading_timeout_sec: 0.75
     gnss_stationary_pose_variance_m2: 25.0
-    inflate_stationary_gnss_covariance: true
-    stationary_gnss_position_variance_m2: 25.0
+    inflate_stationary_gnss_covariance: false
+    stationary_gnss_position_variance_m2: 1.0

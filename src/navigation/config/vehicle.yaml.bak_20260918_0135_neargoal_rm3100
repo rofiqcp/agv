@@ -1,0 +1,59 @@
+vehicle:
+  ros__parameters:
+    # Jarak axle fisik untuk dokumentasi/URDF. Jangan diubah oleh circle-fit.
+    wheelbase_m: 0.7
+    # Geometri kinematik hasil circle-test Part 3. ESC/NavigationCore/perception memakai nilai ini.
+    effective_wheelbase_m: 0.7
+    effective_wheelbase_left_m: 0.7
+    effective_wheelbase_right_m: 0.7
+    track_width_m: 0.48
+    total_width_m: 0.55
+    vehicle_length_m: 1.0
+    wheel_radius_m: 0.145
+    # Electrical-to-ground-speed baseline belongs to the same vehicle SSOT.
+    # Physical certification still requires drive_odometry_calibration_valid=true.
+    drive_erpm_per_mps: 4441.148449
+    # N2.1 certifies drive_erpm_per_mps directly from measured straight-run trials.
+    drive_odometry_calibration_valid: false
+    drive_odometry_calibration_saved_at: '2026-09-17T23:21:28+07:00_speedtest_forward'
+    # Safe fallback until Part 1/2 physical calibration is measured.
+    measured_left_steering_limit_rad: -0.523598775598
+    measured_right_steering_limit_rad: 0.523598775598
+    max_steering_angle_rad: 0.523598775598
+    operational_steering_angle_rad: 0.523598775598
+    steering_calibration_valid: false
+    steering_calibration_source: uncalibrated_safe_fallback
+    steering_calibration_saved_at: ''
+    steering_lut_point_count: 0
+    steering_lut_max_command_hysteresis_deg: 0.0
+    steering_lut_max_feedback_hysteresis_deg: 0.0
+    # Radius planner bersertifikat. Sebelum Part 3 valid, nilai ini masih fallback teoritis.
+    minimum_turning_radius_m: 1.597679121829
+    turning_radius_left_m: 0.0
+    turning_radius_right_m: 0.0
+    turning_radius_safety_margin_pct: 10.0
+    steering_circle_calibration_valid: false
+    steering_circle_trial_count_left: 0
+    steering_circle_trial_count_right: 0
+    steering_circle_fit_rmse_m: 0.0
+    steering_circle_calibration_saved_at: ''
+    minimum_turning_radius_source: theoretical_uncalibrated_safe_fallback
+    max_forward_speed_mps: 1.9
+    max_reverse_speed_mps: 1.0
+    # Kinematic ceiling at max_forward_speed_mps / minimum_turning_radius_m.
+    max_yaw_rate_rps: 1.189225029006
+    # Stage-2 low-level steering/yaw tuning is certified only from physical
+    # step/slalom/circle evidence; default false prevents software-only promotion.
+    control_field_calibration_valid: false
+    control_field_calibration_saved_at: ''
+    control_field_evidence_sha256: ''
+    # Responsive but bounded velocity-smoother profile. At the configured
+    # 1.0 m/s envelope this is about 0.40 s to full speed and 0.25 s to stop.
+    max_accel_mps2: 2.50
+    max_decel_mps2: -4.00
+    max_yaw_accel_rps2: 2.0
+    standard_xy_goal_tolerance_m: 1.0
+    precision_xy_goal_tolerance_m: 0.08
+    precision_controller_frequency_hz: 15.0
+    precision_costmap_resolution_m: 0.05
+    footprint: '[[0.52,0.30],[0.52,-0.30],[-0.52,-0.30],[-0.52,0.30]]'

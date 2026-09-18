@@ -15,22 +15,22 @@ mag_heading_fusion:
     rm3100_heading_variance_rad2: 0.00121846968
     validated_heading_variance_rad2: 0.00121846968
     rm3100_calibration_owner: ros_host
-    rm3100_full_calibration_enabled: false
+    rm3100_full_calibration_enabled: true
     rm3100_mag_bias_xyz_ut:
-    - 0.0
-    - 0.0
-    - 0.0
+    - -12.81021989699917
+    - -0.25037000903352924
+    - -8.251344067342682
     rm3100_mag_matrix_3x3:
-    - 1.0
-    - 0.0
-    - 0.0
-    - 0.0
-    - 1.0
-    - 0.0
-    - 0.0
-    - 0.0
-    - 1.0
-    rm3100_planar_calibration_enabled: true
+    - 0.924228957788029
+    - 0.01986993933060433
+    - 0.04190315437366519
+    - 0.019869939330604346
+    - 0.9913953888422709
+    - -0.0004582819881870549
+    - 0.04190315437366519
+    - -0.00045828198818714745
+    - 0.9925515965577556
+    rm3100_planar_calibration_enabled: false
     rm3100_mag_bias_xy_ut:
     - -13.876793349753695
     - 1.9115564814814796
@@ -39,7 +39,7 @@ mag_heading_fusion:
     - -0.00045890339887859127
     - -0.0004589033988785904
     - 0.04150194919231958
-    rm3100_heading_lut_enabled: true
+    rm3100_heading_lut_enabled: false
     rm3100_heading_lut_input_rad:
     - 1.4229333951861647
     - 0.7003688219043257

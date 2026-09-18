@@ -12,10 +12,10 @@
   body.sidebar-collapsed .sidebar-domain-switch .top-domain span{width:auto;font-size:10px}
   body.sidebar-collapsed .sidebar-domain-switch .top-domain b{display:none}
   body.sidebar-collapsed #contextNav{display:flex!important;min-height:0;overflow-y:auto;overflow-x:hidden;padding:4px 2px;gap:2px}
-  body.sidebar-collapsed #contextNav .nav-item:not(.tuning-nav):not(.report-nav){display:grid;place-items:center;width:100%;min-height:40px;padding:4px;border-radius:4px}
-  body.sidebar-collapsed #contextNav .nav-item:not(.tuning-nav):not(.report-nav)>span{width:auto;margin:0;font-size:12px;text-align:center}
-  body.sidebar-collapsed #contextNav .nav-item:not(.tuning-nav):not(.report-nav)>b{display:none!important}
-  body.sidebar-collapsed #contextNav .tuning-nav,body.sidebar-collapsed #contextNav .report-nav,body.sidebar-collapsed .sidebar-tuning-head,body.sidebar-collapsed .sidebar-tuning-group,body.sidebar-collapsed .sidebar-report-head,body.sidebar-collapsed .sidebar-report-group{display:none!important}
+  body.sidebar-collapsed #contextNav .nav-item:not(.tuning-nav):not(.report-nav):not(.firda-nav){display:grid;place-items:center;width:100%;min-height:40px;padding:4px;border-radius:4px}
+  body.sidebar-collapsed #contextNav .nav-item:not(.tuning-nav):not(.report-nav):not(.firda-nav)>span{width:auto;margin:0;font-size:12px;text-align:center}
+  body.sidebar-collapsed #contextNav .nav-item:not(.tuning-nav):not(.report-nav):not(.firda-nav)>b{display:none!important}
+  body.sidebar-collapsed #contextNav .tuning-nav,body.sidebar-collapsed #contextNav .report-nav,body.sidebar-collapsed #contextNav .firda-nav,body.sidebar-collapsed .sidebar-tuning-head,body.sidebar-collapsed .sidebar-tuning-group,body.sidebar-collapsed .sidebar-report-head,body.sidebar-collapsed .sidebar-report-group,body.sidebar-collapsed .sidebar-firda-head,body.sidebar-collapsed .sidebar-firda-group{display:none!important}
   body.sidebar-collapsed .topbar{padding-left:12px}
 }
 .page-heading{flex:1 1 auto;max-width:none;min-width:0}

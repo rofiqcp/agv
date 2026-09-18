@@ -80,8 +80,8 @@ need(int(per_cfg.get("cpu_threads", -1)) == 2, "CPU threads YAML must default to
 ekf = yaml.safe_load((ROOT / "config/ekf.yaml").read_text(encoding="utf-8"))
 local = ekf["ekf_filter_node_odom"]["ros__parameters"]
 global_ = ekf["ekf_filter_node_map"]["ros__parameters"]
-need(local.get("odom0") == "/esc/odom" and enabled(local.get("odom0_config")) == {6},
-     "local EKF must fuse ESC vx only; kinematic yaw-rate is diagnostic")
+need(local.get("odom0") == "/esc/odom" and enabled(local.get("odom0_config")) == {6, 7},
+     "local EKF must fuse ESC vx + nonholonomic vy=0 only; kinematic yaw-rate is diagnostic")
 need(local.get("twist0") == "/gnss/base_velocity_fusion" and enabled(local.get("twist0_config")) == {6},
      "local EKF must fuse independent GNSS vx")
 need(local.get("imu0") == "/imu/data" and enabled(local.get("imu0_config")) == {11} and local.get("imu0_relative") is True,

@@ -3,7 +3,7 @@ vesc_tool_bridge:
     maintenance_poll_hz: 50.0
     tcp_service_hz: 1000.0
     max_abs_duty: 0.95
-    max_abs_current_a: 20.0
+    max_abs_current_a: 15.0
     max_abs_erpm: 8000.0
     web_lease_timeout_ms: 5000
     # Stock VESC Tool enables Send Alive after a one-shot motor setpoint.

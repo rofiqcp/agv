@@ -14,8 +14,6 @@ required=[
  'steering_physical_operational_limit_deg',
  'operationalPhysicalLimitDeg()',
  'clampPhysicalSteeringDeg',
- 'physical_deg / steering_physical_right_limit_deg_',
- 'physical_deg / steering_physical_left_limit_deg_',
  'return std::min(steering_max_deg_, std::abs(steering_physical_right_limit_deg_))',
  'return -std::min(steering_max_deg_, std::abs(steering_physical_left_limit_deg_))',
 ]
@@ -30,7 +28,7 @@ assert 'measured_left_steering_limit_rad' in gui and 'measured_right_steering_li
 assert 'operational_steering_angle_rad' in gui
 assert 'minimum_turning_radius_m' in gui
 with open(esc_yaml) as f: e=yaml.safe_load(f)['esc_ackermann']['ros__parameters']
-assert e['steering_physical_calibration_enabled'] is False
+assert e['steering_physical_calibration_enabled'] is True
 assert e['steering_physical_left_limit_deg'] < 0 < e['steering_physical_right_limit_deg']
 assert 0 < e['steering_physical_operational_limit_deg'] <= min(abs(e['steering_physical_left_limit_deg']), e['steering_physical_right_limit_deg'])
 with open(veh_yaml) as f: v=yaml.safe_load(f)['vehicle']['ros__parameters']

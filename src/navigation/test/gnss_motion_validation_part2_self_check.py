@@ -17,7 +17,7 @@ required={
  'gnss_motion_history_sec':6.0,'gnss_sync_max_gap_sec':0.30,'gnss_velocity_timeout_sec':0.80,
  'gnss_fit_timeout_sec':4.0,'gnss_velocity_min_validation_speed_mps':0.15,
  'gnss_speed_consistency_max_mps':0.20,'gnss_fit_speed_residual_max_mps':0.30,
- 'wheel_gnss_slip_residual_mps':0.25,'cog_valid_hold_sec':1.5,'cog_invalid_hold_sec':0.5,
+ 'wheel_gnss_slip_residual_mps':0.12,'cog_valid_hold_sec':1.5,'cog_invalid_hold_sec':0.5,
 }
 for k,v in required.items():
     if cfg.get(k)!=v: fail(f'{k}={cfg.get(k)!r}, expected {v!r}')

@@ -126,7 +126,7 @@ esc_ackermann:
     odom_v_variance_erpm_error_gain: 0.2
     wheel_slip_topic: /localization/wheel_slip
     wheel_slip_timeout_sec: 0.75
-    wheel_slip_covariance_multiplier: 25.0
+    wheel_slip_covariance_multiplier: 1000.0
     odom_yaw_variance_base: 0.08
     odom_yaw_variance_steer_gain: 0.3
     odom_yaw_rate_variance_base: 0.05

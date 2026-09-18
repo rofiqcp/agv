@@ -173,8 +173,8 @@ ekf = yaml.safe_load((ROOT / "config/ekf.yaml").read_text(encoding="utf-8"))
 local_ekf = ekf["ekf_filter_node_odom"]["ros__parameters"]
 global_ekf = ekf["ekf_filter_node_map"]["ros__parameters"]
 enabled = lambda values: {index for index, value in enumerate(values) if value}
-if local_ekf.get("odom0") != "/esc/odom" or enabled(local_ekf.get("odom0_config", [])) != {6}:
-    fail("local EKF must fuse ESC longitudinal vx only; kinematic yaw-rate stays diagnostic")
+if local_ekf.get("odom0") != "/esc/odom" or enabled(local_ekf.get("odom0_config", [])) != {6, 7}:
+    fail("local EKF must fuse ESC vx plus the non-holonomic vy=0 constraint; kinematic yaw-rate stays diagnostic")
 if local_ekf["twist0"] != "/gnss/base_velocity_fusion" or enabled(local_ekf["twist0_config"]) != {6}:
     fail("local EKF must fuse independent GNSS base vx")
 if (local_ekf["imu0"] != "/imu/data" or enabled(local_ekf["imu0_config"]) != {11} or
@@ -226,17 +226,32 @@ navcore_cfg = yaml.safe_load((ROOT / "config/navigation_core.yaml").read_text(en
 nav2_cfg = yaml.safe_load((ROOT / "config/nav2_ackermann.yaml").read_text(encoding="utf-8"))
 esc_cfg = yaml.safe_load((SRC / "esc/config/ackermann.yaml").read_text(encoding="utf-8"))[
     "esc_ackermann"]["ros__parameters"]
-teleop_cfg = yaml.safe_load((SRC / "esc/config/teleop.yaml").read_text(encoding="utf-8"))[
-    "/**"]["ros__parameters"]
+teleop_yaml = yaml.safe_load((SRC / "esc/config/teleop.yaml").read_text(encoding="utf-8"))
+teleop_cfg = teleop_yaml["/**"]["ros__parameters"]
+motor_teleop_cfg = teleop_yaml["motor_teleop"]["ros__parameters"]
 follow = nav2_cfg["controller_server"]["ros__parameters"]["FollowPath"]
 smoother = nav2_cfg["velocity_smoother"]["ros__parameters"]
-speed_envelope = [
+autonomy_speed_envelope = [
     float(vehicle_cfg["max_forward_speed_mps"]), float(navcore_cfg["max_forward_speed_mps"]),
-    float(follow["vx_max"]), float(smoother["max_velocity"][0]),
-    float(esc_cfg["speed_max"]), float(teleop_cfg["speed_max"]),
+    float(follow["vx_max"]), float(smoother["max_velocity"][0]), float(esc_cfg["speed_max"]),
 ]
-if max(speed_envelope) - min(speed_envelope) > 1.0e-9:
-    fail(f"runtime forward-speed envelope disagrees across Vehicle/Nav2/ESC/Teleop: {speed_envelope}")
+if max(autonomy_speed_envelope) - min(autonomy_speed_envelope) > 1.0e-9:
+    fail(f"autonomous forward-speed envelope disagrees across Vehicle/Nav2/ESC: {autonomy_speed_envelope}")
+manual_speed_envelope = [
+    float(esc_cfg["manual_speed_max_mps"]), float(teleop_cfg["speed_max"]),
+    float(motor_teleop_cfg["speed_max"]),
+]
+if max(manual_speed_envelope) - min(manual_speed_envelope) > 1.0e-9:
+    fail(f"manual/teleop speed envelope disagrees: {manual_speed_envelope}")
+if min(manual_speed_envelope) + 1.0e-9 < max(autonomy_speed_envelope):
+    fail("manual speed envelope must not be below the autonomous envelope")
+manual_erpm = manual_speed_envelope[0] * float(esc_cfg["drive_erpm_per_mps"])
+if manual_erpm > float(esc_cfg["raw_commissioning_max_erpm"]) + 1.0e-6:
+    fail(f"manual speed converts to {manual_erpm:.1f} eRPM above raw commissioning limit")
+if esc_cfg.get("drive_erpm_lock_enabled") is True:
+    lock = float(esc_cfg["drive_erpm_lock_abs"])
+    if not (0.0 < lock <= float(esc_cfg["raw_commissioning_max_erpm"])):
+        fail(f"commissioning eRPM lock outside actuator safety envelope: {lock}")
 
 if loc_cfg.get("gnss_require_measurement_timestamp") is not True:
     fail("GNSS measurement timestamps must stay mandatory")

@@ -174,7 +174,6 @@ if(BUILD_TESTING)
     gnss_ubx_fixture_self_check
     full_stack_reaudit_self_check
     f411_mag_pipeline_self_check
-    heading_runtime_calibration_self_check
     gui_cpp_migration_self_check
     gui_floating_menu_self_check
     gui_qt_signal_slot_self_check

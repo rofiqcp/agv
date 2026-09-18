@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FORBIDDEN = re.compile("/" + "home" + r"/[A-Za-z0-9._-]+/")
-SKIP_DIRS = {".git", "build", "install", "log", "backups", ".preview_v3", "__pycache__"}
+SKIP_DIRS = {".git", "build", "install", "log", "backups", "records", ".preview_v3", "__pycache__"}
 SKIP_SUFFIXES = (".pyc", ".o", ".so", ".a", ".png", ".jpg", ".pt", ".engine")
 SCAN_ROOTS = [
     ROOT / "src", ROOT / "tools", ROOT / "models", ROOT / "scripts",
@@ -22,7 +22,7 @@ def candidates():
         for path in items:
             if not path.is_file() or any(part in SKIP_DIRS for part in path.parts):
                 continue
-            if path.name == Path(__file__).name or ".bak." in path.name or path.name.endswith((".bak", ".baseline")):
+            if path.name == Path(__file__).name or ".bak." in path.name or ".bak_" in path.name or path.name.endswith((".bak", ".baseline")):
                 continue
             if path.suffix.lower() in SKIP_SUFFIXES:
                 continue

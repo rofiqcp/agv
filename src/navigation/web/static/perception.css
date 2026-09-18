@@ -12,3 +12,6 @@
 .record-toggle.stop:hover{background:rgba(255,101,119,.22)}
 @media(max-width:720px){.record-actions{min-width:0}.record-toggle{height:42px;font-size:11px}}
 
+
+/* single-navigation stays global; only Perception restores its simplified 3-tab workflow. */
+body.perception-workspace-tabs #workspaceTabs{display:flex!important}

@@ -250,7 +250,11 @@ private:
     declare_parameter<double>("gnss_cog_velocity_course_max_rad", 0.1745329252);
     declare_parameter<double>("gnss_cog_fit_course_max_rad", 0.3490658504);
     declare_parameter<double>("gnss_lateral_velocity_warn_mps", 0.15);
-    declare_parameter<double>("wheel_gnss_slip_residual_mps", 0.25);
+    declare_parameter<double>("wheel_gnss_slip_residual_mps", 0.12);
+    declare_parameter<int>("wheel_slip_assert_samples", 3);
+    declare_parameter<int>("wheel_slip_clear_samples", 8);
+    declare_parameter<double>("wheel_slip_clear_residual_mps", 0.06);
+    declare_parameter<double>("wheel_slip_clear_stationary_speed_mps", 0.12);
     declare_parameter<double>("wheel_gnss_nis_gate", 6.634896601);
     declare_parameter<double>("cog_nis_gate", 6.634896601);
     declare_parameter<double>("innovation_min_variance", 1.0e-6);
@@ -387,6 +391,10 @@ private:
     declare_parameter<double>("strict_moving_correction_alpha", 0.03);
     declare_parameter<bool>("enable_wheel_slip_pose_correction", false);
     declare_parameter<double>("strict_slip_correction_alpha", 0.60);
+    declare_parameter<bool>("slip_map_hold_enabled", true);
+    declare_parameter<double>("slip_map_hold_enter_gnss_speed_mps", 0.12);
+    declare_parameter<double>("slip_map_hold_exit_gnss_speed_mps", 0.25);
+    declare_parameter<int>("slip_map_hold_exit_samples", 3);
     declare_parameter<double>("strict_max_correction_m", 0.25);
     declare_parameter<double>("strict_max_yaw_correction_rad", 0.087266463);
     declare_parameter<double>("strict_stationary_speed_mps", 0.15);
@@ -491,6 +499,10 @@ private:
     gnss_cog_fit_course_max_rad_ = std::clamp(get_parameter("gnss_cog_fit_course_max_rad").as_double(), 0.01, M_PI);
     gnss_lateral_velocity_warn_mps_ = std::max(0.01, get_parameter("gnss_lateral_velocity_warn_mps").as_double());
     wheel_gnss_slip_residual_mps_ = std::max(0.01, get_parameter("wheel_gnss_slip_residual_mps").as_double());
+    wheel_slip_assert_samples_ = std::max(1, static_cast<int>(get_parameter("wheel_slip_assert_samples").as_int()));
+    wheel_slip_clear_samples_ = std::max(1, static_cast<int>(get_parameter("wheel_slip_clear_samples").as_int()));
+    wheel_slip_clear_residual_mps_ = std::max(0.01, get_parameter("wheel_slip_clear_residual_mps").as_double());
+    wheel_slip_clear_stationary_speed_mps_ = std::max(0.01, get_parameter("wheel_slip_clear_stationary_speed_mps").as_double());
     wheel_gnss_nis_gate_ = std::max(0.1, get_parameter("wheel_gnss_nis_gate").as_double());
     cog_nis_gate_ = std::max(0.1, get_parameter("cog_nis_gate").as_double());
     innovation_min_variance_ = std::max(1.0e-12, get_parameter("innovation_min_variance").as_double());
@@ -622,6 +634,13 @@ private:
     enable_wheel_slip_pose_correction_ = get_parameter("enable_wheel_slip_pose_correction").as_bool();
     strict_slip_correction_alpha_ = std::clamp(
       get_parameter("strict_slip_correction_alpha").as_double(), 0.0, 1.0);
+    slip_map_hold_enabled_ = get_parameter("slip_map_hold_enabled").as_bool();
+    slip_map_hold_enter_gnss_speed_mps_ = std::max(0.01,
+      get_parameter("slip_map_hold_enter_gnss_speed_mps").as_double());
+    slip_map_hold_exit_gnss_speed_mps_ = std::max(slip_map_hold_enter_gnss_speed_mps_,
+      get_parameter("slip_map_hold_exit_gnss_speed_mps").as_double());
+    slip_map_hold_exit_samples_ = std::max(1,
+      static_cast<int>(get_parameter("slip_map_hold_exit_samples").as_int()));
     strict_max_correction_m_ = std::max(
       0.05, get_parameter("strict_max_correction_m").as_double());
     strict_max_yaw_correction_rad_ = std::max(
@@ -1347,10 +1366,53 @@ private:
     const bool independent_wheel_gate_pass = !require_independent_wheel_validation_ || wheel_nis_gate_pass;
     const bool cog_nis_gate_pass = !std::isfinite(cog_nis) || cog_nis <= cog_nis_gate_;
     wheel_gnss_residual_mps_ = wheel_residual;
-    wheel_slip_motion_detected_ = wheel_nis_valid && vel_fresh && quality_ok &&
-      std::abs(wheel_residual) >= wheel_gnss_slip_residual_mps_ &&
+    // A Doppler speed residual is only evidence of physical slip when it also
+    // exceeds receiver speed uncertainty. Use a 2-sigma floor so noisy sAcc
+    // cannot latch autonomy during otherwise coherent wheel/GNSS motion.
+    const double slip_sacc =
+      (std::isfinite(quality_.sacc_mps) && quality_.sacc_mps > 0.0) ? quality_.sacc_mps : 0.0;
+    const double dynamic_slip_residual_gate = std::max(
+      wheel_gnss_slip_residual_mps_, 2.0 * slip_sacc);
+    const bool wheel_slip_candidate = wheel_nis_valid && vel_fresh && quality_ok &&
+      std::abs(wheel_residual) >= dynamic_slip_residual_gate &&
       std::max(std::abs(wheel_forward_at_gnss_mps_), std::abs(gnss_base_vx_mps_)) >=
         slip_min_wheel_speed_mps_;
+    // Low-speed lifted-wheel tests operate below 0.25 m/s, where a single noisy
+    // GNSS Doppler sample can otherwise either hide a real slip or create a false
+    // positive. Require consecutive 10-Hz evidence to assert, then use a longer
+    // clear hysteresis. This keeps the safety interlock responsive (~0.3 s) while
+    // preventing one-sample GNSS noise from flapping the actuator gate.
+    const double wheel_abs = std::abs(wheel_forward_at_gnss_mps_);
+    const double gnss_abs = std::abs(gnss_base_vx_mps_);
+    const bool both_stationary_for_clear =
+      wheel_abs <= wheel_slip_clear_stationary_speed_mps_ &&
+      gnss_abs <= wheel_slip_clear_stationary_speed_mps_;
+    const bool moving_agreement_for_clear =
+      std::max(wheel_abs, gnss_abs) >= slip_min_wheel_speed_mps_ &&
+      std::abs(wheel_residual) <= wheel_slip_clear_residual_mps_;
+    const bool wheel_slip_clear_candidate =
+      both_stationary_for_clear || moving_agreement_for_clear;
+
+    if (wheel_slip_candidate) {
+      wheel_slip_clear_count_ = 0;
+      wheel_slip_assert_count_ = std::min(wheel_slip_assert_samples_, wheel_slip_assert_count_ + 1);
+      if (wheel_slip_assert_count_ >= wheel_slip_assert_samples_) wheel_slip_motion_detected_ = true;
+    } else {
+      wheel_slip_assert_count_ = 0;
+      if (wheel_slip_motion_detected_) {
+        if (wheel_slip_clear_candidate) {
+          wheel_slip_clear_count_ = std::min(wheel_slip_clear_samples_, wheel_slip_clear_count_ + 1);
+          if (wheel_slip_clear_count_ >= wheel_slip_clear_samples_) {
+            wheel_slip_motion_detected_ = false;
+            wheel_slip_clear_count_ = 0;
+          }
+        } else {
+          wheel_slip_clear_count_ = 0;
+        }
+      } else {
+        wheel_slip_clear_count_ = 0;
+      }
+    }
 
     gnss_velocity_qualified_ = vel_fresh && quality_ok && gnss_last_velocity_covariance_valid_ &&
       vector_speed_ok && cog_vel_ok && cog_nis_gate_pass && independent_wheel_gate_pass && lateral_ok;
@@ -2157,16 +2219,24 @@ private:
       const navigation_math::Pose2D correction_odom =
         have_time_aligned_local ? local_at_gnss.pose : odom_base_;
       const auto candidate = navigation_math::mapOdomFromBase(map_reference, correction_odom);
-      const bool slip_detected = wheelSlipDetectedUnlocked();
-      // Ground-speed UBX pada log lapangan beberapa kali ~0 saat ESC benar-benar
-      // bergerak ~0.5 m/s. Karena itu slip tetap boleh didiagnostikkan, tetapi
-      // TIDAK diberi gain pose tinggi kecuali commissioning mengaktifkannya.
-      const bool slip_pose_correction =
-        enable_wheel_slip_pose_correction_ && slip_detected;
+      const bool slip_detected = wheel_slip_motion_detected_ || wheelSlipDetectedUnlocked();
+      const double slip_gnss_speed = gnssVelocityFreshUnlocked() ?
+        std::hypot(gnss_base_vx_mps_, gnss_base_vy_mps_) :
+        std::numeric_limits<double>::infinity();
+      const bool slip_stationary_evidence = slip_detected && gnssVelocityFreshUnlocked() &&
+        slip_gnss_speed <= slip_map_hold_enter_gnss_speed_mps_ &&
+        std::abs(imu_yaw_rate_rps_) <= strict_stationary_yaw_rate_rps_;
+      // When independent GNSS+IMU say the chassis is stationary, do NOT pull the
+      // map frame toward a still-converging global EKF. onTfTimer() freezes map
+      // translation instead. High-gain absolute correction is reserved for slip
+      // while the chassis is actually moving.
+      const bool slip_pose_correction = enable_wheel_slip_pose_correction_ &&
+        slip_detected && !slip_stationary_evidence;
       const bool stationary = vehicleStationaryUnlocked();
 
-      double alpha = slip_pose_correction ? strict_slip_correction_alpha_ :
-        (stationary ? strict_correction_alpha_ : strict_moving_correction_alpha_);
+      double alpha = slip_stationary_evidence ? 0.0 :
+        (slip_pose_correction ? strict_slip_correction_alpha_ :
+        (stationary ? strict_correction_alpha_ : strict_moving_correction_alpha_));
       // Once the startup anchor is valid, wheel/IMU odometry is the short-term
       // motion authority. Repeatedly pulling map->odom toward single-antenna GNSS
       // jitter while the wheel speed is zero makes a parked robot appear to slide
@@ -2806,6 +2876,71 @@ private:
     {
       std::lock_guard<std::mutex> lock(mutex_);
       valid = anchor_valid_ && have_odom_;
+      if (valid && slip_map_hold_enabled_) {
+        const bool gnss_vel_fresh = gnssVelocityFreshUnlocked();
+        const double gnss_speed = gnss_vel_fresh ?
+          std::hypot(gnss_base_vx_mps_, gnss_base_vy_mps_) :
+          std::numeric_limits<double>::infinity();
+        const bool low_chassis_motion =
+          gnss_vel_fresh && gnss_speed <= slip_map_hold_enter_gnss_speed_mps_ &&
+          std::abs(imu_yaw_rate_rps_) <= strict_stationary_yaw_rate_rps_;
+
+        const bool slip_now = wheel_slip_motion_detected_ || wheelSlipDetectedUnlocked();
+        if (!slip_map_hold_active_ && slip_now && low_chassis_motion) {
+          slip_map_hold_pose_ = navigation_math::mapBaseFromOdom(anchor_map_odom_, odom_base_);
+          slip_map_hold_active_ = true;
+          slip_map_hold_exit_count_ = 0;
+          RCLCPP_WARN(get_logger(),
+            "SLIP MAP HOLD ENTER: map=(%.3f, %.3f) gnss_speed=%.3f wheel=%.3f",
+            slip_map_hold_pose_.x, slip_map_hold_pose_.y, gnss_speed, raw_wheel_speed_mps_);
+        }
+
+        if (slip_map_hold_active_) {
+          if (!slip_now) {
+            // If wheel slip clears while GNSS+IMU still say the chassis is stationary,
+            // absorb the false accumulated local-odom translation into map->odom BEFORE
+            // releasing the hold. Without this rebase the next TF tick exposes the
+            // integrated free-spinning-wheel displacement as a post-slip pose jump.
+            if (low_chassis_motion) {
+              auto held_map_pose = slip_map_hold_pose_;
+              held_map_pose.yaw = navigation_math::normalizeAngle(
+                anchor_map_odom_.yaw + odom_base_.yaw);
+              anchor_map_odom_ = navigation_math::mapOdomFromBase(held_map_pose, odom_base_);
+              RCLCPP_INFO(get_logger(),
+                "SLIP MAP HOLD EXIT: stationary rebase kept map=(%.3f, %.3f)",
+                held_map_pose.x, held_map_pose.y);
+            } else {
+              RCLCPP_INFO(get_logger(), "SLIP MAP HOLD EXIT: slip cleared");
+            }
+            slip_map_hold_active_ = false;
+            slip_map_hold_exit_count_ = 0;
+          } else {
+            const bool chassis_motion_returned = gnss_vel_fresh &&
+              (gnss_speed >= slip_map_hold_exit_gnss_speed_mps_ ||
+               std::abs(imu_yaw_rate_rps_) >= 1.5 * strict_stationary_yaw_rate_rps_);
+            if (chassis_motion_returned) {
+              slip_map_hold_exit_count_ = std::min(
+                slip_map_hold_exit_samples_, slip_map_hold_exit_count_ + 1);
+            } else {
+              slip_map_hold_exit_count_ = 0;
+            }
+            if (slip_map_hold_exit_count_ >= slip_map_hold_exit_samples_) {
+              slip_map_hold_active_ = false;
+              slip_map_hold_exit_count_ = 0;
+              RCLCPP_WARN(get_logger(),
+                "SLIP MAP HOLD EXIT: chassis motion returned gnss_speed=%.3f", gnss_speed);
+            } else {
+              // Cancel false local-wheel TRANSLATION in map frame while the chassis
+              // is independently stationary. Keep current map yaw ownership intact:
+              // validated heading/IMU may continue updating yaw without a release jump.
+              auto held_map_pose = slip_map_hold_pose_;
+              held_map_pose.yaw = navigation_math::normalizeAngle(
+                anchor_map_odom_.yaw + odom_base_.yaw);
+              anchor_map_odom_ = navigation_math::mapOdomFromBase(held_map_pose, odom_base_);
+            }
+          }
+        }
+      }
       anchor = anchor_map_odom_;
     }
     if (!valid) return;
@@ -2832,9 +2967,29 @@ private:
       if (!anchor_valid_ || !have_odom_) return;
       map_pose =
         navigation_math::mapBaseFromOdom(anchor_map_odom_, odom_base_);
-      x_var = global_x_var_;
-      y_var = global_y_var_;
-      yaw_var = local_yaw_var_;
+      // The published pose follows map->odom + local odom, not the global EKF
+      // state directly. Therefore its covariance must include any remaining
+      // tracking residual to the fresh GNSS-anchored global EKF. Publishing only
+      // global_x/y_var made the purple ellipse statistically inconsistent: the
+      // robot could sit outside an ellipse centered on its own published pose.
+      x_var = std::max(0.0, global_x_var_);
+      y_var = std::max(0.0, global_y_var_);
+      yaw_var = std::max(std::max(0.0, local_yaw_var_), std::max(0.0, global_yaw_var_));
+      const bool global_pose_fresh = have_global_odom_ &&
+        last_global_odom_time_.nanoseconds() > 0 &&
+        (now() - last_global_odom_time_).seconds() >= 0.0 &&
+        (now() - last_global_odom_time_).seconds() <= std::max(2.0, 2.0 * odom_timeout_sec_);
+      if (global_pose_fresh) {
+        const double ex = map_pose.x - global_ekf_pose_.x;
+        const double ey = map_pose.y - global_ekf_pose_.y;
+        const double eyaw = navigation_math::normalizeAngle(map_pose.yaw - global_ekf_pose_.yaw);
+        x_var += ex * ex;
+        y_var += ey * ey;
+        yaw_var += eyaw * eyaw;
+      } else {
+        x_var = std::max(x_var, std::max(0.0, local_x_var_));
+        y_var = std::max(y_var, std::max(0.0, local_y_var_));
+      }
     }
 
     geometry_msgs::msg::PoseWithCovarianceStamped pose_msg;
@@ -2947,6 +3102,9 @@ private:
       // still uses inputsFreshUnlocked() + GNSS quality gates.
       const bool manual_inputs_fresh =
         local_odom_fresh && imu_data_fresh && imu_orientation_fresh;
+      // Wheel/GNSS disagreement remains estimator/diagnostic evidence only.
+      // EKF covariance/gating may react to slip, but residual noise must not flap
+      // motion_localization_ready or cancel an otherwise valid Nav2 mission.
       motion_ready = planning_ready && local_covariance_ready_status &&
         (manual_motion ? manual_inputs_fresh : inputs_fresh) &&
         (motionQualityReadyUnlocked() || manual_motion);
@@ -2990,7 +3148,7 @@ private:
         esc_kinematic_w = esc_kinematic_yaw_rate_rps_;
         yaw_model_imu_residual = esc_kinematic_yaw_rate_rps_ - imu_yaw_rate_rps_;
       }
-      wheel_slip = wheelSlipDetectedUnlocked();
+      wheel_slip = wheel_slip_motion_detected_ || wheelSlipDetectedUnlocked();
       latitude = gnss_latitude_;
       longitude = gnss_longitude_;
       altitude = gnss_altitude_m_;
@@ -3088,6 +3246,7 @@ private:
        << ";local_covariance_ready=" << local_covariance_ready_status
        << ";local_vx_var=" << local_vx_var
        << ";local_yaw_var=" << local_yaw_var
+       << ";wheel_slip_interlock=" << wheel_slip
        << ";imu_orientation_fresh=" << imu_orientation_fresh
        << ";sat=" << sats
        << ";dop=" << dop
@@ -3103,7 +3262,16 @@ private:
          << ";degraded_gate=" << degraded_gate;
     }
     if (planning_ready) {
-      ss << ";map_x=" << map_base.x << ";map_y=" << map_base.y << ";yaw=" << map_base.yaw;
+      ss << ";map_x=" << map_base.x << ";map_y=" << map_base.y << ";yaw=" << map_base.yaw
+         << ";global_fresh=" << global_fresh
+         << ";gnss_vel_fusion=" << velocity_fusion_active_status
+         << ";gnss_cog_fusion=" << cog_fusion_active_status;
+      if (global_fresh) {
+        const double global_track_m = std::hypot(map_base.x - global_pose.x, map_base.y - global_pose.y);
+        const double global_yaw_err = navigation_math::normalizeAngle(map_base.yaw - global_pose.yaw);
+        ss << ";global_track_m=" << global_track_m
+           << ";global_yaw_err_rad=" << global_yaw_err;
+      }
     }
     if (!detail.empty()) ss << ";note=" << detail;
 
@@ -3245,7 +3413,11 @@ private:
   double gnss_cog_velocity_course_max_rad_{0.1745329252};
   double gnss_cog_fit_course_max_rad_{0.3490658504};
   double gnss_lateral_velocity_warn_mps_{0.15};
-  double wheel_gnss_slip_residual_mps_{0.25};
+  double wheel_gnss_slip_residual_mps_{0.12};
+  int wheel_slip_assert_samples_{3};
+  int wheel_slip_clear_samples_{8};
+  double wheel_slip_clear_residual_mps_{0.06};
+  double wheel_slip_clear_stationary_speed_mps_{0.12};
   double wheel_gnss_nis_gate_{6.634896601};
   double cog_nis_gate_{6.634896601};
   double innovation_min_variance_{1.0e-6};
@@ -3328,12 +3500,16 @@ private:
   double strict_moving_correction_alpha_{0.03};
   bool enable_wheel_slip_pose_correction_{false};
   double strict_slip_correction_alpha_{0.60};
+  bool slip_map_hold_enabled_{true};
+  double slip_map_hold_enter_gnss_speed_mps_{0.12};
+  double slip_map_hold_exit_gnss_speed_mps_{0.25};
+  int slip_map_hold_exit_samples_{3};
   double strict_max_correction_m_{0.25};
   double strict_max_yaw_correction_rad_{0.087266463};
   double strict_stationary_speed_mps_{0.15};
   double strict_stationary_yaw_rate_rps_{0.10};
-  double slip_min_wheel_speed_mps_{0.25};
-  double slip_speed_difference_mps_{0.20};
+  double slip_min_wheel_speed_mps_{0.15};
+  double slip_speed_difference_mps_{0.12};
   double slip_sacc_multiplier_{0.50};
   double slip_yaw_rate_difference_rps_{0.20};
   std::string esc_kinematic_yaw_rate_topic_{"/esc/kinematic_yaw_rate_rps"};
@@ -3422,6 +3598,11 @@ private:
   bool gnss_velocity_fusion_active_{false};
   bool gnss_cog_fusion_active_{false};
   bool wheel_slip_motion_detected_{false};
+  int wheel_slip_assert_count_{0};
+  int wheel_slip_clear_count_{0};
+  bool slip_map_hold_active_{false};
+  int slip_map_hold_exit_count_{0};
+  navigation_math::Pose2D slip_map_hold_pose_;
   bool have_last_base_velocity_msg_{false};
   geometry_msgs::msg::TwistWithCovarianceStamped last_base_velocity_msg_;
   int64_t last_velocity_fusion_stamp_ns_{-1};

@@ -31,6 +31,9 @@ navigation_core:
     allow_esc_integration_bypass: false
     esc_integration_bypass_timeout_sec: 1.0
     esc_state_timeout_sec: 0.75
+    runtime_localization_loss_grace_sec: 3.0
+    runtime_esc_loss_grace_sec: 1.5
+    runtime_wheel_slip_stop_sec: 1.5
     require_camera_metric_calibration: false
     camera_metric_calibration_validated: false
     require_steering_calibration_for_autonomy: true
@@ -60,6 +63,8 @@ cmd_vel_router:
   ros__parameters:
     teleop_topic: /cmd_vel/teleop
     teleop_source_topic: /teleop/active_source
+    web_trial_topic: /cmd_vel/web_trial
+    web_trial_source_topic: /web_trial/active_source
     teleop_estop_topic: /teleop/emergency_stop_latched
     autonomy_topic: /cmd_vel/autonomy_pre_smoother
     autonomy_gate_topic: /system/autonomy_motion_allowed

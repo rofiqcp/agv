@@ -38,9 +38,12 @@ need(vehicle.get('drive_odometry_calibration_valid') is False,'drive flag must r
 need(vehicle.get('steering_calibration_valid') is False,'steering flag must remain fail-closed')
 need(vehicle.get('steering_circle_calibration_valid') is False,'circle flag must remain fail-closed')
 need(vehicle.get('control_field_calibration_valid') is False,'control field flag must remain fail-closed')
-need(mag.get('field_qualification_valid') is False,'mag field flag must remain fail-closed')
-need(mag.get('enable_current_emi_gate') is False,'EMI gate cannot auto-enable without threshold evidence')
-need(mag.get('motor_current_topic')=='/esc/motor_current_abs_a','mag current source mismatch')
+need(mag.get('rm3100_calibration_owner')=='ros_host','RM3100 full-3D calibration owner must be ros_host')
+need(mag.get('rm3100_full_calibration_enabled') is True,'RM3100 full-3D calibration must be active')
+need(mag.get('rm3100_planar_calibration_enabled') is False,'legacy planar RM3100 calibration must stay disabled')
+need('field_qualification_valid' not in mag,'legacy magnetic field qualification flag must stay removed')
+need('enable_current_emi_gate' not in mag and 'motor_current_topic' not in mag,
+     'legacy YAML magnetic current gate must stay removed from RM3100-only runtime')
 need(float(mppi.get('min_odom_rate_hz',0.0))>=25.0,'closed-loop qualification rate must match 30 Hz local EKF')
 need(loc.get('require_gnss_velocity_certification_for_fusion') is True,'GNSS velocity certification gate missing')
 need(loc.get('require_gnss_cog_certification_for_fusion') is True,'GNSS COG certification gate missing')
@@ -69,9 +72,8 @@ need("report['vehicle_max_forward_speed_mps']" in proposal,
 
 need('/esc/motor_current_abs_a' in esccpp,'ESC motor-current evidence topic missing')
 need('motor_current_abs_pub_' in esccpp,'ESC motor-current publisher missing')
-need('currentEmiGate' in magcpp and 'motor_current_stale' in magcpp and 'current_emi_gate' in magcpp,
-     'magnetic current-aware EMI rejection missing')
-need('motor_current_age_sec' in magcpp,'magnetic EMI diagnostic age missing')
+need('currentEmiGate' not in magcpp and 'motor_current_stale' not in magcpp and 'current_emi_gate' not in magcpp,
+     'legacy magnetic current-aware EMI gate dead code must stay removed')
 gui_cal=text('src/navigation/gui/modules/system_and_gnss_pages.cpp')
 gui_core=text('src/navigation/gui/modules/gui_core.cpp')
 need('QString("imu_calibration")' not in gui_cal,'commissioning wizard still writes legacy IMU authority')

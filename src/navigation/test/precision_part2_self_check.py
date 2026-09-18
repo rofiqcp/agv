@@ -55,7 +55,7 @@ for token in ["/esc/kinematic_yaw_rate_rps", "yaw_rate_kinematic_pub_", "esc_kin
         fail(f"Ackermann-vs-IMU residual contract missing {token}")
 
 # Adaptive odometry covariance must exist in both config and runtime.
-for key in ["odom_v_variance_base", "odom_v_variance_rpm_error_gain",
+for key in ["odom_v_variance_base", "odom_v_variance_erpm_error_gain",
             "odom_yaw_variance_base", "odom_yaw_variance_steer_gain",
             "odom_yaw_rate_variance_base"]:
     if key not in esc_cfg:
@@ -96,7 +96,7 @@ if [i for i,v in enumerate(local["imu0_config"]) if v] != [11]:
     fail("local EKF must take gyro-Z only from IMU")
 if local.get('imu0_relative') is not True:
     fail("local EKF IMU yaw must remain relative")
-if local.get('odom0') != '/esc/odom' or {i for i,v in enumerate(local.get('odom0_config',[])) if v} != {6}:
-    fail("local EKF must accept optional ESC vx only; kinematic yaw-rate stays diagnostic")
+if local.get('odom0') != '/esc/odom' or {i for i,v in enumerate(local.get('odom0_config',[])) if v} != {6, 7}:
+    fail("local EKF must accept ESC vx + nonholonomic vy=0 only; kinematic yaw-rate stays diagnostic")
 
 print("PASS precision_part2_self_check")

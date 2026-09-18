@@ -38,3 +38,53 @@
 .lane-safety-cal-card{margin-top:8px;border:1px solid rgba(54,230,161,.28);border-radius:12px;padding:12px;background:#071315}
 .lane-safety-cal-title{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px}.lane-safety-cal-title b{display:block;margin-top:3px;font-size:13px}.lane-safety-cal-title p{margin:4px 0 0;color:var(--muted);font-size:8.5px;line-height:1.45}.lane-cal-order{font:850 9px ui-monospace;color:var(--green);border:1px solid rgba(54,230,161,.28);border-radius:999px;padding:5px 8px;white-space:nowrap}
 @media(max-width:700px){.perception-cal-subtabs{grid-template-columns:1fr}}
+
+/* Persistent saved-calibration ledger. */
+.perception-cal-ledger{margin:10px 0 12px;padding:12px;border:1px solid rgba(91,181,173,.24);border-radius:12px;background:linear-gradient(145deg,rgba(8,28,29,.72),rgba(5,16,18,.82))}
+.perception-cal-ledger-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.perception-cal-ledger-head b{display:block;margin-top:3px;font-size:10px}.perception-cal-ledger-total{text-align:right}.perception-cal-ledger-total strong{display:block;color:var(--green);font:900 18px ui-monospace}.perception-cal-ledger-total span{font-size:8px;color:var(--muted)}
+.perception-cal-saved-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-top:10px}.perception-cal-saved-grid>div{display:flex;justify-content:space-between;gap:8px;padding:7px 8px;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,.018)}.perception-cal-saved-grid span{font-size:7.5px;color:var(--muted)}.perception-cal-saved-grid b{font:850 8px ui-monospace;color:var(--amber)}.perception-cal-saved-grid>div.done{border-color:rgba(54,230,161,.32);background:rgba(54,230,161,.05)}.perception-cal-saved-grid>div.done b{color:var(--green)}
+.perception-cal-lane-ledger{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid var(--border)}.perception-cal-lane-ledger>span{font:850 8px ui-monospace;color:var(--green);margin-right:2px}.perception-cal-lane-ledger code{padding:4px 6px;border:1px solid var(--border);border-radius:6px;color:var(--text);font:8px ui-monospace}.perception-cal-lane-ledger>b{margin-left:auto;font:900 8px ui-monospace;color:var(--gold)}
+@media(max-width:850px){.perception-cal-saved-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:520px){.perception-cal-ledger-head{display:block}.perception-cal-ledger-total{text-align:left;margin-top:8px}.perception-cal-saved-grid{grid-template-columns:1fr}.perception-cal-lane-ledger>b{margin-left:0}}
+
+/* CSP-safe obstacle calibration progress widths. */
+.obcal-progress-bar i.p0{width:0%}
+.obcal-progress-bar i.p1{width:2.5%}
+.obcal-progress-bar i.p2{width:5%}
+.obcal-progress-bar i.p3{width:7.5%}
+.obcal-progress-bar i.p4{width:10%}
+.obcal-progress-bar i.p5{width:12.5%}
+.obcal-progress-bar i.p6{width:15%}
+.obcal-progress-bar i.p7{width:17.5%}
+.obcal-progress-bar i.p8{width:20%}
+.obcal-progress-bar i.p9{width:22.5%}
+.obcal-progress-bar i.p10{width:25%}
+.obcal-progress-bar i.p11{width:27.5%}
+.obcal-progress-bar i.p12{width:30%}
+.obcal-progress-bar i.p13{width:32.5%}
+.obcal-progress-bar i.p14{width:35%}
+.obcal-progress-bar i.p15{width:37.5%}
+.obcal-progress-bar i.p16{width:40%}
+.obcal-progress-bar i.p17{width:42.5%}
+.obcal-progress-bar i.p18{width:45%}
+.obcal-progress-bar i.p19{width:47.5%}
+.obcal-progress-bar i.p20{width:50%}
+.obcal-progress-bar i.p21{width:52.5%}
+.obcal-progress-bar i.p22{width:55%}
+.obcal-progress-bar i.p23{width:57.5%}
+.obcal-progress-bar i.p24{width:60%}
+.obcal-progress-bar i.p25{width:62.5%}
+.obcal-progress-bar i.p26{width:65%}
+.obcal-progress-bar i.p27{width:67.5%}
+.obcal-progress-bar i.p28{width:70%}
+.obcal-progress-bar i.p29{width:72.5%}
+.obcal-progress-bar i.p30{width:75%}
+.obcal-progress-bar i.p31{width:77.5%}
+.obcal-progress-bar i.p32{width:80%}
+.obcal-progress-bar i.p33{width:82.5%}
+.obcal-progress-bar i.p34{width:85%}
+.obcal-progress-bar i.p35{width:87.5%}
+.obcal-progress-bar i.p36{width:90%}
+.obcal-progress-bar i.p37{width:92.5%}
+.obcal-progress-bar i.p38{width:95%}
+.obcal-progress-bar i.p39{width:97.5%}
+.obcal-progress-bar i.p40{width:100%}

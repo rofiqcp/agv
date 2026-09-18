@@ -572,44 +572,6 @@ parameters:
     related: []
     source_of_constraint: source YAML type + reviewed ROS Web authority mapping
     step: 1
-  esc:esc_ackermann.ros__parameters.drive_gear_ratio:
-    identity: esc:esc_ackermann.ros__parameters.drive_gear_ratio
-    file_key: esc
-    yaml_path: esc_ackermann.ros__parameters.drive_gear_ratio
-    label: RIGHT gear ratio
-    group: ESC
-    level: advanced
-    type: number
-    risk: motion
-    write_authority: ros_yaml
-    requires_stationary: true
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: Parameter RIGHT gear ratio pada esc. Nilai dan tipe mengikuti source YAML/ROS yang aktif.
-    effect_up: Tidak diasumsikan oleh UI; evaluasi perubahan menggunakan telemetry/evidence domain terkait.
-    effect_down: Tidak diasumsikan oleh UI; evaluasi perubahan menggunakan telemetry/evidence domain terkait.
-    related: []
-    source_of_constraint: source YAML type + reviewed ROS Web authority mapping
-    step: 1
-  esc:esc_ackermann.ros__parameters.drive_motor_pole_pairs:
-    identity: esc:esc_ackermann.ros__parameters.drive_motor_pole_pairs
-    file_key: esc
-    yaml_path: esc_ackermann.ros__parameters.drive_motor_pole_pairs
-    label: RIGHT pole pairs
-    group: ESC
-    level: advanced
-    type: number
-    risk: motion
-    write_authority: ros_yaml
-    requires_stationary: true
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: Parameter RIGHT pole pairs pada esc. Nilai dan tipe mengikuti source YAML/ROS yang aktif.
-    effect_up: Tidak diasumsikan oleh UI; evaluasi perubahan menggunakan telemetry/evidence domain terkait.
-    effect_down: Tidak diasumsikan oleh UI; evaluasi perubahan menggunakan telemetry/evidence domain terkait.
-    related: []
-    source_of_constraint: source YAML type + reviewed ROS Web authority mapping
-    step: 1
   esc:esc_ackermann.ros__parameters.odom_v_variance_base:
     identity: esc:esc_ackermann.ros__parameters.odom_v_variance_base
     file_key: esc
@@ -3474,6 +3436,44 @@ parameters:
     related: []
     source_of_constraint: source YAML type + reviewed ROS Web authority mapping
     step: 0.001
+  nav2:controller_server.ros__parameters.goal_checker.trans_stopped_velocity:
+    identity: nav2:controller_server.ros__parameters.goal_checker.trans_stopped_velocity
+    file_key: nav2
+    yaml_path: controller_server.ros__parameters.goal_checker.trans_stopped_velocity
+    label: Goal stopped linear velocity (m/s)
+    group: NAV2
+    level: advanced
+    type: number
+    risk: motion
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Maximum translational speed accepted by StoppedGoalChecker as stopped.
+    effect_up: Declares stopped at a higher residual speed.
+    effect_down: Requires a more complete stop before goal success.
+    related: [controller_server.ros__parameters.goal_checker.xy_goal_tolerance]
+    source_of_constraint: nav2_controller::StoppedGoalChecker
+    step: 0.01
+  nav2:controller_server.ros__parameters.goal_checker.rot_stopped_velocity:
+    identity: nav2:controller_server.ros__parameters.goal_checker.rot_stopped_velocity
+    file_key: nav2
+    yaml_path: controller_server.ros__parameters.goal_checker.rot_stopped_velocity
+    label: Goal stopped yaw rate (rad/s)
+    group: NAV2
+    level: advanced
+    type: number
+    risk: motion
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Maximum angular speed accepted by StoppedGoalChecker as stopped.
+    effect_up: Declares stopped at a higher residual yaw rate.
+    effect_down: Requires a quieter yaw state before goal success.
+    related: [controller_server.ros__parameters.goal_checker.yaw_goal_tolerance]
+    source_of_constraint: nav2_controller::StoppedGoalChecker
+    step: 0.01
   nav2:controller_server.ros__parameters.progress_checker.movement_time_allowance:
     identity: nav2:controller_server.ros__parameters.progress_checker.movement_time_allowance
     file_key: nav2
@@ -4155,6 +4155,137 @@ parameters:
     related: []
     source_of_constraint: source YAML type + reviewed ROS Web authority mapping
     step: 0.001
+  navigation_core:navigation_core.ros__parameters.yaw_hysteresis_enabled:
+    identity: navigation_core:navigation_core.ros__parameters.yaw_hysteresis_enabled
+    file_key: navigation_core
+    yaml_path: navigation_core.ros__parameters.yaw_hysteresis_enabled
+    label: Yaw hysteresis enabled
+    group: NAVIGATION CORE
+    level: advanced
+    type: boolean
+    risk: motion
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Stateful Schmitt-trigger filter for near-zero autonomous yaw commands.
+    effect_up: Enables straight-line anti-chatter filtering before Ackermann steering.
+    effect_down: Falls back to the stateless angular deadband.
+    related: [navigation_core.ros__parameters.yaw_hysteresis_enter_rps, navigation_core.ros__parameters.yaw_hysteresis_exit_rps]
+    source_of_constraint: Ackermann steering anti-chatter policy
+  navigation_core:navigation_core.ros__parameters.yaw_hysteresis_enter_rps:
+    identity: navigation_core:navigation_core.ros__parameters.yaw_hysteresis_enter_rps
+    file_key: navigation_core
+    yaml_path: navigation_core.ros__parameters.yaw_hysteresis_enter_rps
+    label: Yaw hysteresis enter (rad/s)
+    group: NAVIGATION CORE
+    level: advanced
+    type: number
+    risk: motion
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Absolute yaw command required to leave the straight state.
+    effect_up: Rejects larger micro-corrections but delays very gentle turns.
+    effect_down: Makes steering more sensitive near straight ahead.
+    related: [navigation_core.ros__parameters.yaw_hysteresis_exit_rps]
+    source_of_constraint: Ackermann steering anti-chatter policy
+    step: 0.001
+  navigation_core:navigation_core.ros__parameters.yaw_hysteresis_exit_rps:
+    identity: navigation_core:navigation_core.ros__parameters.yaw_hysteresis_exit_rps
+    file_key: navigation_core
+    yaml_path: navigation_core.ros__parameters.yaw_hysteresis_exit_rps
+    label: Yaw hysteresis exit (rad/s)
+    group: NAVIGATION CORE
+    level: advanced
+    type: number
+    risk: motion
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Yaw command below which an active turn returns to the straight state.
+    effect_up: Returns to straight sooner.
+    effect_down: Holds a genuine gentle turn longer before recentering.
+    related: [navigation_core.ros__parameters.yaw_hysteresis_enter_rps]
+    source_of_constraint: Ackermann steering anti-chatter policy
+    step: 0.001
+  navigation_core:navigation_core.ros__parameters.goal_braking_enabled:
+    identity: navigation_core:navigation_core.ros__parameters.goal_braking_enabled
+    file_key: navigation_core
+    yaml_path: navigation_core.ros__parameters.goal_braking_enabled
+    label: Goal braking enabled
+    group: NAVIGATION CORE
+    level: advanced
+    type: boolean
+    risk: motion
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Enables distance-based terminal speed limiting before the Nav2 goal radius.
+    effect_up: Enables deterministic pre-braking before the goal tolerance boundary.
+    effect_down: Leaves terminal speed shaping entirely to the Nav2 controller.
+    related: [navigation_core.ros__parameters.goal_stop_radius_m, navigation_core.ros__parameters.goal_braking_deceleration_mps2]
+    source_of_constraint: Terminal stopping-distance policy
+  navigation_core:navigation_core.ros__parameters.goal_stop_radius_m:
+    identity: navigation_core:navigation_core.ros__parameters.goal_stop_radius_m
+    file_key: navigation_core
+    yaml_path: navigation_core.ros__parameters.goal_stop_radius_m
+    label: Goal stop radius (m)
+    group: NAVIGATION CORE
+    level: advanced
+    type: number
+    risk: motion
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Radius at which autonomous terminal linear and yaw commands are forced to zero.
+    effect_up: Stops farther from the exact pose.
+    effect_down: Stops closer to the exact pose.
+    related: [controller_server.ros__parameters.goal_checker.xy_goal_tolerance]
+    source_of_constraint: Standard goal tolerance / terminal braking contract
+    step: 0.01
+  navigation_core:navigation_core.ros__parameters.goal_braking_deceleration_mps2:
+    identity: navigation_core:navigation_core.ros__parameters.goal_braking_deceleration_mps2
+    file_key: navigation_core
+    yaml_path: navigation_core.ros__parameters.goal_braking_deceleration_mps2
+    label: Goal braking deceleration (m/s2)
+    group: NAVIGATION CORE
+    level: advanced
+    type: number
+    risk: motion
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Deceleration used by v=sqrt(2*a*remaining_distance) terminal speed cap.
+    effect_up: Allows higher speed closer to the goal and requires stronger braking.
+    effect_down: Starts slowing earlier and more gently.
+    related: [navigation_core.ros__parameters.goal_stop_radius_m]
+    source_of_constraint: Terminal stopping-distance policy
+    step: 0.05
+  navigation_core:navigation_core.ros__parameters.goal_braking_pose_timeout_sec:
+    identity: navigation_core:navigation_core.ros__parameters.goal_braking_pose_timeout_sec
+    file_key: navigation_core
+    yaml_path: navigation_core.ros__parameters.goal_braking_pose_timeout_sec
+    label: Goal braking pose timeout (s)
+    group: NAVIGATION CORE
+    level: advanced
+    type: number
+    risk: caution
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Maximum age of map-frame odometry allowed for terminal speed shaping.
+    effect_up: Tolerates older pose data during braking.
+    effect_down: Requires fresher map pose before applying the braking cap.
+    related: [navigation_core.ros__parameters.goal_braking_enabled]
+    source_of_constraint: Localization freshness policy
+    step: 0.05
   navigation_core:navigation_core.ros__parameters.autonomy_timeout_sec:
     identity: navigation_core:navigation_core.ros__parameters.autonomy_timeout_sec
     file_key: navigation_core
@@ -7444,7 +7575,7 @@ parameters:
     level: advanced
     type: number
     risk: motion
-    write_authority: ros_yaml
+    write_authority: calibration_generated
     requires_stationary: true
     apply_mode: node_restart
     metadata_complete: true
@@ -13800,44 +13931,6 @@ parameters:
     related: []
     source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
 
-  ekf:ekf_filter_node_odom.ros__parameters.twist0_differential:
-    identity: ekf:ekf_filter_node_odom.ros__parameters.twist0_differential
-    file_key: ekf
-    yaml_path: ekf_filter_node_odom.ros__parameters.twist0_differential
-    label: "Twist0 Differential"
-    group: "EKF"
-    level: advanced
-    type: boolean
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-
-  ekf:ekf_filter_node_odom.ros__parameters.twist0_relative:
-    identity: ekf:ekf_filter_node_odom.ros__parameters.twist0_relative
-    file_key: ekf
-    yaml_path: ekf_filter_node_odom.ros__parameters.twist0_relative
-    label: "Twist0 Relative"
-    group: "EKF"
-    level: advanced
-    type: boolean
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-
   ekf:ekf_filter_node_map.ros__parameters.two_d_mode:
     identity: ekf:ekf_filter_node_map.ros__parameters.two_d_mode
     file_key: ekf
@@ -14595,44 +14688,6 @@ parameters:
     file_key: ekf
     yaml_path: ekf_filter_node_map.ros__parameters.use_control
     label: "Use Control"
-    group: "EKF"
-    level: advanced
-    type: boolean
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-
-  ekf:ekf_filter_node_map.ros__parameters.twist0_differential:
-    identity: ekf:ekf_filter_node_map.ros__parameters.twist0_differential
-    file_key: ekf
-    yaml_path: ekf_filter_node_map.ros__parameters.twist0_differential
-    label: "Twist0 Differential"
-    group: "EKF"
-    level: advanced
-    type: boolean
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-
-  ekf:ekf_filter_node_map.ros__parameters.twist0_relative:
-    identity: ekf:ekf_filter_node_map.ros__parameters.twist0_relative
-    file_key: ekf
-    yaml_path: ekf_filter_node_map.ros__parameters.twist0_relative
-    label: "Twist0 Relative"
     group: "EKF"
     level: advanced
     type: boolean
@@ -19088,204 +19143,6 @@ parameters:
     source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
     list_length: 3
 
-  imu:data_imu_node.ros__parameters.publish_mag_tesla:
-    identity: imu:data_imu_node.ros__parameters.publish_mag_tesla
-    file_key: imu
-    yaml_path: data_imu_node.ros__parameters.publish_mag_tesla
-    label: "Publish Mag Tesla"
-    group: "IMU"
-    level: advanced
-    type: boolean
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-
-  imu:data_imu_node.ros__parameters.mag_scale_tesla_per_lsb:
-    identity: imu:data_imu_node.ros__parameters.mag_scale_tesla_per_lsb
-    file_key: imu
-    yaml_path: data_imu_node.ros__parameters.mag_scale_tesla_per_lsb
-    label: "Mag Scale Tesla Per Lsb"
-    group: "IMU"
-    level: advanced
-    type: number
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    step: 0.001
-
-  imu:data_imu_node.ros__parameters.use_magnetic_yaw:
-    identity: imu:data_imu_node.ros__parameters.use_magnetic_yaw
-    file_key: imu
-    yaml_path: data_imu_node.ros__parameters.use_magnetic_yaw
-    label: "Use Magnetic Yaw"
-    group: "IMU"
-    level: advanced
-    type: boolean
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-
-  imu:data_imu_node.ros__parameters.mag_yaw_sign:
-    identity: imu:data_imu_node.ros__parameters.mag_yaw_sign
-    file_key: imu
-    yaml_path: data_imu_node.ros__parameters.mag_yaw_sign
-    label: "Mag Yaw Sign"
-    group: "IMU"
-    level: advanced
-    type: number
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    step: 0.001
-
-  imu:data_imu_node.ros__parameters.mag_yaw_offset_rad:
-    identity: imu:data_imu_node.ros__parameters.mag_yaw_offset_rad
-    file_key: imu
-    yaml_path: data_imu_node.ros__parameters.mag_yaw_offset_rad
-    label: "Mag Yaw Offset Rad"
-    group: "IMU"
-    level: advanced
-    type: number
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    step: 0.001
-
-  imu:data_imu_node.ros__parameters.mag_yaw_filter_alpha:
-    identity: imu:data_imu_node.ros__parameters.mag_yaw_filter_alpha
-    file_key: imu
-    yaml_path: data_imu_node.ros__parameters.mag_yaw_filter_alpha
-    label: "Mag Yaw Filter Alpha"
-    group: "IMU"
-    level: advanced
-    type: number
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    step: 0.001
-
-  imu:data_imu_node.ros__parameters.mag_yaw_max_step_rad:
-    identity: imu:data_imu_node.ros__parameters.mag_yaw_max_step_rad
-    file_key: imu
-    yaml_path: data_imu_node.ros__parameters.mag_yaw_max_step_rad
-    label: "Mag Yaw Max Step Rad"
-    group: "IMU"
-    level: advanced
-    type: number
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    step: 0.001
-
-  imu:data_imu_node.ros__parameters.mag_yaw_packet_timeout_sec:
-    identity: imu:data_imu_node.ros__parameters.mag_yaw_packet_timeout_sec
-    file_key: imu
-    yaml_path: data_imu_node.ros__parameters.mag_yaw_packet_timeout_sec
-    label: "Mag Yaw Packet Timeout Sec"
-    group: "IMU"
-    level: advanced
-    type: number
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    step: 0.001
-
-  imu:data_imu_node.ros__parameters.mag_yaw_min_norm_ut:
-    identity: imu:data_imu_node.ros__parameters.mag_yaw_min_norm_ut
-    file_key: imu
-    yaml_path: data_imu_node.ros__parameters.mag_yaw_min_norm_ut
-    label: "Mag Yaw Min Norm Ut"
-    group: "IMU"
-    level: advanced
-    type: number
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    step: 0.001
-
-  imu:data_imu_node.ros__parameters.mag_yaw_max_norm_ut:
-    identity: imu:data_imu_node.ros__parameters.mag_yaw_max_norm_ut
-    file_key: imu
-    yaml_path: data_imu_node.ros__parameters.mag_yaw_max_norm_ut
-    label: "Mag Yaw Max Norm Ut"
-    group: "IMU"
-    level: advanced
-    type: number
-    risk: sensor
-    write_authority: ros_yaml
-    requires_stationary: false
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-    step: 0.001
-
   mag_heading:mag_heading_fusion.ros__parameters.imu_topic:
     identity: mag_heading:mag_heading_fusion.ros__parameters.imu_topic
     file_key: mag_heading
@@ -23326,82 +23183,6 @@ parameters:
     source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
     step: 0.001
 
-  esc:esc_ackermann.ros__parameters.teleop_topic:
-    identity: esc:esc_ackermann.ros__parameters.teleop_topic
-    file_key: esc
-    yaml_path: esc_ackermann.ros__parameters.teleop_topic
-    label: "Teleop Topic"
-    group: "ESC"
-    level: advanced
-    type: string
-    risk: safety_critical
-    write_authority: ros_yaml
-    requires_stationary: true
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-
-  esc:esc_ackermann.ros__parameters.teleop_source_topic:
-    identity: esc:esc_ackermann.ros__parameters.teleop_source_topic
-    file_key: esc
-    yaml_path: esc_ackermann.ros__parameters.teleop_source_topic
-    label: "Teleop Source Topic"
-    group: "ESC"
-    level: advanced
-    type: string
-    risk: safety_critical
-    write_authority: ros_yaml
-    requires_stationary: true
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-
-  esc:esc_ackermann.ros__parameters.nav2_topic:
-    identity: esc:esc_ackermann.ros__parameters.nav2_topic
-    file_key: esc
-    yaml_path: esc_ackermann.ros__parameters.nav2_topic
-    label: "Nav2 Topic"
-    group: "ESC"
-    level: advanced
-    type: string
-    risk: safety_critical
-    write_authority: ros_yaml
-    requires_stationary: true
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-
-  esc:esc_ackermann.ros__parameters.active_source_topic:
-    identity: esc:esc_ackermann.ros__parameters.active_source_topic
-    file_key: esc
-    yaml_path: esc_ackermann.ros__parameters.active_source_topic
-    label: "Active Source Topic"
-    group: "ESC"
-    level: advanced
-    type: string
-    risk: safety_critical
-    write_authority: ros_yaml
-    requires_stationary: true
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-
   esc:esc_ackermann.ros__parameters.maintenance_owner_topic:
     identity: esc:esc_ackermann.ros__parameters.maintenance_owner_topic
     file_key: esc
@@ -23459,25 +23240,6 @@ parameters:
     related: []
     source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
     step: 0.001
-
-  esc:esc_ackermann.ros__parameters.require_autonomy_gate:
-    identity: esc:esc_ackermann.ros__parameters.require_autonomy_gate
-    file_key: esc
-    yaml_path: esc_ackermann.ros__parameters.require_autonomy_gate
-    label: "Require Autonomy Gate"
-    group: "ESC"
-    level: advanced
-    type: boolean
-    risk: safety_critical
-    write_authority: ros_yaml
-    requires_stationary: true
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
 
   esc:esc_ackermann.ros__parameters.raw_commissioning_enabled:
     identity: esc:esc_ackermann.ros__parameters.raw_commissioning_enabled
@@ -23576,63 +23338,6 @@ parameters:
     related: []
     source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
     step: 0.001
-
-  esc:esc_ackermann.ros__parameters.transport_mode:
-    identity: esc:esc_ackermann.ros__parameters.transport_mode
-    file_key: esc
-    yaml_path: esc_ackermann.ros__parameters.transport_mode
-    label: "Transport Mode"
-    group: "ESC"
-    level: advanced
-    type: string
-    risk: safety_critical
-    write_authority: ros_yaml
-    requires_stationary: true
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-
-  esc:esc_ackermann.ros__parameters.serial_device:
-    identity: esc:esc_ackermann.ros__parameters.serial_device
-    file_key: esc
-    yaml_path: esc_ackermann.ros__parameters.serial_device
-    label: "Serial Device"
-    group: "ESC"
-    level: advanced
-    type: string
-    risk: safety_critical
-    write_authority: ros_yaml
-    requires_stationary: true
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
-
-  esc:esc_ackermann.ros__parameters.serial_enabled:
-    identity: esc:esc_ackermann.ros__parameters.serial_enabled
-    file_key: esc
-    yaml_path: esc_ackermann.ros__parameters.serial_enabled
-    label: "Serial Enabled"
-    group: "ESC"
-    level: advanced
-    type: boolean
-    risk: safety_critical
-    write_authority: ros_yaml
-    requires_stationary: true
-    apply_mode: node_restart
-    metadata_complete: true
-    summary: "YAML authority aktif; nilai runtime harus berasal dari file ini, bukan literal source."
-    effect_up: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    effect_down: "Perubahan mengikuti semantics parameter; verifikasi telemetry setelah Apply."
-    related: []
-    source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
 
   esc:esc_ackermann.ros__parameters.integration_bypass:
     identity: esc:esc_ackermann.ros__parameters.integration_bypass
@@ -30138,3 +29843,862 @@ parameters:
     effect_down: Evaluate only with RM3100 telemetry and calibration evidence from the active NEO3 Pro path.
     related: []
     source_of_constraint: mag_heading.yaml + RM3100 calibration workflow
+  navigation_core:navigation_core.ros__parameters.runtime_localization_loss_grace_sec:
+    identity: navigation_core:navigation_core.ros__parameters.runtime_localization_loss_grace_sec
+    file_key: navigation_core
+    yaml_path: navigation_core.ros__parameters.runtime_localization_loss_grace_sec
+    label: Runtime Localization Loss Grace Sec
+    group: NAVIGATION
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    step: 0.001
+  navigation_core:navigation_core.ros__parameters.runtime_esc_loss_grace_sec:
+    identity: navigation_core:navigation_core.ros__parameters.runtime_esc_loss_grace_sec
+    file_key: navigation_core
+    yaml_path: navigation_core.ros__parameters.runtime_esc_loss_grace_sec
+    label: Runtime Esc Loss Grace Sec
+    group: NAVIGATION
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    step: 0.001
+  navigation_core:navigation_core.ros__parameters.runtime_wheel_slip_stop_sec:
+    identity: navigation_core:navigation_core.ros__parameters.runtime_wheel_slip_stop_sec
+    file_key: navigation_core
+    yaml_path: navigation_core.ros__parameters.runtime_wheel_slip_stop_sec
+    label: Runtime Wheel Slip Stop Sec
+    group: NAVIGATION
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    step: 0.001
+  navigation_core:cmd_vel_router.ros__parameters.web_trial_topic:
+    identity: navigation_core:cmd_vel_router.ros__parameters.web_trial_topic
+    file_key: navigation_core
+    yaml_path: cmd_vel_router.ros__parameters.web_trial_topic
+    label: Web Trial Topic
+    group: NAVIGATION
+    level: advanced
+    type: string
+    risk: safety_critical
+    write_authority: read_only
+    requires_stationary: true
+    apply_mode: read_only
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+  navigation_core:cmd_vel_router.ros__parameters.web_trial_source_topic:
+    identity: navigation_core:cmd_vel_router.ros__parameters.web_trial_source_topic
+    file_key: navigation_core
+    yaml_path: cmd_vel_router.ros__parameters.web_trial_source_topic
+    label: Web Trial Source Topic
+    group: NAVIGATION
+    level: advanced
+    type: string
+    risk: safety_critical
+    write_authority: read_only
+    requires_stationary: true
+    apply_mode: read_only
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+  ekf:ekf_filter_node_odom.ros__parameters.pose0:
+    identity: ekf:ekf_filter_node_odom.ros__parameters.pose0
+    file_key: ekf
+    yaml_path: ekf_filter_node_odom.ros__parameters.pose0
+    label: Pose0
+    group: EKF
+    level: advanced
+    type: string
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+  ekf:ekf_filter_node_odom.ros__parameters.pose0_config:
+    identity: ekf:ekf_filter_node_odom.ros__parameters.pose0_config
+    file_key: ekf
+    yaml_path: ekf_filter_node_odom.ros__parameters.pose0_config
+    label: Pose0 Config
+    group: EKF
+    level: advanced
+    type: list
+    risk: safety_critical
+    write_authority: read_only
+    requires_stationary: true
+    apply_mode: read_only
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    list_length: 15
+  ekf:ekf_filter_node_odom.ros__parameters.pose0_queue_size:
+    identity: ekf:ekf_filter_node_odom.ros__parameters.pose0_queue_size
+    file_key: ekf
+    yaml_path: ekf_filter_node_odom.ros__parameters.pose0_queue_size
+    label: Pose0 Queue Size
+    group: EKF
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    step: 1
+  ekf:ekf_filter_node_odom.ros__parameters.pose0_nodelay:
+    identity: ekf:ekf_filter_node_odom.ros__parameters.pose0_nodelay
+    file_key: ekf
+    yaml_path: ekf_filter_node_odom.ros__parameters.pose0_nodelay
+    label: Pose0 Nodelay
+    group: EKF
+    level: advanced
+    type: boolean
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+  ekf:ekf_filter_node_odom.ros__parameters.pose0_differential:
+    identity: ekf:ekf_filter_node_odom.ros__parameters.pose0_differential
+    file_key: ekf
+    yaml_path: ekf_filter_node_odom.ros__parameters.pose0_differential
+    label: Pose0 Differential
+    group: EKF
+    level: advanced
+    type: boolean
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+  ekf:ekf_filter_node_odom.ros__parameters.pose0_relative:
+    identity: ekf:ekf_filter_node_odom.ros__parameters.pose0_relative
+    file_key: ekf
+    yaml_path: ekf_filter_node_odom.ros__parameters.pose0_relative
+    label: Pose0 Relative
+    group: EKF
+    level: advanced
+    type: boolean
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+  ekf:ekf_filter_node_odom.ros__parameters.pose0_rejection_threshold:
+    identity: ekf:ekf_filter_node_odom.ros__parameters.pose0_rejection_threshold
+    file_key: ekf
+    yaml_path: ekf_filter_node_odom.ros__parameters.pose0_rejection_threshold
+    label: Pose0 Rejection Threshold
+    group: EKF
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    step: 0.001
+  ekf:ekf_filter_node_map.ros__parameters.imu0_angular_velocity_rejection_threshold:
+    identity: ekf:ekf_filter_node_map.ros__parameters.imu0_angular_velocity_rejection_threshold
+    file_key: ekf
+    yaml_path: ekf_filter_node_map.ros__parameters.imu0_angular_velocity_rejection_threshold
+    label: Imu0 Angular Velocity Rejection Threshold
+    group: EKF
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    step: 0.001
+  localization:localization_core.ros__parameters.wheel_slip_assert_samples:
+    identity: localization:localization_core.ros__parameters.wheel_slip_assert_samples
+    file_key: localization
+    yaml_path: localization_core.ros__parameters.wheel_slip_assert_samples
+    label: Wheel Slip Assert Samples
+    group: LOCALIZATION
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    step: 1
+  localization:localization_core.ros__parameters.wheel_slip_clear_samples:
+    identity: localization:localization_core.ros__parameters.wheel_slip_clear_samples
+    file_key: localization
+    yaml_path: localization_core.ros__parameters.wheel_slip_clear_samples
+    label: Wheel Slip Clear Samples
+    group: LOCALIZATION
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    step: 1
+  localization:localization_core.ros__parameters.wheel_slip_clear_residual_mps:
+    identity: localization:localization_core.ros__parameters.wheel_slip_clear_residual_mps
+    file_key: localization
+    yaml_path: localization_core.ros__parameters.wheel_slip_clear_residual_mps
+    label: Wheel Slip Clear Residual Mps
+    group: LOCALIZATION
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    step: 0.001
+  localization:localization_core.ros__parameters.wheel_slip_clear_stationary_speed_mps:
+    identity: localization:localization_core.ros__parameters.wheel_slip_clear_stationary_speed_mps
+    file_key: localization
+    yaml_path: localization_core.ros__parameters.wheel_slip_clear_stationary_speed_mps
+    label: Wheel Slip Clear Stationary Speed Mps
+    group: LOCALIZATION
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    step: 0.001
+  localization:localization_core.ros__parameters.slip_map_hold_enabled:
+    identity: localization:localization_core.ros__parameters.slip_map_hold_enabled
+    file_key: localization
+    yaml_path: localization_core.ros__parameters.slip_map_hold_enabled
+    label: Slip Map Hold Enabled
+    group: LOCALIZATION
+    level: advanced
+    type: boolean
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+  localization:localization_core.ros__parameters.slip_map_hold_enter_gnss_speed_mps:
+    identity: localization:localization_core.ros__parameters.slip_map_hold_enter_gnss_speed_mps
+    file_key: localization
+    yaml_path: localization_core.ros__parameters.slip_map_hold_enter_gnss_speed_mps
+    label: Slip Map Hold Enter Gnss Speed Mps
+    group: LOCALIZATION
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    step: 0.001
+  localization:localization_core.ros__parameters.slip_map_hold_exit_gnss_speed_mps:
+    identity: localization:localization_core.ros__parameters.slip_map_hold_exit_gnss_speed_mps
+    file_key: localization
+    yaml_path: localization_core.ros__parameters.slip_map_hold_exit_gnss_speed_mps
+    label: Slip Map Hold Exit Gnss Speed Mps
+    group: LOCALIZATION
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    step: 0.001
+  localization:localization_core.ros__parameters.slip_map_hold_exit_samples:
+    identity: localization:localization_core.ros__parameters.slip_map_hold_exit_samples
+    file_key: localization
+    yaml_path: localization_core.ros__parameters.slip_map_hold_exit_samples
+    label: Slip Map Hold Exit Samples
+    group: LOCALIZATION
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    step: 1
+  localization:localization_core.ros__parameters.motion_max_local_vx_variance_m2ps2:
+    identity: localization:localization_core.ros__parameters.motion_max_local_vx_variance_m2ps2
+    file_key: localization
+    yaml_path: localization_core.ros__parameters.motion_max_local_vx_variance_m2ps2
+    label: Motion Max Local Vx Variance M2Ps2
+    group: LOCALIZATION
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    step: 0.001
+  localization:localization_core.ros__parameters.motion_max_local_yaw_variance_rad2:
+    identity: localization:localization_core.ros__parameters.motion_max_local_yaw_variance_rad2
+    file_key: localization
+    yaml_path: localization_core.ros__parameters.motion_max_local_yaw_variance_rad2
+    label: Motion Max Local Yaw Variance Rad2
+    group: LOCALIZATION
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    step: 0.001
+  localization:localization_core.ros__parameters.validated_heading_topic:
+    identity: localization:localization_core.ros__parameters.validated_heading_topic
+    file_key: localization
+    yaml_path: localization_core.ros__parameters.validated_heading_topic
+    label: Validated Heading Topic
+    group: LOCALIZATION
+    level: advanced
+    type: string
+    risk: safety_critical
+    write_authority: read_only
+    requires_stationary: true
+    apply_mode: read_only
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+  localization:localization_core.ros__parameters.gnss_stationary_pose_variance_m2:
+    identity: localization:localization_core.ros__parameters.gnss_stationary_pose_variance_m2
+    file_key: localization
+    yaml_path: localization_core.ros__parameters.gnss_stationary_pose_variance_m2
+    label: Gnss Stationary Pose Variance M2
+    group: LOCALIZATION
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    step: 0.001
+  localization:localization_core.ros__parameters.inflate_stationary_gnss_covariance:
+    identity: localization:localization_core.ros__parameters.inflate_stationary_gnss_covariance
+    file_key: localization
+    yaml_path: localization_core.ros__parameters.inflate_stationary_gnss_covariance
+    label: Inflate Stationary Gnss Covariance
+    group: LOCALIZATION
+    level: advanced
+    type: boolean
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+  localization:localization_core.ros__parameters.stationary_gnss_position_variance_m2:
+    identity: localization:localization_core.ros__parameters.stationary_gnss_position_variance_m2
+    file_key: localization
+    yaml_path: localization_core.ros__parameters.stationary_gnss_position_variance_m2
+    label: Stationary Gnss Position Variance M2
+    group: LOCALIZATION
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    step: 0.001
+  mag_heading:mag_heading_fusion.ros__parameters.local_heading_topic:
+    identity: mag_heading:mag_heading_fusion.ros__parameters.local_heading_topic
+    file_key: mag_heading
+    yaml_path: mag_heading_fusion.ros__parameters.local_heading_topic
+    label: Local Heading Topic
+    group: RM3100 MAGNETOMETER
+    level: advanced
+    type: string
+    risk: caution
+    write_authority: read_only
+    requires_stationary: true
+    apply_mode: read_only
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+  mag_heading:mag_heading_fusion.ros__parameters.local_heading_frame:
+    identity: mag_heading:mag_heading_fusion.ros__parameters.local_heading_frame
+    file_key: mag_heading
+    yaml_path: mag_heading_fusion.ros__parameters.local_heading_frame
+    label: Local Heading Frame
+    group: RM3100 MAGNETOMETER
+    level: advanced
+    type: string
+    risk: caution
+    write_authority: read_only
+    requires_stationary: true
+    apply_mode: read_only
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+  esc:esc_ackermann.ros__parameters.router_source_topic:
+    identity: esc:esc_ackermann.ros__parameters.router_source_topic
+    file_key: esc
+    yaml_path: esc_ackermann.ros__parameters.router_source_topic
+    label: Router Source Topic
+    group: ESC
+    level: advanced
+    type: string
+    risk: safety_critical
+    write_authority: read_only
+    requires_stationary: true
+    apply_mode: read_only
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+  esc:esc_ackermann.ros__parameters.manual_speed_max_mps:
+    identity: esc:esc_ackermann.ros__parameters.manual_speed_max_mps
+    file_key: esc
+    yaml_path: esc_ackermann.ros__parameters.manual_speed_max_mps
+    label: Manual Speed Max Mps
+    group: ESC
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    step: 0.001
+  esc:esc_ackermann.ros__parameters.drive_erpm_lock_enabled:
+    identity: esc:esc_ackermann.ros__parameters.drive_erpm_lock_enabled
+    file_key: esc
+    yaml_path: esc_ackermann.ros__parameters.drive_erpm_lock_enabled
+    label: Drive Erpm Lock Enabled
+    group: ESC
+    level: advanced
+    type: boolean
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+  esc:esc_ackermann.ros__parameters.drive_erpm_lock_abs:
+    identity: esc:esc_ackermann.ros__parameters.drive_erpm_lock_abs
+    file_key: esc
+    yaml_path: esc_ackermann.ros__parameters.drive_erpm_lock_abs
+    label: Drive Erpm Lock Abs
+    group: ESC
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    step: 0.001
+  esc:esc_ackermann.ros__parameters.drive_zero_command_deadband_erpm:
+    identity: esc:esc_ackermann.ros__parameters.drive_zero_command_deadband_erpm
+    file_key: esc
+    yaml_path: esc_ackermann.ros__parameters.drive_zero_command_deadband_erpm
+    label: Drive Zero Command Deadband Erpm
+    group: ESC
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    step: 0.001
+  esc:esc_ackermann.ros__parameters.zero_hold_feedback_deadband_erpm:
+    identity: esc:esc_ackermann.ros__parameters.zero_hold_feedback_deadband_erpm
+    file_key: esc
+    yaml_path: esc_ackermann.ros__parameters.zero_hold_feedback_deadband_erpm
+    label: Zero Hold Feedback Deadband Erpm
+    group: ESC
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    step: 0.001
+  esc:esc_ackermann.ros__parameters.zero_hold_feedback_release_samples:
+    identity: esc:esc_ackermann.ros__parameters.zero_hold_feedback_release_samples
+    file_key: esc
+    yaml_path: esc_ackermann.ros__parameters.zero_hold_feedback_release_samples
+    label: Zero Hold Feedback Release Samples
+    group: ESC
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    step: 1
+  teleop:motor_teleop.ros__parameters.speed_max:
+    identity: teleop:motor_teleop.ros__parameters.speed_max
+    file_key: teleop
+    yaml_path: motor_teleop.ros__parameters.speed_max
+    label: Speed Max
+    group: TELEOP
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    step: 0.001
+  teleop:motor_teleop.ros__parameters.post_limit_neutral_rearm_sec:
+    identity: teleop:motor_teleop.ros__parameters.post_limit_neutral_rearm_sec
+    file_key: teleop
+    yaml_path: motor_teleop.ros__parameters.post_limit_neutral_rearm_sec
+    label: Post Limit Neutral Rearm Sec
+    group: TELEOP
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    step: 0.001
+  teleop:motor_teleop.ros__parameters.axis_full_scale_jump_guard:
+    identity: teleop:motor_teleop.ros__parameters.axis_full_scale_jump_guard
+    file_key: teleop
+    yaml_path: motor_teleop.ros__parameters.axis_full_scale_jump_guard
+    label: Axis Full Scale Jump Guard
+    group: TELEOP
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    step: 0.001
+  teleop:motor_teleop.ros__parameters.axis_motion_confirm_sec:
+    identity: teleop:motor_teleop.ros__parameters.axis_motion_confirm_sec
+    file_key: teleop
+    yaml_path: motor_teleop.ros__parameters.axis_motion_confirm_sec
+    label: Axis Motion Confirm Sec
+    group: TELEOP
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    step: 0.001
+  teleop:motor_teleop.ros__parameters.axis_event_start_window_sec:
+    identity: teleop:motor_teleop.ros__parameters.axis_event_start_window_sec
+    file_key: teleop
+    yaml_path: motor_teleop.ros__parameters.axis_event_start_window_sec
+    label: Axis Event Start Window Sec
+    group: TELEOP
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    step: 0.001
+  teleop:motor_teleop.ros__parameters.button_axis_delta_guard:
+    identity: teleop:motor_teleop.ros__parameters.button_axis_delta_guard
+    file_key: teleop
+    yaml_path: motor_teleop.ros__parameters.button_axis_delta_guard
+    label: Button Axis Delta Guard
+    group: TELEOP
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    step: 0.001
+  vesc_tool:vesc_tool_bridge.ros__parameters.tcp_keepalive_period_ms:
+    identity: vesc_tool:vesc_tool_bridge.ros__parameters.tcp_keepalive_period_ms
+    file_key: vesc_tool
+    yaml_path: vesc_tool_bridge.ros__parameters.tcp_keepalive_period_ms
+    label: Tcp Keepalive Period Ms
+    group: ESC MAINTENANCE
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Active YAML authority synchronized with runtime and ROS Web transaction model.
+    effect_up: Evaluate only through domain telemetry and staged validation.
+    effect_down: Evaluate only through domain telemetry and staged validation.
+    related: []
+    source_of_constraint: active YAML SSOT + runtime authority audit
+    step: 1
+  ekf:ekf_filter_node_map.ros__parameters.initial_estimate_covariance:
+    identity: ekf:ekf_filter_node_map.ros__parameters.initial_estimate_covariance
+    file_key: ekf
+    yaml_path: ekf_filter_node_map.ros__parameters.initial_estimate_covariance
+    label: Global EKF Initial Covariance
+    group: EKF
+    level: advanced
+    type: list
+    risk: motion
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Initial covariance P0 global EKF; nilai besar pada state observable membuat GNSS dan heading valid menguasai startup tanpa konvergensi lambat dari prior nol.
+    effect_up: Measurement awal lebih cepat menguasai state; terlalu besar dapat memperbesar transient covariance saat sensor belum valid.
+    effect_down: Prior awal lebih kaku dan dapat memperlambat konvergensi global EKF ke GNSS saat startup.
+    related: []
+    source_of_constraint: robot_localization startup covariance + measured GNSS convergence evidence
+  navigation_core:navigation_core.ros__parameters.relax_goal_orientation_for_ackermann:
+    identity: navigation_core:navigation_core.ros__parameters.relax_goal_orientation_for_ackermann
+    file_key: navigation_core
+    yaml_path: navigation_core.ros__parameters.relax_goal_orientation_for_ackermann
+    label: Relax goal orientation for Ackermann
+    group: NAVIGATION CORE
+    level: advanced
+    type: boolean
+    risk: motion
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Use line-of-sight approach yaw for SMAC while preserving the requested goal X/Y.
+    effect_up: Prevents terminal Dubins loops caused only by the clicked final yaw.
+    effect_down: Planner again attempts to satisfy the requested terminal yaw.
+    related: [nav2.controller_server.ros__parameters.goal_checker.yaw_goal_tolerance]
+    source_of_constraint: Ackermann near-goal path robustness
+  navigation_core:navigation_core.ros__parameters.goal_orientation_pose_timeout_sec:
+    identity: navigation_core:navigation_core.ros__parameters.goal_orientation_pose_timeout_sec
+    file_key: navigation_core
+    yaml_path: navigation_core.ros__parameters.goal_orientation_pose_timeout_sec
+    label: Goal orientation pose timeout
+    group: NAVIGATION CORE
+    level: advanced
+    type: number
+    risk: caution
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Maximum age of GNSS-map pose used to compute Ackermann line-of-sight terminal yaw.
+    effect_up: Allows older map pose to define planner approach yaw.
+    effect_down: Requires fresher GNSS-map pose before relaxing terminal yaw.
+    related: [navigation_core.ros__parameters.relax_goal_orientation_for_ackermann]
+    source_of_constraint: GNSS-backed Ackermann goal preprocessing
+    step: 0.1

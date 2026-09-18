@@ -54,6 +54,8 @@ class Rm3100HeadingNode final : public rclcpp::Node {
     declare_parameter<std::string>("calibrated_mag_topic", "/neo3pro/mag_calibrated");
     declare_parameter<std::string>("inertial_heading_topic", "/imu/inertial_heading");
     declare_parameter<std::string>("validated_heading_topic", "/heading/validated_fusion");
+    declare_parameter<std::string>("local_heading_topic", "/heading/validated_local");
+    declare_parameter<std::string>("local_heading_frame", "odom");
     declare_parameter<std::string>("output_frame", "map");
     declare_parameter<double>("magnetic_declination_rad", 0.0);
     declare_parameter<double>("rm3100_yaw_sign", 1.0);
@@ -79,6 +81,7 @@ class Rm3100HeadingNode final : public rclcpp::Node {
     mag_topic_ = get_parameter("rm3100_mag_topic").as_string();
     map_yaw_topic_ = get_parameter("map_yaw_topic").as_string();
     output_frame_ = get_parameter("output_frame").as_string();
+    local_heading_frame_ = get_parameter("local_heading_frame").as_string();
     declination_rad_ = get_parameter("magnetic_declination_rad").as_double();
     yaw_sign_ = get_parameter("rm3100_yaw_sign").as_double() < 0.0 ? -1.0 : 1.0;
     yaw_offset_rad_ = get_parameter("rm3100_yaw_offset_rad").as_double();
@@ -91,6 +94,8 @@ class Rm3100HeadingNode final : public rclcpp::Node {
     }
     full_enabled_ = get_parameter("rm3100_full_calibration_enabled").as_bool();
     planar_enabled_ = get_parameter("rm3100_planar_calibration_enabled").as_bool();
+    calibration_applied_ = (calibration_owner_ == "ap_periph") ||
+      (calibration_owner_ == "ros_host" && full_enabled_);
     loadVector("rm3100_mag_bias_xyz_ut", bias_xyz_, 3);
     loadVector("rm3100_mag_matrix_3x3", matrix_3x3_, 9);
     loadVector("rm3100_mag_bias_xy_ut", bias_xy_, 2);
@@ -115,13 +120,15 @@ class Rm3100HeadingNode final : public rclcpp::Node {
     calibrated_mag_pub_ = create_publisher<sensor_msgs::msg::MagneticField>(get_parameter("calibrated_mag_topic").as_string(), sensor_qos);
     inertial_pub_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(get_parameter("inertial_heading_topic").as_string(), sensor_qos);
     validated_pub_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(get_parameter("validated_heading_topic").as_string(), sensor_qos);
+    local_heading_pub_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(get_parameter("local_heading_topic").as_string(), sensor_qos);
     valid_pub_ = create_publisher<std_msgs::msg::Bool>("/heading/validated", state_qos);
     rm_valid_pub_ = create_publisher<std_msgs::msg::Bool>("/neo3pro/mag_heading_valid", state_qos);
     status_pub_ = create_publisher<std_msgs::msg::String>("/system/magnetic_heading_status", state_qos);
     status_timer_ = create_wall_timer(std::chrono::milliseconds(500), [this] { publishStatus(); });
 
-    RCLCPP_INFO(get_logger(), "RM3100-only heading: input=%s owner=%s full3d=%s planar=%s",
-      mag_topic_.c_str(), calibration_owner_.c_str(), full_enabled_ ? "on" : "off", planar_enabled_ ? "on" : "off");
+    RCLCPP_INFO(get_logger(), "RM3100-only heading: input=%s owner=%s full3d=%s planar=%s applied=%s",
+      mag_topic_.c_str(), calibration_owner_.c_str(), full_enabled_ ? "on" : "off",
+      planar_enabled_ ? "on" : "off", calibration_applied_ ? "yes" : "no");
   }
 
  private:
@@ -155,9 +162,10 @@ class Rm3100HeadingNode final : public rclcpp::Node {
     return normalizeAngle(y + c0 + t*(c1-c0));
   }
 
-  geometry_msgs::msg::PoseWithCovarianceStamped poseMsg(double yaw, double variance, const rclcpp::Time &stamp) const {
+  geometry_msgs::msg::PoseWithCovarianceStamped poseMsg(double yaw, double variance, const rclcpp::Time &stamp,
+      const std::string &frame = "") const {
     geometry_msgs::msg::PoseWithCovarianceStamped p;
-    p.header.stamp = stamp; p.header.frame_id = output_frame_;
+    p.header.stamp = stamp; p.header.frame_id = frame.empty() ? output_frame_ : frame;
     p.pose.pose.orientation = yawQuaternion(yaw); p.pose.covariance.fill(0.0);
     p.pose.covariance[0]=p.pose.covariance[7]=p.pose.covariance[14]=p.pose.covariance[21]=p.pose.covariance[28]=1.0e6;
     p.pose.covariance[35]=variance; return p;
@@ -177,7 +185,14 @@ class Rm3100HeadingNode final : public rclcpp::Node {
       if (dt>0.0 && dt<0.5) inertial_yaw_=normalizeAngle(inertial_yaw_ + wz*dt);
     }
     last_imu_stamp_=stamp;
-    if (have_inertial_) inertial_pub_->publish(poseMsg(inertial_yaw_, validated_variance_, stamp));
+    if (have_inertial_) {
+      inertial_pub_->publish(poseMsg(inertial_yaw_, validated_variance_, stamp));
+      if (have_local_heading_reference_) {
+        local_heading_pub_->publish(poseMsg(
+          normalizeAngle(inertial_yaw_ - local_heading_reference_yaw_),
+          validated_variance_, stamp, local_heading_frame_));
+      }
+    }
   }
 
   void onRm3100(const sensor_msgs::msg::MagneticField &msg) {
@@ -219,11 +234,20 @@ class Rm3100HeadingNode final : public rclcpp::Node {
     const double yaw_map=normalizeAngle(yaw_enu+(have_map_yaw_?map_yaw_rad_:0.0));
     last_heading_=yaw_map; last_mag_stamp_=stamp; have_heading_=true;
 
+    // Diagnostic heading may always be observed, but the EKF-facing validated
+    // stream is fail-closed: it exists only after the selected calibration owner
+    // has an applied production correction.  This prevents the global EKF from
+    // silently consuming legacy planar/LUT or identity/raw magnetic yaw.
     heading_pub_->publish(poseMsg(yaw_map, heading_variance_, stamp));
-    validated_pub_->publish(poseMsg(yaw_map, validated_variance_, stamp));
-    std_msgs::msg::Bool ok; ok.data=true; valid_pub_->publish(ok); rm_valid_pub_->publish(ok);
+    std_msgs::msg::Bool ok; ok.data=calibration_applied_;
+    valid_pub_->publish(ok); rm_valid_pub_->publish(ok);
+    if (!calibration_applied_) return;
 
-    if (!have_inertial_) { inertial_yaw_=yaw_map; have_inertial_=true; }
+    validated_pub_->publish(poseMsg(yaw_map, validated_variance_, stamp));
+    if (!have_inertial_) {
+      inertial_yaw_=yaw_map; have_inertial_=true;
+      local_heading_reference_yaw_=yaw_map; have_local_heading_reference_=true;
+    }
     else if (inertial_stationary_correction_ && stationary_) {
       const double e=normalizeAngle(yaw_map-inertial_yaw_);
       if (std::abs(e)<=inertial_correction_max_error_) {
@@ -234,13 +258,19 @@ class Rm3100HeadingNode final : public rclcpp::Node {
     }
     last_correction_stamp_=stamp;
     inertial_pub_->publish(poseMsg(inertial_yaw_, validated_variance_, stamp));
+    if (have_local_heading_reference_) {
+      local_heading_pub_->publish(poseMsg(
+        normalizeAngle(inertial_yaw_ - local_heading_reference_yaw_),
+        validated_variance_, stamp, local_heading_frame_));
+    }
   }
 
   void publishStatus() {
     const auto t=now();
     const double age=have_heading_?(t-last_mag_stamp_).seconds():999.0;
     const bool live=have_heading_ && age>=0.0 && age<1.0;
-    std_msgs::msg::Bool b; b.data=live; valid_pub_->publish(b); rm_valid_pub_->publish(b);
+    const bool validated_live=live && calibration_applied_;
+    std_msgs::msg::Bool b; b.data=validated_live; valid_pub_->publish(b); rm_valid_pub_->publish(b);
     std_msgs::msg::String s;
     s.data="mag_source=RM3100;input_topic="+mag_topic_+
       ";rm3100_live="+(live?std::string("true"):std::string("false"))+
@@ -251,29 +281,33 @@ class Rm3100HeadingNode final : public rclcpp::Node {
       ";inertial_heading_deg="+std::to_string(inertial_yaw_*180.0/kPi)+
       ";map_yaw_known="+(have_map_yaw_?std::string("true"):std::string("false"))+
       ";cal_owner="+calibration_owner_+
+      ";rm3100_calibration_applied="+(calibration_applied_?std::string("true"):std::string("false"))+
+      ";validated_live="+(validated_live?std::string("true"):std::string("false"))+
       ";rm3100_full3d="+(full_enabled_?std::string("true"):std::string("false"))+
       ";rm3100_planar="+(planar_enabled_?std::string("true"):std::string("false"))+
       ";rm3100_lut="+(lut_enabled_?std::string("true"):std::string("false"));
     status_pub_->publish(s);
   }
 
-  std::string imu_topic_, mag_topic_, map_yaw_topic_, output_frame_, calibration_owner_;
+  std::string imu_topic_, mag_topic_, map_yaw_topic_, output_frame_, local_heading_frame_, calibration_owner_;
   double declination_rad_{0.0}, yaw_sign_{1.0}, yaw_offset_rad_{0.0}, alignment_rad_{0.0};
   double heading_variance_{0.01}, validated_variance_{0.01};
-  bool full_enabled_{false}, planar_enabled_{false}, lut_enabled_{false};
+  bool full_enabled_{false}, planar_enabled_{false}, lut_enabled_{false}, calibration_applied_{false};
   std::vector<double> bias_xyz_, matrix_3x3_, bias_xy_, matrix_xy_;
   std::vector<std::pair<double,double>> lut_;
   bool inertial_stationary_correction_{true};
   double inertial_correction_rate_rps_{0.00174532925}, inertial_correction_max_error_{0.2617993878};
   bool have_tilt_{false}, have_map_yaw_{false}, have_inertial_{false}, have_heading_{false}, stationary_{false};
+  bool have_local_heading_reference_{false};
   double roll_rad_{0.0}, pitch_rad_{0.0}, map_yaw_rad_{0.0}, inertial_yaw_{0.0}, last_heading_{0.0};
+  double local_heading_reference_yaw_{0.0};
   std::array<double,3> wire_xyz_{{0,0,0}}, calibrated_xyz_{{0,0,0}};
   double wire_norm_{0.0}, calibrated_norm_{0.0};
   rclcpp::Time last_imu_stamp_{0,0,RCL_ROS_TIME}, last_mag_stamp_{0,0,RCL_ROS_TIME}, last_correction_stamp_{0,0,RCL_ROS_TIME};
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   rclcpp::Subscription<sensor_msgs::msg::MagneticField>::SharedPtr mag_sub_;
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr map_yaw_sub_;
-  rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr heading_pub_, inertial_pub_, validated_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr heading_pub_, inertial_pub_, validated_pub_, local_heading_pub_;
   rclcpp::Publisher<sensor_msgs::msg::MagneticField>::SharedPtr calibrated_mag_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr valid_pub_, rm_valid_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;

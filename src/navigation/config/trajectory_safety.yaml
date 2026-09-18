@@ -66,6 +66,6 @@ trajectory_safety_supervisor:
     require_camera_connected: true
     require_camera_health: true
     require_obstacle_stream_when_moving: true
-    stop_on_lane_lost: false
+    stop_on_lane_lost: true
     use_local_plan_when_available: true
-    minimum_turning_radius_m: 1.597679121829
+    minimum_turning_radius_m: 1.452435565298

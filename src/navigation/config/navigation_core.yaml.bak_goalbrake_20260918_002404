@@ -1,0 +1,108 @@
+navigation_core:
+  ros__parameters:
+    autonomy_topic: /cmd_vel/autonomy_integrated
+    pre_collision_topic: /cmd_vel/nav2_pre_collision
+    final_topic: /cmd_vel/autonomy_pre_smoother
+    goal_topic: /navigation/goal_request
+    legacy_goal_topic: /move_base_simple/goal
+    action_name: navigate_to_pose
+    lifecycle_manager_service: /lifecycle_manager_navigation/manage_nodes
+    map_topic: /map
+    defer_nav2_startup_until_localization: true
+    map_nav2_startup_settle_sec: 2.5
+    collision_monitor_enabled: false
+    command_rate_hz: 20.0
+    status_rate_hz: 10.0
+    autonomy_timeout_sec: 0.6
+    max_forward_speed_mps: 1.9
+    max_reverse_speed_mps: 1.0
+    max_yaw_rate_rps: 1.189225029006
+    linear_deadband_mps: 0.08
+    angular_deadband_rps: 0.02
+    yaw_hysteresis_enabled: true
+    yaw_hysteresis_enter_rps: 0.08
+    yaw_hysteresis_exit_rps: 0.025
+    min_speed_for_yaw_mps: 0.08
+    require_perception_for_autonomy_motion: false
+    perception_timeout_sec: 1.5
+    require_sensor_publisher_contract: true
+    sensor_publisher_contract_topic: /system/sensor_publishers_ok
+    sensor_publisher_contract_timeout_sec: 0.75
+    require_sensor_integrity_contract: true
+    sensor_integrity_topic: /system/sensors_transport_ok
+    sensor_integrity_timeout_sec: 0.75
+    allow_esc_integration_bypass: false
+    esc_integration_bypass_timeout_sec: 1.0
+    esc_state_timeout_sec: 0.75
+    runtime_localization_loss_grace_sec: 3.0
+    runtime_esc_loss_grace_sec: 1.5
+    runtime_wheel_slip_stop_sec: 1.5
+    require_camera_metric_calibration: false
+    camera_metric_calibration_validated: false
+    require_steering_calibration_for_autonomy: true
+    steering_calibration_validated: false
+    require_steering_circle_calibration_for_autonomy: true
+    steering_circle_calibration_validated: false
+    require_drive_odometry_calibration_for_autonomy: true
+    drive_odometry_calibration_validated: false
+    require_imu_calibration_for_autonomy: true
+    imu_calibration_validated: false
+    overlay_text_size_px: 9.0
+    hud_margin_px: 12
+    wheelbase_m: 0.7
+    track_width_m: 0.48
+    max_steering_angle_rad: 0.523598775598
+    log_heartbeat_sec: 10.0
+    minimum_turning_radius_m: 1.597679121829
+    require_stage3_production_certification: true
+    precision_mode: false
+    require_collision_monitor_for_production: true
+    require_perception_for_production: true
+    stage3_production_certified: false
+    stage3_commissioning_mode: true
+    stage3_commissioning_speed_cap_mps: 1.9
+
+    keyboard_available: false
+
+# Command routing settings are YAML-owned so ROS Web can inspect/change them.
+cmd_vel_router:
+  ros__parameters:
+    teleop_topic: /cmd_vel/teleop
+    teleop_source_topic: /teleop/active_source
+    web_trial_topic: /cmd_vel/web_trial
+    web_trial_source_topic: /web_trial/active_source
+    teleop_estop_topic: /teleop/emergency_stop_latched
+    autonomy_topic: /cmd_vel/autonomy_pre_smoother
+    autonomy_gate_topic: /system/autonomy_motion_allowed
+    global_estop_topic: /safety/estop
+    output_topic: /cmd_vel/pre_smoother
+    source_topic: /navigation/cmd_mux/source
+    rate_hz: 50.0
+    teleop_timeout_sec: 0.30
+    autonomy_timeout_sec: 0.60
+    manual_release_hold_sec: 1.00
+
+sensor_contract_monitor:
+  ros__parameters:
+    required_single_publisher_topics: [/imu/data, /gnss/fix_raw, /gnss/vel, /esc/odom]
+    check_rate_hz: 5.0
+    imu_timeout_sec: 0.75
+    gnss_fix_timeout_sec: 2.5
+    gnss_velocity_timeout_sec: 0.8
+    gnss_quality_timeout_sec: 0.8
+    esc_odom_timeout_sec: 0.75
+    max_future_stamp_sec: 0.20
+    max_message_stamp_age_sec: 3.0
+
+joint_state_visualizer:
+  ros__parameters:
+    publish_rate_hz: 20.0
+    feedback_timeout_sec: 0.75
+    max_visual_steering_rad: 0.523598775598
+
+agv_web_gui:
+  ros__parameters:
+    bind_address: 127.0.0.1
+    port: 5000
+    read_only: false
+    camera_jpeg_fps: 5.0

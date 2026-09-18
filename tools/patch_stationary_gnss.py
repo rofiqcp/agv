@@ -1,6 +1,7 @@
 from pathlib import Path
 import shutil, datetime, yaml
-p=Path('/home/sirobo/agv/src/navigation/src/localization_core.cpp')
+ROOT=Path(__file__).resolve().parents[1]
+p=ROOT/'src/navigation/src/localization_core.cpp'
 ts=datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
 backup=p.with_name(p.name+f'.bak_stationary_gnss_{ts}')
 shutil.copy2(p, backup)
@@ -45,7 +46,7 @@ rep('''  double strict_correction_alpha_{0.20};
   double stationary_gnss_position_variance_m2_{25.0};
   double strict_moving_correction_alpha_{0.03};''')
 p.write_text(s)
-cfg=Path('/home/sirobo/agv/src/navigation/config/localization_cpp.yaml')
+cfg=ROOT/'src/navigation/config/localization_cpp.yaml'
 d=yaml.safe_load(cfg.read_text())
 r=d['localization_core']['ros__parameters']
 r['use_global_ekf_yaw_for_map_correction']=False

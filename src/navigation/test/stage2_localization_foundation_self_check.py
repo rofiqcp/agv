@@ -25,7 +25,7 @@ global_=ekf['ekf_filter_node_map']['ros__parameters']
 # 1) TF and sensor ownership: no ESC dependency in estimator startup.
 require(local.get('publish_tf') is True,'Local EKF must own odom->base TF')
 require(global_.get('publish_tf') is False,'Global EKF must not publish map->odom TF')
-require(local.get('odom0')=='/esc/odom' and enabled(local.get('odom0_config'))=={6},'Local EKF optional ESC odom must remain vx-only; steering/encoder yaw is not heading authority')
+require(local.get('odom0')=='/esc/odom' and enabled(local.get('odom0_config'))=={6,7},'Local EKF ESC odom must provide vx plus explicit non-holonomic vy=0; steering/encoder yaw is not heading authority')
 require(local.get('twist0')=='/gnss/base_velocity_fusion' and enabled(local.get('twist0_config'))=={6},
         'Local EKF must use independent GNSS vx')
 require(local.get('imu0')=='/imu/data' and enabled(local.get('imu0_config'))=={11} and local.get('imu0_relative') is True,
@@ -113,4 +113,4 @@ for key in ('steering_calibration_valid','steering_circle_calibration_valid','dr
     require(isinstance(vehicle.get(key),bool),f'vehicle {key} missing/not bool')
 
 print('STAGE2 LOCALIZATION FOUNDATION SELF-CHECK: PASS')
-print('GNSS=vx/COG | validated RM3100 heading | global IMU=gyro-Z only | ESC vx-only auxiliary')
+print('GNSS=vx/COG | validated RM3100 heading | global IMU=gyro-Z only | ESC vx + nonholonomic vy auxiliary')

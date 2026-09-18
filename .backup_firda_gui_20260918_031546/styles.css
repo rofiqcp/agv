@@ -1,0 +1,46 @@
+/* Legacy stylesheet split into ordered domain/feature modules. Keep import order: it preserves the historical cascade exactly. */
+@import url("/legacy-core.css?v=20260913-stage2-css-v1");
+@import url("/experiments.css?v=20260913-stage2-css-v1");
+@import url("/navigation.css?v=20260913-stage2-css-v1");
+@import url("/perception.css?v=20260913-stage2-css-v1");
+@import url("/hmi.css?v=20260913-stage2-css-v1");
+@import url("/tuning.css?v=20260913-stage2-css-v1");
+@import url("/perception-calibration.css?v=20260914-obcal-v3");
+@import url("/domain-sidebar.css?v=20260913-stage2-css-v1");
+@import url("/engineering-workspaces.css?v=20260913-stage2-css-v1");
+@import url("/esc.css?v=20260914-robust-v2");
+@import url("/engineering-theme.css?v=20260913-stage2-css-v1");
+@import url("/workspace-tabs.css?v=20260913-stage2-css-v1");
+@import url("/navigation-advanced.css?v=20260913-stage2-css-v1");
+@import url("/evidence.css?v=20260913-stage2-css-v1");
+@import url("/legacy-final-authority.css?v=20260913-stage2-css-v1");
+@import url("/shared-calibration.css?v=20260913-stage2-css-v1");
+
+@import url("/imu-heading-validation.css?v=20260916-r412-linearity-v1");
+@import url("/report-dual-export.css?v=20260915-report-lifecycle-v1");
+
+/* R4.1 timed source-rate acquisition */
+#report41TimedPanel[hidden]{display:none!important}
+.r41-timed-card{display:grid;gap:14px}
+.r41-timed-card .panel-head p{margin:6px 0 0;max-width:980px;color:var(--muted)}
+.r41-timed-kpis{display:grid;grid-template-columns:repeat(6,minmax(120px,1fr));gap:10px}
+.r41-timed-kpis>div{padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2)}
+.r41-timed-kpis span{display:block;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.r41-timed-kpis b{display:block;margin-top:4px;font:700 18px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace}
+.r41-rate-line{padding:10px 12px;border:1px dashed var(--line);border-radius:10px;font:600 12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted)}
+.r41-timed-actions{display:flex;gap:8px;flex-wrap:wrap}
+.r41-table-section{display:grid;gap:8px}
+.r41-table-section .direct-table-title small{display:block;margin-top:3px}
+.r41-detail-scroll{max-height:560px;overflow:auto}
+.r41-detail-scroll thead{position:sticky;top:0;z-index:2;background:var(--surface)}
+.r41-detail-scroll th small{display:block;font-weight:500;color:var(--muted)}
+@media(max-width:900px){.r41-timed-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.r41-detail-scroll{max-height:440px}}
+
+/* R4.1.4 heading characterization */
+.r41-heading-live{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.r41-heading-source{padding:14px 16px;border:1px solid var(--line);border-radius:12px;background:linear-gradient(180deg,var(--surface-2),var(--surface));min-width:0}
+.r41-heading-source span{display:block;font-size:10px;font-weight:800;letter-spacing:.08em;color:var(--muted)}
+.r41-heading-source b{display:block;margin:5px 0 3px;font:800 25px/1.05 ui-monospace,SFMono-Regular,Menlo,monospace}
+.r41-heading-source small{display:block;color:var(--muted);line-height:1.45}
+.r41-heading-source.comparison{border-style:dashed}
+@media(max-width:900px){.r41-heading-live{grid-template-columns:1fr}.r41-heading-source b{font-size:22px}}

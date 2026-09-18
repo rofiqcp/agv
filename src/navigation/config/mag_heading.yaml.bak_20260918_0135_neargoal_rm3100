@@ -1,0 +1,65 @@
+mag_heading_fusion:
+  ros__parameters:
+    imu_topic: /imu/data
+    rm3100_mag_topic: /neo3pro/mag
+    map_yaw_topic: /localization/map_yaw_from_enu
+    heading_topic: /neo3pro/mag_heading_fusion
+    calibrated_mag_topic: /neo3pro/mag_calibrated
+    inertial_heading_topic: /imu/inertial_heading
+    validated_heading_topic: /heading/validated_fusion
+    local_heading_topic: /heading/validated_local
+    local_heading_frame: odom
+    output_frame: map
+    magnetic_declination_rad: 0.0
+    rm3100_yaw_sign: 1.0
+    rm3100_yaw_offset_rad: 1.5404193957978243
+    rm3100_heading_alignment_rad: 0.04015621282605733
+    rm3100_heading_variance_rad2: 0.00121846968
+    validated_heading_variance_rad2: 0.00121846968
+    rm3100_calibration_owner: ros_host
+    rm3100_full_calibration_enabled: true
+    rm3100_mag_bias_xyz_ut:
+    - -12.81021989699917
+    - -0.25037000903352924
+    - -8.251344067342682
+    rm3100_mag_matrix_3x3:
+    - 0.924228957788029
+    - 0.01986993933060433
+    - 0.04190315437366519
+    - 0.019869939330604346
+    - 0.9913953888422709
+    - -0.0004582819881870549
+    - 0.04190315437366519
+    - -0.00045828198818714745
+    - 0.9925515965577556
+    rm3100_planar_calibration_enabled: false
+    rm3100_mag_bias_xy_ut:
+    - -13.876793349753695
+    - 1.9115564814814796
+    rm3100_mag_matrix_xy:
+    - 0.03652314949169245
+    - -0.00045890339887859127
+    - -0.0004589033988785904
+    - 0.04150194919231958
+    rm3100_heading_lut_enabled: false
+    rm3100_heading_lut_input_rad:
+    - 1.4229333951861647
+    - 0.7003688219043257
+    - 0.25191914473139354
+    - -0.576254362848672
+    - -1.4687284707664956
+    - -2.359534869345018
+    - 2.976791413366419
+    - 2.196387289784848
+    rm3100_heading_lut_correction_rad:
+    - 0.14786293160873187
+    - 0.08502934149312256
+    - -0.25191914473139354
+    - -0.20914380054877624
+    - -0.10206785602840095
+    - 0.0033403791526733784
+    - 0.1648012402233745
+    - 0.15980720040749707
+    rm3100_inertial_stationary_correction: true
+    rm3100_inertial_correction_max_rate_dps: 0.1
+    rm3100_inertial_correction_max_error_rad: 0.2617993877991494

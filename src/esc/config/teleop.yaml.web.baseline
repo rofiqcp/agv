@@ -68,4 +68,8 @@ motor_teleop:
     joy_auto_center: true
     joy_auto_center_max_abs: 0.08
     button_debounce_sec: 0.20
+    limit_button_axis_guard_sec: 0.18
+    post_limit_neutral_rearm_sec: 0.80
+    axis_full_scale_jump_guard: 0.92
+    axis_motion_confirm_sec: 0.06
     log_command_changes: true

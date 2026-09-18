@@ -272,7 +272,7 @@ class VescToolBridge final : public rclcpp::Node {
     poll_hz_ = std::clamp(declare_parameter<double>("maintenance_poll_hz", 50.0), 1.0, 50.0);
     tcp_service_hz_ = std::clamp(declare_parameter<double>("tcp_service_hz", 1000.0), 100.0, 2000.0);
     max_abs_duty_ = std::clamp(declare_parameter<double>("max_abs_duty", 0.95), 0.01, 0.99);
-    max_abs_current_a_ = std::clamp(declare_parameter<double>("max_abs_current_a", 20.0), 0.1, 100.0);
+    max_abs_current_a_ = std::clamp(declare_parameter<double>("max_abs_current_a", 15.0), 0.1, 15.0);
     max_abs_erpm_ = std::clamp(declare_parameter<double>("max_abs_erpm", 8000.0), 10.0, 200000.0);
     web_lease_timeout_ms_ = static_cast<int>(std::clamp<std::int64_t>(
       declare_parameter<int>("web_lease_timeout_ms", 5000), 500, 5000));

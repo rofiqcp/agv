@@ -758,7 +758,7 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('engine_path', default_value=engine_path),
         DeclareLaunchArgument('pt_model_path', default_value=pt_model_path),
         DeclareLaunchArgument('perception_inference_enabled', default_value='false', description='YOLOPv2 inference lazy toggle; false keeps camera-only lightweight startup'),
-        DeclareLaunchArgument('enable_semantic_calibration', default_value='false', description='Explicitly enable the auxiliary Torch semantic detector used only by perception calibration'),
+        DeclareLaunchArgument('enable_semantic_calibration', default_value='true', description='Enable the auxiliary Torch semantic detector used by obstacle calibration in web mode'),
         DeclareLaunchArgument('cpu_inference_fps', default_value=str(cpu_fps_default)),
         DeclareLaunchArgument('cpu_threads', default_value=str(cpu_threads_default)),
         DeclareLaunchArgument('enable_trajectory_safety', default_value='true'),
@@ -1088,7 +1088,8 @@ def generate_launch_description() -> LaunchDescription:
         remappings=[('cmd_vel', '/cmd_vel_nav_raw')])
     behavior = Node(
         package='nav2_behaviors', executable='behavior_server', name='behavior_server', output='screen',
-        respawn=True, respawn_delay=2.0, parameters=[LaunchConfiguration('nav2_params')])
+        respawn=True, respawn_delay=2.0, parameters=[LaunchConfiguration('nav2_params')],
+        remappings=[('cmd_vel', '/cmd_vel_nav_raw')])
     navigator = Node(
         package='nav2_bt_navigator', executable='bt_navigator', name='bt_navigator', output='screen',
         respawn=True, respawn_delay=2.0,

@@ -1,6 +1,7 @@
 from pathlib import Path
 import shutil, time
-p=Path('/home/sirobo/agv/src/navigation/src/mag_heading_fusion_node.cpp')
+ROOT=Path(__file__).resolve().parents[1]
+p=ROOT/'src/navigation/src/mag_heading_fusion_node.cpp'
 s=p.read_text(); ts=time.strftime('%Y%m%d_%H%M%S'); shutil.copy2(p,str(p)+'.bak_heading_arch2_'+ts)
 def rep(a,b):
     global s

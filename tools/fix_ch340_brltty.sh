@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-ROOT_DIR=/home/sirobo/agv
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 echo '[1/7] Stop BRLTTY USB takeover'
 systemctl stop brltty-udev.service brltty.service 2>/dev/null || true

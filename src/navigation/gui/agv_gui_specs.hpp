@@ -577,7 +577,7 @@ inline QVector<TabDef> buildTabs() {
       },QStringLiteral(""),QStringLiteral("")
     });
     t.specs.push_back(SettingSpec{
-      QStringLiteral("Adaptive Covariance"),QStringLiteral("RPM tracking error gain"),QStringLiteral("esc"),QStringLiteral("esc_ackermann.ros__parameters.odom_v_variance_rpm_error_gain"),QStringLiteral("float"),0.0,10.0,0.01,3,QStringList{
+      QStringLiteral("Adaptive Covariance"),QStringLiteral("eRPM tracking error gain"),QStringLiteral("esc"),QStringLiteral("esc_ackermann.ros__parameters.odom_v_variance_erpm_error_gain"),QStringLiteral("float"),0.0,10.0,0.01,3,QStringList{
       },QStringLiteral(""),QStringLiteral("")
     });
     t.specs.push_back(SettingSpec{

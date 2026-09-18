@@ -139,7 +139,7 @@ class Recorder(Node):
 
 def main():
     p=argparse.ArgumentParser(description='RM3100 Mission-Planner-style 3D host calibration recorder')
-    p.add_argument('--workspace',default='/home/sirobo/agv'); p.add_argument('--topic',default='/neo3pro/mag')
+    p.add_argument('--workspace',default=str(Path(__file__).resolve().parents[3])); p.add_argument('--topic',default='/neo3pro/mag')
     p.add_argument('--imu-topic',default='/imu/data'); a=p.parse_args(); root=Path(a.workspace).resolve()
     cal=root/'calibration'; cal.mkdir(parents=True,exist_ok=True); stamp=datetime.now().strftime('%Y%m%d_%H%M%S')
     a.state_path=cal/'rm3100_calibration_state.json'; a.control_path=cal/'rm3100_calibration_control.json'; a.csv_path=cal/f'rm3100_3d_raw_{stamp}.csv'; a.fit_path=cal/'rm3100_ardupilot_latest.yaml'

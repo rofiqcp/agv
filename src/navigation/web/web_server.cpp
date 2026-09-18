@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <cstdint>
@@ -228,6 +229,78 @@ QMap<QString, QString> configCandidates() {
       {"perception", per + "/astra_yolop_gpu.yaml"},
       {"bbox_calibration", per + "/bbox_obstacle_calibration.yaml"},
   };
+}
+
+
+struct PgmImageData {
+  int width = 0;
+  int height = 0;
+  int maxValue = 0;
+  QByteArray pixels;
+};
+
+QByteArray nextPgmToken(const QByteArray &data, int *offset) {
+  int i = *offset;
+  while (i < data.size()) {
+    const char c = data.at(i);
+    if (c == '#') { while (i < data.size() && data.at(i) != '\n') ++i; continue; }
+    if (std::isspace(static_cast<unsigned char>(c))) { ++i; continue; }
+    break;
+  }
+  const int start = i;
+  while (i < data.size()) {
+    const char c = data.at(i);
+    if (c == '#' || std::isspace(static_cast<unsigned char>(c))) break;
+    ++i;
+  }
+  *offset = i;
+  return data.mid(start, i - start);
+}
+
+bool loadPgmP5(const QString &path, PgmImageData *out, QString *message) {
+  QFile f(path);
+  if (!f.open(QIODevice::ReadOnly)) { if (message) *message = QStringLiteral("PGM source tidak dapat dibuka: ") + path; return false; }
+  const QByteArray data = f.readAll();
+  int pos = 0; bool okW=false, okH=false, okM=false;
+  if (nextPgmToken(data,&pos) != "P5") { if(message)*message=QStringLiteral("PGM wajib format P5"); return false; }
+  const int w=nextPgmToken(data,&pos).toInt(&okW), h=nextPgmToken(data,&pos).toInt(&okH), m=nextPgmToken(data,&pos).toInt(&okM);
+  if(pos<data.size() && std::isspace(static_cast<unsigned char>(data.at(pos)))) ++pos;
+  const qint64 need=static_cast<qint64>(w)*static_cast<qint64>(h);
+  if(!okW||!okH||!okM||w<=0||h<=0||m!=255||need<=0||need>100000000LL||data.size()-pos<need){if(message)*message=QStringLiteral("Header/data PGM tidak valid");return false;}
+  out->width=w;out->height=h;out->maxValue=m;out->pixels=data.mid(pos,static_cast<int>(need));return true;
+}
+
+bool saveMapEditorCopy(const QJsonObject &json, QJsonObject *result, QString *message) {
+  const QString navCfg=packageConfigDir("navigation","AGV_CONFIG_DIR");
+  const QString mapDir=QDir::cleanPath(QDir(navCfg).absoluteFilePath(QStringLiteral("../maps/undip")));
+  const QString sourceYaml=QDir(mapDir).absoluteFilePath(QStringLiteral("undip_nav2.yaml"));
+  if(!QFileInfo(sourceYaml).isFile()){if(message)*message=QStringLiteral("Source map YAML tidak ditemukan: ")+sourceYaml;return false;}
+  QString sourcePgm; double resolution=0.0,originX=0.0,originY=0.0,originYaw=0.0,occupied=.65,free=.196;int negate=0;QString mode=QStringLiteral("trinary");
+  try{
+    const YAML::Node y=YAML::LoadFile(sourceYaml.toStdString());
+    sourcePgm=QString::fromStdString(y["image"].as<std::string>());if(QDir::isRelativePath(sourcePgm))sourcePgm=QDir(mapDir).absoluteFilePath(sourcePgm);
+    resolution=y["resolution"].as<double>();if(y["origin"]&&y["origin"].size()>=3){originX=y["origin"][0].as<double>();originY=y["origin"][1].as<double>();originYaw=y["origin"][2].as<double>();}
+    if (y["occupied_thresh"]) occupied = y["occupied_thresh"].as<double>();
+    if (y["free_thresh"]) free = y["free_thresh"].as<double>();
+    if (y["negate"]) negate = y["negate"].as<int>();
+    if (y["mode"]) mode = QString::fromStdString(y["mode"].as<std::string>());
+  }catch(const std::exception &e){if(message)*message=QStringLiteral("Gagal membaca map YAML: ")+QString::fromUtf8(e.what());return false;}
+  if(!(resolution>0.0)||std::abs(originYaw)>1e-9){if(message)*message=QStringLiteral("Map editor saat ini memerlukan resolution>0 dan origin yaw=0");return false;}
+  PgmImageData original; if(!loadPgmP5(sourcePgm,&original,message))return false; QByteArray edited=original.pixels;
+  const QJsonArray strokes=json.value("strokes").toArray();if(strokes.size()>50000){if(message)*message=QStringLiteral("Terlalu banyak brush stroke (>50000)");return false;}
+  int accepted=0;
+  for(const QJsonValue &v:strokes){const QJsonObject st=v.toObject();const double x=st.value("x").toDouble(std::numeric_limits<double>::quiet_NaN()),y=st.value("y").toDouble(std::numeric_limits<double>::quiet_NaN()),radius=st.value("radius_m").toDouble(.5);const QString action=st.value("action").toString(QStringLiteral("add"));if(!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(radius)||radius<=0||radius>10.0||(action!="add"&&action!="erase"))continue;const int cx=static_cast<int>(std::floor((x-originX)/resolution)),cy=static_cast<int>(std::floor((y-originY)/resolution)),rr=std::max(1,static_cast<int>(std::ceil(radius/resolution)));if(cx+rr<0||cy+rr<0||cx-rr>=original.width||cy-rr>=original.height)continue;const int r2=rr*rr;for(int yy=std::max(0,cy-rr);yy<=std::min(original.height-1,cy+rr);++yy){for(int xx=std::max(0,cx-rr);xx<=std::min(original.width-1,cx+rr);++xx){const int dx=xx-cx,dy=yy-cy;if(dx*dx+dy*dy>r2)continue;const int row=original.height-1-yy,idx=row*original.width+xx;edited[idx]=(action=="add")?char(0):original.pixels.at(idx);}}++accepted;}
+  qint64 changed=0;for(int i=0;i<edited.size();++i)if(edited.at(i)!=original.pixels.at(i))++changed;
+  const QString outDir=QDir(mapDir).absoluteFilePath(QStringLiteral("edits"));if(!QDir().mkpath(outDir)){if(message)*message=QStringLiteral("Gagal membuat folder edits");return false;}
+  const QString stamp=QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss_zzz")),base=QStringLiteral("undip_nav2_edit_")+stamp;
+  const QString pgmPath=QDir(outDir).absoluteFilePath(base+QStringLiteral(".pgm")),yamlPath=QDir(outDir).absoluteFilePath(base+QStringLiteral(".yaml")),previewPath=QDir(outDir).absoluteFilePath(base+QStringLiteral("_preview.png"));
+  QSaveFile pgm(pgmPath);if(!pgm.open(QIODevice::WriteOnly)){if(message)*message=QStringLiteral("Gagal membuat output PGM");return false;}pgm.write(QByteArray("P5\n# ADV static map editor; runtime inflation/lethal overlays are NOT baked\n")+QByteArray::number(original.width)+" "+QByteArray::number(original.height)+"\n255\n");pgm.write(edited);if(!pgm.commit()){if(message)*message=QStringLiteral("Commit PGM gagal");return false;}
+  const QString yamlText=QStringLiteral("image: \"")+QFileInfo(pgmPath).fileName()+QStringLiteral("\"\nmode: ")+mode+QStringLiteral("\nresolution: ")+QString::number(resolution,'f',11)+QStringLiteral("\norigin: [")+QString::number(originX,'f',9)+QStringLiteral(", ")+QString::number(originY,'f',9)+QStringLiteral(", ")+QString::number(originYaw,'f',9)+QStringLiteral("]\nnegate: ")+QString::number(negate)+QStringLiteral("\noccupied_thresh: ")+QString::number(occupied,'g',12)+QStringLiteral("\nfree_thresh: ")+QString::number(free,'g',12)+QStringLiteral("\n");
+  QSaveFile yf(yamlPath);if(!yf.open(QIODevice::WriteOnly)||yf.write(yamlText.toUtf8())<0||!yf.commit()){QFile::remove(pgmPath);if(message)*message=QStringLiteral("Save YAML pendamping gagal");return false;}
+  QImage preview(original.width,original.height,QImage::Format_Grayscale8);for(int row=0;row<original.height;++row)std::memcpy(preview.scanLine(row),edited.constData()+static_cast<qint64>(row)*original.width,original.width);preview.save(previewPath,"PNG");
+  *result=QJsonObject{{"source_pgm",sourcePgm},{"source_yaml",sourceYaml},{"pgm_path",pgmPath},{"yaml_path",yamlPath},{"preview_path",previewPath},{"width",original.width},{"height",original.height},{"resolution",resolution},{"accepted_strokes",accepted},{"changed_cells",static_cast<double>(changed)},{"changed_area_m2",changed*resolution*resolution},{"active_map_changed",false}};
+  if (message) *message = QStringLiteral("Map edit copy tersimpan; active map tidak diubah");
+  return true;
 }
 
 QString baselinePathForConfig(const QString &filePath) {
@@ -1342,6 +1415,62 @@ class WebRosBridge {
     return true;
   }
 
+  bool setPerceptionLanePreview(
+      double topY, double bottomY, double leftTop, double leftBottom,
+      double rightTop, double rightBottom, QString *message) {
+    if (readOnly_) return rejectReadOnly(message);
+    const bool valid = std::isfinite(topY) && std::isfinite(bottomY) &&
+      std::isfinite(leftTop) && std::isfinite(leftBottom) &&
+      std::isfinite(rightTop) && std::isfinite(rightBottom) &&
+      topY >= 0.0 && topY <= 0.90 && bottomY >= topY + 0.05 && bottomY <= 0.995 &&
+      leftTop >= 0.0 && leftTop <= 1.0 && leftBottom >= 0.0 && leftBottom <= 1.0 &&
+      rightTop >= 0.0 && rightTop <= 1.0 && rightBottom >= 0.0 && rightBottom <= 1.0 &&
+      leftTop < rightTop && leftBottom < rightBottom;
+    if (!valid) {
+      if (message) *message = "Lane preview geometry tidak valid";
+      return false;
+    }
+    const double speed = scalarState("esc_drive_actual").value_or(0.0);
+    if (std::abs(speed) > 0.03) {
+      if (message) *message = QString("Lane preview ditolak: kendaraan masih bergerak (%1 m/s)").arg(speed, 0, 'f', 3);
+      return false;
+    }
+    auto client = node_->create_client<rcl_interfaces::srv::SetParametersAtomically>(
+      "/perception/set_parameters_atomically");
+    if (!client->wait_for_service(300ms)) {
+      if (message) *message = "Node /perception belum tersedia untuk lane preview";
+      return false;
+    }
+    auto request = std::make_shared<rcl_interfaces::srv::SetParametersAtomically::Request>();
+    const auto addDouble = [&request](const char *name, double value) {
+      rcl_interfaces::msg::Parameter p;
+      p.name = name;
+      p.value.type = rcl_interfaces::msg::ParameterType::PARAMETER_DOUBLE;
+      p.value.double_value = value;
+      request->parameters.push_back(std::move(p));
+    };
+    addDouble("lane_corridor_top_y_ratio", topY);
+    addDouble("lane_corridor_bottom_y_ratio", bottomY);
+    addDouble("lane_corridor_left_top_x_ratio", leftTop);
+    addDouble("lane_corridor_left_bottom_x_ratio", leftBottom);
+    addDouble("lane_corridor_right_top_x_ratio", rightTop);
+    addDouble("lane_corridor_right_bottom_x_ratio", rightBottom);
+    client->async_send_request(request,
+      [this, client](rclcpp::Client<rcl_interfaces::srv::SetParametersAtomically>::SharedFuture future) {
+        try {
+          const auto response = future.get();
+          update("web_action", QJsonObject{{"ok", response->result.successful},
+            {"action", "perception_lane_preview"},
+            {"message", QString::fromStdString(response->result.reason)}, {"at_ms", nowMs()}});
+        } catch (const std::exception &e) {
+          update("web_action", QJsonObject{{"ok", false}, {"action", "perception_lane_preview"},
+            {"message", QString::fromUtf8(e.what())}, {"at_ms", nowMs()}});
+        }
+      });
+    if (message) *message = "Lane Safety runtime preview diperbarui; YAML belum berubah";
+    return true;
+  }
+
   bool setDriveErpmPerMps(double erpmPerMps, QString *message) {
     if (readOnly_) return rejectReadOnly(message);
     if (!std::isfinite(erpmPerMps) || erpmPerMps < 100.0 || erpmPerMps > 50000.0) {
@@ -2312,8 +2441,8 @@ class WebRosBridge {
     initialPosePub_ = node_->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>("/initialpose", 10);
     hmiRequestPub_ = node_->create_publisher<std_msgs::msg::String>("/hmi/request", 10);
     vescToolCommandPub_ = node_->create_publisher<std_msgs::msg::String>("/esc/vesc/tool_command", 20);
-    trialTwistPub_ = node_->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel/teleop", 10);
-    trialSourcePub_ = node_->create_publisher<std_msgs::msg::String>("/teleop/active_source", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
+    trialTwistPub_ = node_->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel/web_trial", 10);
+    trialSourcePub_ = node_->create_publisher<std_msgs::msg::String>("/web_trial/active_source", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
   }
 };
 
@@ -2981,6 +3110,18 @@ class LocalHttpServer : public QObject {
       else return sendJson(socket,400,QJsonObject{{"ok",false},{"message","action harus ensure atau restore"},{"at_ms",nowMs()}});
       result["ok"]=ok;result["message"]=message;result["commissioning"]=commissioningState();result["at_ms"]=nowMs();
       return sendJson(socket,ok?200:409,result);
+    } else if (request.path == "/api/map-editor/save") {
+      if (bridge_->readOnly()) return sendJson(socket,403,QJsonObject{{"ok",false},{"code","READ_ONLY"},{"message","Read-only; save map copy ditolak"}});
+      QJsonObject result; ok=saveMapEditorCopy(json,&result,&message); result["ok"]=ok; result["message"]=message; result["at_ms"]=nowMs();
+      return sendJson(socket,ok?200:409,result);
+    } else if (request.path == "/api/map-editor/open-gimp") {
+      if (bridge_->readOnly()) return sendJson(socket,403,QJsonObject{{"ok",false},{"code","READ_ONLY"},{"message","Read-only; open GIMP ditolak"}});
+      const QString navCfg=packageConfigDir("navigation","AGV_CONFIG_DIR"),editRoot=QDir::cleanPath(QDir(navCfg).absoluteFilePath(QStringLiteral("../maps/undip/edits")));
+      const QString requested=QDir::cleanPath(json.value("path").toString());
+      if(requested.isEmpty()||!requested.startsWith(editRoot+QDir::separator())||QFileInfo(requested).suffix().toLower()!=QStringLiteral("pgm")||!QFileInfo(requested).isFile())
+        return sendJson(socket,400,QJsonObject{{"ok",false},{"message","Path PGM edit tidak valid"}});
+      const bool started=QProcess::startDetached(QStringLiteral("gimp"),QStringList{requested});
+      return sendJson(socket,started?200:409,QJsonObject{{"ok",started},{"message",started?QStringLiteral("GIMP dibuka dengan map hasil edit"):QStringLiteral("Gagal membuka GIMP")},{"path",requested},{"at_ms",nowMs()}});
     } else if (request.path == "/api/config/proposal") {
       const QString sourceTask=json.value("source_task").toString();const QJsonArray proposalItems=json.value("items").toArray();
       const QMap<QString,QSet<QString>> allowedPaths{
@@ -3139,6 +3280,12 @@ class LocalHttpServer : public QObject {
       ok=bridge_->triggerService("/imu/configure_optimal_profile","imu_optimal_profile",&message);
         } else if (request.path == "/api/perception/inference") {
       ok = bridge_->setPerceptionInference(json.value("enabled").toBool(false), &message);
+    } else if (request.path == "/api/perception/lane-preview") {
+      const double nan = std::numeric_limits<double>::quiet_NaN();
+      ok = bridge_->setPerceptionLanePreview(
+        json.value("top_y").toDouble(nan), json.value("bottom_y").toDouble(nan),
+        json.value("left_top_x").toDouble(nan), json.value("left_bottom_x").toDouble(nan),
+        json.value("right_top_x").toDouble(nan), json.value("right_bottom_x").toDouble(nan), &message);
     } else if (request.path == "/api/navigation/goal") {
       ok = bridge_->publishGoal(json.value("x").toDouble(std::numeric_limits<double>::quiet_NaN()),
                                 json.value("y").toDouble(std::numeric_limits<double>::quiet_NaN()),
@@ -3377,8 +3524,7 @@ class LocalHttpServer : public QObject {
       return taskId == QStringLiteral("N2.1") || taskId == QStringLiteral("N3.1") || taskId == QStringLiteral("N3.2") ||
              taskId.startsWith(QStringLiteral("N12.")) || taskId.startsWith(QStringLiteral("N13.")) ||
              taskId.startsWith(QStringLiteral("N14.")) || taskId.startsWith(QStringLiteral("N15.")) ||
-             taskId.startsWith(QStringLiteral("N16.")) || taskId.startsWith(QStringLiteral("N17.")) ||
-             taskId == QStringLiteral("R4.1.3");
+             taskId.startsWith(QStringLiteral("N16.")) || taskId.startsWith(QStringLiteral("N17."));
     };
     if (subsystem == QStringLiteral("navigation") && navigationRequiresMotionQualification(sourceExperimentId) &&
         !taskQualified(QStringLiteral("steering"), QStringLiteral("4.9"))) {

@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#07100f">
   <link rel="icon" href="data:,">
   <title>ADV Operator Console</title>
-  <link rel="stylesheet" href="/styles.css?v=20260916-r414-heading-v1">
+  <link rel="stylesheet" href="/styles.css?v=20260918-perception-workflow-v1">
   <link rel="stylesheet" href="/tokens.css?v=20260913-stage6-v1">
   <link rel="stylesheet" href="/base.css?v=20260913-stage6-v1">
   <link rel="stylesheet" href="/shell.css?v=20260913-stage6-v1">
@@ -14,10 +14,11 @@
   <link rel="stylesheet" href="/responsive.css?v=20260913-stage6-v1">
   <link rel="stylesheet" href="/accessibility.css?v=20260913-stage6-v1">
   <link rel="stylesheet" href="/workspaces.css?v=20260913-stage6-v1">
-  <link rel="stylesheet" href="/perception_bab4.css?v=20260914-bab4-v1">
+  <link rel="stylesheet" href="/perception_bab4.css?v=20260918-perception-workflow-v1">
   <link rel="stylesheet" href="/single-navigation.css?v=20260914-single-nav-v1">
   <link rel="stylesheet" href="/rm3100-calibration.css?v=20260917-rm3100-v1">
-  <link rel="stylesheet" href="/ui-polish.css?v=20260917-n0-clarity-v1">
+  <link rel="stylesheet" href="/ui-polish.css?v=20260918-firda-steering-v1">
+  <link rel="stylesheet" href="/map_editor.css?v=20260918-map-editor-v1">
 </head>
 <body>
   <div class="app-shell">
@@ -31,7 +32,8 @@
         <button class="top-domain active" data-domain="overview"><span>0</span><b>Overview</b></button>
         <button class="top-domain" data-domain="esc"><span>1</span><b>ESC</b></button>
         <button class="top-domain" data-domain="navigation"><span>2</span><b>Navigasi</b></button>
-        <button class="top-domain" data-domain="perception"><span>3</span><b>Persepsi</b></button>
+        <button class="top-domain" data-domain="map"><span>3</span><b>Map</b></button>
+        <button class="top-domain" data-domain="perception"><span>4</span><b>Persepsi</b></button>
       </nav>
       <div class="sidebar-context-head">
         <span id="contextDomainLabel">SYSTEM</span>
@@ -306,6 +308,46 @@
               <section class="nav-inspector-pane" data-nav-pane="command"><pre class="json-pretty" id="navInspectorCommand">Waiting...</pre></section>
             </div>
           </details>
+        </section>
+
+        <!-- STATIC MAP EDITOR -->
+        <section class="page" id="page-map-editor">
+          <div class="map-editor-shell">
+            <article class="panel map-editor-main">
+              <div class="panel-head map-editor-head">
+                <div><span class="eyebrow">STATIC MAP / MAP FRAME</span><h2>Map Inspection & Static Obstacle Editor</h2><p>Costmap runtime hanya overlay. SAVE hanya membakar obstacle hitam buatan operator ke copy PGM baru.</p></div>
+                <div class="map-editor-toolbar" role="toolbar" aria-label="Map editor tools">
+                  <button class="soft-btn active" data-map-edit-tool="pan">✋ Pan</button>
+                  <button class="soft-btn" data-map-edit-tool="measure">⌁ Measure</button>
+                  <button class="soft-btn map-edit-add" data-map-edit-tool="add">● Add Obstacle</button>
+                  <button class="soft-btn" data-map-edit-tool="erase">◌ Eraser</button>
+                  <button class="soft-btn" id="mapEditUndo">↶ Undo</button><button class="soft-btn" id="mapEditRedo">↷ Redo</button>
+                  <button class="soft-btn" id="mapEditFit">Fit</button>
+                </div>
+              </div>
+              <div class="map-editor-stage" id="mapEditorStage" tabindex="0">
+                <canvas id="mapEditorCanvas" width="1400" height="820"></canvas>
+                <div class="map-editor-legend"><span><i class="me-static"></i>Static</span><span><i class="me-edit"></i>User obstacle</span><span><i class="me-inflation"></i>Inflation</span><span><i class="me-high"></i>High cost</span><span><i class="me-lethal"></i>Lethal</span><span><i class="me-robot"></i>Localization</span><span><i class="me-gnss"></i>GNSS</span></div>
+                <div class="map-editor-status"><span id="mapEditCursor">x -- • y -- • cell --</span><span id="mapEditZoom">100%</span><span id="mapEditMapInfo">map --</span></div>
+                <div class="map-placeholder" id="mapEditorPlaceholder">Menunggu /map...</div>
+              </div>
+            </article>
+            <aside class="map-editor-rail">
+              <section class="panel compact"><div class="panel-head"><div><span class="eyebrow">LAYERS</span><h2>Runtime Reference</h2></div><span class="status-chip waiting" id="mapEditRuntimeChip">WAIT</span></div>
+                <div class="map-editor-checks"><label><input type="checkbox" id="mapEditLayerStatic" checked> Static PGM</label><label><input type="checkbox" id="mapEditLayerGlobal" checked> Global costmap</label><label><input type="checkbox" id="mapEditLayerLocal" checked> Local costmap</label><label><input type="checkbox" id="mapEditLayerGlobalEkf" checked> EKF global</label><label><input type="checkbox" id="mapEditLayerAuthorityPose" checked> Localization authority</label><label><input type="checkbox" id="mapEditLayerGnss" checked> GNSS map pose</label><label><input type="checkbox" id="mapEditLayerCov" checked> EKF covariance</label><label><input type="checkbox" id="mapEditLayerFootprint" checked> Robot footprint</label></div>
+              </section>
+              <section class="panel compact"><div class="panel-head"><div><span class="eyebrow">BRUSH</span><h2>Static Obstacle Mask</h2></div><b id="mapEditDirty">CLEAN</b></div>
+                <label class="map-editor-field">Brush radius <select id="mapEditBrush"><option value="0.2">0.2 m</option><option value="0.5" selected>0.5 m</option><option value="1">1.0 m</option><option value="2">2.0 m</option></select></label>
+                <div class="metric-grid"><div><span>Strokes</span><b id="mapEditStrokeCount">0</b></div><div><span>Brush cells</span><b id="mapEditBrushCells">5</b></div><div><span>Measure</span><b id="mapEditMeasure">--</b></div><div><span>Bearing</span><b id="mapEditBearing">--</b></div></div>
+                <div class="button-row"><button class="soft-btn grow" id="mapEditSaveDraft">Save Draft</button><button class="danger-btn" id="mapEditClear">Clear Edit</button></div>
+              </section>
+              <section class="panel compact map-editor-save-card"><div class="panel-head"><div><span class="eyebrow">EXPORT</span><h2>PGM Copy for GIMP</h2></div><span class="status-chip waiting" id="mapEditSaveState">NOT SAVED</span></div>
+                <p class="info-box">Static source tidak pernah ditimpa. Inflation/lethal/EKF tidak ikut disimpan.</p>
+                <button class="primary-btn full" id="mapEditSavePgm">SAVE PGM COPY</button><button class="soft-btn full" id="mapEditOpenGimp" disabled>OPEN LAST PGM IN GIMP</button>
+                <pre class="json-pretty map-edit-output" id="mapEditOutput">Belum ada output.</pre>
+              </section>
+            </aside>
+          </div>
         </section>
 
         <!-- PERCEPTION -->
@@ -760,6 +802,37 @@
                 <div class="record-footer"><span id="recordElapsed">00:00.0</span><span id="recordPath">Output: $AGV_ROOT/data/{navigasi|presepsi|esc}</span><span id="recordMessage">START/STOP → tabel 1 Hz tersimpan • Save CSV / Excel • tiap grafik dapat Download PNG</span></div>
               </article>
 
+              <article class="panel" id="firdaKpQuickPanel" hidden>
+                <div class="panel-head">
+                  <div><span class="eyebrow">FIRDA • 4.2.1 ONE-PAGE TEST</span><h2>Tuning Kp Arus FOC • LEFT</h2></div>
+                  <span class="status-chip waiting" id="firdaKpModeState">RUNTIME</span>
+                </div>
+                <p class="hint">Urutan: Web Maintenance → Read LEFT → pilih Kp → Apply Runtime → START recorder → Pulse 1 A sebanyak 3× → STOP + SAVE. EEPROM selalu OFF.</p>
+                <div class="run-grid">
+                  <label>Kp Q candidate<input id="firdaKpValue" type="number" min="0" max="5" step="0.000001" value="0.400391"></label>
+                  <label>Actual Q Kp<input id="firdaKpActual" type="text" value="--" readonly></label>
+                  <label>Actual Q Ki<input id="firdaKiActual" type="text" value="--" readonly></label>
+                  <label>Iq pulse<input id="firdaIqPulse" type="text" value="1.0 A / 1.0 s" readonly></label>
+                </div>
+                <div class="button-row" style="margin-top:10px;flex-wrap:wrap">
+                  <button class="soft-btn" id="firdaKpEnterMaint">1. WEB MAINTENANCE</button>
+                  <button class="soft-btn" id="firdaKpRead">2. READ LEFT</button>
+                  <button class="soft-btn" id="firdaKpPresetLow">Kp 0.4</button>
+                  <button class="soft-btn" id="firdaKpPresetMid">Kp 0.8</button>
+                  <button class="soft-btn" id="firdaKpPresetHigh">Kp 1.2</button>
+                  <button class="primary-btn" id="firdaKpApply">3. APPLY Kp RUNTIME</button>
+                  <button class="primary-btn" id="firdaKpRecordStart">4. START RECORD</button>
+                  <button class="warning-btn" id="firdaKpPulse">5. PULSE 1 A • 1 s</button>
+                  <button class="danger-btn" id="firdaKpRecordStop">6. STOP + SAVE</button>
+                  <button class="danger-btn" id="firdaKpStop">STOP CURRENT</button>
+                </div>
+                <div class="record-footer" style="margin-top:10px">
+                  <span id="firdaKpApplyState">READ LEFT dulu.</span>
+                  <span id="firdaKpLive">Iq -- A • Id -- A • Imotor -- A • Duty -- • Vbus -- V</span>
+                  <span id="firdaKpPulseCount">Pulse: 0 / 3</span>
+                </div>
+              </article>
+
               <div id="report41TimedPanel" hidden></div>
 
               <article class="panel graph-workspace">
@@ -812,7 +885,7 @@
                     <div class="obcal-preview">
                       <div class="obcal-preview-title"><b>LIVE YOLO PREVIEW</b><span id="obcalLiveStatus">WAITING</span></div>
                       <div class="obcal-camera"><img id="obcalImage" alt="Obstacle calibration live preview"><canvas id="obcalOverlay" width="1280" height="720"></canvas><div class="context-empty" id="obcalCameraEmpty">Menunggu camera + raw detection...</div></div>
-                      <div class="obcal-live-metrics"><span>Class <b id="obcalDetectedClass">--</b></span><span>Conf <b id="obcalDetectedConf">--</b></span><span>Pixel foot <b id="obcalDetectedPixel">--</b></span><span>Raw X <b id="obcalDetectedRaw">--</b></span><span>Cal X <b id="obcalDetectedCal">--</b></span><span>Clipped <b id="obcalDetectedClip">--</b></span></div>
+                      <div class="obcal-live-metrics"><span>Class <b id="obcalDetectedClass">--</b></span><span>Conf stabil <b id="obcalDetectedConf">--</b></span><span>BBox H stabil <b id="obcalDetectedBbox">--</b></span><span>Pixel foot <b id="obcalDetectedPixel">--</b></span><span>Raw X <b id="obcalDetectedRaw">--</b></span><span>Cal X <b id="obcalDetectedCal">--</b></span><span>Clipped <b id="obcalDetectedClip">--</b></span></div>
                     </div>
                     <div class="obcal-input">
                       <span class="eyebrow">CURRENT MEASUREMENT</span>
@@ -959,24 +1032,26 @@
   <script src="/camera_geometry.js?v=20260910-stage2-v1" defer></script>
   <script src="/analysis_session.js?v=20260910-stage2-v2" defer></script>
   <script src="/diagnostics.js?v=20260910-stage2-v1" defer></script>
-  <script src="/core.js?v=20260916-yellow-flow-v1" defer></script>
-  <script src="/navigation.js?v=20260914-mag-ekf-v1" defer></script>
-  <script src="/perception.js?v=20260914-single-nav-v1" defer></script>
+  <script src="/core.js?v=20260918-firda-live-v4" defer></script>
+  <script src="/navigation.js?v=20260918-goalchecker-v1" defer></script>
+  <script src="/map_editor.js?v=20260918-map-editor-v1" defer></script>
+  <script src="/perception.js?v=20260918-perception-workflow-v1" defer></script>
   <script src="/sensors.js?v=20260914-mag-ekf-v1" defer></script>
   <script src="/rm3100_calibration.js?v=20260917-rm3100-v1" defer></script>
   <script src="/esc.js?v=20260913-stage6-v1" defer></script>
-  <script src="/system_views.js?v=20260913-stage6-v1" defer></script>
-  <script src="/perception_calibration.js?v=20260914-single-nav-v1" defer></script>
-  <script src="/tuning_catalog.js?v=20260916-yellow-flow-v1" defer></script>
-  <script src="/tuning_ui.js?v=20260917-n0-clarity-v1" defer></script>
-  <script src="/tuning_charts.js?v=20260917-n0-clarity-v1" defer></script>
-  <script src="/tuning_trials.js?v=20260916-yellow-flow-v1" defer></script>
+  <script src="/system_views.js?v=20260918-map-editor-v1" defer></script>
+  <script src="/perception_calibration.js?v=20260918-perception-workflow-v1" defer></script>
+  <script src="/tuning_catalog.js?v=20260918-firda-live-v4" defer></script>
+  <script src="/tuning_ui.js?v=20260918-firda-421-onepage-v1" defer></script>
+  <script src="/tuning_charts.js?v=20260918-goalchecker-v1" defer></script>
+  <script src="/tuning_trials.js?v=20260918-firda-valid-v3" defer></script>
   <script src="/navigation_tuning_policy.js?v=20260916-yellow-flow-v1" defer></script>
-  <script src="/tuning_evidence.js?v=20260916-yellow-flow-v1" defer></script>
+  <script src="/tuning_evidence.js?v=20260918-firda-live-v4" defer></script>
   <script src="/report_41_timed.js?v=20260916-r41-summary-graph-v1" defer></script>
   <script src="/imu_heading_validation.js?v=20260916-report-integer-seconds-v1" defer></script>
-  <script src="/perception_bab4.js?v=20260914-single-nav-v1" defer></script>
+  <script src="/perception_bab4.js?v=20260918-perception-workflow-v1" defer></script>
   <script src="/config.js?v=20260916-yellow-flow-v1" defer></script>
+  <script src="/ekf_report_tools.js?v=20260917-r423-3cycle-v1" defer></script>
   <script src="/export_tools.js?v=20260916-report-integer-seconds-v1" defer></script>
   <script src="/report_dual_export.js?v=20260916-report-integer-seconds-v1" defer></script>
   <script src="/boot.js?v=20260913-stage6-v1" defer></script>

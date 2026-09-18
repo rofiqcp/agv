@@ -399,9 +399,11 @@ async function perBab4AutoCaptureTrial(){
   perBab4.autoTrial.busy=true;const btn=$('perBab4AutoCapture');if(btn){btn.disabled=true;btn.textContent='MENYIMPAN FRAME...'}
   try{
     const ev=await perBab4PersistTrialEvidence(label),evidencePath=ev.image_path||'--',dataUrl=perBab4EvidenceJpeg({kind:'detection',detections:dets,selectedIndex:Math.max(0,decision.index),title:`${target==='human'?'MANUSIA':'SEPEDA MOTOR'} • ${distance} m • ulangan ${repeat}`,subtitle:`AUTO ${success?'BERHASIL':'GAGAL'} • ${decision.reason}${success&&Number.isFinite(confidence)?` • confidence ${confidence.toFixed(3)}`:''}`});
-    perBab4Push(0,[perBab4Rows().length+1,target,distance,repeat,perBab4FrameTimestamp(),backend,dets.length,success?confidence.toFixed(5):'--',success?'BERHASIL':'GAGAL',success?String(sel?.class_id??'--'):classes,note,decision.reason,evidencePath]);
+    const values=[perBab4Rows().length+1,target,distance,repeat,perBab4FrameTimestamp(),backend,dets.length,success?confidence.toFixed(5):'--',success?'BERHASIL':'GAGAL',success?String(sel?.class_id??'--'):classes,note,decision.reason,evidencePath],
+      trialKey=`${target}|${distance}|${repeat}`,retake=perBab4UpsertMainTrial(trialKey,values,v=>`${v[1]}|${v[2]}|${v[3]}`);
+    perBab4.evidence.f42=perBab4.evidence.f42.filter(x=>!(x.target===target&&+x.distance===distance&&+x.repeat===repeat));
     if(dataUrl)perBab4.evidence.f42.push({target,distance,repeat,success,confidence,dataUrl,evidencePath});else perBab4.evidence.captureWarnings++;
-    perBab4.autoTrial.lastResult=`${success?'BERHASIL':'GAGAL'} • ${decision.reason}${success&&Number.isFinite(confidence)?` • conf ${confidence.toFixed(3)}`:''}`;perBab4AdvanceDetection(target,distance,repeat);perBab4RefreshEvidencePackage();perBab4RefreshAutoTrialUi();toast(`${target==='human'?'Manusia':'Sepeda motor'} ${distance} m #${repeat}: ${success?'BERHASIL':'GAGAL'} • frame tersimpan`,!success);
+    perBab4.autoTrial.lastResult=`${retake?'RETAKE • ':''}${success?'BERHASIL':'GAGAL'} • ${decision.reason}${success&&Number.isFinite(confidence)?` • conf ${confidence.toFixed(3)}`:''}`;perBab4AdvanceDetection(target,distance,repeat);perBab4RefreshEvidencePackage();perBab4RefreshAutoTrialUi();toast(`${retake?'RETAKE replace • ':''}${target==='human'?'Manusia':'Sepeda motor'} ${distance} m #${repeat}: ${success?'BERHASIL':'GAGAL'} • frame tersimpan`,!success);
   }catch(e){perBab4.autoTrial.lastResult='SAVE ERROR';toast(e.message||String(e),true)}finally{perBab4.autoTrial.busy=false;if(btn){btn.disabled=false;btn.textContent='📷 AMBIL DATA'}perBab4RefreshAutoTrialUi()}
 }
 function perBab4RefreshAutoTrialUi(){
@@ -515,4 +517,364 @@ perBab4RefreshLive=function(){perBab4F41BaseRefreshLive();perBab4F41RefreshCard(
 const perBab4F41BaseCollectPng=collectExperimentGraphPngPayload;
 collectExperimentGraphPngPayload=function(){if(selectedExperiment?.id==='F4.1'&&perBab4.f41.canvas)return[{index:1,title:'Bukti Implementasi Runtime',data_url:perBab4.f41.canvas.toDataURL('image/png')}];return perBab4F41BaseCollectPng()};
 const perBab4F41BaseRenderSelected=renderSelectedExperiment;
-renderSelectedExperiment=function(){if(currentExp==='perception'&&selectedExperiment?.id==='F4.1')perBab4F41ApplySchema();const r=perBab4F41BaseRenderSelected();const rec=$('recordToggleBtn');if(rec)rec.style.display=perBab4Is('F4.1')?'none':'';return r};
+renderSelectedExperiment=function(){if(currentExp==='perception'&&selectedExperiment?.id==='F4.1')perBab4F41ApplySchema();const r=perBab4F41BaseRenderSelected();const rec=$('recordToggleBtn');if(rec)rec.hidden=perBab4Is('F4.1');return r};
+
+
+/* ===== BAB IV 4.5 CONTROL RESPONSE WIZARD v1 (2026-09-17) =====
+ * Scope is intentionally limited to the Persepsi FINAL Dataset surface.
+ * No navigation/ESC page markup or behaviour is modified. Existing navigation goal
+ * and recorder APIs are only consumed so the perception thesis test is end-to-end.
+ */
+PER_BAB4_IDS.add('F4.5');
+perBab4.f45=perBab4.f45||{active:false,phase:'IDLE',token:0,timer:null,countdownTimer:null,startMs:0,trialKey:'',mode:'obstacle',samples:[],completed:{},lastResult:'WAIT SESSION',lastFolder:'',initialPose:null,goalDistance:3,timeoutSec:30,countdownLeft:0};
+const PER_F45_OBSTACLE_KEYS=['human-1','human-2','human-3','human-4','human-5','motorcycle-1','motorcycle-2','motorcycle-3','motorcycle-4','motorcycle-5'];
+const PER_F45_LANE_KEYS=['green_outer','green_drivable','yellow-left','yellow-right','red-left','red-right','gray'];
+function perBab4F45ApplySchema(){
+  const list=experiments.perception||[];let x=list.find(v=>v.id==='F4.5');
+  if(!x){const base=list.find(v=>v.id==='F4.4')||list[0]||{};x={...base,id:'F4.5'};list.push(x)}
+  Object.assign(x,{groupId:'FINAL-4.5',groupTitle:'FINAL BAB IV — 4.5 Validasi Respons Kendaraan',section:'4.5 Validasi Respons Kendaraan terhadap Keluaran Persepsi',reportMode:true,bab4Protocol:'control_response',bab4ManualCapture:true,bab4NoTimeAxis:true,parameterFields:[],
+    tableColumns:[
+      ['No','Objek','Jarak Awal [m]','Respons Aktual','Response Latency [ms]','Min Obstacle [m]','Max |Steering Target| [deg]','Steering RMSE [deg]','Mean Speed Actual [m/s]','Durasi [s]','Hasil','Evidence Frame'],
+      ['No','Kondisi Lane','Expected Policy','Respons Aktual','Response Time [ms]','Mean Speed Actual [m/s]','Max |Steering Target| [deg]','Steering RMSE [deg]','Recovery Time [ms]','Durasi [s]','Hasil','Evidence Frame'],
+      ['Trial Key','t [ms]','Mode','Kondisi','Obstacle [m]','Safety Decision','Lane State','Lane Decision','Nav v [m/s]','Out v [m/s]','Out w [rad/s]','Speed Target [m/s]','Speed Actual [m/s]','Steer Target [deg]','Steer Actual [deg]','Obstacle Seen','Obstacle Source','Obstacle Class ID','Near Emergency'],
+      ['Timestamp','Trial Key','Mode','Reason','Durasi [s]','Evidence Frame']
+    ],tableNames:['Rekap Respons Kontrol Obstacle 1–5 m','Rekap Respons Kontrol Lane Safety','Time-Series Target dan Feedback Kontrol','Log Trial Invalid / Abort'],
+    graphCaptions:['Response Latency Obstacle terhadap Jarak','Mean Speed Aktual Lane Safety','RMSE Steering per Kondisi'],graphs:[],
+    liveSeries:{'Drive target':'esc_drive_target','Drive actual':'esc_drive_actual','Steering target':'esc_steer_target','Steering actual':'esc_steer_actual'}});
+  if(selectedExperiment?.id==='F4.5')selectedExperiment=x;
+}
+const perBab4F45PatchBase=patchPerceptionBab4Catalog;
+patchPerceptionBab4Catalog=function(){perBab4F45PatchBase();perBab4F45ApplySchema()};
+perBab4F45ApplySchema();
+
+function perBab4F45Pose(){try{const p=typeof navigationRobotPose==='function'?navigationRobotPose():obj('ekf_global');const yaw=Number.isFinite(+p?.yaw)?+p.yaw:Number.isFinite(+p?.yaw_rad)?+p.yaw_rad:NaN;return{x:+p?.x,y:+p?.y,yaw}}catch(_){const p=obj('ekf_global');return{x:+p.x,y:+p.y,yaw:+p.yaw}}}
+function perBab4F45SelectedObstacleClassId(){const key=perBab4.f45.active&&/^(human|motorcycle)-/.test(perBab4.f45.trialKey)?perBab4.f45.trialKey:(($('perF45Object')?.value||'human')+'-');return key.startsWith('motorcycle-')?3:0}
+function perBab4F45ObstacleObservation(){
+  const classId=perBab4F45SelectedObstacleClassId(),ds=obj('obstacle_metrics')?.detections,metric=Array.isArray(ds)?ds.filter(d=>d?.confirmed!==false&&+d.class_id===classId&&Number.isFinite(+d.forward_m)&&+d.forward_m>=0):[],near=obj('near_field_state')||{},nearSeen=near.raw_candidate===true&&+near.raw_class_id===classId,nearEmergency=nearSeen&&near.emergency===true;
+  metric.sort((a,b)=>(+a.forward_m)-(+b.forward_m));const m=metric[0];return{seen:!!m||nearSeen,distance:m?+m.forward_m:NaN,source:m?(nearEmergency?'METRIC+NEAR':'METRIC'):(nearSeen?'NEAR_FIELD':'NONE'),classId,nearEmergency,confidence:m?+m.score:+near.confidence};
+}
+function perBab4F45ObstacleDistance(){return perBab4F45ObstacleObservation().distance}
+function perBab4F45LaneSnapshot(){const ls=obj('lane_state')||{},c=ls.corridor||{};return{valid:Boolean(ls.valid),drivable:Boolean(c.drivable_detected??ls.drivable_valid),rawLaneMask:Boolean(c.raw_lane_mask_detected),laneMask:Boolean(c.lane_mask_detected),leftValid:Boolean(c.left_valid),rightValid:Boolean(c.right_valid),internalIgnored:Boolean(c.internal_lane_ignored),evidenceMode:String(c.evidence_mode||'NONE'),left:String(c.left_status||'UNKNOWN').toUpperCase(),right:String(c.right_status||'UNKNOWN').toUpperCase(),rec:String(c.recommendation||ls.state||'--').toUpperCase(),leftGap:+c.left_gap_px,rightGap:+c.right_gap_px}}
+function perBab4F45LaneExpected(key){return({green_outer:{label:'GREEN • OUTER SAFE',policy:'NORMAL SPEED • DRIVABLE + OUTER LANE SAFE • NO SAFETY STEERING'},green_drivable:{label:'GREEN • DRIVABLE ONLY',policy:'NORMAL SPEED • DRIVABLE VALID • LANE MASK ABSENT • NO SAFETY STEERING'},'yellow-left':{label:'YELLOW LEFT',policy:'SLOW • OUTER LANE WARNING • NO RECENTER'},'yellow-right':{label:'YELLOW RIGHT',policy:'SLOW • OUTER LANE WARNING • NO RECENTER'},'red-left':{label:'RED LEFT',policy:'SLOW • OUTER LANE INTRUSION • RECENTER RIGHT'},'red-right':{label:'RED RIGHT',policy:'SLOW • OUTER LANE INTRUSION • RECENTER LEFT'},gray:{label:'GRAY',policy:'STOP • NO LANE + NO DRIVABLE • FAIL-CLOSED'}})[key]||{label:key,policy:'--'}}
+function perBab4F45LaneMatches(key){const s=perBab4F45LaneSnapshot();if(key==='green_outer')return s.drivable&&s.laneMask&&s.leftValid&&s.rightValid&&s.left==='GREEN'&&s.right==='GREEN';if(key==='green_drivable')return s.drivable&&!s.laneMask&&!s.leftValid&&!s.rightValid&&s.left==='GREEN'&&s.right==='GREEN';if(key==='yellow-left')return s.drivable&&s.laneMask&&s.leftValid&&s.left==='YELLOW'&&s.right==='GREEN';if(key==='yellow-right')return s.drivable&&s.laneMask&&s.rightValid&&s.right==='YELLOW'&&s.left==='GREEN';if(key==='red-left')return s.drivable&&s.laneMask&&s.leftValid&&s.left==='RED'&&s.right==='GREEN';if(key==='red-right')return s.drivable&&s.laneMask&&s.rightValid&&s.right==='RED'&&s.left==='GREEN';return !s.drivable&&!s.laneMask&&s.rec==='NO_MASK_EVIDENCE'&&s.left==='UNKNOWN'&&s.right==='UNKNOWN'}
+function perBab4F45CurrentKey(){const mode=$('perF45Mode')?.value||'obstacle';if(mode==='lane')return $('perF45LaneCondition')?.value||'green_outer';return`${$('perF45Object')?.value||'human'}-${+$('perF45Distance')?.value||1}`}
+function perBab4F45DoneCount(){return Object.values(perBab4.f45.completed||{}).filter(v=>v==='PASS'||v==='FAIL').length}
+const PER_F45_STORAGE_KEY='adv-perception-f45-session-v1';
+function perBab4F45Persist(){
+  if(!recordStartedMs)return;try{const tables={};for(let i=0;i<4;i++)tables[i]=tableRunRows.get(i)||[];localStorage.setItem(PER_F45_STORAGE_KEY,JSON.stringify({version:1,startedMs:recordStartedMs,completed:perBab4.f45.completed||{},lastResult:perBab4.f45.lastResult||'',lastFolder:perBab4.f45.lastFolder||'',tables,savedAt:Date.now()}));perBab4.f45.restoredFor=recordStartedMs}catch(e){console.warn('F4.5 persist gagal',e)}}
+function perBab4F45Restore(){
+  if(!recordStartedMs||perBab4.f45.restoredFor===recordStartedMs)return false;try{const x=JSON.parse(localStorage.getItem(PER_F45_STORAGE_KEY)||'null');if(!x||x.version!==1||Math.abs((+x.startedMs||0)-recordStartedMs)>5000)return false;perBab4.f45.completed=x.completed||{};perBab4.f45.lastResult=x.lastResult||'SESSION RESTORED';perBab4.f45.lastFolder=x.lastFolder||'';for(let i=0;i<4;i++)tableRunRows.set(i,Array.isArray(x.tables?.[i])?x.tables[i]:[]);perBab4.f45.restoredFor=recordStartedMs;return true}catch(e){console.warn('F4.5 restore gagal',e);return false}}
+function perBab4F45ControlConfig(){return configData('trajectory_safety')?.trajectory_safety_supervisor?.ros__parameters||{}}
+function perBab4F45RuntimeFlags(){
+  const cfg=perBab4F45ControlConfig(),ts=obj('trajectory_safety_state')||{},lc=obj('lane_control')||{},tsText=String(ts.raw||ts.value||'');
+  return{
+    metric:ts.metric_obstacle_safety===true||/metric_obstacle_safety=true/.test(tsText),
+    lane:lc.enabled===true||ts.lane_safety_enabled===true||/lane_safety_enabled=true/.test(tsText),
+    grayStop:cfg.stop_on_lane_lost===true||ts.stop_on_lane_lost===true||/stop_on_lane_lost=true/.test(tsText),
+    bypass:cfg.commissioning_bypass_enabled===true||/commissioning_bypass=true/.test(tsText),
+    ts,tsText,cfg
+  };
+}
+function perBab4F45SessionReady(){
+  const pose=perBab4F45Pose(),f=perBab4F45RuntimeFlags(),reasons=[];
+  if(!bool(raw('connected.camera'))||!bool(raw('camera_healthy')))reasons.push('camera');
+  if(!perBab4InferenceOn())reasons.push('YOLOPv2');
+  if(!bool(raw('connected.esc_feedback'))||!bool(raw('connected.esc_ready')))reasons.push('ESC');
+  if(!bool(raw('system.motion_ready')))reasons.push('motion gate');
+  const qualification=perBab4BasePhaseGate();if(!qualification.ok)reasons.push('actuator/Nav2 qualification');
+  if(bool(raw('system.estop')))reasons.push('E-stop');
+  if(!Number.isFinite(pose.x)||!Number.isFinite(pose.y)||!Number.isFinite(pose.yaw))reasons.push('map pose');
+  if(!channelFresh('trajectory_safety_state',2.5))reasons.push('trajectory safety stream');
+  if(f.bypass)reasons.push('safety bypass ON');
+  // Satu sesi F4.5 harus mampu menyelesaikan 10 obstacle + 7 Lane Safety.
+  // Jangan mulai sesi bila authority hanya aktif sebagian karena hasil 17 kondisi
+  // harus berasal dari runtime kontrol yang sama.
+  if(!f.metric)reasons.push('metric obstacle safety OFF / kalibrasi kamera belum valid');
+  if(!f.lane)reasons.push('lane safety runtime OFF');
+  if(!f.grayStop)reasons.push('GRAY fail-closed OFF');
+  return{ok:reasons.length===0,reasons,pose,cfg:f.cfg,tsText:f.tsText,ts:f.ts,runtime:f};
+}
+function perBab4F45Ready(){
+  const base=perBab4F45SessionReady(),mode=$('perF45Mode')?.value||perBab4.f45.mode||'obstacle',laneKey=$('perF45LaneCondition')?.value||'green_outer',reasons=[...base.reasons],cfg=base.cfg;
+  const speed=+raw('esc_drive_actual');if(Number.isFinite(speed)&&Math.abs(speed)>.03)reasons.push('kendaraan belum diam');
+  if(mode==='obstacle'){
+    if(!channelFresh('obstacle_metrics',2.5))reasons.push('obstacle metric stream');
+  }else{
+    if(bool(raw('perception_emergency')))reasons.push('perception emergency');
+    if(!channelFresh('lane_state',2.5))reasons.push('lane stream');
+    if(!perBab4F45LaneMatches(laneKey))reasons.push('kondisi lane belum sesuai pilihan');
+  }
+  return{ok:reasons.length===0,reasons,pose:base.pose,cfg};
+}
+const perBab4F45PhaseBase=phaseGate;
+phaseGate=function(){if(selectedExperiment?.id==='F4.5')return perBab4BasePhaseGate();return perBab4F45PhaseBase()};
+const perBab4F45PreflightBase=testPreflightStatus;
+testPreflightStatus=function(){
+  const p=perBab4F45PreflightBase();if(selectedExperiment?.id!=='F4.5')return p;const items=[...p.items],add=(label,ok,detail)=>{const i=items.findIndex(x=>x.label===label),v={label,ok:!!ok,detail,critical:true};if(i>=0)items[i]=v;else items.push(v)};
+  const realGate=perBab4BasePhaseGate(),r=perBab4F45SessionReady();add('Commissioning prerequisite',realGate.ok,realGate.ok?'aktuator/Nav2 qualification READY':realGate.reason||'qualification belum READY');add('F4.5 session gate',r.ok,r.ok?'kamera + ESC + motion + safety READY':r.reasons.join(', '));const bad=items.filter(i=>i.critical&&!i.ok);return{ok:bad.length===0,items,reason:bad.map(x=>x.label).join(', ')};
+};
+
+function perBab4F45Sample(){
+  const ts=obj('trajectory_safety_state')||{},lane=perBab4F45LaneSnapshot(),t=Math.max(0,Date.now()-perBab4.f45.startMs),obs=perBab4F45ObstacleObservation(),sv=+raw('esc_drive_target'),av=+raw('esc_drive_actual'),st=deg(+raw('esc_steer_target')),sa=deg(+raw('esc_steer_actual'));
+  return{t,ob:obs.distance,obsSeen:obs.seen,obsSource:obs.source,obsClass:obs.classId,nearEmergency:obs.nearEmergency,decision:String(ts.decision||ts.raw||'--'),laneState:`${lane.left}/${lane.right}`,laneDecision:String(ts.lane_recommendation||ts.lane_control_decision||lane.rec||'--'),navV:+ts.nav_v,outV:+ts.out_v,outW:+ts.out_w,speedTarget:sv,speedActual:av,steerTarget:st,steerActual:sa};
+}
+function perBab4F45Stats(samples){const finite=(k)=>samples.map(x=>+x[k]).filter(Number.isFinite),mean=a=>a.length?a.reduce((s,v)=>s+v,0)/a.length:NaN,obs=finite('ob'),spd=finite('speedActual'),steer=finite('steerTarget'),errs=samples.map(x=>Number.isFinite(+x.steerTarget)&&Number.isFinite(+x.steerActual)?(+x.steerTarget)-(+x.steerActual):NaN).filter(Number.isFinite);return{minObstacle:obs.length?Math.min(...obs):NaN,meanSpeed:mean(spd),maxSteer:steer.length?Math.max(...steer.map(Math.abs)):NaN,steerRmse:errs.length?Math.sqrt(mean(errs.map(v=>v*v))):NaN}}
+function perBab4F45ObstacleDecision(d){d=String(d||'').toUpperCase();return /^(PATH_OBSTACLE_SLOW_SEARCH|SEARCH_AVOIDANCE_(LEFT|RIGHT|BOTH)|AVOID_(LEFT|RIGHT)|IMMEDIATE_COMMAND_HARD_STOP|NO_SAFE_CORRIDOR_STOP|AVOIDANCE_NOT_ENGAGED_STOP|DRIVABLE_SPACE_UNKNOWN_STOP|PERCEPTION_EMERGENCY_STOP)$/.test(d)}
+function perBab4F45ObstacleStopDecision(d){d=String(d||'').toUpperCase();return /^(IMMEDIATE_COMMAND_HARD_STOP|NO_SAFE_CORRIDOR_STOP|AVOIDANCE_NOT_ENGAGED_STOP|DRIVABLE_SPACE_UNKNOWN_STOP|PERCEPTION_EMERGENCY_STOP)$/.test(d)}
+function perBab4F45RuntimeFaultDecision(d){d=String(d||'').toUpperCase();return /^(NAV_CMD_STALE_STOP|CAMERA_DISCONNECTED_STOP|CAMERA_UNHEALTHY_STOP|PLAN_UNAVAILABLE_STOP|OBSTACLE_STREAM_STALE_STOP|LANE_RECENTER_BLOCKED_STOP|LANE_LOST_STOP|NONFINITE_COMMAND_STOP)$/.test(d)}
+function perBab4F45ResponseAt(samples,mode,key){for(const s of samples){const d=String(s.decision).toUpperCase();if(mode==='obstacle'){if(perBab4F45ObstacleDecision(d))return s.t}else if(key==='green_outer'||key==='green_drivable'){if(Math.abs(+s.speedActual)>0.03)return s.t}else if(key.startsWith('yellow')){if(Number.isFinite(s.navV)&&Number.isFinite(s.outV)&&s.outV<s.navV-.015)return s.t}else if(key.startsWith('red')){if(/RECENTER/.test(d)||/RECENTER/.test(String(s.laneDecision).toUpperCase()))return s.t}else if(key==='gray'){if(/STOP/.test(d)&&Math.abs(+s.speedActual)<.03)return s.t}}return NaN}
+function perBab4F45FirstObstacleAt(samples){const s=samples.find(x=>x.obsSeen===true||Number.isFinite(+x.ob));return s?+s.t:NaN}
+function perBab4F45Outcome(samples,mode,key,reason='AUTO'){const st=perBab4F45Stats(samples),last=samples.at(-1)||{},decision=String(last.decision||'--'),rt=perBab4F45ResponseAt(samples,mode,key),firstObs=mode==='obstacle'?perBab4F45FirstObstacleAt(samples):NaN,latency=mode==='obstacle'&&Number.isFinite(firstObs)&&Number.isFinite(rt)?Math.max(0,rt-firstObs):rt,dur=samples.length?Math.max(...samples.map(x=>x.t))/1000:0;let pass=false,response=decision,recovery=NaN;
+  if(reason==='INVALID'||reason==='ABORT')return{pass:false,status:'INVALID',response:reason,rt,firstObs,latency,st,dur,recovery};
+  if(mode==='obstacle'){const obstacleSeen=Number.isFinite(firstObs),responded=samples.some(s=>perBab4F45ObstacleDecision(s.decision)),stopped=samples.some(s=>perBab4F45ObstacleStopDecision(s.decision)&&Math.abs(+s.speedActual)<.03),avoided=samples.some(s=>/^AVOID_(LEFT|RIGHT)$/.test(String(s.decision).toUpperCase()));pass=obstacleSeen&&responded&&((reason==='SAFE_STOP'&&stopped)||(reason==='GOAL_SUCCEEDED'));response=!obstacleSeen?'OBSTACLE NOT OBSERVED':reason==='SAFE_STOP'&&stopped?'SAFETY STOP':reason==='GOAL_SUCCEEDED'&&responded?(avoided?'AVOIDANCE → GOAL':'SLOW/SEARCH → GOAL'):reason==='GOAL_SUCCEEDED'?'GOAL • NO SAFETY RESPONSE':reason==='TIMEOUT'?`TIMEOUT • ${decision}`:decision}
+  else if(key==='green_outer'||key==='green_drivable'){const moving=samples.some(s=>Math.abs(+s.speedActual)>.03),recenter=samples.some(s=>/RECENTER/.test(String(s.decision).toUpperCase())||/RECENTER/.test(String(s.laneDecision).toUpperCase())),capped=samples.some(s=>Number.isFinite(s.navV)&&Number.isFinite(s.outV)&&s.navV>.05&&s.outV<s.navV-.03);pass=moving&&!recenter&&!capped;response=`${moving?'NORMAL SPEED':'NO MOTION'} • ${recenter?'RECENTER':'NO RECENTER'}`}
+  else if(key.startsWith('yellow')){const slow=samples.some(s=>Number.isFinite(s.navV)&&Number.isFinite(s.outV)&&s.outV<s.navV-.015),rec=samples.some(s=>/RECENTER/.test(String(s.decision).toUpperCase()));pass=slow&&!rec;response=`${slow?'SLOW':'NO SLOW'} • ${rec?'RECENTER':'NO RECENTER'}`}
+  else if(key.startsWith('red')){const wantRight=key==='red-left',dir=samples.some(s=>Number.isFinite(s.outW)&&(wantRight?s.outW<-.015:s.outW>.015)),ri=samples.findIndex(s=>/RECENTER/.test(String(s.decision).toUpperCase())||/RECENTER/.test(String(s.laneDecision).toUpperCase())),gi=ri>=0?samples.findIndex((s,i)=>i>ri&&s.laneState==='GREEN/GREEN'):-1;pass=ri>=0&&dir&&gi>=0;recovery=gi>=0?samples[gi].t-samples[ri].t:NaN;response=`RECENTER ${wantRight?'RIGHT':'LEFT'}${gi>=0?' → GREEN':' • NO GREEN RECOVERY'}`}
+  else if(key==='gray'){const stop=samples.some(s=>/STOP/.test(String(s.decision).toUpperCase())&&Math.abs(+s.speedActual)<.03);pass=stop;response=stop?'FAIL-CLOSED STOP':'MOTION NOT BLOCKED'}
+  return{pass,status:pass?'PASS':'FAIL',response,rt,firstObs,latency,st,dur,recovery};
+}
+function perBab4F45SortSummaries(){
+  const obstacle=perBab4RowsAt(0),objectOrder={'Manusia':0,'Sepeda motor':1};
+  obstacle.sort((a,b)=>(objectOrder[a.values?.[1]]??9)-(objectOrder[b.values?.[1]]??9)||(+a.values?.[2]||99)-(+b.values?.[2]||99));
+  obstacle.forEach((r,i)=>{if(Array.isArray(r.values))r.values[0]=i+1});tableRunRows.set(0,obstacle);
+  const lane=perBab4RowsAt(1),laneOrder=Object.fromEntries(PER_F45_LANE_KEYS.map((k,i)=>[perBab4F45LaneExpected(k).label,i]));
+  lane.sort((a,b)=>(laneOrder[a.values?.[1]]??99)-(laneOrder[b.values?.[1]]??99));
+  lane.forEach((r,i)=>{if(Array.isArray(r.values))r.values[0]=i+1});tableRunRows.set(1,lane);
+}
+function perBab4F45AppendTimeseries(key,mode,label,samples){const a=perBab4RowsAt(2),yaml=perBab4YamlSnapshot();samples.forEach((s,i)=>a.push({sec:Math.floor(s.t/1000),values:[key,s.t,mode,label,perBab4FmtNum(s.ob,3),s.decision,s.laneState,s.laneDecision,perBab4FmtNum(s.navV,3),perBab4FmtNum(s.outV,3),perBab4FmtNum(s.outW,3),perBab4FmtNum(s.speedTarget,3),perBab4FmtNum(s.speedActual,3),perBab4FmtNum(s.steerTarget,2),perBab4FmtNum(s.steerActual,2),s.obsSeen?'YES':'NO',s.obsSource||'NONE',Number.isFinite(+s.obsClass)?+s.obsClass:'--',s.nearEmergency?'YES':'NO'],yaml:i===0?yaml:[]}));tableRunRows.set(2,a)}
+async function perBab4F45Finish(statusReason='AUTO'){
+  if(!perBab4.f45.active)return;const token=perBab4.f45.token;perBab4.f45.active=false;perBab4.f45.phase='SAVING';clearInterval(perBab4.f45.timer);clearInterval(perBab4.f45.countdownTimer);try{await post('/api/navigation/cancel',{},true)}catch(_){ }
+  const mode=perBab4.f45.mode,key=perBab4.f45.trialKey,samples=[...perBab4.f45.samples],label=mode==='obstacle'?key:perBab4F45LaneExpected(key).label,result=perBab4F45Outcome(samples,mode,key,statusReason);let evidence='--';try{const ev=await perBab4PersistTrialEvidence(`F4.5_${mode}_${key}_${result.status}`);evidence=ev.image_path||'--'}catch(_){ }
+  if(result.status==='INVALID'){
+    const a=perBab4RowsAt(3);a.push({sec:0,values:[new Date().toISOString(),key,mode,result.response,perBab4FmtNum(result.dur,2),evidence],yaml:perBab4YamlSnapshot()});tableRunRows.set(3,a);
+  }else if(mode==='obstacle'){
+    perBab4F45AppendTimeseries(key,mode,label,samples);
+    const [target,distance]=key.split('-'),a=perBab4RowsAt(0);a.push({sec:0,values:[a.length+1,target==='human'?'Manusia':'Sepeda motor',+distance,result.response,perBab4FmtNum(result.latency,0),perBab4FmtNum(result.st.minObstacle,3),perBab4FmtNum(result.st.maxSteer,2),perBab4FmtNum(result.st.steerRmse,2),perBab4FmtNum(result.st.meanSpeed,3),perBab4FmtNum(result.dur,2),result.status,evidence],yaml:perBab4YamlSnapshot()});tableRunRows.set(0,a);
+  }else{
+    perBab4F45AppendTimeseries(key,mode,label,samples);
+    const a=perBab4RowsAt(1),exp=perBab4F45LaneExpected(key);a.push({sec:0,values:[a.length+1,exp.label,exp.policy,result.response,perBab4FmtNum(result.rt,0),perBab4FmtNum(result.st.meanSpeed,3),perBab4FmtNum(result.st.maxSteer,2),perBab4FmtNum(result.st.steerRmse,2),perBab4FmtNum(result.recovery,0),perBab4FmtNum(result.dur,2),result.status,evidence],yaml:perBab4YamlSnapshot()});tableRunRows.set(1,a);
+  }
+  perBab4F45SortSummaries();if(result.status==='PASS'||result.status==='FAIL')perBab4.f45.completed[key]=result.status;perBab4.f45.lastResult=`${key} • ${result.status} • ${result.response}`;perBab4.f45.phase='IDLE';renderExperimentTable();await saveAllTemplateTablesServer();perBab4F45Persist();perBab4F45Advance();perBab4F45DrawGraphs();perBab4F45Refresh();if(token===perBab4.f45.token)toast(`F4.5 ${key}: ${result.status} • ${result.response} • checkpoint tersimpan`,result.status!=='PASS')
+}
+function perBab4F45Monitor(){if(!perBab4.f45.active||perBab4.f45.phase!=='RUNNING')return;const s=perBab4F45Sample();perBab4.f45.samples.push(s);const elapsed=s.t/1000,key=perBab4.f45.trialKey,mode=perBab4.f45.mode;if(bool(raw('system.estop'))||(mode==='lane'&&bool(raw('perception_emergency'))))return perBab4F45Finish('INVALID');if(elapsed>=perBab4.f45.timeoutSec)return perBab4F45Finish(mode==='obstacle'?'TIMEOUT':'AUTO');if(mode==='obstacle'){if(elapsed>.4&&perBab4F45RuntimeFaultDecision(s.decision))return perBab4F45Finish('INVALID');if(elapsed>.7&&perBab4F45ObstacleStopDecision(s.decision)&&Math.abs(+s.speedActual)<.03)return perBab4F45Finish('SAFE_STOP');const gs=String(obj('goal_state')?.state||'').toUpperCase();if(['SUCCEEDED','SUCCESS'].includes(gs))return perBab4F45Finish('GOAL_SUCCEEDED')}else if(key==='gray'){if(elapsed>1.5)return perBab4F45Finish('AUTO')}else if(key.startsWith('red')){const had=perBab4.f45.samples.some(x=>/RECENTER/.test(String(x.decision).toUpperCase())||/RECENTER/.test(String(x.laneDecision).toUpperCase()));if(had&&s.laneState==='GREEN/GREEN'&&elapsed>1)return perBab4F45Finish('AUTO')}else if(elapsed>=3)return perBab4F45Finish('AUTO');perBab4F45Refresh()}
+async function perBab4F45ActivateControl(token){if(!perBab4.f45.active||token!==perBab4.f45.token)return;perBab4.f45.phase='RUNNING';perBab4.f45.startMs=Date.now();perBab4.f45.samples=[];const p=perBab4F45Pose(),d=perBab4.f45.goalDistance,x=p.x+d*Math.cos(p.yaw),y=p.y+d*Math.sin(p.yaw),yawDeg=p.yaw*180/Math.PI;const j=await post('/api/navigation/goal',{x,y,yaw_deg:yawDeg},true);if(!j?.ok){perBab4.f45.samples.push(perBab4F45Sample());return perBab4F45Finish('INVALID')}perBab4.f45.timer=setInterval(perBab4F45Monitor,100);perBab4F45Refresh()}
+function perBab4F45CancelCountdown(reason){clearInterval(perBab4.f45.countdownTimer);perBab4.f45.countdownTimer=null;perBab4.f45.active=false;perBab4.f45.phase='IDLE';perBab4.f45.countdownLeft=0;perBab4.f45.lastResult=`COUNTDOWN CANCEL • ${reason}`;perBab4F45Refresh();toast(`Countdown dibatalkan: ${reason}`,true)}
+function perBab4F45DefaultGoal(){const mode=$('perF45Mode')?.value||'obstacle';if(mode==='lane')return 2.0;return Math.max(3.0,(+$('perF45Distance')?.value||1)+2.0)}
+function perBab4F45DefaultTimeout(){return ($('perF45Mode')?.value||'obstacle')==='obstacle'?30:10}
+function perBab4F45ApplyRunDefaults(){const goal=$('perF45GoalDistance'),timeout=$('perF45Timeout');if(goal&&!goal.dataset.userEdit)goal.value=perBab4F45DefaultGoal().toFixed(1);if(timeout&&!timeout.dataset.userEdit)timeout.value=String(perBab4F45DefaultTimeout())}
+async function perBab4F45StartTrial(){
+  if(perBab4.f45.active)return;if(!recordStartedMs)return toast('Klik START SESI F4.5 dahulu agar 17 kondisi masuk satu folder.',true);const ready=perBab4F45Ready();if(!ready.ok)return toast('Belum READY: '+ready.reasons.join(', '),true);if(!$('perF45PhysicalReady')?.checked)return toast('Konfirmasi POSISI FISIK SIAP terlebih dahulu.',true);const key=perBab4F45CurrentKey();if(['PASS','FAIL'].includes(perBab4.f45.completed[key]))return toast(`${key} sudah menjadi formal trial. Pilih kondisi lain.`,true);
+  try{await post('/api/navigation/cancel',{},true)}catch(_){return toast('Gagal memastikan goal sebelumnya sudah cancel.',true)}
+  const afterCancel=perBab4F45Ready();if(!afterCancel.ok)return toast('Setelah cancel belum READY: '+afterCancel.reasons.join(', '),true);
+  perBab4.f45.mode=$('perF45Mode')?.value||'obstacle';perBab4.f45.trialKey=key;perBab4.f45.goalDistance=Math.max(.5,+$('perF45GoalDistance')?.value||perBab4F45DefaultGoal());perBab4.f45.timeoutSec=Math.max(3,+$('perF45Timeout')?.value||perBab4F45DefaultTimeout());perBab4.f45.active=true;perBab4.f45.phase='COUNTDOWN';perBab4.f45.samples=[];perBab4.f45.token++;const token=perBab4.f45.token,end=Date.now()+3000;perBab4.f45.countdownLeft=3;perBab4F45Refresh();
+  perBab4.f45.countdownTimer=setInterval(()=>{if(!perBab4.f45.active||token!==perBab4.f45.token)return clearInterval(perBab4.f45.countdownTimer);const r=perBab4F45Ready();if(!r.ok)return perBab4F45CancelCountdown(r.reasons.join(', '));if(!$('perF45PhysicalReady')?.checked)return perBab4F45CancelCountdown('konfirmasi posisi fisik dilepas');const left=Math.max(0,end-Date.now());perBab4.f45.countdownLeft=Math.ceil(left/1000);perBab4F45Refresh();if(left<=0){clearInterval(perBab4.f45.countdownTimer);perBab4.f45.countdownTimer=null;perBab4.f45.countdownLeft=0;setText('perF45Countdown','GO');perBab4F45ActivateControl(token)}},100)
+}
+function perBab4F45Abort(){if(!perBab4.f45.active)return toast('Tidak ada trial aktif.',true);perBab4.f45.token++;perBab4F45Finish('ABORT')}
+function perBab4F45Advance(){if($('perF45PhysicalReady'))$('perF45PhysicalReady').checked=false;const all=[...PER_F45_OBSTACLE_KEYS,...PER_F45_LANE_KEYS],next=all.find(k=>!['PASS','FAIL'].includes(perBab4.f45.completed[k]));if(!next)return;if(next.includes('-')&&/^(human|motorcycle)-/.test(next)){const [o,d]=next.split('-');if($('perF45Mode'))$('perF45Mode').value='obstacle';if($('perF45Object'))$('perF45Object').value=o;if($('perF45Distance'))$('perF45Distance').value=d}else{if($('perF45Mode'))$('perF45Mode').value='lane';if($('perF45LaneCondition'))$('perF45LaneCondition').value=next}perBab4F45SyncMode()}
+function perBab4F45SyncMode(){const m=$('perF45Mode')?.value||'obstacle';perBab4.f45.mode=m;if($('perF45PhysicalReady'))$('perF45PhysicalReady').checked=false;$('perF45ObstacleSetup')?.toggleAttribute('hidden',m!=='obstacle');$('perF45LaneSetup')?.toggleAttribute('hidden',m!=='lane');perBab4F45ApplyRunDefaults();perBab4F45Refresh()}
+function perBab4F45CardHtml(){return `<section class="per-bab4-evidence-card per-f45-card" id="perF45Card"><div class="per-bab4-evidence-head"><div><span class="eyebrow">4.5 • FINAL CONTROL RESPONSE DATASET</span><b>17 formal run • satu sesi • satu folder hasil</b><p>Pilih kondisi → siapkan fisik → START TRIAL → countdown 3 s → goal relatif aktif → respons safety direkam → auto-cancel → lanjut kondisi berikutnya. PASS/FAIL menjadi formal data; INVALID boleh diulang.</p></div><span class="status-chip" id="perF45State">WAIT SESSION</span></div><div class="per-f45-selectors"><label>Jenis pengujian<select id="perF45Mode"><option value="obstacle">Obstacle response</option><option value="lane">Lane Safety response</option></select></label><div id="perF45ObstacleSetup" class="per-f45-inline"><label>Objek<select id="perF45Object"><option value="human">Manusia</option><option value="motorcycle">Sepeda motor</option></select></label><label>Jarak awal<select id="perF45Distance">${[1,2,3,4,5].map(x=>`<option value="${x}">${x} meter</option>`).join('')}</select></label></div><div id="perF45LaneSetup" class="per-f45-inline" hidden><label>Kondisi<select id="perF45LaneCondition">${PER_F45_LANE_KEYS.map(k=>`<option value="${k}">${perBab4F45LaneExpected(k).label}</option>`).join('')}</select></label></div><label>Goal maju<input id="perF45GoalDistance" type="number" min="0.5" max="12" step="0.5" value="3.0"></label><label>Timeout<input id="perF45Timeout" type="number" min="3" max="60" step="1" value="30"></label></div><div class="per-f45-runtime-note" id="perF45RuntimeHelp"><b>RUNTIME F4.5</b><span>Gunakan hanya setelah kalibrasi metrik kamera sudah APPLY. Launch pengujian: <code>ros2 launch navigation autonomous.launch.py perception_mode:=cpu perception_inference_enabled:=true enable_lane_safety:=true</code>. Nilai <code>camera_metric_calibration_validated</code> tetap berasal dari YAML hasil kalibrasi dan tidak boleh dipaksa TRUE dari CLI.</span></div><div class="per-f45-readiness"><div><span>Formal progress</span><b id="perF45Progress">0 / 17</b></div><div><span>Selected condition</span><b id="perF45Selected">--</b></div><div><span>Expected policy</span><b id="perF45Expected">--</b></div><div><span>Live perception</span><b id="perF45Live">--</b></div><div><span>Control / safety</span><b id="perF45Safety">--</b></div><div><span>F4.5 runtime authority</span><b id="perF45Runtime">--</b></div><div><span>Last result</span><b id="perF45Last">WAIT</b></div></div><label class="per-f45-physical-ready"><input id="perF45PhysicalReady" type="checkbox"><span><b>POSISI FISIK SIAP</b><small>Centang setelah obstacle/lane benar-benar berada pada kondisi yang dipilih. Otomatis di-reset setiap selesai/pindah kondisi.</small></span></label><div class="per-f45-countdown"><span>CONTROL ENABLE</span><b id="perF45Countdown">--</b><small>Selama countdown kendaraan wajib diam dan kondisi harus tetap valid; t=0 dimulai setelah angka GO.</small></div><div class="per-f45-actions"><button class="primary-btn" id="perF45StartTrial">▶ START TRIAL • 3 s</button><button class="warning-btn" id="perF45Abort">ABORT / CANCEL GOAL</button></div><div class="per-f45-progress"><div><b>Obstacle • 10 kondisi</b><div id="perF45ObstacleProgress"></div></div><div><b>Lane Safety • 7 kondisi</b><div id="perF45LaneProgress"></div></div></div><div class="per-f45-graphs"><canvas id="perF45ObstacleGraph" width="900" height="250"></canvas><canvas id="perF45LaneGraph" width="900" height="250"></canvas><canvas id="perF45RmseGraph" width="900" height="250"></canvas></div><div class="per-bab4-f41-result"><span>Folder final</span><code id="perF45Folder">STOP + SAVE setelah 17/17 kondisi selesai</code></div></section>`}
+function perBab4F45Refresh(){if(selectedExperiment?.id!=='F4.5'||!$('perF45Card'))return;const mode=$('perF45Mode')?.value||'obstacle',key=perBab4F45CurrentKey(),ready=perBab4F45Ready(),lane=perBab4F45LaneSnapshot(),obs=perBab4F45ObstacleObservation(),ob=obs.distance,ts=obj('trajectory_safety_state')||{},exp=mode==='lane'?perBab4F45LaneExpected(key).policy:'AUTO: slowdown / avoidance / safety stop sesuai supervisor',physical=$('perF45PhysicalReady')?.checked===true;setText('perF45State',perBab4.f45.active?perBab4.f45.phase:(recordStartedMs?'SESSION ACTIVE':perBab4F45DoneCount()===17?'DATASET COMPLETE':'WAIT SESSION'));setText('perF45Progress',`${perBab4F45DoneCount()} / 17`);setText('perF45Selected',mode==='obstacle'?`${key.startsWith('human')?'MANUSIA':'MOTOR'} • ${key.split('-')[1]} m`:perBab4F45LaneExpected(key).label);setText('perF45Expected',exp);setText('perF45Live',mode==='obstacle'?`${obs.seen?'SELECTED OBJECT SEEN':'WAIT SELECTED OBJECT'} • ${obs.source} • metric ${Number.isFinite(ob)?ob.toFixed(2)+' m':'--'} • class ${obs.classId}`:`${lane.left}/${lane.right} • ${lane.rec} • ${lane.evidenceMode}`);const rf=perBab4F45RuntimeFlags();setText('perF45Safety',ready.ok?`${physical?'READY':'WAIT POSISI FISIK'} • ${ts.decision||'--'}`:`WAIT • ${ready.reasons.join(', ')}`);setText('perF45Runtime',`METRIC ${rf.metric?'ON':'OFF'} • LANE ${rf.lane?'ON':'OFF'} • GRAY STOP ${rf.grayStop?'ON':'OFF'}${rf.bypass?' • BYPASS ON':''}`);setText('perF45Last',perBab4.f45.lastResult||'WAIT');setText('perF45Countdown',perBab4.f45.phase==='COUNTDOWN'?String(perBab4.f45.countdownLeft||3):perBab4.f45.phase==='RUNNING'?'GO':'--');const chip=$('perF45State');if(chip)chip.className='status-chip '+(ready.ok&&!perBab4.f45.active?'':'waiting');const start=$('perF45StartTrial');if(start){start.disabled=perBab4.f45.active||!recordStartedMs||!ready.ok||!physical||['PASS','FAIL'].includes(perBab4.f45.completed[key]);start.textContent=perBab4.f45.phase==='COUNTDOWN'?'COUNTDOWN...':perBab4.f45.phase==='RUNNING'?'CONTROL ACTIVE':'▶ START TRIAL • 3 s'}const abort=$('perF45Abort');if(abort)abort.disabled=!perBab4.f45.active;['perF45Mode','perF45Object','perF45Distance','perF45LaneCondition','perF45GoalDistance','perF45Timeout','perF45PhysicalReady'].forEach(id=>{const e=$(id);if(e)e.disabled=!!perBab4.f45.active});const op=$('perF45ObstacleProgress');if(op)op.innerHTML=PER_F45_OBSTACLE_KEYS.map(k=>`<span class="${(perBab4.f45.completed[k]||'').toLowerCase()}">${k.replace('motorcycle','motor').replace('-', ' • ')} <em>${perBab4.f45.completed[k]||'WAIT'}</em></span>`).join('');const lp=$('perF45LaneProgress');if(lp)lp.innerHTML=PER_F45_LANE_KEYS.map(k=>`<span class="${(perBab4.f45.completed[k]||'').toLowerCase()}">${perBab4F45LaneExpected(k).label} <em>${perBab4.f45.completed[k]||'WAIT'}</em></span>`).join('');setText('perF45Folder',lastTrialArtifacts?.report_folder||lastTrialArtifacts?.report_root||perBab4.f45.lastFolder||(perBab4F45DoneCount()===17?'17/17 lengkap • klik FINISH + SAVE FOLDER':'STOP + SAVE setelah seluruh kondisi selesai'))}
+function perBab4F45DrawBar(canvasId,title,rows,valueIndex,labelIndex,maxHint=0){const c=$(canvasId);if(!c)return;const ctx=c.getContext('2d'),w=c.width,h=c.height,p={l:58,r:20,t:42,b:62};ctx.clearRect(0,0,w,h);ctx.fillStyle='#071113';ctx.fillRect(0,0,w,h);ctx.fillStyle='#d8eeee';ctx.font='800 15px system-ui';ctx.fillText(title,18,24);if(!rows.length){ctx.fillStyle='#8fa8a9';ctx.font='12px system-ui';ctx.fillText('Belum ada formal trial.',18,52);return}const vals=rows.map(r=>+r.values[valueIndex]).filter(Number.isFinite),max=Math.max(maxHint,...vals,1),gap=(w-p.l-p.r)/rows.length,bw=gap*.62;rows.forEach((r,i)=>{const v=+r.values[valueIndex],x=p.l+i*gap+(gap-bw)/2,bh=Number.isFinite(v)?Math.max(2,(v/max)*(h-p.t-p.b)):0,y=h-p.b-bh;ctx.fillStyle=r.values.at(-2)==='PASS'?'#48e0a4':'#ffc86b';ctx.fillRect(x,y,bw,bh);ctx.fillStyle='#d8eeee';ctx.font='10px system-ui';ctx.fillText(Number.isFinite(v)?v.toFixed(valueIndex===4?0:2):'--',x,y-4);ctx.save();ctx.translate(x+bw/2,h-p.b+10);ctx.rotate(-.45);ctx.fillText(String(r.values[labelIndex]),0,0);ctx.restore()})}
+function perBab4F45DrawObstacleResponse(){const c=$('perF45ObstacleGraph');if(!c)return;const ctx=c.getContext('2d'),w=c.width,h=c.height,p={l:62,r:24,t:45,b:48},rows=perBab4RowsAt(0);ctx.clearRect(0,0,w,h);ctx.fillStyle='#071113';ctx.fillRect(0,0,w,h);ctx.fillStyle='#d8eeee';ctx.font='800 15px system-ui';ctx.fillText('4.5.1 Response Latency Obstacle vs Jarak [ms] • n=1/kondisi',18,24);const series=[['Manusia','#48e0a4'],['Sepeda motor','#67b7ff']],data=Object.fromEntries(series.map(([name])=>[name,rows.filter(r=>r.values[1]===name&&Number.isFinite(+r.values[4])).map(r=>({d:+r.values[2],v:+r.values[4]}))]));const vals=Object.values(data).flat().map(x=>x.v),max=Math.max(100,...vals)*1.12;ctx.strokeStyle='#294144';ctx.fillStyle='#8fa8a9';ctx.font='10px system-ui';for(let i=0;i<=4;i++){const y=p.t+(h-p.t-p.b)*i/4,lab=Math.round(max*(1-i/4));ctx.beginPath();ctx.moveTo(p.l,y);ctx.lineTo(w-p.r,y);ctx.stroke();ctx.fillText(String(lab),12,y+3)}for(let d=1;d<=5;d++){const x=p.l+(w-p.l-p.r)*(d-1)/4;ctx.fillText(`${d} m`,x-8,h-18)}series.forEach(([name,color],si)=>{const pts=data[name].sort((a,b)=>a.d-b.d);ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=2;ctx.beginPath();pts.forEach((q,i)=>{const x=p.l+(w-p.l-p.r)*(q.d-1)/4,y=h-p.b-(q.v/max)*(h-p.t-p.b);if(i)ctx.lineTo(x,y);else ctx.moveTo(x,y)});ctx.stroke();pts.forEach(q=>{const x=p.l+(w-p.l-p.r)*(q.d-1)/4,y=h-p.b-(q.v/max)*(h-p.t-p.b);ctx.beginPath();ctx.arc(x,y,4,0,Math.PI*2);ctx.fill()});ctx.fillRect(w-205,p.t+si*19,10,3);ctx.fillText(name,w-188,p.t+4+si*19)});if(!rows.length){ctx.fillStyle='#8fa8a9';ctx.fillText('Belum ada formal trial.',18,52)}}
+function perBab4F45DrawGraphs(){if(selectedExperiment?.id!=='F4.5')return;perBab4F45DrawObstacleResponse();perBab4F45DrawBar('perF45LaneGraph','4.5.2 Mean Speed Aktual Lane Safety [m/s]',perBab4RowsAt(1),5,1);const mix=[...perBab4RowsAt(0).map(r=>({values:[r.values[2]+'m '+r.values[1],r.values[7],r.values[10]]})),...perBab4RowsAt(1).map(r=>({values:[r.values[1],r.values[7],r.values[10]]}))];perBab4F45DrawBar('perF45RmseGraph','4.5.3 Steering RMSE per Kondisi [deg]',mix,1,0)}
+function perBab4F45Bind(){if(!$('perF45Card'))return;$('perF45Mode')?.addEventListener('change',perBab4F45SyncMode);$('perF45Object')?.addEventListener('change',()=>{if($('perF45PhysicalReady'))$('perF45PhysicalReady').checked=false;perBab4F45Refresh()});$('perF45Distance')?.addEventListener('change',()=>{if($('perF45PhysicalReady'))$('perF45PhysicalReady').checked=false;perBab4F45ApplyRunDefaults();perBab4F45Refresh()});$('perF45LaneCondition')?.addEventListener('change',()=>{if($('perF45PhysicalReady'))$('perF45PhysicalReady').checked=false;perBab4F45Refresh()});$('perF45PhysicalReady')?.addEventListener('change',perBab4F45Refresh);$('perF45GoalDistance')?.addEventListener('input',e=>{e.currentTarget.dataset.userEdit='1'});$('perF45Timeout')?.addEventListener('input',e=>{e.currentTarget.dataset.userEdit='1'});$('perF45StartTrial')?.addEventListener('click',perBab4F45StartTrial);$('perF45Abort')?.addEventListener('click',perBab4F45Abort);perBab4F45SyncMode();perBab4F45DrawGraphs();perBab4F45Refresh()}
+
+const perBab4F45InfoBase=perBab4InfoText;
+perBab4InfoText=function(){if(selectedExperiment?.id==='F4.5')return '17 formal run end-to-end dalam satu sesi: 10 obstacle (manusia/motor × 1–5 m) + 7 Lane Safety. Setiap trial memakai countdown 3 detik, kontrol aktual, target/feedback, PASS/FAIL/INVALID, evidence frame, lalu satu folder final.';return perBab4F45InfoBase()};
+const perBab4F45StepBase=perBab4StepText;
+perBab4StepText=function(){if(selectedExperiment?.id==='F4.5')return['Tujuan','Buktikan keluaran persepsi benar-benar menjadi respons longitudinal/lateral kendaraan.','Yang dilakukan','START SESI → pilih kondisi → siapkan fisik sampai READY → START TRIAL → 3 s → kontrol aktif → auto-stop/cancel → lanjut sampai 17/17.','Output laporan','2 tabel rekap formal + time-series target/feedback + log INVALID + 3 PNG grafik + evidence frame + XLSX/manifest dalam satu folder run.'];return perBab4F45StepBase()};
+const perBab4F45NavigatorBase=perBab4RenderFinalNavigator;
+perBab4RenderFinalNavigator=function(){perBab4F45NavigatorBase();const box=$('perBab4FinalNavigator');if(!box||box.hidden)return;const grid=box.querySelector('.per-final-cards');if(grid&&!grid.querySelector('[data-final-id="F4.5"]')){const b=document.createElement('button');b.dataset.finalId='F4.5';b.className=selectedExperiment?.id==='F4.5'?'active':'';b.innerHTML='<em>4.5</em><b>Respons Kontrol</b><small>17 run • obstacle + Lane Safety</small>';b.onclick=()=>selectExperimentById('F4.5');grid.appendChild(b)}const h=box.querySelector('.per-final-title h2');if(h)h.textContent='FINAL BAB IV • 4.1–4.5';const p=box.querySelector('.per-final-title p');if(p)p.innerHTML='Tahap 4.1–4.4 menguji persepsi; <b>4.5</b> memvalidasi respons kendaraan end-to-end. Seluruh perubahan ini hanya berada pada tab Persepsi.'};
+const perBab4F45RenderBase=perBab4RenderPanel;
+perBab4RenderPanel=function(){const r=perBab4F45RenderBase();if(selectedExperiment?.id==='F4.5'){perBab4F45ApplySchema();const p=$('perceptionBab4Acquisition');if(p&&!$('perF45Card')){p.insertAdjacentHTML('beforeend',perBab4F45CardHtml());perBab4F45Bind()}if(perBab4F45Restore()){renderExperimentTable();perBab4F45DrawGraphs()}perBab4F45Refresh()}return r};
+const perBab4F45RefreshBase=perBab4RefreshLive;
+perBab4RefreshLive=function(){perBab4F45RefreshBase();perBab4F45Refresh()};
+const perBab4F45StartBase=startWebRecording;
+startWebRecording=async function(){const was=!!recordStartedMs;await perBab4F45StartBase();if(selectedExperiment?.id==='F4.5'&&!was&&recordStartedMs){localStorage.removeItem(PER_F45_STORAGE_KEY);perBab4.f45.active=false;perBab4.f45.phase='IDLE';perBab4.f45.completed={};perBab4.f45.restoredFor=0;perBab4.f45.lastResult='SESSION ACTIVE • pilih kondisi pertama';perBab4.f45.lastFolder='';perBab4F45Persist();perBab4F45Refresh()}};
+const perBab4F45StopBase=stopWebRecording;
+stopWebRecording=async function(){if(selectedExperiment?.id==='F4.5'&&perBab4.f45.active)return toast('Trial F4.5 masih aktif. ABORT atau tunggu selesai sebelum FINISH + SAVE.',true);if(selectedExperiment?.id==='F4.5'&&recordStartedMs&&perBab4F45DoneCount()<17)return toast(`Dataset F4.5 baru ${perBab4F45DoneCount()}/17. Selesaikan seluruh kondisi sebelum FINISH + SAVE FOLDER.`,true);const was45=selectedExperiment?.id==='F4.5';const r=await perBab4F45StopBase();if(was45&&!recordStartedMs){perBab4.f45.lastFolder=lastTrialArtifacts?.report_folder||lastTrialArtifacts?.report_root||lastTrialArtifacts?.primary_csv||'Folder tersimpan';perBab4F45Refresh()}return r};
+const perBab4F45CollectBase=collectExperimentGraphPngPayload;
+collectExperimentGraphPngPayload=function(){if(selectedExperiment?.id!=='F4.5')return perBab4F45CollectBase();perBab4F45DrawGraphs();const out=[];for(const [id,title,index] of [['perF45ObstacleGraph','Response Latency Obstacle terhadap Jarak',1],['perF45LaneGraph','Mean Speed Aktual Lane Safety',2],['perF45RmseGraph','Steering RMSE per Kondisi',3]]){const c=$(id);if(c)out.push({index,title,data_url:c.toDataURL('image/png')})}return out};
+const perBab4F45RecordingUiBase=setRecordingUi;
+setRecordingUi=function(active,info={}){perBab4F45RecordingUiBase(active,info);if(perBab4Is('F4.5')){const b=$('recordToggleBtn');if(b){const sr=perBab4F45SessionReady();b.textContent=active?'■ FINISH + SAVE FOLDER':'● START SESI F4.5';b.disabled=active?(!!perBab4.f45.active||perBab4F45DoneCount()<17):!sr.ok;b.title=active?(perBab4F45DoneCount()<17?`Selesaikan ${17-perBab4F45DoneCount()} kondisi lagi`:'Simpan satu folder final'):(sr.ok?'Runtime F4.5 READY':`Belum READY: ${sr.reasons.join(', ')}`)}if(active)setTimeout(()=>{if(perBab4F45Restore()){renderExperimentTable();perBab4F45DrawGraphs();perBab4F45Refresh()}},0);perBab4F45Refresh()}};
+const perBab4F45SelectedBase=renderSelectedExperiment;
+renderSelectedExperiment=function(){const r=perBab4F45SelectedBase();if(selectedExperiment?.id==='F4.5'){perBab4F45ApplySchema();const badge=$('experimentGraphBadge');if(badge)badge.textContent='3 GRAPH REKAP';const sub=$('experimentSubtitle');if(sub)sub.textContent='Final control-response dataset: 10 obstacle + 7 Lane Safety • 1 formal run per kondisi • satu folder.';const rec=$('recordToggleBtn');if(rec){const active=rec.dataset.active==='true';rec.hidden=false;rec.textContent=active?'■ FINISH + SAVE FOLDER':'● START SESI F4.5';const sr=perBab4F45SessionReady();rec.disabled=active?(perBab4.f45.active||perBab4F45DoneCount()<17):!sr.ok;rec.title=active?(perBab4F45DoneCount()<17?`Selesaikan ${17-perBab4F45DoneCount()} kondisi lagi`:'Simpan satu folder final'):(sr.ok?'Runtime F4.5 READY':`Belum READY: ${sr.reasons.join(', ')}`)}}return r};
+
+/* Keep BAB IV perception styling/panels strictly inside the Persepsi domain. */
+const perBab4F45SwitchDomainBase=switchDomain;
+switchDomain=function(domain,syncHmi=true){
+  const r=perBab4F45SwitchDomainBase(domain,syncHmi);
+  if(domain!=='perception'){
+    document.body.classList.remove('per-bab4-final-mode');delete document.body.dataset.bab4;
+    const p=$('perceptionBab4Acquisition'),n=$('perBab4FinalNavigator');if(p)p.hidden=true;if(n)n.hidden=true;
+  }
+  return r;
+};
+
+
+/* ===== PERCEPTION FINAL 4.3 LANE SAFETY OUTER-BOUNDARY v2 =====
+ * Scope strictly GUI Persepsi + Final Dataset Persepsi.
+ * Output colors: GRAY(no evidence), GREEN(outer safe OR drivable-only),
+ * YELLOW(outer lane warning), RED(outer lane intrusion).
+ */
+const PER_BAB4_LANE_V2=[
+  ['gray','Abu-abu','NO MASK + NO DRIVABLE'],
+  ['green_outer','Hijau • Outer Lane Aman','DRIVABLE + 2 OUTER LANE SAFE'],
+  ['green_drivable','Hijau • Drivable Only','DRIVABLE VALID + OUTER LANE TIDAK TERLIHAT / INTERNAL LANE DIABAIKAN'],
+  ['yellow','Kuning','OUTER LANE MENDEKATI SAFETY'],
+  ['red','Merah','OUTER LANE MASUK SAFETY']
+];
+function perBab4LaneV2Meta(cond){const q=PER_BAB4_LANE_V2.find(x=>x[0]===cond)||PER_BAB4_LANE_V2[0];return{key:q[0],label:q[1],detail:q[2]}}
+function perBab4LaneV2ApplySchema(){
+  const x=(experiments.perception||[]).find(v=>v.id==='F4.3');if(!x)return;
+  Object.assign(x,{groupId:'FINAL-4.3',groupTitle:'FINAL BAB IV — 4.3 Pengujian Lane Safety',
+    section:'FINAL 4.3 Lane Safety — 5 kondisi input • 20 percobaan/kondisi • 100 trial',
+    reportMode:true,bab4Protocol:'lane',bab4ManualCapture:true,bab4NoTimeAxis:true,parameterFields:perBab4LaneFields(),
+    tableColumns:[['Trial','Kondisi Acuan','Sisi Uji','Ulangan','Timestamp','Drivable Valid','Left Gap [px]','Right Gap [px]','Left Color','Right Color','Latch L','Latch R','Recommendation Aktual','Expected','Hasil','Evidence Frame','Raw Lane Mask','Outer Lane Detected','Evidence Mode','Outer Left Valid','Outer Right Valid','Internal Lane Ignored','Drivable Fraction','Raw Lane Rows','Internal Lane Rows'],['Kondisi Acuan','Percobaan','Benar','Salah','Success Rate [%]']],
+    tableNames:['Raw Percobaan Lane Safety • Outer Boundary','Rekap Success Rate Lane Safety'],graphCaptions:[],graphs:[],
+    liveSeries:{'Left gap':'lane_state.corridor.left_gap_px','Right gap':'lane_state.corridor.right_gap_px','Lane valid':'lane_state.valid','Drivable valid':'lane_state.corridor.drivable_detected'}});
+  if(selectedExperiment?.id==='F4.3')selectedExperiment=x;
+}
+const perBab4LaneV2BasePatchCatalog=patchPerceptionBab4Catalog;
+patchPerceptionBab4Catalog=function(){perBab4LaneV2BasePatchCatalog();perBab4LaneV2ApplySchema()};
+perBab4LaneV2ApplySchema();
+
+function perBab4LaneExpected(cond,side){
+  if(cond==='gray')return{rec:'NO_MASK_EVIDENCE',left:'UNKNOWN',right:'UNKNOWN'};
+  if(cond==='green_outer'||cond==='green_drivable')return{rec:'CLEAR',left:'GREEN',right:'GREEN'};
+  if(cond==='yellow')return{rec:'WARNING',left:side==='left'?'YELLOW':'GREEN',right:side==='right'?'YELLOW':'GREEN'};
+  return{rec:side==='left'?'RECENTER_RIGHT':'RECENTER_LEFT',left:side==='left'?'RED':'GREEN',right:side==='right'?'RED':'GREEN'};
+}
+function perBab4LaneEvidenceMatch(cond,side,ls,c,exp){
+  const drivable=Boolean(c.drivable_detected??ls.drivable_valid??ls.valid),laneMask=Boolean(c.lane_mask_detected),
+    leftValid=Boolean(c.left_valid),rightValid=Boolean(c.right_valid),rec=String(c.recommendation||'--'),
+    left=String(c.left_status||'--'),right=String(c.right_status||'--');
+  const base=rec===exp.rec&&left===exp.left&&right===exp.right;
+  if(!base)return false;
+  if(cond==='gray')return !drivable&&!laneMask;
+  if(cond==='green_outer')return drivable&&laneMask&&leftValid&&rightValid;
+  if(cond==='green_drivable')return drivable&&!laneMask&&!leftValid&&!rightValid;
+  if(cond==='yellow'||cond==='red')return drivable&&laneMask&&(side==='left'?leftValid:rightValid);
+  return false;
+}
+function perBab4LaneProtocolSide(){const cond=$('perBab4LaneCondition')?.value||'gray',rep=+$('perBab4LaneRepeat')?.value||1;return(cond==='yellow'||cond==='red')?(rep<=10?'left':'right'):'left'}
+perBab4SyncLaneSide=function(){
+  const cond=$('perBab4LaneCondition')?.value||'gray',s=$('perBab4LaneSide'),rep=+$('perBab4LaneRepeat')?.value||1,sideNeeded=cond==='yellow'||cond==='red';
+  if(s){s.disabled=!sideNeeded;s.value=sideNeeded?(rep<=10?'left':'right'):'left';s.title=sideNeeded?'BAB IV: ulangan 1–10 sisi kiri, 11–20 sisi kanan':'Tidak memakai sisi individual pada kondisi ini'}
+  perBab4RefreshReportExtensions();perBab4RefreshLive();
+};
+perBab4LaneControls=function(){return `<div class="per-bab4-auto-guide"><b>MEKANISME 1 TRIAL</b><span>Pastikan kondisi fisik sesuai acuan → stabilkan drivable + outer lane → klik <strong>AMBIL DATA LANE</strong>. Garis internal seperti batas sepeda tidak boleh menjadi outer boundary.</span></div><div class="per-bab4-controls"><label>Kondisi acuan<select id="perBab4LaneCondition">${PER_BAB4_LANE_V2.map(q=>`<option value="${q[0]}">${q[1]} • ${q[2]}</option>`).join('')}</select></label><label>Sisi uji<select id="perBab4LaneSide"><option value="left">Kiri</option><option value="right">Kanan</option></select></label><label>Ulangan<input id="perBab4LaneRepeat" type="number" min="1" max="20" step="1" value="1" readonly></label><div class="per-bab4-actions"><button class="primary-btn per-bab4-capture-main" id="perBab4LaneCapture">📷 AMBIL DATA LANE</button><button class="soft-btn" id="perBab4Undo">Undo trial terakhir</button></div></div>`};
+
+perBab4LaneCapture=async function(){
+  if(perBab4.autoTrial.laneBusy)return;
+  if(!recordStartedMs)return toast('Klik START SESI dahulu.',true);
+  if(!channelFresh('lane_state',2.5))return toast('Lane Safety stream belum fresh.',true);
+  const cond=$('perBab4LaneCondition')?.value||'gray',rep=+$('perBab4LaneRepeat')?.value||1,
+    side=(cond==='yellow'||cond==='red')?perBab4LaneProtocolSide():'left',ls=obj('lane_state'),c=ls.corridor||{},
+    exp=perBab4LaneExpected(cond,side),actual=String(c.recommendation||'--'),left=String(c.left_status||'--'),
+    right=String(c.right_status||'--'),meta=perBab4LaneV2Meta(cond),match=perBab4LaneEvidenceMatch(cond,side,ls,c,exp),
+    key=(cond==='yellow'||cond==='red')?`${cond}-${side}`:cond,
+    evidenceLabel=`F4.3_${key}_trial_${String(rep).padStart(2,'0')}_${match?'BENAR':'SALAH'}`;
+  perBab4.autoTrial.laneBusy=true;const btn=$('perBab4LaneCapture');if(btn){btn.disabled=true;btn.textContent='MENYIMPAN FRAME...'}
+  try{
+    const ev=await perBab4PersistTrialEvidence(evidenceLabel),evidencePath=ev.image_path||'--',
+      evidenceMode=String(c.evidence_mode||'--'),drivable=Boolean(c.drivable_detected??ls.drivable_valid??ls.valid),
+      rawLaneMask=Boolean(c.raw_lane_mask_detected),laneMask=Boolean(c.lane_mask_detected),leftValid=Boolean(c.left_valid),rightValid=Boolean(c.right_valid),
+      internalIgnored=Boolean(c.internal_lane_ignored),frac=Number.isFinite(+c.drivable_fraction)?(+c.drivable_fraction).toFixed(4):'--',
+      expectedText=`${exp.rec} • ${exp.left}/${exp.right} • ${meta.detail}`,
+      dataUrl=perBab4EvidenceJpeg({kind:'lane',left,right,recommendation:actual,title:`LANE SAFETY • ${meta.label}${(cond==='yellow'||cond==='red')?` ${side==='left'?'KIRI':'KANAN'}`:''} • ulangan ${rep}`,subtitle:`${left}/${right} • ${actual} • ${evidenceMode} • ${match?'BENAR':'SALAH'}`});
+    const values=[perBab4Rows().length+1,meta.label,(cond==='yellow'||cond==='red')?side:'N/A',rep,perBab4FrameTimestamp(),String(drivable),
+      Number.isFinite(+c.left_gap_px)?(+c.left_gap_px).toFixed(2):'--',Number.isFinite(+c.right_gap_px)?(+c.right_gap_px).toFixed(2):'--',
+      left,right,String(c.left_recenter_latched??false),String(c.right_recenter_latched??false),actual,expectedText,match?'BENAR':'SALAH',
+      evidencePath,String(rawLaneMask),String(laneMask),evidenceMode,String(leftValid),String(rightValid),String(internalIgnored),frac,
+      Number.isFinite(+c.raw_lane_rows)?String(c.raw_lane_rows):'--',Number.isFinite(+c.internal_lane_rows)?String(c.internal_lane_rows):'--'],
+      trialKey=`${meta.label}|${(cond==='yellow'||cond==='red')?side:'N/A'}|${rep}`,retake=perBab4UpsertMainTrial(trialKey,values,v=>`${v[1]}|${v[2]}|${v[3]}`);
+    perBab4.evidence.f43=perBab4.evidence.f43.filter(x=>!(x.cond===cond&&+x.repeat===rep&&((cond!=='yellow'&&cond!=='red')||x.side===side)));
+    if(dataUrl)perBab4.evidence.f43.push({key,cond,side,repeat:rep,left,right,recommendation:actual,match,dataUrl,evidencePath,evidenceMode});else perBab4.evidence.captureWarnings++;
+    const seq=PER_BAB4_LANE_V2.map(q=>q[0]);let nr=rep+1,nc=cond;if(nr>20){nr=1;nc=seq[(seq.indexOf(cond)+1)%seq.length]}
+    if($('perBab4LaneRepeat'))$('perBab4LaneRepeat').value=String(nr);if($('perBab4LaneCondition'))$('perBab4LaneCondition').value=nc;
+    perBab4SyncLaneSide();perBab4RefreshEvidencePackage();toast(`${retake?'RETAKE replace • ':''}${meta.label} #${rep}: ${match?'BENAR':'SALAH'} • frame tersimpan`,!match);
+  }catch(e){toast(e.message||String(e),true)}
+  finally{perBab4.autoTrial.laneBusy=false;if(btn){btn.disabled=false;btn.textContent='📷 AMBIL DATA LANE'}}
+};
+
+perBab4BuildLaneSummary=function(){
+  const groups=new Map();for(const r of perBab4Rows()){const v=r.values,g=groups.get(v[1])||{cond:v[1],n:0,ok:0};g.n++;if(v[14]==='BENAR')g.ok++;groups.set(v[1],g)}
+  const order=PER_BAB4_LANE_V2.map(q=>q[1]);return [...groups.values()].sort((a,b)=>order.indexOf(a.cond)-order.indexOf(b.cond)).map(g=>[g.cond,g.n,g.ok,g.n-g.ok,(100*g.ok/g.n).toFixed(2)]);
+};
+const perBab4LaneV2BaseRenderProgress=perBab4RenderProgress;
+perBab4RenderProgress=function(){
+  perBab4LaneV2BaseRenderProgress();if(selectedExperiment?.id!=='F4.3')return;const box=$('perBab4Progress');if(!box)return;
+  const c=perBab4ProgressCounts();box.innerHTML=PER_BAB4_LANE_V2.map(q=>`<span class="${(c[q[1]]||0)>=20?'done':''}">${q[1]} <em>${c[q[1]]||0}/20</em></span>`).join('');
+};
+const perBab4LaneV2BaseInfoText=perBab4InfoText;
+perBab4InfoText=function(){if(selectedExperiment?.id==='F4.3')return '100 trial: 5 kondisi input × 20. Dua kondisi HIJAU diuji terpisah: outer lane aman + drivable valid, serta drivable valid tanpa lane mask. Marka internal/batas sepeda dicatat sebagai internal-lane ignored dan tidak boleh memicu steering.';return perBab4LaneV2BaseInfoText()};
+const perBab4LaneV2BaseStepText=perBab4StepText;
+perBab4StepText=function(){if(selectedExperiment?.id==='F4.3')return ['Tujuan','Verifikasi logika Lane Safety outer-boundary pada 5 kondisi input (100 trial).','Yang dilakukan','START SESI → bentuk kondisi fisik sesuai acuan → tunggu evidence_mode stabil → AMBIL DATA LANE. Kuning/merah dibagi ulangan 1–10 kiri dan 11–20 kanan.','Output laporan','Raw status + drivable/lane evidence + outer-valid + internal-lane ignored + rekap Success Rate + montage 7 kondisi representatif.'];return perBab4LaneV2BaseStepText()};
+const perBab4LaneV2BaseRefreshLive=perBab4RefreshLive;
+perBab4RefreshLive=function(){perBab4LaneV2BaseRefreshLive();if(selectedExperiment?.id==='F4.3'){const c=obj('lane_state').corridor||{};setText('perBab4LivePrimary',`${c.recommendation||'--'} • ${c.left_status||'--'}/${c.right_status||'--'} • ${c.evidence_mode||'--'}`)}};
+
+perBab4BuildLaneMontage=async function(){
+  const spec=[['gray','Abu-abu'],['green_outer','Hijau • Outer Aman'],['green_drivable','Hijau • Drivable Only'],['yellow-left','Kuning kiri'],['yellow-right','Kuning kanan'],['red-left','Merah kiri'],['red-right','Merah kanan']],reps=spec.map(x=>perBab4RepresentativeLane(x[0]));if(!reps.some(Boolean))return null;
+  const c=document.createElement('canvas');c.width=1280;c.height=780;const ctx=c.getContext('2d');ctx.fillStyle='#071113';ctx.fillRect(0,0,c.width,c.height);
+  perBab4EvidenceText(ctx,'Bukti Visual Lane Safety • Tujuh Kondisi Representatif',40,52,28,'#e5f4f3',900);perBab4EvidenceText(ctx,'Dua HIJAU dipisah: outer lane aman dan drivable-only. Kuning/merah masing-masing sisi kiri/kanan.',40,82,15,'#8fa8a9',600);
+  const pw=290,ph=300,imgH=218,gap=15;
+  for(let i=0;i<7;i++){const col=i%4,row=Math.floor(i/4),x=25+col*(pw+gap),y=100+row*325,rep=reps[i];ctx.fillStyle='#0b1b1d';ctx.fillRect(x,y,pw,ph);ctx.strokeStyle=rep?'rgba(91,181,173,.42)':'rgba(255,200,107,.4)';ctx.lineWidth=2;ctx.strokeRect(x,y,pw,ph);perBab4EvidenceText(ctx,spec[i][1],x+12,y+27,18,'#e5f4f3',900);if(rep){try{const im=await perBab4LoadEvidenceImage(rep.dataUrl);perBab4DrawImageContain(ctx,im,x+8,y+38,pw-16,imgH)}catch(_){perBab4EvidenceText(ctx,'FRAME ERROR',x+85,y+170,16,'#ff6677',800)}const colr=rep.match?'#48e0a4':'#ff6677';perBab4EvidenceText(ctx,`Trial ${rep.repeat} • ${rep.left}/${rep.right}`,x+10,y+276,11,colr,800);perBab4EvidenceText(ctx,rep.evidenceMode||rep.recommendation||'--',x+10,y+293,10,'#9dc0bd',700)}else perBab4EvidenceText(ctx,'Belum ada frame',x+78,y+170,14,'#8fa8a9',700)}
+  perBab4EvidenceText(ctx,'Generated automatically by GUI Persepsi • BAB IV 4.3',25,760,12,'#708f8d',600);return c;
+};
+const perBab4LaneV2BasePrepareEvidenceExports=perBab4PrepareEvidenceExports;
+perBab4PrepareEvidenceExports=async function(){if(selectedExperiment?.id!=='F4.3')return perBab4LaneV2BasePrepareEvidenceExports();perBab4.evidence.exports=[];const c=await perBab4BuildLaneMontage();if(c)perBab4.evidence.exports.push({index:2,title:'Montage Lane Safety 7 kondisi',data_url:c.toDataURL('image/png')})};
+const perBab4LaneV2BasePackageHtml=perBab4EvidencePackageHtml;
+perBab4EvidencePackageHtml=function(){if(selectedExperiment?.id!=='F4.3')return perBab4LaneV2BasePackageHtml();return `<section class="per-bab4-evidence-card per-bab4-save-package" id="perBab4SavePackage"><div class="per-bab4-evidence-head"><div><span class="eyebrow">OUTPUT OTOMATIS SAAT STOP + SAVE</span><b>Tabel + grafik + bukti visual Lane Safety Outer Boundary</b><p>100 trial utama menyimpan dua kondisi hijau terpisah, outer-lane validity, raw lane evidence, internal-lane ignored, evidence mode, gap, warna, latch, dan recommendation.</p></div><span class="status-chip" id="perBab4VisualState">0 frame</span></div><div class="per-bab4-package-grid"><div><span>Visual capture</span><b id="perBab4VisualFrames">0 / 100</b></div><div><span>Kondisi montage</span><b id="perBab4LaneReady">0 / 7</b></div><div><span>Output visual</span><b>1 graph + 1 montage</b></div><div><span>Data utama</span><b>Raw evidence + rekap</b></div></div><div class="per-bab4-package-actions"><button class="soft-btn" id="perBab4PreviewLane">PNG Montage Lane Safety</button></div></section>`};
+const perBab4LaneV2BaseRefreshEvidencePackage=perBab4RefreshEvidencePackage;
+perBab4RefreshEvidencePackage=function(){perBab4LaneV2BaseRefreshEvidencePackage();if(selectedExperiment?.id==='F4.3'){const n=perBab4.evidence.f43.length,keys=new Set(perBab4.evidence.f43.map(x=>x.key));setText('perBab4VisualState',`${n} frame`);setText('perBab4VisualFrames',`${n} / 100`);setText('perBab4LaneReady',`${keys.size} / 7`);const chip=$('perBab4VisualState');if(chip)chip.className='status-chip '+(n>=100?'':'waiting')}};
+
+/* Final Dataset presentation: LIVE -> DATA TABLE -> RESULTS, Perception only. */
+const PER_BAB4_VIEW_KEY='adv-perception-final-view-v1';
+let perBab4ViewMode=['live','table','results'].includes(localStorage.getItem(PER_BAB4_VIEW_KEY))?localStorage.getItem(PER_BAB4_VIEW_KEY):'live';
+function perBab4FinalDatasetActive(){return currentExp==='perception'&&/^F4\.[1-5]$/.test(String(selectedExperiment?.id||''))}
+function perBab4SetView(mode,persist=true){
+  if(!['live','table','results'].includes(mode))mode='live';perBab4ViewMode=mode;if(persist)localStorage.setItem(PER_BAB4_VIEW_KEY,mode);
+  if(perBab4FinalDatasetActive())document.body.dataset.bab4View=mode;else delete document.body.dataset.bab4View;
+  qa('#perBab4ViewTabs [data-bab4-view]').forEach(b=>{const on=b.dataset.bab4View===mode;b.classList.toggle('active',on);b.setAttribute('aria-selected',String(on));b.tabIndex=on?0:-1});
+  const copy={live:['LIVE','Camera / source / current task / recorder'],table:['DATA TABLE','Raw trial + rekap; data yang sudah diambil tetap terlihat'],results:['RESULTS','Grafik / evidence / XLSX / PNG / manifest']}[mode];
+  setText('perBab4ViewState',copy?copy.join(' • '):'');
+}
+function perBab4RefreshFolderContract(result=null){
+  const id=String(selectedExperiment?.id||'F4.x').replace('.','_'),folder=result?.report_folder||result?.report_root||lastTrialArtifacts?.report_folder||lastTrialArtifacts?.report_root;
+  setText('perBab4FolderPath',folder||('$AGV_ROOT/data/presepsi/BAB4_'+id+'_<timestamp>/'));
+  const st=$('perBab4FolderState');if(st){st.textContent=folder?'SAVED FOLDER':'AUTO ON FINISH';st.className='status-chip '+(folder?'':'waiting')}
+}
+
+function perBab4EnsureViewTabs(){
+  const nav=$('perBab4FinalNavigator');if(!nav||nav.hidden||!perBab4FinalDatasetActive())return;let tabs=$('perBab4ViewTabs');
+  if(!tabs){tabs=document.createElement('div');tabs.id='perBab4ViewTabs';tabs.className='per-bab4-view-tabs';tabs.setAttribute('role','tablist');const cards=nav.querySelector('.per-final-cards');cards?.before(tabs)}
+  tabs.innerHTML='<button data-bab4-view="live" role="tab"><b>1 • LIVE</b><span>Current task + recorder</span></button><button data-bab4-view="table" role="tab"><b>2 • DATA TABLE</b><span>Raw + rekap tersimpan</span></button><button data-bab4-view="results" role="tab"><b>3 • RESULTS</b><span>Grafik + evidence + export</span></button><div class="per-bab4-view-state" id="perBab4ViewState"></div>';
+  qa('[data-bab4-view]',tabs).forEach(b=>b.onclick=()=>perBab4SetView(b.dataset.bab4View));
+  let folder=$('perBab4FolderContract');if(!folder){folder=document.createElement('div');folder.id='perBab4FolderContract';folder.className='per-bab4-folder-contract';nav.appendChild(folder)}
+  folder.innerHTML='<div><span>OUTPUT PER PENGUJIAN</span><b id="perBab4FolderPath">--</b></div><div class="per-bab4-folder-files"><em>RAW CSV</em><em>TABLE CSV</em><em>XLSX</em><em>PNG</em><em>EVIDENCE</em><em>CONFIG</em><em>MANIFEST</em></div><span class="status-chip waiting" id="perBab4FolderState">AUTO ON FINISH</span>';
+  perBab4SetView(perBab4ViewMode,false);perBab4RefreshFolderContract();
+}
+const perBab4ViewNavBase=perBab4RenderFinalNavigator;
+perBab4RenderFinalNavigator=function(){const r=perBab4ViewNavBase();perBab4EnsureViewTabs();return r};
+const perBab4ViewPanelBase=perBab4RenderPanel;
+perBab4RenderPanel=function(){const r=perBab4ViewPanelBase();perBab4EnsureViewTabs();perBab4SetView(perBab4ViewMode,false);return r};
+
+const perBab4ViewRecordingUiBase=setRecordingUi;
+setRecordingUi=function(active,info={}){perBab4ViewRecordingUiBase(active,info);if(perBab4FinalDatasetActive()&&selectedExperiment?.id!=='F4.5'&&selectedExperiment?.id!=='F4.1'){const b=$('recordToggleBtn');if(b)b.textContent=active?'■ FINISH + SAVE FOLDER':'● START SESI DATA'}perBab4RefreshFolderContract()};
+const perBab4ViewArtifactsBase=renderTrialArtifacts;
+renderTrialArtifacts=function(result){const r=perBab4ViewArtifactsBase(result);if(perBab4FinalDatasetActive()){perBab4RefreshFolderContract(result);perBab4ViewMode='results';perBab4SetView('results',true)}return r};
+const perBab4ViewSwitchBase=switchDomain;
+switchDomain=function(domain,syncHmi=true){const r=perBab4ViewSwitchBase(domain,syncHmi);if(domain!=='perception')delete document.body.dataset.bab4View;return r};
+
+function perBab4UpsertMainTrial(key,values,keyOf){
+  const a=perBab4Rows(),at=a.findIndex(r=>keyOf(r.values)===key),row={sec:Math.max(0,Math.floor((Date.now()-(recordStartedMs||Date.now()))/1000)),values,yaml:perBab4YamlSnapshot()};
+  if(at>=0)a[at]=row;else a.push(row);tableRunRows.set(0,a);renderExperimentTable();perBab4RenderProgress();perBab4DrawSummary();return at>=0;
+}
+function perBab4EnableRetakeControls(){
+  if(!perBab4FinalDatasetActive()||!['F4.2','F4.3'].includes(selectedExperiment?.id))return;const r=$('perBab4Repeat');if(r){r.readOnly=false;r.title='Retake: pilih nomor ulangan lama lalu capture; data lama akan diganti, bukan diduplikasi.'}
+  const controls=$('perceptionBab4Acquisition')?.querySelector('.per-bab4-controls');if(controls&&!controls.querySelector('.per-bab4-retake-note')){const n=document.createElement('div');n.className='per-bab4-retake-note';n.innerHTML='<b>RETAKE AMAN</b><span>Target/kondisi + nomor ulangan yang sama = replace trial lama. Progress tetap satu data, tidak membuat duplikat.</span>';controls.appendChild(n)}
+  if(r&&selectedExperiment?.id==='F4.2')r.onchange=perBab4RefreshAutoTrialUi;if(r&&selectedExperiment?.id==='F4.3')r.onchange=perBab4SyncLaneSide;
+}
+const perBab4RetakePanelBase=perBab4RenderPanel;
+perBab4RenderPanel=function(){const out=perBab4RetakePanelBase();perBab4EnableRetakeControls();return out};

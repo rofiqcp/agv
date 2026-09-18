@@ -44,8 +44,8 @@ def main() -> None:
     global_ = data["ekf_filter_node_map"]["ros__parameters"]
     if local.get("publish_tf") is not True or global_.get("publish_tf") is not False:
         fail("TF ownership must be local EKF odom->base, LocalizationCore map->odom")
-    if local.get("odom0") != "/esc/odom" or enabled(local.get("odom0_config", [])) != {6}:
-        fail("local EKF must fuse ESC longitudinal vx only")
+    if local.get("odom0") != "/esc/odom" or enabled(local.get("odom0_config", [])) != {6, 7}:
+        fail("local EKF must fuse ESC vx plus the explicit non-holonomic vy=0 constraint")
     if local.get("twist0") != "/gnss/base_velocity_fusion" or enabled(local.get("twist0_config", [])) != {6}:
         fail("local EKF must fuse independent GNSS vx")
     if (local.get("imu0") != "/imu/data" or enabled(local.get("imu0_config", [])) != {11} or

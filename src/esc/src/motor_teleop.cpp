@@ -237,8 +237,14 @@ public:
     RCLCPP_INFO(get_logger(),
                 "[JOY] LB=BTN_TL speed+ | LT=BTN_TL2 speed- | RB=BTN_TR steering-limit+ | RT=BTN_TR2 steering-limit-");
     RCLCPP_INFO(get_logger(),
-                "[JOY] limit-button axis isolation %.0f ms: LB/LT/RB/RT tidak boleh mengubah cmd_vel",
+                "[JOY] button axis-freeze %.0f ms (0=disabled); EV_ABS proof keeps stick responsive with LB/LT/RB/RT",
                 limit_button_axis_guard_sec_ * 1000.0);
+    RCLCPP_INFO(get_logger(),
+                "[JOY-SAFETY] fault-only neutral re-arm %.0f ms (not used for normal button clicks)",
+                post_limit_neutral_rearm_sec_ * 1000.0);
+    RCLCPP_INFO(get_logger(),
+                "[JOY-SAFETY] onset confirm %.0f ms | reject direct full-scale jump >= %.2f",
+                axis_motion_confirm_sec_ * 1000.0, axis_full_scale_jump_guard_);
     RCLCPP_INFO(get_logger(),
                 "[JOY] Axis shaping: forward_deadzone=%.2f forward_full=%.2f | yaw_deadzone=%.2f yaw_full=%.2f",
                 joy_forward_deadzone_, joy_forward_full_scale_threshold_,
@@ -311,10 +317,29 @@ private:
     bool ready{false};
     bool wait_center_logged{false};
     std::unordered_map<uint16_t, bool> button_down;
-    // Limit buttons share one HID report with analog axes on several low-cost
-    // controllers. Freeze axis sampling briefly around press/release so a
-    // speed/steering-limit button can never inject a motion command.
+    std::unordered_map<uint16_t, bool> button_press_pending;
+    double trusted_forward{0.0};
+    double trusted_yaw{0.0};
+    // Some low-cost controllers multiplex shoulder buttons and analog axes in one HID report.
+    // Optional axis freeze exists only as a fallback; production teleop keeps it at 0 ms so
+    // real stick motion and LB/LT/RB/RT can be processed concurrently.
     std::chrono::steady_clock::time_point limit_axis_guard_until{};
+    bool motion_rearm_required{false};
+    std::chrono::steady_clock::time_point neutral_rearm_since{};
+    bool forward_intermediate_seen{false};
+    bool yaw_intermediate_seen{false};
+    bool forward_motion_pending{false};
+    bool yaw_motion_pending{false};
+    int forward_pending_sign{0};
+    int yaw_pending_sign{0};
+    std::chrono::steady_clock::time_point forward_pending_since{};
+    std::chrono::steady_clock::time_point yaw_pending_since{};
+    std::chrono::steady_clock::time_point last_forward_abs_event{};
+    std::chrono::steady_clock::time_point last_yaw_abs_event{};
+    int last_forward_abs_value{0};
+    int last_yaw_abs_value{0};
+    bool last_forward_abs_valid{false};
+    bool last_yaw_abs_valid{false};
   };
 
   void declare_all_parameters() {
@@ -361,8 +386,13 @@ private:
     declare_parameter<double>("joy_axis_init_tolerance", 0.35);
     declare_parameter<bool>("joy_auto_center", true);
     declare_parameter<double>("joy_auto_center_max_abs", 0.08);
-    declare_parameter<double>("button_debounce_sec", 0.20);
-    declare_parameter<double>("limit_button_axis_guard_sec", 0.18);
+    declare_parameter<double>("button_debounce_sec", 0.03);
+    declare_parameter<double>("limit_button_axis_guard_sec", 0.0);
+    declare_parameter<double>("post_limit_neutral_rearm_sec", 0.80);
+    declare_parameter<double>("axis_full_scale_jump_guard", 0.92);
+    declare_parameter<double>("axis_motion_confirm_sec", 0.02);
+    declare_parameter<double>("axis_event_start_window_sec", 0.15);
+    declare_parameter<double>("button_axis_delta_guard", 0.30);
 
     declare_parameter<bool>("log_command_changes", true);
   }
@@ -407,6 +437,11 @@ private:
     joy_auto_center_max_abs_ = get_parameter("joy_auto_center_max_abs").as_double();
     button_debounce_sec_ = get_parameter("button_debounce_sec").as_double();
     limit_button_axis_guard_sec_ = get_parameter("limit_button_axis_guard_sec").as_double();
+    post_limit_neutral_rearm_sec_ = get_parameter("post_limit_neutral_rearm_sec").as_double();
+    axis_full_scale_jump_guard_ = get_parameter("axis_full_scale_jump_guard").as_double();
+    axis_motion_confirm_sec_ = get_parameter("axis_motion_confirm_sec").as_double();
+    axis_event_start_window_sec_ = get_parameter("axis_event_start_window_sec").as_double();
+    button_axis_delta_guard_ = get_parameter("button_axis_delta_guard").as_double();
 
     log_command_changes_ = get_parameter("log_command_changes").as_bool();
 
@@ -438,6 +473,21 @@ private:
     if (button_debounce_sec_ < 0.0) throw std::runtime_error("button_debounce_sec tidak boleh negatif");
     if (limit_button_axis_guard_sec_ < 0.0 || limit_button_axis_guard_sec_ > 1.0) {
       throw std::runtime_error("limit_button_axis_guard_sec harus 0..1 s");
+    }
+    if (post_limit_neutral_rearm_sec_ < 0.0 || post_limit_neutral_rearm_sec_ > 5.0) {
+      throw std::runtime_error("post_limit_neutral_rearm_sec harus 0..5 s");
+    }
+    if (axis_full_scale_jump_guard_ <= 0.5 || axis_full_scale_jump_guard_ > 1.0) {
+      throw std::runtime_error("axis_full_scale_jump_guard harus >0.5 dan <=1.0");
+    }
+    if (axis_motion_confirm_sec_ < 0.0 || axis_motion_confirm_sec_ > 0.5) {
+      throw std::runtime_error("axis_motion_confirm_sec harus 0..0.5 s");
+    }
+    if (axis_event_start_window_sec_ <= 0.0 || axis_event_start_window_sec_ > 1.0) {
+      throw std::runtime_error("axis_event_start_window_sec harus >0..1 s");
+    }
+    if (button_axis_delta_guard_ <= 0.0 || button_axis_delta_guard_ > 1.0) {
+      throw std::runtime_error("button_axis_delta_guard harus >0..1");
     }
     if (gamepad_forward_abs_code_ < 0 || gamepad_forward_abs_code_ > ABS_MAX) {
       throw std::runtime_error("gamepad_forward_abs_code invalid");
@@ -844,6 +894,10 @@ private:
       dev.ready = false;
       dev.wait_center_logged = false;
       dev.button_down.clear();
+      dev.last_forward_abs_event = {};
+      dev.last_yaw_abs_event = {};
+      dev.last_forward_abs_valid = false;
+      dev.last_yaw_abs_valid = false;
 
       input_absinfo fwd_now{};
       input_absinfo yaw_now{};
@@ -862,7 +916,9 @@ private:
       }
 
       init_button_snapshot(dev);
-      set_gamepad_connected(true, 0.0, 0.0);
+      // Opening a USB receiver is not proof that the wireless controller is usable.
+      // Keep link fail-closed until update_gamepad_axes() validates a centered state.
+      set_gamepad_connected(false, 0.0, 0.0);
       if (same_reconnect) {
         publish_gamepad_status(
           std::string("state=CONNECTED_WAIT_CENTER;ready=0;device=") + best.path +
@@ -1005,6 +1061,20 @@ private:
     dev.limit_axis_guard_until = std::chrono::steady_clock::now() + guard;
   }
 
+  void require_neutral_rearm(GamepadDevice &dev) {
+    dev.motion_rearm_required = true;
+    dev.neutral_rearm_since = {};
+    dev.trusted_forward = 0.0;
+    dev.trusted_yaw = 0.0;
+    dev.forward_intermediate_seen = false;
+    dev.yaw_intermediate_seen = false;
+    dev.forward_motion_pending = false;
+    dev.yaw_motion_pending = false;
+    dev.forward_pending_sign = 0;
+    dev.yaw_pending_sign = 0;
+    set_gamepad_connected(true, 0.0, 0.0);
+  }
+
   void handle_gamepad_button(GamepadDevice &dev, uint16_t code, int32_t value) {
     std::string action;
     std::string label;
@@ -1019,26 +1089,36 @@ private:
     const bool pressed = value != 0;
     const bool previous = dev.button_down[code];
     dev.button_down[code] = pressed;
-    // Guard press and release. A few HID firmwares alter analog bytes in the
-    // same report as shoulder/trigger buttons, including a release spike.
-    arm_limit_axis_guard(dev);
     if (pressed != previous) {
-      // Pair arbitration is performed once per loop after ALL EV_KEY edges and
-      // the EVIOCGKEY snapshot have been consumed. Reset this timestamp so the
-      // surviving direction is applied immediately, even after a simultaneous
-      // opposite-button conflict is released.
-      button_last_trigger_sec_[code] = 0.0;
+      // Queue ONLY the rising edge. Optional HID guard is disabled in production (0 ms),
+      // so shoulder clicks never stall a legitimate simultaneous stick command.
+      // A very fast tap may deliver press+release in one read() batch; the
+      // release must never erase the queued click before it is consumed.
+      arm_limit_axis_guard(dev);
+      if (pressed) dev.button_press_pending[code] = true;
     }
     (void)action;
     (void)label;
   }
 
-  void service_limit_button_repeat(GamepadDevice &dev) {
+  void service_limit_button_edges(GamepadDevice &dev) {
     const double now_sec = std::chrono::duration<double>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
     const auto down = [&dev](uint16_t code) {
       const auto it = dev.button_down.find(code);
       return it != dev.button_down.end() && it->second;
+    };
+    const auto pending = [&dev](uint16_t code) {
+      const auto it = dev.button_press_pending.find(code);
+      return it != dev.button_press_pending.end() && it->second;
+    };
+
+    const auto consume = [&](uint16_t code, const char *action, const char *label) {
+      dev.button_press_pending[code] = false;
+      double &last = button_last_trigger_sec_[code];
+      if (last > 0.0 && (now_sec - last) < button_debounce_sec_) return;
+      last = now_sec;
+      adjust_limit(action, label);
     };
 
     const auto service_pair = [&](uint16_t up_code, uint16_t down_code,
@@ -1046,32 +1126,80 @@ private:
                                   const char *up_label, const char *down_label) {
       const bool up = down(up_code);
       const bool dn = down(down_code);
+      const bool up_pending = pending(up_code);
+      const bool dn_pending = pending(down_code);
 
-      // Opposite buttons on one domain are a deliberate HOLD, not two commands
-      // fighting each other. This also makes all four buttons safe together:
-      // velocity and steering remain unchanged until one opposite is released.
-      if (up == dn) {
-        if (up && dn) {
-          button_last_trigger_sec_[up_code] = 0.0;
-          button_last_trigger_sec_[down_code] = 0.0;
-        }
+      // Same-domain opposite buttons cancel each other for this click cycle.
+      if ((up && dn) || (up_pending && dn_pending)) {
+        dev.button_press_pending[up_code] = false;
+        dev.button_press_pending[down_code] = false;
         return;
       }
-
-      const uint16_t active_code = up ? up_code : down_code;
-      double &last = button_last_trigger_sec_[active_code];
-      if (last <= 0.0 || (now_sec - last) >= button_debounce_sec_) {
-        last = now_sec;
-        adjust_limit(up ? up_action : down_action, up ? up_label : down_label);
+      if (up_pending) {
+        dev.button_press_pending[up_code] = false;
+        // Consume the queued rising edge even if release arrived in the same batch.
+        // Only an actually-held opposite direction cancels it.
+        if (!dn) consume(up_code, up_action, up_label);
+      }
+      if (dn_pending) {
+        dev.button_press_pending[down_code] = false;
+        if (!up) consume(down_code, down_action, down_label);
       }
     };
 
-    // Independent domains: LB+RB and LT+RT are intentionally processed in the
-    // same loop so velocity and steering levels update together.
+    // Independent domains: LB+RB may be clicked together and both update once.
     service_pair(BTN_TL, BTN_TL2, "speed_up", "speed_down",
                  "JOY LB", "JOY LT");
     service_pair(BTN_TR, BTN_TR2, "yaw_up", "yaw_down",
                  "JOY RB", "JOY RT");
+  }
+
+  double validate_axis_motion(double value, bool onset_event_matches_snapshot,
+                              bool &intermediate_seen, bool &pending, int &pending_sign,
+                              std::chrono::steady_clock::time_point &pending_since,
+                              const char *axis_label) {
+    const auto now_steady = std::chrono::steady_clock::now();
+    if (almost_zero(value)) {
+      intermediate_seen = false;
+      pending = false;
+      pending_sign = 0;
+      pending_since = {};
+      return 0.0;
+    }
+
+    const int sign = value > 0.0 ? 1 : -1;
+    const double mag = std::abs(value);
+    if (!pending || sign != pending_sign) {
+      if (!onset_event_matches_snapshot) {
+        pending = false;
+        pending_sign = 0;
+        pending_since = {};
+        intermediate_seen = false;
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+          "[JOY-SAFETY] reject %s snapshot-only onset %.2f (no matching recent EV_ABS)",
+          axis_label, value);
+        return 0.0;
+      }
+      pending = true;
+      pending_sign = sign;
+      pending_since = now_steady;
+      // Do NOT bless a direct neutral -> full-scale event merely because EV_ABS exists.
+      // Cheap 20bc:5001 HID receivers can emit exactly that phantom opposite endpoint
+      // after a real stick release. A genuine fast stick sweep is still accepted because
+      // the event loop records any intermediate EV_ABS sample from the same read() batch.
+      if (mag < axis_full_scale_jump_guard_) intermediate_seen = true;
+    } else if (mag < axis_full_scale_jump_guard_) {
+      intermediate_seen = true;
+    }
+
+    if (mag >= axis_full_scale_jump_guard_ && !intermediate_seen) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+        "[JOY-SAFETY] reject %s full-scale jump %.2f from neutral", axis_label, value);
+      return 0.0;
+    }
+    if (std::chrono::duration<double>(now_steady - pending_since).count() <
+        axis_motion_confirm_sec_) return 0.0;
+    return value;
   }
 
   bool update_gamepad_axes(GamepadDevice &dev) {
@@ -1099,30 +1227,98 @@ private:
                     abs_code_name(dev.candidate.forward_code), dev.forward_center,
                     abs_code_name(dev.candidate.yaw_code), dev.yaw_center);
       } else {
-        set_gamepad_connected(true, 0.0, 0.0);
+        // USB receiver presence is not the same as a usable gamepad. Many 20bc:5001
+        // receivers pin all analog axes at their minimum while the wireless pad is
+        // asleep/unpaired. Keep teleop link DOWN until a real centered state exists.
+        set_gamepad_connected(false, 0.0, 0.0);
         if (!dev.wait_center_logged) {
           dev.wait_center_logged = true;
-          RCLCPP_INFO(get_logger(),
-                      "[JOY] Menunggu stick netral | %s raw=%d (%.2f dari center), %s raw=%d (%.2f dari center)",
-                      abs_code_name(dev.candidate.forward_code), fwd.value, fcenter,
-                      abs_code_name(dev.candidate.yaw_code), yaw.value, ycenter);
+          const bool receiver_idle = (fwd.value == fwd.minimum && yaw.value == yaw.minimum);
+          if (receiver_idle) {
+            publish_gamepad_status("state=WAIT_CONTROLLER;ready=0;reason=receiver_axes_pinned_min");
+            RCLCPP_INFO(get_logger(),
+                        "[JOY] Receiver USB aktif tetapi controller belum awake/paired; menunggu state center");
+          } else {
+            publish_gamepad_status("state=WAIT_CENTER;ready=0;reason=sticks_not_neutral");
+            RCLCPP_INFO(get_logger(),
+                        "[JOY] Menunggu stick netral | %s raw=%d (%.2f dari center), %s raw=%d (%.2f dari center)",
+                        abs_code_name(dev.candidate.forward_code), fwd.value, fcenter,
+                        abs_code_name(dev.candidate.yaw_code), yaw.value, ycenter);
+          }
         }
         return true;
       }
     }
 
-    // Limit adjustment is control-plane only. Hold the previous joystick
-    // fractions while LB/LT/RB/RT is down and during the short release guard.
-    // This prevents a limit-button HID report from moving the front wheel.
-    if (limit_button_down(dev) || std::chrono::steady_clock::now() < dev.limit_axis_guard_until) {
-      return true;
-    }
-
+    const auto now_steady = std::chrono::steady_clock::now();
     const double forward = normalize_evdev_axis(
         fwd.value, fwd, dev.forward_center, gamepad_invert_forward_);
     const double yaw_fraction = normalize_steering_axis(
         yaw.value, yaw, dev.yaw_center, gamepad_invert_yaw_);
-    set_gamepad_connected(true, forward, yaw_fraction);
+
+    // Button edges never stop a valid joystick command. The short guard below only
+    // freezes suspicious axis jumps that coincide with a button HID report.
+    if (dev.motion_rearm_required) {
+      const bool neutral = almost_zero(forward) && almost_zero(yaw_fraction);
+      if (!neutral) {
+        dev.neutral_rearm_since = {};
+      } else if (dev.neutral_rearm_since.time_since_epoch().count() == 0) {
+        dev.neutral_rearm_since = now_steady;
+      } else if (std::chrono::duration<double>(now_steady - dev.neutral_rearm_since).count() >=
+                 post_limit_neutral_rearm_sec_) {
+        dev.motion_rearm_required = false;
+        dev.neutral_rearm_since = {};
+        dev.trusted_forward = 0.0;
+        dev.trusted_yaw = 0.0;
+        RCLCPP_INFO(get_logger(), "[JOY-SAFETY] fault neutral re-arm complete; motion enabled");
+      }
+      set_gamepad_connected(true, 0.0, 0.0);
+      if (dev.motion_rearm_required) return true;
+    }
+
+    const auto event_matches_snapshot = [&](bool valid, int event_value, int snapshot_value,
+                                            const std::chrono::steady_clock::time_point &stamp) {
+      if (!valid || stamp.time_since_epoch().count() == 0 || event_value != snapshot_value) return false;
+      const double age = std::chrono::duration<double>(now_steady - stamp).count();
+      return age >= 0.0 && age <= axis_event_start_window_sec_;
+    };
+    const bool fwd_event_match = event_matches_snapshot(
+      dev.last_forward_abs_valid, dev.last_forward_abs_value, fwd.value, dev.last_forward_abs_event);
+    const bool yaw_event_match = event_matches_snapshot(
+      dev.last_yaw_abs_valid, dev.last_yaw_abs_value, yaw.value, dev.last_yaw_abs_event);
+    const double safe_forward = validate_axis_motion(
+      forward, fwd_event_match, dev.forward_intermediate_seen, dev.forward_motion_pending,
+      dev.forward_pending_sign, dev.forward_pending_since, "ABS_Y");
+    const double safe_yaw = validate_axis_motion(
+      yaw_fraction, yaw_event_match, dev.yaw_intermediate_seen, dev.yaw_motion_pending,
+      dev.yaw_pending_sign, dev.yaw_pending_since, "STEERING");
+
+    const bool button_guard = now_steady < dev.limit_axis_guard_until;
+    const auto update_trusted = [&](double candidate, bool event_match, double &trusted,
+                                    const char *axis_label) {
+      if (almost_zero(candidate)) {
+        trusted = 0.0;  // center/release is always accepted immediately.
+        return;
+      }
+      const double delta = std::abs(candidate - trusted);
+      if (delta <= 1.0e-6) return;
+      if (!event_match) {
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+          "[JOY-SAFETY] freeze %s snapshot change %.2f->%.2f without matching EV_ABS",
+          axis_label, trusted, candidate);
+        return;
+      }
+      if (button_guard && delta > button_axis_delta_guard_) {
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+          "[JOY-SAFETY] freeze %s button-coincident jump %.2f->%.2f",
+          axis_label, trusted, candidate);
+        return;
+      }
+      trusted = candidate;
+    };
+    update_trusted(safe_forward, fwd_event_match, dev.trusted_forward, "ABS_Y");
+    update_trusted(safe_yaw, yaw_event_match, dev.trusted_yaw, "STEERING");
+    set_gamepad_connected(true, dev.trusted_forward, dev.trusted_yaw);
     return true;
   }
 
@@ -1168,6 +1364,9 @@ private:
     dev.fd = -1;
     dev.ready = false;
     dev.button_down.clear();
+    dev.button_press_pending.clear();
+    dev.trusted_forward = 0.0;
+    dev.trusted_yaw = 0.0;
     set_gamepad_connected(false, 0.0, 0.0);
     publish_gamepad_status(
       std::string("state=DISCONNECTED;ready=0;device=") + path +
@@ -1237,14 +1436,51 @@ private:
         } else {
           const size_t count = static_cast<size_t>(bytes) / sizeof(input_event);
           for (size_t i = 0; i < count; ++i) {
-            if (events[i].type == EV_KEY) handle_gamepad_button(dev, events[i].code, events[i].value);
+            if (events[i].type == EV_KEY) {
+              handle_gamepad_button(dev, events[i].code, events[i].value);
+            } else if (events[i].type == EV_ABS) {
+              const auto event_time = std::chrono::steady_clock::now();
+              if (events[i].code == dev.candidate.forward_code) {
+                dev.last_forward_abs_event = event_time;
+                dev.last_forward_abs_value = events[i].value;
+                dev.last_forward_abs_valid = true;
+                if (dev.ready) {
+                  const double event_fraction = normalize_evdev_axis(
+                    events[i].value, dev.candidate.forward_info, dev.forward_center, gamepad_invert_forward_);
+                  const double mag = std::abs(event_fraction);
+                  if (almost_zero(event_fraction)) dev.forward_intermediate_seen = false;
+                  else if (mag < axis_full_scale_jump_guard_) dev.forward_intermediate_seen = true;
+                }
+              }
+              if (events[i].code == dev.candidate.yaw_code) {
+                dev.last_yaw_abs_event = event_time;
+                dev.last_yaw_abs_value = events[i].value;
+                dev.last_yaw_abs_valid = true;
+                if (dev.ready) {
+                  const double event_fraction = normalize_steering_axis(
+                    events[i].value, dev.candidate.yaw_info, dev.yaw_center, gamepad_invert_yaw_);
+                  const double mag = std::abs(event_fraction);
+                  if (almost_zero(event_fraction)) dev.yaw_intermediate_seen = false;
+                  else if (mag < axis_full_scale_jump_guard_) dev.yaw_intermediate_seen = true;
+                }
+              }
+            } else if (events[i].type == EV_SYN && events[i].code == SYN_DROPPED) {
+              // Kernel reports lost input events: never trust the resulting ioctl snapshot
+              // until both sticks have returned to neutral and a fresh EV_ABS onset occurs.
+              dev.last_forward_abs_event = {};
+              dev.last_yaw_abs_event = {};
+              dev.last_forward_abs_valid = false;
+              dev.last_yaw_abs_valid = false;
+              require_neutral_rearm(dev);
+              RCLCPP_WARN(get_logger(), "[JOY-SAFETY] SYN_DROPPED -> force 0,0 + neutral re-arm");
+            }
           }
         }
       }
 
-      // Recover any missed shoulder-button edge from EVIOCGKEY, then repeat while held.
+      // Recover any missed shoulder-button edge from EVIOCGKEY, then consume press edges once.
       sync_limit_buttons_from_kernel(dev);
-      service_limit_button_repeat(dev);
+      service_limit_button_edges(dev);
 
       // Snapshot axis melalui ioctl setiap loop. Tidak membutuhkan autorepeat /joy;
       // stick diam tetap dianggap konek, event yang terlewat tidak membuat state stale.
@@ -1315,7 +1551,7 @@ private:
     }
     if (log_command_changes_) {
       if (label == "speed") {
-        const double request_erpm = new_value * 8000.0;
+        const double request_erpm = speed_max_ > 1.0e-9 ? new_value * (8000.0 / speed_max_) : 0.0;
         RCLCPP_INFO(get_logger(),
                     "[LEVEL] %s VELOCITY=%d/10 request=%.0f eRPM (%.3f m/s)",
                     source.c_str(), speed_level_, request_erpm, new_value);
@@ -1575,8 +1811,13 @@ private:
   double joy_axis_init_tolerance_{0.35};
   bool joy_auto_center_{true};
   double joy_auto_center_max_abs_{0.08};
-  double button_debounce_sec_{0.20};
-  double limit_button_axis_guard_sec_{0.18};
+  double button_debounce_sec_{0.03};
+  double limit_button_axis_guard_sec_{0.0};
+  double post_limit_neutral_rearm_sec_{0.80};
+  double axis_full_scale_jump_guard_{0.92};
+  double axis_motion_confirm_sec_{0.02};
+  double axis_event_start_window_sec_{0.15};
+  double button_axis_delta_guard_{0.30};
   bool gamepad_absent_logged_{false};
   std::unordered_map<uint16_t, double> button_last_trigger_sec_;
 

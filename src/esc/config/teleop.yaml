@@ -7,11 +7,11 @@ motor_teleop:
   ros__parameters:
     output_topic: /cmd_vel/teleop
     publish_rate_hz: 50.0
-    speed_initial: 1.8137254478007407
+    speed_initial: 0.6801470429252777
     speed_min: 0.6801470429252777
     speed_max: 1.8137254478007407
     speed_step: 0.12595315609727364
-    yaw_initial_deg_s: 80.0
+    yaw_initial_deg_s: 26.666666666666668
     yaw_step_deg_s: 5.925925925925926
     yaw_min_deg_s: 26.666666666666668
     keyboard_device: ''
@@ -36,6 +36,20 @@ motor_teleop:
     joy_axis_init_tolerance: 0.35
     joy_auto_center: true
     joy_auto_center_max_abs: 0.08
-    button_debounce_sec: 0.2
-    limit_button_axis_guard_sec: 0.18
+    button_debounce_sec: 0.03
+    limit_button_axis_guard_sec: 0.0
+    # Used only after a real input-stream fault (for example SYN_DROPPED).
+    # Normal LB/LT/RB/RT clicks never trigger this re-arm.
+    post_limit_neutral_rearm_sec: 0.80
+    # Reject suspicious full-scale jumps from neutral until the axis has shown
+    # at least one intermediate sample. Prevents 20bc:5001 HID phantom +/-FS.
+    axis_full_scale_jump_guard: 0.92
+    axis_motion_confirm_sec: 0.02
+    # A new non-zero motion must be backed by a real EV_ABS event in this window.
+    # Holding an already-valid stick remains continuous; stale ioctl snapshots cannot start motion.
+    axis_event_start_window_sec: 0.15
+    # Legacy threshold retained for compatibility. The button-time axis freeze is disabled
+    # (limit_button_axis_guard_sec=0) so a real EV_ABS stick event can respond together
+    # with LB/LT/RB/RT. Phantom motion is rejected by EV_ABS proof + 20 ms persistence.
+    button_axis_delta_guard: 0.30
     log_command_changes: true

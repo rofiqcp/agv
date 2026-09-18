@@ -921,7 +921,7 @@ class MainWindow:public QMainWindow{
     };
     QVector<Audit>a={
       {"/esc_ackermann","esc",{
-        "wheelbase_m","track_width_m","odom_v_variance_base","odom_v_variance_rpm_error_gain",
+        "wheelbase_m","track_width_m","odom_v_variance_base","odom_v_variance_erpm_error_gain",
         "odom_yaw_variance_base","odom_yaw_variance_steer_gain","odom_yaw_rate_variance_base",
         "steering_physical_left_limit_deg","steering_physical_right_limit_deg","steering_physical_operational_limit_deg"
       },"esc","esc_ackermann.ros__parameters."},

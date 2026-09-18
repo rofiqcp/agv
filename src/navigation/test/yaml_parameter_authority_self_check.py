@@ -28,13 +28,17 @@ for path in SRC.rglob("*.yaml"):
     walk(data)
 
 decl = re.compile(r"declare_parameter(?:<[^>]+>)?\s*\(\s*[\"']([^\"']+)[\"']")
+launch_owned = {"nav2_topic", "active_source_topic", "require_autonomy_gate", "transport_mode", "serial_enabled"}
+esc_launch_text = (SRC / "esc/launch/esc.launch.py").read_text(errors="ignore")
+for name in launch_owned:
+    assert f'DeclareLaunchArgument("{name}"' in esc_launch_text, f"launch-owned parameter missing declaration: {name}"
 missing = []
 for path in SRC.rglob("*"):
     if path.suffix not in {".cpp", ".hpp", ".py"} or "test" in path.parts:
         continue
     text = path.read_text(errors="ignore")
     for name in decl.findall(text):
-        if name not in yaml_param_names:
+        if name not in yaml_param_names and name not in launch_owned:
             missing.append(f"{path.relative_to(AGV)}:{name}")
 assert not missing, "Declared parameters without YAML authority:\n" + "\n".join(missing)
 

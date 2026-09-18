@@ -4,7 +4,7 @@ import re, yaml
 ROOT=Path(__file__).resolve().parents[3]
 urdf=(ROOT/'src/navigation/urdf/dimensions.xacro').read_text()
 src=(ROOT/'src/perception/src/astra_yolop_cpu_pt_node.cpp').read_text()
-app='\n'.join((ROOT/'src/navigation/web/static'/name).read_text() for name in ('app.js','tuning_catalog.js'))
+app='\n'.join((ROOT/'src/navigation/web/static'/name).read_text() for name in ('app.js','tuning_catalog.js')); bab4=(ROOT/'src/navigation/web/static/perception_bab4.js').read_text()
 with open(ROOT/'src/perception/config/astra_yolop_gpu.yaml') as f:
     cfg=yaml.safe_load(f)['perception']['ros__parameters']
 def val(name):
@@ -22,9 +22,18 @@ assert 'laneSafetyLineAtRow' in src
 assert 'cv::line(image, top_left, top_right' not in src
 assert 'cv::line(image, bottom_left, bottom_right' not in src
 assert 'TRAPEZOID' not in src
-assert 'if (!result.drivable_detected && !lane_mask_detected)' in src
+assert 'result.raw_lane_mask_detected =' in src
+assert 'result.lane_mask_detected = result.left_valid || result.right_valid' in src
+assert 'DRIVABLE_INTERNAL_LANE_IGNORED' in src
+assert 'drawOuterLaneBoundaryOverlay' in src
+assert 'red.copyTo(annotated, lane)' not in src
+assert 'edge_gate_px = std::max(18.0, 0.18 * road_width_px)' in src
+assert 'if (!result.drivable_detected)' in src
 assert 'result.left_status = "UNKNOWN"' in src
 assert 'result.left_valid ? laneCorridorStatus(true, result.left_gap_px) : "GREEN"' in src
+assert '5 kondisi input' in bab4 and '100 trial' in bab4
+assert 'green_outer' in bab4 and 'green_drivable' in bab4
+assert 'Internal Lane Ignored' in bab4
 assert cfg['lane_corridor_far_lookahead_m'] == 3.8
 assert abs(cfg['lane_corridor_safety_margin_m'] - 0.30) < 1e-9
 assert cfg['lane_corridor_touch_margin_px'] == 2.0
@@ -48,7 +57,7 @@ assert 'top_line.left_x + t * (bottom_line.left_x - top_line.left_x)' in src
 
 # Color-state contract requested for operator preview.
 def visual_state(drivable, lane_present, valid, gap, warning=36.0, touch=2.0):
-    if not drivable and not lane_present:
+    if not drivable:
         return 'GRAY'
     if valid and gap <= touch:
         return 'RED'
@@ -57,7 +66,7 @@ def visual_state(drivable, lane_present, valid, gap, warning=36.0, touch=2.0):
     return 'GREEN'
 assert visual_state(False,False,False,999)=='GRAY'
 assert visual_state(True,False,False,999)=='GREEN'
-assert visual_state(False,True,True,80)=='GREEN'
+assert visual_state(False,True,True,80)=='GRAY'
 assert visual_state(True,True,True,20)=='YELLOW'
 assert visual_state(True,True,True,0)=='RED'
 

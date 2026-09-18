@@ -39,8 +39,8 @@ if l.get('twist0')!='/gnss/base_velocity_fusion' or enabled(l.get('twist0_config
     fail('local EKF must fuse independent GNSS vx')
 if l.get('imu0')!='/imu/data' or enabled(l.get('imu0_config')) != [11] or l.get('imu0_relative') is not True:
     fail('local EKF must fuse IMU gyro-Z only')
-if l.get('odom0')!='/esc/odom' or enabled(l.get('odom0_config')) != [6]:
-    fail('local EKF wheel odometry must remain auxiliary vx-only to avoid steering-slip yaw authority')
+if l.get('odom0')!='/esc/odom' or enabled(l.get('odom0_config')) != [6,7]:
+    fail('local EKF wheel odometry must provide vx plus explicit non-holonomic vy=0; steering-slip yaw stays diagnostic')
 # Global EKF: GNSS x/y + vx; COG plus pre-EKF validated heading provide absolute yaw; IMU gyro-Z provides short-term dynamics.
 if g.get('odom0')!='/odometry/gnss_map' or enabled(g.get('odom0_config')) != [0,1]:
     fail('global EKF must fuse GNSS absolute x/y')

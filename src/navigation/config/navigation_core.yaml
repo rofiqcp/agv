@@ -14,12 +14,21 @@ navigation_core:
     command_rate_hz: 20.0
     status_rate_hz: 10.0
     autonomy_timeout_sec: 0.6
-    max_forward_speed_mps: 1.0
+    max_forward_speed_mps: 1.9
     max_reverse_speed_mps: 1.0
-    max_yaw_rate_rps: 0.625907910003
+    max_yaw_rate_rps: 1.308147531908
     linear_deadband_mps: 0.08
     angular_deadband_rps: 0.02
+    yaw_hysteresis_enabled: true
+    yaw_hysteresis_enter_rps: 0.08
+    yaw_hysteresis_exit_rps: 0.025
     min_speed_for_yaw_mps: 0.08
+    goal_braking_enabled: true
+    goal_stop_radius_m: 1.0
+    goal_braking_deceleration_mps2: 0.60
+    goal_braking_pose_timeout_sec: 0.50
+    relax_goal_orientation_for_ackermann: true
+    goal_orientation_pose_timeout_sec: 1.0
     require_perception_for_autonomy_motion: false
     perception_timeout_sec: 1.5
     require_sensor_publisher_contract: true
@@ -31,6 +40,9 @@ navigation_core:
     allow_esc_integration_bypass: false
     esc_integration_bypass_timeout_sec: 1.0
     esc_state_timeout_sec: 0.75
+    runtime_localization_loss_grace_sec: 3.0
+    runtime_esc_loss_grace_sec: 1.5
+    runtime_wheel_slip_stop_sec: 1.5
     require_camera_metric_calibration: false
     camera_metric_calibration_validated: false
     require_steering_calibration_for_autonomy: true
@@ -47,14 +59,14 @@ navigation_core:
     track_width_m: 0.48
     max_steering_angle_rad: 0.523598775598
     log_heartbeat_sec: 10.0
-    minimum_turning_radius_m: 1.597679121829
+    minimum_turning_radius_m: 1.452435565298
     require_stage3_production_certification: true
     precision_mode: false
     require_collision_monitor_for_production: true
     require_perception_for_production: true
     stage3_production_certified: false
     stage3_commissioning_mode: true
-    stage3_commissioning_speed_cap_mps: 1.0
+    stage3_commissioning_speed_cap_mps: 1.9
 
     keyboard_available: false
 
@@ -63,6 +75,8 @@ cmd_vel_router:
   ros__parameters:
     teleop_topic: /cmd_vel/teleop
     teleop_source_topic: /teleop/active_source
+    web_trial_topic: /cmd_vel/web_trial
+    web_trial_source_topic: /web_trial/active_source
     teleop_estop_topic: /teleop/emergency_stop_latched
     autonomy_topic: /cmd_vel/autonomy_pre_smoother
     autonomy_gate_topic: /system/autonomy_motion_allowed

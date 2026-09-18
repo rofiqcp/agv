@@ -8,7 +8,7 @@ function syncReportDocumentLayout(){
   if(report){main.insertBefore(table,graph);main.insertBefore(banner,table);main.insertBefore(graph,two);if(per)main.insertBefore(two,per)}
   else{if(banner.parentNode===main)main.insertBefore(banner,recap);main.insertBefore(graph,two);if(per){main.insertBefore(two,per);main.insertBefore(per,table)}main.insertBefore(table,recap)}
 }
-function renderSelectedExperiment(){const x=selectedExperiment;if(!x)return;const domain=currentExp==='navigation'?'Navigasi':currentExp==='perception'?'Persepsi':'ESC / FOC',id=displayExperimentId(x),title=displayExperimentTitle(x),report=x.reportMode===true;setText('experimentGroup',displayExperimentGroup(x));setText('experimentTitle',`${id} ${title}`);const n0=currentExp==='navigation'&&x.id==='N0.1';setText('experimentSubtitle',report?`${domain} • LAPORAN BAB IV • rekap data dari ${x.sourceIds?.join(', ')||'source tuning'} • START/STOP, Excel, grafik, dan parameter YAML memakai mesin akuisisi Navigasi yang sama.`:n0?'Navigasi • N0 Timing Readiness • target konfigurasi dan rate aktual dipisahkan. ESC command-loop target bukan rate /esc/odom feedback.':`${domain} • Tuning ${id} • parameter, tabel, grafik, dan live evidence mengikuti source pengujian ini.`);if(activePage==='experiments'){setText('pageEyebrow',report?'NAVIGASI • LAPORAN BAB IV':`${domain.toUpperCase()} • TUNING`);setText('pageTitle',`${id} ${title}`)}syncReportDocumentLayout();const imuLinearityExtra=report&&x.id==='R4.1.2';setText('experimentTableBadge',`${(x.tableNames||[]).length+(imuLinearityExtra?1:0)} TABLE`);setText('experimentGraphBadge',`${(x.graphCaptions||[]).length+(imuLinearityExtra?2:0)} GRAPH`);setText('experimentRawMetadata',JSON.stringify(x,null,2));renderTuningFields();renderLabTabs();renderExperimentTable();renderExperimentGraphs();window.renderImuHeadingLinearity?.();window.renderReport41TimedPanel?.();renderContextVisual();renderSourceAudit();renderN0TimingGuide();renderPerceptionEngineering();renderTrialGuideDetailed();renderTrialRecap();renderCommissioningRoadmap();renderQualificationPanel();window.navigationTuningPolicy?.render?.()}
+function renderSelectedExperiment(){const x=selectedExperiment;if(!x)return;const domain=currentExp==='navigation'?'Navigasi':currentExp==='perception'?'Persepsi':'ESC / FOC',id=displayExperimentId(x),title=displayExperimentTitle(x),report=x.reportMode===true;setText('experimentGroup',displayExperimentGroup(x));setText('experimentTitle',`${id} ${title}`);const n0=currentExp==='navigation'&&x.id==='N0.1',ekfReport=currentExp==='navigation'&&/^R4\.[23]\.[1-5]$/.test(String(x.id||''));setText('experimentSubtitle',report?(ekfReport?`${domain} • LAPORAN BAB IV ${id} • YAML source-of-truth → safe runtime apply/read-back → data aktual berjalan • setiap kondisi diulang 3 cycle dan dibandingkan overall.`:`${domain} • LAPORAN BAB IV • rekap data dari ${x.sourceIds?.join(', ')||'source tuning'} • START/STOP, Excel, grafik, dan parameter YAML memakai mesin akuisisi Navigasi yang sama.`):n0?'Navigasi • N0 Timing Readiness • target konfigurasi dan rate aktual dipisahkan. ESC command-loop target bukan rate /esc/odom feedback.':`${domain} • Tuning ${id} • parameter, tabel, grafik, dan live evidence mengikuti source pengujian ini.`);if(activePage==='experiments'){setText('pageEyebrow',report?'NAVIGASI • LAPORAN BAB IV':`${domain.toUpperCase()} • TUNING`);setText('pageTitle',`${id} ${title}`)}syncReportDocumentLayout();const imuLinearityExtra=report&&x.id==='R4.1.2';setText('experimentTableBadge',`${(x.tableNames||[]).length+(imuLinearityExtra?1:0)} TABLE`);setText('experimentGraphBadge',`${(x.graphCaptions||[]).length+(imuLinearityExtra?2:0)} GRAPH`);setText('experimentRawMetadata',JSON.stringify(x,null,2));renderTuningFields();renderLabTabs();renderExperimentTable();renderExperimentGraphs();window.renderImuHeadingLinearity?.();window.renderReport41TimedPanel?.();renderContextVisual();renderSourceAudit();renderN0TimingGuide();renderPerceptionEngineering();renderTrialGuideDetailed();renderTrialRecap();renderCommissioningRoadmap();renderQualificationPanel();window.renderEkfReportRuntimePanel?.();window.navigationTuningPolicy?.render?.();renderFirdaKpQuickPanel()}
 let tuningMode='unified',tuningLevel='all';
 const HELP_REGISTRY=new Map([
   ['action.tuning.validate',{label:'Validate Draft',summary:'Memeriksa draft tanpa menulis YAML atau mengubah runtime.',apply_mode:'read-only validation',risk:'Tidak menggerakkan actuator dan aman digunakan sebelum Apply.'}],
@@ -62,7 +62,7 @@ function decorateTuningFieldStates(fields){fields.forEach((p,i)=>{const row=q(`.
 function updateTuningDraftControls(){const items=tuningDraftRows(),n=items.length,ro=obj('server').read_only===true,busy=!!recordStartedMs,validated=validationMatches(items);setText('tuningDraftCount',`${n} DRAFT${validated?' • VALIDATED':''}`);const v=$('tuningValidateDraft'),a=$('tuningApplyDraft'),r=$('tuningRevertDraft');if(v)v.disabled=!n;if(a)a.disabled=!n||ro||busy||!validated;if(r)r.disabled=!n}
 async function validateTuningDrafts(){const items=tuningDraftRows();if(!items.length)return toast('Tidak ada draft tuning.',true);try{const j=await validateConfigItems(items);toast(`Validate OK: ${items.length} draft • review diff sebelum Apply`)}catch(e){toast('Validate gagal: '+e.message,true)}}
 function revertTuningDrafts(){const items=tuningDraftRows();for(const x of items)configPending.delete(`${x.fileKey}:${x.path}`);invalidateConfigValidation('draft reverted');renderTuningFields();renderConfigBrowser();window.navigationTuningPolicy?.render?.();toast(`${items.length} draft tuning dibuang; YAML tidak berubah.`)}
-async function applyTuningDrafts(){const items=tuningDraftRows();if(!items.length)return toast('Tidak ada draft tuning.',true);if(obj('server').read_only===true)return toast('Server read-only; Apply ditolak.',true);if(!validationMatches(items))return toast('Validate + Diff Review wajib diulang sebelum Apply.',true);confirmModal('Apply validated tuning',`${items.length} draft tervalidasi akan di-backup sebagai satu transaksi, ditulis atomik, lalu runtime di-apply/read-back.`,async()=>{try{const r=await writeRequest('/api/config/apply',{validation_id:configValidation.id,items:configPayload(items)}),j=await r.json();if(!r.ok)throw new Error(`${j.code||''} ${j.message||`HTTP ${r.status}`}`.trim());for(const row of j.items||[]){const id=row.identity,st=row.apply_status||'YAML_SAVED';configRuntimeState.set(id,{label:st,kind:st==='ACTIVE_MATCH'?'ready':st==='RUNTIME_MISMATCH'?'error':'pending'})}for(const x of items)configPending.delete(`${x.fileKey}:${x.path}`);configValidation=null;closeConfigDiff();await loadConfig();if(typeof loadTrials==='function')await loadTrials();window.navigationTuningPolicy?.onApplied?.();renderTuningFields();toast(`Transaction ${j.transaction_id||'--'}: ${items.length} OK`)}catch(e){invalidateConfigValidation('apply rejected');toast('Apply tuning gagal: '+e.message,true)}})}
+async function applyTuningDrafts(){const items=tuningDraftRows();if(!items.length)return toast('Tidak ada draft tuning.',true);if(obj('server').read_only===true)return toast('Server read-only; Apply ditolak.',true);if(!validationMatches(items))return toast('Validate + Diff Review wajib diulang sebelum Apply.',true);confirmModal('Konfirmasi ubah YAML + runtime',`${items.length} parameter tervalidasi akan mengubah YAML source-of-truth. Backend membuat backup, menulis atomik, me-restart node terkait saat kendaraan stationary, lalu membaca ulang parameter runtime. Jika read-back tidak MATCH, transaksi di-rollback otomatis.`,async()=>{try{const r=await writeRequest('/api/config/apply',{validation_id:configValidation.id,items:configPayload(items)}),j=await r.json();if(!r.ok)throw new Error(`${j.code||''} ${j.message||`HTTP ${r.status}`}`.trim());for(const row of j.items||[]){const id=row.identity,st=row.apply_status||'YAML_SAVED';configRuntimeState.set(id,{label:st,kind:st==='ACTIVE_MATCH'?'ready':st==='RUNTIME_MISMATCH'?'error':'pending',runtime:row.runtime,savedValue:row.saved_value,transactionId:j.transaction_id,verifiedAt:Date.now()})}for(const x of items)configPending.delete(`${x.fileKey}:${x.path}`);configValidation=null;closeConfigDiff();await loadConfig();if(typeof loadTrials==='function')await loadTrials();window.navigationTuningPolicy?.onApplied?.();renderTuningFields();window.renderEkfReportRuntimePanel?.();toast(j.runtime_match===true?`YAML TERSIMPAN + RUNTIME MATCH • transaction ${j.transaction_id||'--'} • ${items.length} parameter aktif`:`Transaction ${j.transaction_id||'--'} selesai • cek status runtime tiap parameter`)}catch(e){invalidateConfigValidation('apply rejected');toast('Apply tuning gagal: '+e.message,true)}})}
 function resetSelectedExperimentYaml(){if(!selectedExperiment)return toast('Pilih tahap tuning terlebih dahulu.',true);if(recordStartedMs)return toast('STOP recording dulu sebelum stage baseline.',true);const fields=tuningFieldsFor(selectedExperiment).filter(p=>p.yamlFileKey&&p.kind!=='yaml_readonly'&&!p.locked&&schemaMetaForParam(p)?.write_authority==='ros_yaml'&&baselineConfigValue(p.yamlFileKey,p.yamlPath)!==undefined);let n=0;for(const p of fields){const id=`${p.yamlFileKey}:${p.yamlPath}`,cur=configValue(p.yamlFileKey,p.yamlPath),base=baselineConfigValue(p.yamlFileKey,p.yamlPath);if(JSON.stringify(cur)===JSON.stringify(base)){configPending.delete(id);continue}configPending.set(id,{fileKey:p.yamlFileKey,path:p.yamlPath,name:p.label||p.key||p.yamlPath,value:base,oldValue:cur,action:'reset',source:'tuning',experimentId:selectedExperiment.id});n++}invalidateConfigValidation('baseline staged');renderTuningFields();renderConfigBrowser();window.navigationTuningPolicy?.render?.();toast(n?`${n} baseline staged; YAML belum berubah.`:'Semua parameter sudah sama dengan baseline.')}
 
 
@@ -150,6 +150,7 @@ function renderLabWorkbench(force=false){
     renderSourceAudit();
     renderPerceptionEngineering();
     renderTestPreflight();
+    window.renderEkfReportRuntimePanel?.();
     window.renderReport41TimedPanel?.();
     window.renderImuHeadingLinearity?.();
   }
@@ -158,3 +159,54 @@ setInterval(()=>{
   if(document.hidden)return;
   if(activePage==='experiments'||recordStartedMs||(++recorderIdlePoll%5===0))pollRecorder();
 },1000);
+
+// FIRDA 4.2.1 one-page helper. Reuses the existing Workbench controls and recorder.
+let firdaKpPulseCount=0,firdaKpPulseBusy=false;
+function firdaKpActive(){return currentExp==='steering'&&String(selectedExperiment?.id||'')==='4.2.1'&&String(typeof activeFirdaEscStep==='undefined'?'':activeFirdaEscStep)==='4.2.1'}
+function firdaKpTune(){const t=obj('vesc_tuning_state');return (+t.motor===1&&+t.status===0)?t:null}
+function firdaKpSetText(id,v){const e=$(id);if(e)e.textContent=v}
+function firdaKpMeta(v){if(Math.abs(v-.4)<.08)return['KP-05X','candidate-a'];if(Math.abs(v-.8)<.12)return['KP-10X','candidate-b'];if(Math.abs(v-1.2)<.15)return['KP-15X','candidate-c'];return['KP-'+Number(v).toFixed(3),'candidate-a']}
+function firdaKpApplyIdentity(v){const [variation,candidate]=firdaKpMeta(v);if($('runVariation'))$('runVariation').value=variation;if($('runCondition'))$('runCondition').value='IQ_STEP_1A';if($('runCandidate'))$('runCandidate').value=candidate}
+function renderFirdaKpQuickPanel(){
+  const p=$('firdaKpQuickPanel');if(!p)return;const active=firdaKpActive();p.hidden=!active;if(!active)return;
+  const maint=bool(raw('vesc_maintenance_active')),t=firdaKpTune(),lv=obj('vesc_left_values'),rec=$('recordToggleBtn')?.dataset.active==='true';
+  const chip=$('firdaKpModeState');if(chip){chip.textContent=maint?'WEB MAINTENANCE':'RUNTIME';chip.className='status-chip '+(maint?'':'waiting')}
+  if($('firdaKpActual'))$('firdaKpActual').value=t?fmt(t.foc_q_kp,6):'--';
+  if($('firdaKiActual'))$('firdaKiActual').value=t?fmt(t.foc_q_ki,6):'--';
+  firdaKpSetText('firdaKpLive','Iq '+fmt(lv.iq_a,3)+' A • Id '+fmt(lv.id_a,3)+' A • Imotor '+fmt(lv.current_motor_a,3)+' A • Duty '+fmt(lv.duty,4)+' • Vbus '+fmt(lv.vbus_v,2)+' V');
+  firdaKpSetText('firdaKpPulseCount','Pulse: '+firdaKpPulseCount+' / 3');
+  if($('firdaKpEnterMaint')){$('firdaKpEnterMaint').disabled=maint||firdaKpPulseBusy;$('firdaKpEnterMaint').textContent=maint?'1. MAINTENANCE ACTIVE':'1. WEB MAINTENANCE'}
+  if($('firdaKpRead'))$('firdaKpRead').disabled=!maint||firdaKpPulseBusy;
+  if($('firdaKpApply'))$('firdaKpApply').disabled=!maint||!t||firdaKpPulseBusy;
+  if($('firdaKpRecordStart'))$('firdaKpRecordStart').disabled=!maint||rec||firdaKpPulseBusy;
+  if($('firdaKpPulse'))$('firdaKpPulse').disabled=!maint||!rec||firdaKpPulseBusy||firdaKpPulseCount>=3;
+  if($('firdaKpRecordStop'))$('firdaKpRecordStop').disabled=!rec||firdaKpPulseBusy;
+}
+function firdaKpBind(){
+  const p=$('firdaKpQuickPanel');if(!p||p.dataset.bound==='1')return;p.dataset.bound='1';
+  const preset=(id,v)=>{$(id).onclick=()=>{if($('firdaKpValue'))$('firdaKpValue').value=String(v);firdaKpApplyIdentity(v);firdaKpPulseCount=0;renderFirdaKpQuickPanel()}};
+  preset('firdaKpPresetLow',0.4);preset('firdaKpPresetMid',0.8);preset('firdaKpPresetHigh',1.2);
+  $('firdaKpValue').onchange=()=>{const v=+$('firdaKpValue').value;if(Number.isFinite(v)){firdaKpApplyIdentity(v);firdaKpPulseCount=0}renderFirdaKpQuickPanel()};
+  $('firdaKpEnterMaint').onclick=()=>{$('vescEnterMaintenance')?.click()};
+  $('firdaKpRead').onclick=()=>{firdaKpSetText('firdaKpApplyState','Reading LEFT tuning…');$('vescLReadTuning')?.click()};
+  $('firdaKpApply').onclick=()=>{
+    const kp=+$('firdaKpValue').value;if(!Number.isFinite(kp)||kp<=0||kp>5)return toast('Kp candidate tidak valid.',true);
+    const q=$('vescLTuneFocQKp'),store=$('vescLTuneStore'),write=$('vescLWriteTuning');
+    if(!q||!store||!write)return toast('Workbench LEFT tuning belum tersedia.',true);
+    q.value=String(kp);store.checked=false;firdaKpApplyIdentity(kp);firdaKpPulseCount=0;
+    firdaKpSetText('firdaKpApplyState','Q Kp '+kp.toFixed(3)+' siap • confirm Runtime only.');
+    write.click();
+  };
+  $('firdaKpRecordStart').onclick=()=>{firdaKpPulseCount=0;$('recordToggleBtn')?.click()};
+  $('firdaKpRecordStop').onclick=()=>{$('recordToggleBtn')?.click()};
+  $('firdaKpStop').onclick=()=>{$('vescSendZero')?.click()};
+  $('firdaKpPulse').onclick=async()=>{
+    if(firdaKpPulseBusy)return;if($('recordToggleBtn')?.dataset.active!=='true')return toast('START recorder dulu.',true);
+    const input=$('vescLeftCurrentInput'),set=$('vescLeftSetCurrent'),stop=$('vescSendZero');if(!input||!set||!stop)return toast('Direct LEFT control belum tersedia.',true);
+    firdaKpPulseBusy=true;renderFirdaKpQuickPanel();
+    try{firdaKpSetText('firdaKpApplyState','Pulse '+(firdaKpPulseCount+1)+'/3 • 1.0 A');input.value='1.0';set.click();await sleep(1000);stop.click();firdaKpPulseCount++;firdaKpSetText('firdaKpApplyState','Pulse '+firdaKpPulseCount+'/3 selesai • jeda 2 s.');await sleep(2000)}
+    finally{firdaKpPulseBusy=false;renderFirdaKpQuickPanel()}
+  };
+}
+firdaKpBind();
+setInterval(()=>{if(firdaKpActive())renderFirdaKpQuickPanel()},250);

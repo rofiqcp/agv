@@ -581,6 +581,7 @@ private:
       [this](std_msgs::msg::String::SharedPtr msg) {
         std::lock_guard<std::mutex> lock(mutex_);
         lane_state_ = extractStringField(msg->data, "state", "UNKNOWN");
+        lane_recommendation_ = extractStringField(msg->data, "recommendation", "UNKNOWN");
         lane_valid_ = extractBoolField(msg->data, "valid", false);
         lane_critical_ = extractBoolField(msg->data, "critical", false);
         lane_received_ = now();
@@ -921,6 +922,7 @@ private:
     double perception_latency_sec = perception_latency_fallback_sec_;
     bool perception_latency_fresh = false;
     std::string lane_state = "UNKNOWN";
+    std::string lane_recommendation = "UNKNOWN";
     std::string lane_control_decision = "UNKNOWN";
     PathSnapshot path;
     double min_obstacle_along = std::numeric_limits<double>::infinity();
@@ -953,6 +955,7 @@ private:
       lane_valid = lane_valid_;
       lane_critical = lane_critical_;
       lane_state = lane_state_;
+      lane_recommendation = lane_recommendation_;
       lane_control_fresh = lane_control_seen_ && fresh(lane_control_received_, lane_timeout_sec_, t);
       if (lane_control_fresh) {
         lane_recenter_blocked = lane_recenter_blocked_;
@@ -1072,6 +1075,12 @@ private:
         output.angular.z = (1.0 - lane_advisory_blend_) * output.angular.z +
           lane_advisory_blend_ * advisory.angular.z;
         decision = lane_critical ? "LANE_CRITICAL_RECENTER" : "LANE_RECENTER";
+      } else if (!commissioning_bypass && lane_safety_enabled_ && !path_obstacle_near &&
+                 lane_fresh && lane_valid && lane_recommendation == "WARNING") {
+        // Yellow lane zone is longitudinal-only safety: reduce speed while preserving
+        // Nav2 steering. Steering authority begins only after RED/recenter latch.
+        if (output.linear.x > 0.0) output.linear.x = std::min(output.linear.x, warning_lane_speed_mps_);
+        decision = "LANE_WARNING_SLOW";
       } else if (!commissioning_bypass && lane_safety_enabled_ && stop_on_lane_lost_ && lane_fresh &&
                  (!lane_valid || lane_state == "LANE_LOST")) {
         decision = "LANE_LOST_STOP";
@@ -1128,7 +1137,9 @@ private:
     if (std::isfinite(min_obstacle_command_along)) ss << min_obstacle_command_along;
     else ss << "NA";
     ss << ";lane_state=" << lane_state
+       << ";lane_recommendation=" << lane_recommendation
        << ";lane_safety_enabled=" << lane_safety_enabled_
+       << ";stop_on_lane_lost=" << stop_on_lane_lost_
        << ";lane_control_decision=" << lane_control_decision
        << ";lane_recenter_blocked=" << lane_recenter_blocked
        << ";lane_fresh=" << lane_fresh
@@ -1263,6 +1274,7 @@ private:
   bool lane_valid_{false};
   bool lane_critical_{false};
   std::string lane_state_{"UNKNOWN"};
+  std::string lane_recommendation_{"UNKNOWN"};
   rclcpp::Time lane_received_{0, 0, RCL_ROS_TIME};
   bool lane_control_seen_{false};
   bool lane_recenter_blocked_{false};
