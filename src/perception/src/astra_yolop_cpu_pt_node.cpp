@@ -256,15 +256,22 @@ public:
         result.successful = true;
         bool inference_seen = false;
         bool inference_value = inference_enabled_.load();
-        double top_y, bottom_y, left_top, left_bottom, right_top, right_bottom;
+        bool cpu_threads_seen = false;
+        int cpu_threads_value = cpu_threads_;
+        double top_y, bottom_y, left_top_x, left_top_y, left_bottom_x, left_bottom_y;
+        double right_top_x, right_top_y, right_bottom_x, right_bottom_y;
         {
           std::lock_guard<std::mutex> lock(lane_corridor_config_mutex_);
           top_y = lane_corridor_top_y_ratio_;
           bottom_y = lane_corridor_bottom_y_ratio_;
-          left_top = lane_corridor_left_top_x_ratio_;
-          left_bottom = lane_corridor_left_bottom_x_ratio_;
-          right_top = lane_corridor_right_top_x_ratio_;
-          right_bottom = lane_corridor_right_bottom_x_ratio_;
+          left_top_x = lane_corridor_left_top_x_ratio_;
+          left_top_y = lane_corridor_left_top_y_ratio_;
+          left_bottom_x = lane_corridor_left_bottom_x_ratio_;
+          left_bottom_y = lane_corridor_left_bottom_y_ratio_;
+          right_top_x = lane_corridor_right_top_x_ratio_;
+          right_top_y = lane_corridor_right_top_y_ratio_;
+          right_bottom_x = lane_corridor_right_bottom_x_ratio_;
+          right_bottom_y = lane_corridor_right_bottom_y_ratio_;
         }
         for (const auto & parameter : parameters) {
           const auto & name = parameter.get_name();
@@ -274,10 +281,22 @@ public:
             }
             inference_seen = true; inference_value = parameter.as_bool(); continue;
           }
+          if (name == "cpu_threads") {
+            if (parameter.get_type() != rclcpp::ParameterType::PARAMETER_INTEGER) {
+              result.successful = false; result.reason = "cpu_threads wajib integer"; return result;
+            }
+            const auto requested = parameter.as_int();
+            if (requested < 1 || requested > 8) {
+              result.successful = false; result.reason = "cpu_threads wajib 1..8"; return result;
+            }
+            cpu_threads_seen = true; cpu_threads_value = static_cast<int>(requested); continue;
+          }
           const bool lane_geometry =
             name == "lane_corridor_top_y_ratio" || name == "lane_corridor_bottom_y_ratio" ||
-            name == "lane_corridor_left_top_x_ratio" || name == "lane_corridor_left_bottom_x_ratio" ||
-            name == "lane_corridor_right_top_x_ratio" || name == "lane_corridor_right_bottom_x_ratio";
+            name == "lane_corridor_left_top_x_ratio" || name == "lane_corridor_left_top_y_ratio" ||
+            name == "lane_corridor_left_bottom_x_ratio" || name == "lane_corridor_left_bottom_y_ratio" ||
+            name == "lane_corridor_right_top_x_ratio" || name == "lane_corridor_right_top_y_ratio" ||
+            name == "lane_corridor_right_bottom_x_ratio" || name == "lane_corridor_right_bottom_y_ratio";
           if (!lane_geometry) continue;
           if (parameter.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE) {
             result.successful = false; result.reason = "lane corridor preview parameters wajib double"; return result;
@@ -288,16 +307,36 @@ public:
           }
           if (name == "lane_corridor_top_y_ratio") top_y = value;
           else if (name == "lane_corridor_bottom_y_ratio") bottom_y = value;
-          else if (name == "lane_corridor_left_top_x_ratio") left_top = value;
-          else if (name == "lane_corridor_left_bottom_x_ratio") left_bottom = value;
-          else if (name == "lane_corridor_right_top_x_ratio") right_top = value;
-          else if (name == "lane_corridor_right_bottom_x_ratio") right_bottom = value;
+          else if (name == "lane_corridor_left_top_x_ratio") left_top_x = value;
+          else if (name == "lane_corridor_left_top_y_ratio") left_top_y = value;
+          else if (name == "lane_corridor_left_bottom_x_ratio") left_bottom_x = value;
+          else if (name == "lane_corridor_left_bottom_y_ratio") left_bottom_y = value;
+          else if (name == "lane_corridor_right_top_x_ratio") right_top_x = value;
+          else if (name == "lane_corridor_right_top_y_ratio") right_top_y = value;
+          else if (name == "lane_corridor_right_bottom_x_ratio") right_bottom_x = value;
+          else if (name == "lane_corridor_right_bottom_y_ratio") right_bottom_y = value;
         }
+        const double overlap_top = std::max(left_top_y, right_top_y);
+        const double overlap_bottom = std::min(left_bottom_y, right_bottom_y);
+        const auto interp_x = [](double y, double x0, double y0, double x1, double y1) {
+          const double t = std::clamp((y - y0) / std::max(1.0e-9, y1 - y0), 0.0, 1.0);
+          return x0 + t * (x1 - x0);
+        };
+        const double left_at_top = interp_x(overlap_top, left_top_x, left_top_y, left_bottom_x, left_bottom_y);
+        const double right_at_top = interp_x(overlap_top, right_top_x, right_top_y, right_bottom_x, right_bottom_y);
+        const double left_at_bottom = interp_x(overlap_bottom, left_top_x, left_top_y, left_bottom_x, left_bottom_y);
+        const double right_at_bottom = interp_x(overlap_bottom, right_top_x, right_top_y, right_bottom_x, right_bottom_y);
+        top_y = overlap_top;
+        bottom_y = overlap_bottom;
         const bool geometry_valid =
-          top_y >= 0.0 && top_y <= 0.90 && bottom_y >= top_y + 0.05 && bottom_y <= 0.995 &&
-          left_top >= 0.0 && left_top <= 1.0 && left_bottom >= 0.0 && left_bottom <= 1.0 &&
-          right_top >= 0.0 && right_top <= 1.0 && right_bottom >= 0.0 && right_bottom <= 1.0 &&
-          left_top < right_top && left_bottom < right_bottom;
+          left_top_y >= 0.0 && left_top_y <= 0.95 &&
+          left_bottom_y >= left_top_y + 0.05 && left_bottom_y <= 0.995 &&
+          right_top_y >= 0.0 && right_top_y <= 0.95 &&
+          right_bottom_y >= right_top_y + 0.05 && right_bottom_y <= 0.995 &&
+          bottom_y >= top_y + 0.05 &&
+          left_top_x >= 0.0 && left_top_x <= 1.0 && left_bottom_x >= 0.0 && left_bottom_x <= 1.0 &&
+          right_top_x >= 0.0 && right_top_x <= 1.0 && right_bottom_x >= 0.0 && right_bottom_x <= 1.0 &&
+          left_at_top + 0.005 < right_at_top && left_at_bottom + 0.005 < right_at_bottom;
         if (!geometry_valid) {
           result.successful = false; result.reason = "lane corridor preview geometry invalid"; return result;
         }
@@ -305,10 +344,19 @@ public:
           std::lock_guard<std::mutex> lock(lane_corridor_config_mutex_);
           lane_corridor_top_y_ratio_ = top_y;
           lane_corridor_bottom_y_ratio_ = bottom_y;
-          lane_corridor_left_top_x_ratio_ = left_top;
-          lane_corridor_left_bottom_x_ratio_ = left_bottom;
-          lane_corridor_right_top_x_ratio_ = right_top;
-          lane_corridor_right_bottom_x_ratio_ = right_bottom;
+          lane_corridor_left_top_x_ratio_ = left_top_x;
+          lane_corridor_left_top_y_ratio_ = left_top_y;
+          lane_corridor_left_bottom_x_ratio_ = left_bottom_x;
+          lane_corridor_left_bottom_y_ratio_ = left_bottom_y;
+          lane_corridor_right_top_x_ratio_ = right_top_x;
+          lane_corridor_right_top_y_ratio_ = right_top_y;
+          lane_corridor_right_bottom_x_ratio_ = right_bottom_x;
+          lane_corridor_right_bottom_y_ratio_ = right_bottom_y;
+        }
+        if (cpu_threads_seen) {
+          cpu_threads_ = cpu_threads_value;
+          torch::set_num_threads(cpu_threads_);
+          RCLCPP_INFO(get_logger(), "YOLOPv2 CPU threads runtime -> %d", cpu_threads_);
         }
         if (inference_seen) {
           inference_enabled_.store(inference_value);
@@ -434,9 +482,13 @@ private:
     declare_parameter<double>("lane_corridor_top_y_ratio", 0.02);
     declare_parameter<double>("lane_corridor_bottom_y_ratio", 0.98);
     declare_parameter<double>("lane_corridor_left_top_x_ratio", 0.42);
+    declare_parameter<double>("lane_corridor_left_top_y_ratio", 0.02);
     declare_parameter<double>("lane_corridor_left_bottom_x_ratio", 0.20);
+    declare_parameter<double>("lane_corridor_left_bottom_y_ratio", 0.98);
     declare_parameter<double>("lane_corridor_right_top_x_ratio", 0.58);
+    declare_parameter<double>("lane_corridor_right_top_y_ratio", 0.02);
     declare_parameter<double>("lane_corridor_right_bottom_x_ratio", 0.80);
+    declare_parameter<double>("lane_corridor_right_bottom_y_ratio", 0.98);
     declare_parameter<double>("lane_corridor_camera_height_m", 0.736);
     declare_parameter<double>("lane_corridor_camera_pitch_deg", 0.0);
     declare_parameter<double>("lane_corridor_safety_margin_m", 0.30);
@@ -622,9 +674,13 @@ private:
     lane_corridor_top_y_ratio_ = get_parameter("lane_corridor_top_y_ratio").as_double();
     lane_corridor_bottom_y_ratio_ = get_parameter("lane_corridor_bottom_y_ratio").as_double();
     lane_corridor_left_top_x_ratio_ = get_parameter("lane_corridor_left_top_x_ratio").as_double();
+    lane_corridor_left_top_y_ratio_ = get_parameter("lane_corridor_left_top_y_ratio").as_double();
     lane_corridor_left_bottom_x_ratio_ = get_parameter("lane_corridor_left_bottom_x_ratio").as_double();
+    lane_corridor_left_bottom_y_ratio_ = get_parameter("lane_corridor_left_bottom_y_ratio").as_double();
     lane_corridor_right_top_x_ratio_ = get_parameter("lane_corridor_right_top_x_ratio").as_double();
+    lane_corridor_right_top_y_ratio_ = get_parameter("lane_corridor_right_top_y_ratio").as_double();
     lane_corridor_right_bottom_x_ratio_ = get_parameter("lane_corridor_right_bottom_x_ratio").as_double();
+    lane_corridor_right_bottom_y_ratio_ = get_parameter("lane_corridor_right_bottom_y_ratio").as_double();
     lane_corridor_camera_height_m_ = get_parameter("lane_corridor_camera_height_m").as_double();
     lane_corridor_camera_pitch_deg_ = get_parameter("lane_corridor_camera_pitch_deg").as_double();
     lane_corridor_safety_margin_m_ = get_parameter("lane_corridor_safety_margin_m").as_double();
@@ -792,9 +848,17 @@ private:
       throw std::runtime_error("Parameter homography/ground metric CPU tidak valid");
     }
     lane_thresholds_.validate();
-    lane_corridor_top_y_ratio_ = std::clamp(lane_corridor_top_y_ratio_, 0.0, 0.95);
-    lane_corridor_bottom_y_ratio_ = std::clamp(
-      lane_corridor_bottom_y_ratio_, lane_corridor_top_y_ratio_ + 0.05, 0.99);
+    lane_corridor_left_top_y_ratio_ = std::clamp(lane_corridor_left_top_y_ratio_, 0.0, 0.95);
+    lane_corridor_left_bottom_y_ratio_ = std::clamp(
+      lane_corridor_left_bottom_y_ratio_, lane_corridor_left_top_y_ratio_ + 0.05, 0.995);
+    lane_corridor_right_top_y_ratio_ = std::clamp(lane_corridor_right_top_y_ratio_, 0.0, 0.95);
+    lane_corridor_right_bottom_y_ratio_ = std::clamp(
+      lane_corridor_right_bottom_y_ratio_, lane_corridor_right_top_y_ratio_ + 0.05, 0.995);
+    lane_corridor_top_y_ratio_ = std::max(lane_corridor_left_top_y_ratio_, lane_corridor_right_top_y_ratio_);
+    lane_corridor_bottom_y_ratio_ = std::min(lane_corridor_left_bottom_y_ratio_, lane_corridor_right_bottom_y_ratio_);
+    if (lane_corridor_bottom_y_ratio_ < lane_corridor_top_y_ratio_ + 0.05) {
+      throw std::runtime_error("Lane Safety kiri/kanan tidak memiliki overlap vertikal >= 0.05");
+    }
     lane_corridor_left_top_x_ratio_ = std::clamp(lane_corridor_left_top_x_ratio_, 0.0, 1.0);
     lane_corridor_left_bottom_x_ratio_ = std::clamp(lane_corridor_left_bottom_x_ratio_, 0.0, 1.0);
     lane_corridor_right_top_x_ratio_ = std::clamp(lane_corridor_right_top_x_ratio_, 0.0, 1.0);
@@ -2030,20 +2094,24 @@ private:
 
   LaneSafetyLineAtRow laneSafetyLineAtRow(int y, int image_width, int image_height) const
   {
-    double top_ratio, bottom_ratio, left_top, left_bottom, right_top, right_bottom;
+    double left_top_x, left_top_y, left_bottom_x, left_bottom_y;
+    double right_top_x, right_top_y, right_bottom_x, right_bottom_y;
     {
       std::lock_guard<std::mutex> lock(lane_corridor_config_mutex_);
-      top_ratio = lane_corridor_top_y_ratio_; bottom_ratio = lane_corridor_bottom_y_ratio_;
-      left_top = lane_corridor_left_top_x_ratio_; left_bottom = lane_corridor_left_bottom_x_ratio_;
-      right_top = lane_corridor_right_top_x_ratio_; right_bottom = lane_corridor_right_bottom_x_ratio_;
+      left_top_x = lane_corridor_left_top_x_ratio_; left_top_y = lane_corridor_left_top_y_ratio_;
+      left_bottom_x = lane_corridor_left_bottom_x_ratio_; left_bottom_y = lane_corridor_left_bottom_y_ratio_;
+      right_top_x = lane_corridor_right_top_x_ratio_; right_top_y = lane_corridor_right_top_y_ratio_;
+      right_bottom_x = lane_corridor_right_bottom_x_ratio_; right_bottom_y = lane_corridor_right_bottom_y_ratio_;
     }
     if (lane_corridor_manual_lines_enabled_) {
-      const int top_y = std::clamp(static_cast<int>(std::lround(image_height * top_ratio)), 0, image_height - 2);
-      const int bottom_y = std::clamp(static_cast<int>(std::lround(image_height * bottom_ratio)), top_y + 1, image_height - 1);
-      const double t = std::clamp(static_cast<double>(y - top_y) / static_cast<double>(std::max(1, bottom_y - top_y)), 0.0, 1.0);
+      const double yn = static_cast<double>(y) / static_cast<double>(std::max(1, image_height - 1));
+      const double left_t = std::clamp(
+        (yn - left_top_y) / std::max(1.0e-9, left_bottom_y - left_top_y), 0.0, 1.0);
+      const double right_t = std::clamp(
+        (yn - right_top_y) / std::max(1.0e-9, right_bottom_y - right_top_y), 0.0, 1.0);
       LaneSafetyLineAtRow line;
-      line.left_x = (left_top + t * (left_bottom - left_top)) * (image_width - 1);
-      line.right_x = (right_top + t * (right_bottom - right_top)) * (image_width - 1);
+      line.left_x = (left_top_x + left_t * (left_bottom_x - left_top_x)) * (image_width - 1);
+      line.right_x = (right_top_x + right_t * (right_bottom_x - right_top_x)) * (image_width - 1);
       if (line.left_x > line.right_x) std::swap(line.left_x, line.right_x);
       line.center_x = 0.5 * (line.left_x + line.right_x);
       return line;
@@ -2263,7 +2331,10 @@ private:
     cv::Mat & image, const LaneCorridorDecision & corridor) const
   {
     if (image.empty()) return;
-    const cv::Scalar outer_color(255, 210, 70);
+    // Outer-lane evidence is neutral white. Safety semantics (GREEN/YELLOW/RED)
+    // belong only to the calibrated safety lines below; this also avoids an RGB/BGR
+    // ambiguity that previously rendered the evidence line blue/purple on ROS Web.
+    const cv::Scalar outer_color(230, 230, 230);
     if (corridor.left_outer_points.size() >= 2U) {
       cv::polylines(image, corridor.left_outer_points, false, outer_color, 3, cv::LINE_AA);
     }
@@ -2283,19 +2354,24 @@ private:
   void drawLaneCorridorOverlay(cv::Mat & image, const LaneCorridorDecision & corridor) const
   {
     if (!lane_corridor_overlay_enabled_ || image.empty()) return;
-    double top_ratio, bottom_ratio;
+    double left_top_x, left_top_y, left_bottom_x, left_bottom_y;
+    double right_top_x, right_top_y, right_bottom_x, right_bottom_y;
     {
       std::lock_guard<std::mutex> lock(lane_corridor_config_mutex_);
-      top_ratio = lane_corridor_top_y_ratio_; bottom_ratio = lane_corridor_bottom_y_ratio_;
+      left_top_x = lane_corridor_left_top_x_ratio_; left_top_y = lane_corridor_left_top_y_ratio_;
+      left_bottom_x = lane_corridor_left_bottom_x_ratio_; left_bottom_y = lane_corridor_left_bottom_y_ratio_;
+      right_top_x = lane_corridor_right_top_x_ratio_; right_top_y = lane_corridor_right_top_y_ratio_;
+      right_bottom_x = lane_corridor_right_bottom_x_ratio_; right_bottom_y = lane_corridor_right_bottom_y_ratio_;
     }
-    const int top_y = std::clamp(static_cast<int>(std::lround(image.rows * top_ratio)), 0, image.rows - 2);
-    const int bottom_y = std::clamp(static_cast<int>(std::lround(image.rows * bottom_ratio)), top_y + 1, image.rows - 1);
-    const auto top = laneSafetyLineAtRow(top_y, image.cols, image.rows);
-    const auto bottom = laneSafetyLineAtRow(bottom_y, image.cols, image.rows);
-    const cv::Point top_left(static_cast<int>(std::lround(top.left_x)), top_y);
-    const cv::Point top_right(static_cast<int>(std::lround(top.right_x)), top_y);
-    const cv::Point bottom_left(static_cast<int>(std::lround(bottom.left_x)), bottom_y);
-    const cv::Point bottom_right(static_cast<int>(std::lround(bottom.right_x)), bottom_y);
+    const auto point = [&image](double x, double y) {
+      return cv::Point(
+        std::clamp(static_cast<int>(std::lround(x * (image.cols - 1))), 0, image.cols - 1),
+        std::clamp(static_cast<int>(std::lround(y * (image.rows - 1))), 0, image.rows - 1));
+    };
+    const cv::Point top_left = point(left_top_x, left_top_y);
+    const cv::Point bottom_left = point(left_bottom_x, left_bottom_y);
+    const cv::Point top_right = point(right_top_x, right_top_y);
+    const cv::Point bottom_right = point(right_bottom_x, right_bottom_y);
 
     // Preview hanya menampilkan dua garis safety miring. Tidak ada garis horizontal
     // atau label diagnostik, sehingga kamera tetap bersih dan mudah dibaca operator.
@@ -2706,8 +2782,22 @@ private:
         cv::Mat green(frame.size(), CV_8UC3, cv::Scalar(0, 255, 0));
         green.copyTo(annotated, drivable);
         cv::addWeighted(frame, 1.0 - overlay_alpha_, annotated, overlay_alpha_, 0.0, annotated);
-        // ROS Web hanya menampilkan dua OUTER lane tervalidasi. Raw lane-mask internal
-        // (mis. garis sepeda/marka tengah) sengaja tidak dibakar ke preview operator.
+
+        // Visual diagnostic saja: tampilkan raw lane-mask YOLOPv2 dalam cyan tipis.
+        // Mask kontrol asli tidak diubah; dilasi hanya pada salinan visual agar marka
+        // tipis tetap terlihat jelas pada preview ROS Web 640x360.
+        if (!lane.empty()) {
+          cv::Mat lane_visual;
+          cv::dilate(
+            lane, lane_visual,
+            cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3)));
+          cv::Mat lane_tint = annotated.clone();
+          cv::Mat cyan(frame.size(), CV_8UC3, cv::Scalar(255, 255, 0));
+          cyan.copyTo(lane_tint, lane_visual);
+          cv::addWeighted(annotated, 0.72, lane_tint, 0.28, 0.0, annotated);
+        }
+
+        // Outer-boundary tervalidasi tetap netral putih, terpisah dari raw lane-mask.
         drawOuterLaneBoundaryOverlay(annotated, lane_corridor);
         // Dua garis Lane Safety berasal dari empat titik hasil APPLY dan warnanya
         // mengikuti UNKNOWN/GREEN/YELLOW/RED runtime.
@@ -3036,9 +3126,13 @@ private:
   double lane_corridor_top_y_ratio_{0.02};
   double lane_corridor_bottom_y_ratio_{0.98};
   double lane_corridor_left_top_x_ratio_{0.42};
+  double lane_corridor_left_top_y_ratio_{0.02};
   double lane_corridor_left_bottom_x_ratio_{0.20};
+  double lane_corridor_left_bottom_y_ratio_{0.98};
   double lane_corridor_right_top_x_ratio_{0.58};
+  double lane_corridor_right_top_y_ratio_{0.02};
   double lane_corridor_right_bottom_x_ratio_{0.80};
+  double lane_corridor_right_bottom_y_ratio_{0.98};
   mutable std::mutex lane_corridor_config_mutex_;
   double lane_corridor_camera_height_m_{0.736};
   double lane_corridor_camera_pitch_deg_{0.0};

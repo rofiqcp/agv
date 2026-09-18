@@ -7276,6 +7276,28 @@ parameters:
     hard_max: 1.0
     step: 0.001
     unit: normalized
+  perception:perception.ros__parameters.lane_corridor_left_top_y_ratio:
+    identity: perception:perception.ros__parameters.lane_corridor_left_top_y_ratio
+    file_key: perception
+    yaml_path: perception.ros__parameters.lane_corridor_left_top_y_ratio
+    label: Lane left top Y
+    group: PERCEPTION CALIBRATION
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Lane left top Y untuk direct perception calibration 4 titik independen.
+    effect_up: Titik kiri atas bergeser ke bawah pada frame normalized.
+    effect_down: Titik kiri atas bergeser ke atas pada frame normalized.
+    related: []
+    source_of_constraint: astra_yolop_gpu_node.cpp / astra_yolop_cpu_pt_node.cpp
+    hard_min: 0.0
+    hard_max: 0.995
+    step: 0.001
+    unit: normalized
   perception:perception.ros__parameters.lane_corridor_left_bottom_x_ratio:
     identity: perception:perception.ros__parameters.lane_corridor_left_bottom_x_ratio
     file_key: perception
@@ -7296,6 +7318,28 @@ parameters:
     source_of_constraint: astra_yolop_gpu_node.cpp / astra_yolop_cpu_pt_node.cpp
     hard_min: 0.0
     hard_max: 1.0
+    step: 0.001
+    unit: normalized
+  perception:perception.ros__parameters.lane_corridor_left_bottom_y_ratio:
+    identity: perception:perception.ros__parameters.lane_corridor_left_bottom_y_ratio
+    file_key: perception
+    yaml_path: perception.ros__parameters.lane_corridor_left_bottom_y_ratio
+    label: Lane left bottom Y
+    group: PERCEPTION CALIBRATION
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Lane left bottom Y untuk direct perception calibration 4 titik independen.
+    effect_up: Titik kiri bawah bergeser ke bawah pada frame normalized.
+    effect_down: Titik kiri bawah bergeser ke atas pada frame normalized.
+    related: []
+    source_of_constraint: astra_yolop_gpu_node.cpp / astra_yolop_cpu_pt_node.cpp
+    hard_min: 0.0
+    hard_max: 0.995
     step: 0.001
     unit: normalized
   perception:perception.ros__parameters.lane_corridor_right_top_x_ratio:
@@ -7320,6 +7364,28 @@ parameters:
     hard_max: 1.0
     step: 0.001
     unit: normalized
+  perception:perception.ros__parameters.lane_corridor_right_top_y_ratio:
+    identity: perception:perception.ros__parameters.lane_corridor_right_top_y_ratio
+    file_key: perception
+    yaml_path: perception.ros__parameters.lane_corridor_right_top_y_ratio
+    label: Lane right top Y
+    group: PERCEPTION CALIBRATION
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Lane right top Y untuk direct perception calibration 4 titik independen.
+    effect_up: Titik kanan atas bergeser ke bawah pada frame normalized.
+    effect_down: Titik kanan atas bergeser ke atas pada frame normalized.
+    related: []
+    source_of_constraint: astra_yolop_gpu_node.cpp / astra_yolop_cpu_pt_node.cpp
+    hard_min: 0.0
+    hard_max: 0.995
+    step: 0.001
+    unit: normalized
   perception:perception.ros__parameters.lane_corridor_right_bottom_x_ratio:
     identity: perception:perception.ros__parameters.lane_corridor_right_bottom_x_ratio
     file_key: perception
@@ -7340,6 +7406,28 @@ parameters:
     source_of_constraint: astra_yolop_gpu_node.cpp / astra_yolop_cpu_pt_node.cpp
     hard_min: 0.0
     hard_max: 1.0
+    step: 0.001
+    unit: normalized
+  perception:perception.ros__parameters.lane_corridor_right_bottom_y_ratio:
+    identity: perception:perception.ros__parameters.lane_corridor_right_bottom_y_ratio
+    file_key: perception
+    yaml_path: perception.ros__parameters.lane_corridor_right_bottom_y_ratio
+    label: Lane right bottom Y
+    group: PERCEPTION CALIBRATION
+    level: advanced
+    type: number
+    risk: safety_critical
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: Lane right bottom Y untuk direct perception calibration 4 titik independen.
+    effect_up: Titik kanan bawah bergeser ke bawah pada frame normalized.
+    effect_down: Titik kanan bawah bergeser ke atas pada frame normalized.
+    related: []
+    source_of_constraint: astra_yolop_gpu_node.cpp / astra_yolop_cpu_pt_node.cpp
+    hard_min: 0.0
+    hard_max: 0.995
     step: 0.001
     unit: normalized
   perception:perception.ros__parameters.nav2_obstacle_roi_enabled:

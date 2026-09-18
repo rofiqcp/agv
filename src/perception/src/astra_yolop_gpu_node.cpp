@@ -2161,9 +2161,13 @@ private:
     declare_parameter<double>("lane_corridor_top_y_ratio", 0.18);
     declare_parameter<double>("lane_corridor_bottom_y_ratio", 0.96);
     declare_parameter<double>("lane_corridor_left_top_x_ratio", 0.42);
+    declare_parameter<double>("lane_corridor_left_top_y_ratio", 0.18);
     declare_parameter<double>("lane_corridor_left_bottom_x_ratio", 0.20);
+    declare_parameter<double>("lane_corridor_left_bottom_y_ratio", 0.96);
     declare_parameter<double>("lane_corridor_right_top_x_ratio", 0.58);
+    declare_parameter<double>("lane_corridor_right_top_y_ratio", 0.18);
     declare_parameter<double>("lane_corridor_right_bottom_x_ratio", 0.80);
+    declare_parameter<double>("lane_corridor_right_bottom_y_ratio", 0.96);
     declare_parameter<double>("lane_corridor_warning_gap_px", 36.0);
     declare_parameter<double>("lane_corridor_touch_margin_px", 2.0);
     declare_parameter<double>("lane_corridor_release_gap_px", 48.0);
@@ -2402,9 +2406,13 @@ private:
     lane_corridor_top_y_ratio_ = get_parameter("lane_corridor_top_y_ratio").as_double();
     lane_corridor_bottom_y_ratio_ = get_parameter("lane_corridor_bottom_y_ratio").as_double();
     lane_corridor_left_top_x_ratio_ = get_parameter("lane_corridor_left_top_x_ratio").as_double();
+    lane_corridor_left_top_y_ratio_ = get_parameter("lane_corridor_left_top_y_ratio").as_double();
     lane_corridor_left_bottom_x_ratio_ = get_parameter("lane_corridor_left_bottom_x_ratio").as_double();
+    lane_corridor_left_bottom_y_ratio_ = get_parameter("lane_corridor_left_bottom_y_ratio").as_double();
     lane_corridor_right_top_x_ratio_ = get_parameter("lane_corridor_right_top_x_ratio").as_double();
+    lane_corridor_right_top_y_ratio_ = get_parameter("lane_corridor_right_top_y_ratio").as_double();
     lane_corridor_right_bottom_x_ratio_ = get_parameter("lane_corridor_right_bottom_x_ratio").as_double();
+    lane_corridor_right_bottom_y_ratio_ = get_parameter("lane_corridor_right_bottom_y_ratio").as_double();
     lane_corridor_warning_gap_px_ = get_parameter("lane_corridor_warning_gap_px").as_double();
     lane_corridor_touch_margin_px_ = get_parameter("lane_corridor_touch_margin_px").as_double();
     lane_corridor_release_gap_px_ = get_parameter("lane_corridor_release_gap_px").as_double();
@@ -2513,8 +2521,15 @@ private:
     confidence_threshold_ = std::clamp(confidence_threshold_, 0.01F, 0.99F);
     iou_threshold_ = std::clamp(iou_threshold_, 0.01F, 0.99F);
     lane_threshold_ = std::clamp(lane_threshold_, 0.01F, 0.99F);
-    lane_corridor_top_y_ratio_ = std::clamp(lane_corridor_top_y_ratio_, 0.0, 0.90);
-    lane_corridor_bottom_y_ratio_ = std::clamp(lane_corridor_bottom_y_ratio_, lane_corridor_top_y_ratio_ + 0.05, 0.995);
+    lane_corridor_left_top_y_ratio_ = std::clamp(lane_corridor_left_top_y_ratio_, 0.0, 0.95);
+    lane_corridor_left_bottom_y_ratio_ = std::clamp(lane_corridor_left_bottom_y_ratio_, lane_corridor_left_top_y_ratio_ + 0.05, 0.995);
+    lane_corridor_right_top_y_ratio_ = std::clamp(lane_corridor_right_top_y_ratio_, 0.0, 0.95);
+    lane_corridor_right_bottom_y_ratio_ = std::clamp(lane_corridor_right_bottom_y_ratio_, lane_corridor_right_top_y_ratio_ + 0.05, 0.995);
+    lane_corridor_top_y_ratio_ = std::max(lane_corridor_left_top_y_ratio_, lane_corridor_right_top_y_ratio_);
+    lane_corridor_bottom_y_ratio_ = std::min(lane_corridor_left_bottom_y_ratio_, lane_corridor_right_bottom_y_ratio_);
+    if (lane_corridor_bottom_y_ratio_ < lane_corridor_top_y_ratio_ + 0.05) {
+      throw std::runtime_error("Lane Safety kiri/kanan tidak memiliki overlap vertikal >= 0.05");
+    }
     lane_corridor_left_top_x_ratio_ = std::clamp(lane_corridor_left_top_x_ratio_, 0.0, 1.0);
     lane_corridor_left_bottom_x_ratio_ = std::clamp(lane_corridor_left_bottom_x_ratio_, 0.0, 1.0);
     lane_corridor_right_top_x_ratio_ = std::clamp(lane_corridor_right_top_x_ratio_, 0.0, 1.0);
@@ -3430,17 +3445,25 @@ private:
     PixelLaneCorridorRuntime out;
     out.enabled = lane_corridor_overlay_enabled_ || lane_corridor_control_enabled_;
     if (!out.enabled || h_lane_mask_ == nullptr || width_ < 20 || height_ < 20) return out;
-    const int top_y = std::clamp(static_cast<int>(std::lround(height_ * lane_corridor_top_y_ratio_)), 0, height_ - 2);
-    const int bottom_y = std::clamp(static_cast<int>(std::lround(height_ * lane_corridor_bottom_y_ratio_)), top_y + 1, height_ - 1);
+    const double overlap_top = std::max(lane_corridor_left_top_y_ratio_, lane_corridor_right_top_y_ratio_);
+    const double overlap_bottom = std::min(lane_corridor_left_bottom_y_ratio_, lane_corridor_right_bottom_y_ratio_);
+    const int top_y = std::clamp(static_cast<int>(std::lround(height_ * overlap_top)), 0, height_ - 2);
+    const int bottom_y = std::clamp(static_cast<int>(std::lround(height_ * overlap_bottom)), top_y + 1, height_ - 1);
     std::vector<double> left_gaps, right_gaps;
     left_gaps.reserve(static_cast<size_t>((bottom_y - top_y) / lane_corridor_sample_stride_px_ + 2));
     right_gaps.reserve(left_gaps.capacity());
     for (int y = top_y; y <= bottom_y; y += lane_corridor_sample_stride_px_) {
-      const double t = static_cast<double>(y - top_y) / static_cast<double>(std::max(1, bottom_y - top_y));
+      const double yn = static_cast<double>(y) / static_cast<double>(std::max(1, height_ - 1));
+      const double left_t = std::clamp(
+        (yn - lane_corridor_left_top_y_ratio_) /
+        std::max(1.0e-9, lane_corridor_left_bottom_y_ratio_ - lane_corridor_left_top_y_ratio_), 0.0, 1.0);
+      const double right_t = std::clamp(
+        (yn - lane_corridor_right_top_y_ratio_) /
+        std::max(1.0e-9, lane_corridor_right_bottom_y_ratio_ - lane_corridor_right_top_y_ratio_), 0.0, 1.0);
       const double left_x = (lane_corridor_left_top_x_ratio_ +
-        t * (lane_corridor_left_bottom_x_ratio_ - lane_corridor_left_top_x_ratio_)) * (width_ - 1);
+        left_t * (lane_corridor_left_bottom_x_ratio_ - lane_corridor_left_top_x_ratio_)) * (width_ - 1);
       const double right_x = (lane_corridor_right_top_x_ratio_ +
-        t * (lane_corridor_right_bottom_x_ratio_ - lane_corridor_right_top_x_ratio_)) * (width_ - 1);
+        right_t * (lane_corridor_right_bottom_x_ratio_ - lane_corridor_right_top_x_ratio_)) * (width_ - 1);
       const double center_x = 0.5 * (left_x + right_x);
       const uint8_t *row = h_lane_mask_ + static_cast<size_t>(y) * static_cast<size_t>(width_);
       int left_lane = -1, right_lane = -1;
@@ -5670,9 +5693,13 @@ private:
   double lane_corridor_top_y_ratio_{0.18};
   double lane_corridor_bottom_y_ratio_{0.96};
   double lane_corridor_left_top_x_ratio_{0.42};
+  double lane_corridor_left_top_y_ratio_{0.18};
   double lane_corridor_left_bottom_x_ratio_{0.20};
+  double lane_corridor_left_bottom_y_ratio_{0.96};
   double lane_corridor_right_top_x_ratio_{0.58};
+  double lane_corridor_right_top_y_ratio_{0.18};
   double lane_corridor_right_bottom_x_ratio_{0.80};
+  double lane_corridor_right_bottom_y_ratio_{0.96};
   double lane_corridor_warning_gap_px_{36.0};
   double lane_corridor_touch_margin_px_{2.0};
   double lane_corridor_release_gap_px_{48.0};

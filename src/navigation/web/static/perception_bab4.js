@@ -146,7 +146,7 @@ const perBab4DrawSummaryBase=perBab4DrawSummary;
 perBab4DrawSummary=function(){perBab4DrawSummaryBase();perBab4DrawConfidence()};
 function perBab4EnsureOverlay(){const box=$('contextCamera');if(!box)return null;let c=perBab4Get('perBab4DetectionOverlay');if(!c){c=document.createElement('canvas');c.id='perBab4DetectionOverlay';c.className='per-bab4-detection-overlay';box.appendChild(c)}c.hidden=!(perBab4Is('F4.2'));return c}
 function perBab4DrawOverlay(){const c=perBab4EnsureOverlay();if(!c||c.hidden)return;const img=$('expCameraImage'),g=cameraGeometryFor(img);if(!g)return;const fit=g.resizeCanvas(c),ctx=fit.ctx,dpr=fit.dpr,cr=c.getBoundingClientRect();ctx.clearRect(0,0,fit.width,fit.height);const ds=perBab4RawDetections(),candidateSelect=perBab4Get('perBab4Candidate'),autoIndex=!candidateSelect&&typeof perBab4AutoDetectionDecision==='function'?perBab4AutoDetectionDecision().index:-1,selectedIndex=candidateSelect?(+candidateSelect.value||0):autoIndex;ds.forEach((d,i)=>{const a=g.imageToScreen?.(+d.x1,+d.y1),b=g.imageToScreen?.(+d.x2,+d.y2);if(!a||!b)return;const x=(a.x-cr.left)*dpr,y=(a.y-cr.top)*dpr,w=(b.x-a.x)*dpr,h=(b.y-a.y)*dpr;ctx.strokeStyle=i===selectedIndex?'#ffc86b':'#48e0a4';ctx.lineWidth=(i===selectedIndex?3:2)*dpr;ctx.strokeRect(x,y,w,h);ctx.fillStyle=ctx.strokeStyle;ctx.font=`${12*dpr}px ui-monospace`;ctx.fillText(`#${i+1} c${d.class_id??'--'} ${(Number(d.score)||0).toFixed(2)}`,x+3*dpr,Math.max(14*dpr,y-3*dpr))})}
-function perBab4LanePointCards(){const panel=$('perceptionCalibrationSection');if(!panel)return;let box=perBab4Get('perLanePointCards');if(!box){box=document.createElement('div');box.id='perLanePointCards';box.className='per-lane-point-cards';const read=$('perceptionCalReadout');read?.before(box)}const c=perceptionDirectCal?.candidate;if(!c){box.innerHTML='<span>Menunggu YAML lane...</span>';return}const pts=[['LT','Kiri Atas',c.leftTopX,c.topY,0],['LB','Kiri Bawah',c.leftBottomX,c.bottomY,1],['RT','Kanan Atas',c.rightTopX,c.topY,2],['RB','Kanan Bawah',c.rightBottomX,c.bottomY,3]];box.innerHTML=`<div class="per-lane-point-note"><b>4 TITIK LANE SAFETY</b><span>Drag LT/LB/RT/RB pada kamera. Runtime memakai Y bersama untuk pasangan atas dan pasangan bawah; X tiap titik independen. Keyboard 1–4 + panah = fine adjust.</span></div>${pts.map(([id,name,x,y,i])=>`<button type="button" data-lane-handle="${i}"><b>${id}</b><span>${name}</span><code>x ${(+x).toFixed(4)} • y ${(+y).toFixed(4)}</code></button>`).join('')}`;box.querySelectorAll('[data-lane-handle]').forEach(b=>b.onclick=()=>{perceptionDirectCal.mode='lane';perceptionDirectCal.keyboardIndex=+b.dataset.laneHandle;$('perceptionCalOverlay')?.focus();drawPerceptionDirectOverlay()})}
+function perBab4LanePointCards(){const panel=$('perceptionCalibrationSection');if(!panel)return;let box=perBab4Get('perLanePointCards');if(!box){box=document.createElement('div');box.id='perLanePointCards';box.className='per-lane-point-cards';const read=$('perceptionCalReadout');read?.before(box)}const c=perceptionDirectCal?.candidate;if(!c){box.innerHTML='<span>Menunggu YAML lane...</span>';return}const pts=[['LT','Kiri Atas',c.leftTopX,c.leftTopY,0],['LB','Kiri Bawah',c.leftBottomX,c.leftBottomY,1],['RT','Kanan Atas',c.rightTopX,c.rightTopY,2],['RB','Kanan Bawah',c.rightBottomX,c.rightBottomY,3]];box.innerHTML=`<div class="per-lane-point-note"><b>4 TITIK LANE SAFETY</b><span>Drag LT/LB/RT/RB bebas 2D. X/Y setiap titik independen; keyboard 1–4 + panah empat arah = fine adjust.</span></div>${pts.map(([id,name,x,y,i])=>`<button type="button" data-lane-handle="${i}"><b>${id}</b><span>${name}</span><code>x ${(+x).toFixed(4)} • y ${(+y).toFixed(4)}</code></button>`).join('')}`;box.querySelectorAll('[data-lane-handle]').forEach(b=>b.onclick=()=>{perceptionDirectCal.mode='lane';perceptionDirectCal.keyboardIndex=+b.dataset.laneHandle;$('perceptionCalOverlay')?.focus();drawPerceptionDirectOverlay()})}
 const perBab4BaseRenderDirect=renderPerceptionDirectCalibration;
 renderPerceptionDirectCalibration=function(){const r=perBab4BaseRenderDirect();perBab4LanePointCards();return r};
 const perBab4BaseDrawDirect=drawPerceptionDirectOverlay;
@@ -899,3 +899,102 @@ function perBab4EnableRetakeControls(){
 }
 const perBab4RetakePanelBase=perBab4RenderPanel;
 perBab4RenderPanel=function(){const out=perBab4RetakePanelBase();perBab4EnableRetakeControls();return out};
+
+/* Final Dataset operator preview + explicit save/download controls. Perception only. */
+function perBab4CurrentArtifacts(){
+  const a=lastTrialArtifacts||null,id=String(selectedExperiment?.id||'');
+  return a&&String(a.source_experiment_id||a.section_id||'')===id?a:null;
+}
+function perBab4LanePreviewCal(){
+  const c=typeof perceptionDirectCal!=='undefined'?perceptionDirectCal?.candidate:null;
+  if(c&&[c.leftTopX,c.leftTopY,c.leftBottomX,c.leftBottomY,c.rightTopX,c.rightTopY,c.rightBottomX,c.rightBottomY].every(Number.isFinite))return c;
+  const v=k=>+configValue('perception',`perception.ros__parameters.${k}`),legacyTop=v('lane_corridor_top_y_ratio'),legacyBottom=v('lane_corridor_bottom_y_ratio');
+  const opt=(k,fallback)=>{const x=v(k);return Number.isFinite(x)?x:fallback};
+  const q={leftTopX:v('lane_corridor_left_top_x_ratio'),leftTopY:opt('lane_corridor_left_top_y_ratio',legacyTop),leftBottomX:v('lane_corridor_left_bottom_x_ratio'),leftBottomY:opt('lane_corridor_left_bottom_y_ratio',legacyBottom),rightTopX:v('lane_corridor_right_top_x_ratio'),rightTopY:opt('lane_corridor_right_top_y_ratio',legacyTop),rightBottomX:v('lane_corridor_right_bottom_x_ratio'),rightBottomY:opt('lane_corridor_right_bottom_y_ratio',legacyBottom)};
+  return Object.values(q).every(Number.isFinite)?q:null;
+}
+function perBab4LaneStatusColor(s){
+  s=String(s||'').toUpperCase();if(s.includes('RED'))return'#ff6677';if(s.includes('YELLOW'))return'#ffc86b';if(s.includes('GREEN'))return'#48e0a4';return'#8fa8a9';
+}
+async function perBab4DownloadZip(url,fallback){
+  try{
+    const r=await fetch(url,{cache:'no-store'});if(!r.ok)throw new Error((await r.text()).trim()||`HTTP ${r.status}`);
+    const blob=await r.blob(),cd=r.headers.get('content-disposition')||'',m=cd.match(/filename="([^"]+)"/i),name=m?.[1]||fallback,u=URL.createObjectURL(blob),a=document.createElement('a');
+    a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),1200);toast(`${name} siap diunduh`);
+  }catch(e){toast(`ZIP belum tersedia: ${e.message||e}`,true)}
+}
+function perBab4EnsureFinalActions(){
+  const host=$('perBab4FolderContract');if(!host||!perBab4FinalDatasetActive())return;
+  let box=$('perBab4FolderActions');if(!box){box=document.createElement('div');box.id='perBab4FolderActions';box.className='per-bab4-folder-actions';host.appendChild(box)}
+  box.innerHTML='<button class="primary-btn" id="perBab4FinishSaveFolder">● START SESI DATA</button><button class="soft-btn" id="perBab4RunZip">⬇ ZIP RUN TERAKHIR</button><button class="soft-btn" id="perBab4FinalZip">⬇ ZIP FINAL DATASET</button>';
+  $('perBab4FinishSaveFolder').onclick=()=>{const active=!!recordStartedMs||$('recordToggleBtn')?.dataset.active==='true';if(active)return stopWebRecording();perBab4SetView('live');setTimeout(()=>startWebRecording(),0)};
+  $('perBab4RunZip').onclick=()=>perBab4DownloadZip('/api/experiment/record/last.zip',`BAB4_${String(selectedExperiment?.id||'run').replace('.','_')}_latest.zip`);
+  $('perBab4FinalZip').onclick=()=>perBab4DownloadZip('/api/perception/final-dataset/latest.zip','FINAL_DATASET_PERSEPSI.zip');
+  perBab4RefreshFinalActions();
+}
+function perBab4RefreshFinalActions(){
+  if(!perBab4FinalDatasetActive())return;const active=!!recordStartedMs||$('recordToggleBtn')?.dataset.active==='true',a=perBab4CurrentArtifacts(),save=$('perBab4FinishSaveFolder'),zip=$('perBab4RunZip');
+  const pre=typeof testPreflightStatus==='function'?testPreflightStatus():{ok:true};
+  if(save){save.disabled=!active&&!pre.ok;save.textContent=active?'■ FINISH + SAVE FOLDER':(a?'● START SESI BARU':'● START SESI DATA');save.title=active?'Simpan CSV/XLSX/PNG/evidence/config/manifest ke folder run':pre.ok?'Mulai sesi pengujian Final Dataset':`Preflight belum ready: ${pre.reason||'cek source'}`}
+  if(zip){zip.disabled=false;zip.title=a?'Download seluruh folder run pengujian ini':'Mencoba download run terakhir yang masih tersimpan pada server'}
+}
+function perBab4PreviewText(){
+  const id=String(selectedExperiment?.id||'');
+  if(id==='F4.2')return['LIVE OBJECT DETECTION','BBox raw + target-zone. DETECTED berarti bbox menyentuh/berpusat pada zona TARGET.'];
+  if(id==='F4.3')return['LIVE LANE SAFETY','Annotated frame + dua garis Lane Safety hasil kalibrasi. Status menunjukkan apakah outer lane masih aman, mendekat, atau masuk safety.'];
+  if(id==='F4.4')return['LIVE PERFORMANCE','Frame yang benar-benar diproses + pipeline/inference status.'];
+  if(id==='F4.5')return['LIVE CONTROL RESPONSE','Frame persepsi yang menjadi dasar kondisi respons kontrol.'];
+  return['LIVE CAMERA / PIPELINE','Preview kamera dan health pipeline untuk bukti implementasi.'];
+}
+let perBab4PreviewBindTimer=0;
+function perBab4EnsureOperatorPreview(){
+  const nav=$('perBab4FinalNavigator');if(!nav||nav.hidden||!perBab4FinalDatasetActive())return;
+  let box=$('perBab4OperatorPreview');if(!box){box=document.createElement('section');box.id='perBab4OperatorPreview';box.className='per-bab4-operator-preview';const folder=$('perBab4FolderContract');folder?folder.after(box):nav.appendChild(box)}
+  const id=String(selectedExperiment?.id||''),copy=perBab4PreviewText();
+  if(box.dataset.task!==id){box.dataset.task=id;box.innerHTML=`<div class="per-bab4-preview-head"><div><span>OPERATOR VISUAL CONFIRMATION</span><b>${copy[0]}</b><p>${copy[1]}</p></div><span class="status-chip waiting" id="perBab4PreviewState">WAIT FRAME</span></div><div class="per-bab4-preview-grid"><div class="per-bab4-preview-media"><img id="perBab4PreviewImage" alt="Final Dataset live preview"><canvas id="perBab4PreviewOverlay"></canvas><div id="perBab4PreviewEmpty">WAIT CAMERA FRAME</div></div><div class="per-bab4-preview-stats" id="perBab4PreviewStats"></div></div>`}
+  clearTimeout(perBab4PreviewBindTimer);perBab4PreviewBindTimer=setTimeout(perBab4BindOperatorPreview,0);perBab4RefreshOperatorPreview();
+}
+function perBab4BindOperatorPreview(){
+  if(!cameraFrameStore){perBab4PreviewBindTimer=setTimeout(perBab4BindOperatorPreview,350);return}
+  const img=$('perBab4PreviewImage');if(!img)return;
+  cameraFrameStore.subscribe('bab4-final-preview',{img,placeholder:$('perBab4PreviewEmpty'),isActive:()=>perBab4FinalDatasetActive()&&elementVisible($('perBab4OperatorPreview')),onFrame:()=>{perBab4DrawOperatorOverlay();perBab4RefreshOperatorPreview()}});
+}
+function perBab4DrawOperatorOverlay(){
+  const canvas=$('perBab4PreviewOverlay'),img=$('perBab4PreviewImage'),g=cameraGeometryFor(img);if(!canvas||!img||!g)return;
+  const fit=g.resizeCanvas(canvas),ctx=fit.ctx,dpr=fit.dpr,cr=canvas.getBoundingClientRect();ctx.clearRect(0,0,fit.width,fit.height);
+  const line=(a,b,color,width=3)=>{if(!a||!b)return;ctx.strokeStyle=color;ctx.lineWidth=width*dpr;ctx.beginPath();ctx.moveTo((a.x-cr.left)*dpr,(a.y-cr.top)*dpr);ctx.lineTo((b.x-cr.left)*dpr,(b.y-cr.top)*dpr);ctx.stroke()};
+  if(selectedExperiment?.id==='F4.2'){
+    const dets=perBab4RawDetections(),decision=perBab4AutoDetectionDecision(),w=img.naturalWidth,h=img.naturalHeight;
+    dets.forEach((d,i)=>{const b=perBab4AutoNormalizeBox(d,w,h);if(!b)return;const a=g.imageToScreen(b.x1,b.y1),z=g.imageToScreen(b.x2,b.y2);if(!a||!z)return;const x=Math.min(a.x,z.x)-cr.left,y=Math.min(a.y,z.y)-cr.top,bw=Math.abs(z.x-a.x),bh=Math.abs(z.y-a.y),sel=i===decision.index;ctx.strokeStyle=sel?'#48e0a4':'#31a8ff';ctx.lineWidth=(sel?4:2)*dpr;ctx.strokeRect(x*dpr,y*dpr,bw*dpr,bh*dpr);ctx.fillStyle=ctx.strokeStyle;ctx.font=`800 ${11*dpr}px ui-monospace`;ctx.fillText(`#${i+1} ${Number.isFinite(+d.score)?(+d.score).toFixed(2):'--'}`,(x+4)*dpr,Math.max(14,(y-4))*dpr)});
+    const p=g.normalizedToScreen(.5,.5);if(p){const x=(p.x-cr.left)*dpr,y=(p.y-cr.top)*dpr,rx=cr.width*.10*dpr,ry=cr.height*.12*dpr;ctx.save();ctx.setLineDash([8*dpr,5*dpr]);ctx.strokeStyle='#ffc86b';ctx.lineWidth=2*dpr;ctx.strokeRect(x-rx,y-ry,rx*2,ry*2);ctx.restore()}
+  }else if(selectedExperiment?.id==='F4.3'){
+    const cal=perBab4LanePreviewCal(),c=obj('lane_state').corridor||{};if(!cal)return;
+    const lt=g.normalizedToScreen(cal.leftTopX,cal.leftTopY),lb=g.normalizedToScreen(cal.leftBottomX,cal.leftBottomY),rt=g.normalizedToScreen(cal.rightTopX,cal.rightTopY),rb=g.normalizedToScreen(cal.rightBottomX,cal.rightBottomY);
+    line(lt,lb,perBab4LaneStatusColor(c.left_status),4);line(rt,rb,perBab4LaneStatusColor(c.right_status),4);
+    ctx.font=`900 ${12*dpr}px ui-monospace`;if(lt){ctx.fillStyle=perBab4LaneStatusColor(c.left_status);ctx.fillText(`LEFT ${String(c.left_status||'--').toUpperCase()}`,(lt.x-cr.left+8)*dpr,(lt.y-cr.top+18)*dpr)}if(rt){ctx.fillStyle=perBab4LaneStatusColor(c.right_status);ctx.fillText(`RIGHT ${String(c.right_status||'--').toUpperCase()}`,(rt.x-cr.left-115)*dpr,(rt.y-cr.top+18)*dpr)}
+  }
+}
+function perBab4RefreshOperatorPreview(){
+  const box=$('perBab4PreviewStats'),chip=$('perBab4PreviewState');if(!box||!perBab4FinalDatasetActive())return;
+  const p=obj('perception_performance')||{},cf=obj('camera_frame')||{},frameAge=age('camera_frame'),source=cf.source||cf.format||'--';
+  let rows=[['Camera',bool(raw('connected.camera'))&&bool(raw('camera_healthy'))?'HEALTHY':'CHECK'],['Source',source],['Pipeline',Number.isFinite(+p.pipeline_fps)?(+p.pipeline_fps).toFixed(2)+' Hz':'--'],['Frame age',Number.isFinite(frameAge)?frameAge.toFixed(2)+' s':'--']],state='LIVE',stateClass='';
+  if(selectedExperiment?.id==='F4.2'){
+    const d=perBab4AutoDetectionDecision(),conf=Number.isFinite(+d.candidate?.score)?(+d.candidate.score).toFixed(3):'--';state=d.success?'DETECTED':'NOT DETECTED';stateClass=d.success?'':'waiting';
+    rows=[['Trial aktif',typeof perBab4AutoTargetText==='function'?perBab4AutoTargetText():'--'],['Raw candidate',String(d.dets.length)],['Confidence target',conf],['Decision',d.reason],['raw_detections age',Number.isFinite(age('raw_detections'))?age('raw_detections').toFixed(2)+' s':'--'],...rows];
+  }else if(selectedExperiment?.id==='F4.3'){
+    const ls=obj('lane_state')||{},c=ls.corridor||{},drivable=Boolean(c.drivable_detected??ls.drivable_valid??ls.valid),mask=Boolean(c.lane_mask_detected??c.raw_lane_mask_detected),l=String(c.left_status||'UNKNOWN').toUpperCase(),r=String(c.right_status||'UNKNOWN').toUpperCase();
+    const red=l.includes('RED')||r.includes('RED'),yellow=l.includes('YELLOW')||r.includes('YELLOW');
+    state=red?'MASUK LANE SAFETY':yellow?'MENDEKATI SAFETY':mask?'DI LUAR SAFETY':drivable?'DRIVABLE • NO LANE MASK':'NO MASK / NO DRIVABLE';stateClass=red?'bad':yellow?'waiting':mask||drivable?'':'waiting';
+    rows=[['Drivable',drivable?'VALID':'NO'],['Lane mask',mask?'TERLIHAT':'TIDAK TERLIHAT'],['Left',`${l} • ${Number.isFinite(+c.left_gap_px)?(+c.left_gap_px).toFixed(1)+' px':'--'}`],['Right',`${r} • ${Number.isFinite(+c.right_gap_px)?(+c.right_gap_px).toFixed(1)+' px':'--'}`],['Recommendation',c.recommendation||'--'],['Evidence mode',c.evidence_mode||'--'],...rows];
+  }
+  box.innerHTML=rows.map(([k,v])=>`<div><span>${escapeHtml(k)}</span><b>${escapeHtml(v)}</b></div>`).join('');
+  if(chip){chip.textContent=state;chip.className='status-chip '+stateClass}perBab4DrawOperatorOverlay();
+}
+const perBab4PreviewEnsureBase=perBab4EnsureViewTabs;
+perBab4EnsureViewTabs=function(){const r=perBab4PreviewEnsureBase();perBab4EnsureFinalActions();perBab4EnsureOperatorPreview();return r};
+const perBab4PreviewRefreshBase=perBab4RefreshLive;
+perBab4RefreshLive=function(){const r=perBab4PreviewRefreshBase();perBab4RefreshOperatorPreview();perBab4RefreshFinalActions();return r};
+const perBab4PreviewRecordingBase=setRecordingUi;
+setRecordingUi=function(active,info={}){const r=perBab4PreviewRecordingBase(active,info);perBab4RefreshFinalActions();return r};
+const perBab4PreviewArtifactsBase=renderTrialArtifacts;
+renderTrialArtifacts=function(result){const r=perBab4PreviewArtifactsBase(result);perBab4RefreshFinalActions();return r};

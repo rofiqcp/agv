@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#07100f">
   <link rel="icon" href="data:,">
   <title>ADV Operator Console</title>
-  <link rel="stylesheet" href="/styles.css?v=20260918-perception-workflow-v1">
+  <link rel="stylesheet" href="/styles.css?v=20260918-camera-mirror-v2">
   <link rel="stylesheet" href="/tokens.css?v=20260913-stage6-v1">
   <link rel="stylesheet" href="/base.css?v=20260913-stage6-v1">
   <link rel="stylesheet" href="/shell.css?v=20260913-stage6-v1">
@@ -14,7 +14,7 @@
   <link rel="stylesheet" href="/responsive.css?v=20260913-stage6-v1">
   <link rel="stylesheet" href="/accessibility.css?v=20260913-stage6-v1">
   <link rel="stylesheet" href="/workspaces.css?v=20260913-stage6-v1">
-  <link rel="stylesheet" href="/perception_bab4.css?v=20260918-perception-workflow-v1">
+  <link rel="stylesheet" href="/perception_bab4.css?v=20260918-lane-mask-final-flip-v2">
   <link rel="stylesheet" href="/single-navigation.css?v=20260914-single-nav-v1">
   <link rel="stylesheet" href="/rm3100-calibration.css?v=20260917-rm3100-v1">
   <link rel="stylesheet" href="/ui-polish.css?v=20260918-firda-steering-v1">
@@ -371,11 +371,13 @@
             </div>
             <div id="perceptionObstacleCalHost" class="perception-obstacle-cal-host"></div>
             <section class="lane-safety-cal-card" id="laneSafetyCalibrationCard" hidden>
-              <div class="lane-safety-cal-title"><div><span class="eyebrow">LANE SAFETY CALIBRATION</span><b>4 titik batas safety • LT / LB / RT / RB</b><p>Geser empat titik langsung pada live camera. X tiap titik independen; Y digunakan bersama untuk pasangan atas dan bawah sesuai runtime saat ini.</p></div><span class="lane-cal-order">2 / 2</span></div>
+              <div class="lane-safety-cal-title"><div><span class="eyebrow">LANE SAFETY CALIBRATION</span><b>4 titik batas safety • LT / LB / RT / RB</b><p>Axis-lock aktif: geser kiri/kanan hanya memindahkan titik yang dipilih. Geser atas/bawah memindahkan pasangan LT+RT atau LB+RB bersama agar kanan-kiri tetap sejajar.</p></div><span class="lane-cal-order">2 / 2</span></div>
               <div class="perception-cal-grid">
-                <div class="perception-cal-copy"><b>Drag titik Lane Safety pada kamera</b><p>Pilih LT/LB/RT/RB lalu drag atau gunakan tombol 1–4 dan panah untuk fine adjust.</p><div class="segmented perception-cal-mode"><button class="active" id="perceptionCalLaneMode" type="button">Lane Safety 4 Points</button></div></div>
+                <div class="perception-cal-copy"><b>Drag titik Lane Safety pada kamera</b><p>Arah drag dikunci dari gerakan awal. Horizontal = hanya X handle terpilih. Vertikal = Y pasangan atas/bawah bergerak bersama. Keyboard 1–4 memilih handle.</p><div class="segmented perception-cal-mode"><button class="active" id="perceptionCalLaneMode" type="button">Lane Safety • X Independent / Y Paired</button></div></div>
                 <label class="perception-cal-field"><span>Lane safety</span><select id="perceptionCalLaneEnabled"><option value="false">Disabled / calibrate</option><option value="true">Enabled / active</option></select><small>Aktifkan setelah posisi garis sudah tervalidasi.</small></label>
                 <label class="perception-cal-field"><span>Kp proportional</span><input id="perceptionCalKp" type="number" min="0" max="0.05" step="0.0005"><small>m correction / px penetration</small></label>
+                <label class="perception-cal-field"><span>Y atas • LT + RT</span><input id="perceptionCalTopPairY" type="number" min="0" max="0.945" step="0.002"><small>Menggeser LT dan RT bersama; X keduanya tidak berubah.</small></label>
+                <label class="perception-cal-field"><span>Y bawah • LB + RB</span><input id="perceptionCalBottomPairY" type="number" min="0.05" max="0.995" step="0.002"><small>Menggeser LB dan RB bersama; X keduanya tidak berubah.</small></label>
                 <div class="perception-cal-actions"><button class="primary-btn" id="perceptionCalSave" type="button">SAVE LANE → REVIEW YAML</button><button class="soft-btn" id="perceptionCalReload" type="button">Reload YAML</button><button class="warning-btn" id="perceptionCalKeepDraft" type="button" hidden>Keep Draft</button><button class="soft-btn" id="perceptionCalReset" type="button">Reset Draft</button></div>
               </div>
               <div class="perception-cal-readout" id="perceptionCalReadout">Menunggu konfigurasi perception...</div>
@@ -807,7 +809,7 @@
                   <div><span class="eyebrow">FIRDA • 4.2.1 ONE-PAGE TEST</span><h2>Tuning Kp Arus FOC • LEFT</h2></div>
                   <span class="status-chip waiting" id="firdaKpModeState">RUNTIME</span>
                 </div>
-                <p class="hint">Urutan: Web Maintenance → Read LEFT → pilih Kp → Apply Runtime → START recorder → Pulse 1 A sebanyak 3× → STOP + SAVE. EEPROM selalu OFF.</p>
+                <p class="hint"><b>Paling mudah:</b> pilih Kp lalu tekan <b>START TEST OTOMATIS</b>. GUI akan masuk maintenance secara internal, apply Kp runtime-only, record, memberi 3 pulse 1 A × 1 s, STOP + SAVE, lalu kembali ke runtime. EEPROM selalu OFF.</p>
                 <div class="run-grid">
                   <label>Kp Q candidate<input id="firdaKpValue" type="number" min="0" max="5" step="0.000001" value="0.400391"></label>
                   <label>Actual Q Kp<input id="firdaKpActual" type="text" value="--" readonly></label>
@@ -820,6 +822,7 @@
                   <button class="soft-btn" id="firdaKpPresetLow">Kp 0.4</button>
                   <button class="soft-btn" id="firdaKpPresetMid">Kp 0.8</button>
                   <button class="soft-btn" id="firdaKpPresetHigh">Kp 1.2</button>
+                  <button class="primary-btn" id="firdaKpAuto">START TEST OTOMATIS • 3 PULSE</button>
                   <button class="primary-btn" id="firdaKpApply">3. APPLY Kp RUNTIME</button>
                   <button class="primary-btn" id="firdaKpRecordStart">4. START RECORD</button>
                   <button class="warning-btn" id="firdaKpPulse">5. PULSE 1 A • 1 s</button>
@@ -831,6 +834,156 @@
                   <span id="firdaKpLive">Iq -- A • Id -- A • Imotor -- A • Duty -- • Vbus -- V</span>
                   <span id="firdaKpPulseCount">Pulse: 0 / 3</span>
                 </div>
+              </article>
+
+              <article class="panel" id="firdaKiQuickPanel" hidden>
+                <div class="panel-head">
+                  <div><span class="eyebrow">FIRDA • 4.2.2 ONE-PAGE TEST</span><h2>Tuning Ki Arus FOC • LEFT</h2></div>
+                  <span class="status-chip waiting" id="firdaKiModeState">RUNTIME</span>
+                </div>
+                <p class="hint"><b>Kp dikunci 0.80013.</b> Pilih Ki lalu tekan <b>START TEST OTOMATIS</b>. GUI akan apply runtime-only, record 50 Hz, memberi 3 pulse Iq 1 A × 1 s, STOP + SAVE, lalu kembali ke runtime. EEPROM selalu OFF.</p>
+                <div class="run-grid">
+                  <label>Ki Q candidate<input id="firdaKiValue" type="number" min="0" max="1000" step="0.001" value="150"></label>
+                  <label>Fixed Q Kp<input id="firdaKiFixedKp" type="text" value="0.800130" readonly></label>
+                  <label>Actual Q Ki<input id="firdaKiActual2" type="text" value="--" readonly></label>
+                  <label>Iq pulse<input type="text" value="1.0 A / 1.0 s" readonly></label>
+                </div>
+                <div class="button-row" style="margin-top:10px;flex-wrap:wrap">
+                  <button class="soft-btn" id="firdaKiPresetLow">Ki 75</button>
+                  <button class="soft-btn" id="firdaKiPresetMid">Ki 150</button>
+                  <button class="soft-btn" id="firdaKiPresetHigh">Ki 225</button>
+                  <button class="primary-btn" id="firdaKiAuto">START TEST OTOMATIS • 3 PULSE</button>
+                  <button class="danger-btn" id="firdaKiStop">STOP CURRENT</button>
+                </div>
+                <div class="record-footer" style="margin-top:10px">
+                  <span id="firdaKiState">Pilih Ki lalu START TEST OTOMATIS.</span>
+                  <span id="firdaKiLive">Iq -- A • Id -- A • Imotor -- A • Duty -- • Vbus -- V</span>
+                  <span id="firdaKiPulseCount">Pulse: 0 / 3</span>
+                </div>
+              </article>
+
+              <article class="panel" id="firdaPiQuickPanel" hidden>
+                <div class="panel-head">
+                  <div><span class="eyebrow">FIRDA • 4.2.3 ONE-PAGE TEST</span><h2>Validasi PI Arus FOC • LEFT</h2></div>
+                  <span class="status-chip waiting" id="firdaPiModeState">RUNTIME</span>
+                </div>
+                <p class="hint"><b>Gain final validasi:</b> Q Kp = 0.80013 dan Q Ki = 75. Pilih level Iq lalu tekan <b>START VALIDASI OTOMATIS</b>. GUI akan apply gain final runtime-only, record 50 Hz, memberi 3 pulse, STOP + SAVE, lalu kembali ke runtime.</p>
+                <div class="run-grid">
+                  <label>Iq reference<input id="firdaPiIqValue" type="number" min="0.1" max="3" step="0.1" value="0.5"></label>
+                  <label>Final Q Kp<input id="firdaPiKp" type="text" value="0.800130" readonly></label>
+                  <label>Final Q Ki<input id="firdaPiKi" type="text" value="75.000" readonly></label>
+                  <label>Actual Kp / Ki<input id="firdaPiActual" type="text" value="-- / --" readonly></label>
+                </div>
+                <div class="button-row" style="margin-top:10px;flex-wrap:wrap">
+                  <button class="soft-btn" id="firdaPiPreset05">Iq 0.5 A</button>
+                  <button class="soft-btn" id="firdaPiPreset10">Iq 1.0 A</button>
+                  <button class="soft-btn" id="firdaPiPreset15">Iq 1.5 A</button>
+                  <button class="primary-btn" id="firdaPiAuto">START VALIDASI OTOMATIS • 3 PULSE</button>
+                  <button class="danger-btn" id="firdaPiStop">STOP CURRENT</button>
+                </div>
+                <div class="record-footer" style="margin-top:10px">
+                  <span id="firdaPiState">Pilih Iq lalu START VALIDASI OTOMATIS.</span>
+                  <span id="firdaPiLive">Iq -- A • Id -- A • Imotor -- A • Duty -- • Vbus -- V</span>
+                  <span id="firdaPiPulseCount">Pulse: 0 / 3</span>
+                </div>
+              </article>
+
+              <article class="panel" id="firdaPosKpQuickPanel" hidden>
+                <div class="panel-head">
+                  <div><span class="eyebrow">FIRDA • 4.3.1 ONE-PAGE TEST</span><h2>Tuning Kp Posisi Steering • LEFT</h2></div>
+                  <span class="status-chip waiting" id="firdaPosKpModeState">RUNTIME</span>
+                </div>
+                <p class="hint"><b>FOC dikunci:</b> Q Kp 0.80013, Q Ki 75. Position Ki = 0 dan Kd = 0 selama tuning Kp. Uji otomatis memakai step fisik ±5° (VESC POS 150/180/210), 3 siklus, runtime-only, lalu STOP + SAVE.</p>
+                <div class="run-grid">
+                  <label>Position Kp candidate<input id="firdaPosKpValue" type="number" min="0" max="1" step="0.0001" value="0.0125"></label>
+                  <label>Fixed Position Ki<input type="text" value="0" readonly></label>
+                  <label>Fixed Position Kd<input type="text" value="0" readonly></label>
+                  <label>Actual Pos Kp / Ki / Kd<input id="firdaPosActual" type="text" value="-- / -- / --" readonly></label>
+                </div>
+                <div class="button-row" style="margin-top:10px;flex-wrap:wrap">
+                  <button class="soft-btn" id="firdaPosKpPresetLow">Kp 0.0125</button>
+                  <button class="soft-btn" id="firdaPosKpPresetMid">Kp 0.0250</button>
+                  <button class="soft-btn" id="firdaPosKpPresetHigh">Kp 0.0375</button>
+                  <button class="primary-btn" id="firdaPosKpAuto">START TEST OTOMATIS • ±5° • 3 CYCLE</button>
+                  <button class="danger-btn" id="firdaPosKpStop">STOP POSITION</button>
+                </div>
+                <div class="record-footer" style="margin-top:10px">
+                  <span id="firdaPosKpState">Pilih Kp lalu START TEST OTOMATIS.</span>
+                  <span id="firdaPosKpLive">Target --° • Actual --° • Error --° • Iq -- A</span>
+                  <span id="firdaPosKpCycleCount">Cycle: 0 / 3</span>
+                </div>
+              </article>
+
+              <article class="panel" id="firdaPosKiQuickPanel" hidden>
+                <div class="panel-head"><div><span class="eyebrow">FIRDA • 4.3.2 ONE-PAGE TEST</span><h2>Tuning Ki Posisi Steering • LEFT</h2></div><span class="status-chip waiting" id="firdaPosKiModeState">RUNTIME</span></div>
+                <p class="hint">Gunakan Kp posisi hasil 4.3.1. Kd = 0 selama tuning Ki. Uji otomatis memakai step fisik ±5°, 3 cycle, runtime-only.</p>
+                <div class="run-grid">
+                  <label>Fixed Position Kp<input id="firdaPosKiFixedKp" type="number" step="0.0001" value="0.0250"></label>
+                  <label>Position Ki candidate<input id="firdaPosKiValue" type="number" step="0.0001" value="0.0025"></label>
+                  <label>Fixed Position Kd<input type="text" value="0" readonly></label>
+                  <label>Actual Kp / Ki / Kd<input id="firdaPosKiActual" type="text" value="-- / -- / --" readonly></label>
+                </div>
+                <div class="button-row" style="margin-top:10px;flex-wrap:wrap">
+                  <button class="soft-btn" id="firdaPosKiPresetLow">Ki 0.0025</button><button class="soft-btn" id="firdaPosKiPresetMid">Ki 0.0050</button><button class="soft-btn" id="firdaPosKiPresetHigh">Ki 0.0100</button>
+                  <button class="primary-btn" id="firdaPosKiAuto">START TEST OTOMATIS • ±5° • 3 CYCLE</button><button class="danger-btn" id="firdaPosKiStop">STOP POSITION</button>
+                </div>
+                <div class="record-footer" style="margin-top:10px"><span id="firdaPosKiState">Set Kp terpilih, pilih Ki, lalu START.</span><span id="firdaPosKiLive">Target --° • Actual --° • Error --° • Iq -- A</span><span id="firdaPosKiCycleCount">Cycle: 0 / 3</span></div>
+              </article>
+
+              <article class="panel" id="firdaPosKdQuickPanel" hidden>
+                <div class="panel-head"><div><span class="eyebrow">FIRDA • 4.3.3 ONE-PAGE TEST</span><h2>Tuning Kd Posisi Steering • LEFT</h2></div><span class="status-chip waiting" id="firdaPosKdModeState">RUNTIME</span></div>
+                <p class="hint">Gunakan Kp dan Ki terpilih dari 4.3.1–4.3.2. Uji Kd dengan step fisik ±5°, 3 cycle, runtime-only.</p>
+                <div class="run-grid">
+                  <label>Fixed Position Kp<input id="firdaPosKdFixedKp" type="number" step="0.0001" value="0.0250"></label>
+                  <label>Fixed Position Ki<input id="firdaPosKdFixedKi" type="number" step="0.0001" value="0.0050"></label>
+                  <label>Position Kd candidate<input id="firdaPosKdValue" type="number" step="0.0001" value="0"></label>
+                  <label>Actual Kp / Ki / Kd<input id="firdaPosKdActual" type="text" value="-- / -- / --" readonly></label>
+                </div>
+                <div class="button-row" style="margin-top:10px;flex-wrap:wrap">
+                  <button class="soft-btn" id="firdaPosKdPreset0">Kd 0</button><button class="soft-btn" id="firdaPosKdPreset2">Kd 0.0020</button><button class="soft-btn" id="firdaPosKdPreset4">Kd 0.0040</button>
+                  <button class="primary-btn" id="firdaPosKdAuto">START TEST OTOMATIS • ±5° • 3 CYCLE</button><button class="danger-btn" id="firdaPosKdStop">STOP POSITION</button>
+                </div>
+                <div class="record-footer" style="margin-top:10px"><span id="firdaPosKdState">Set Kp/Ki terpilih, pilih Kd, lalu START.</span><span id="firdaPosKdLive">Target --° • Actual --° • Error --° • Iq -- A</span><span id="firdaPosKdCycleCount">Cycle: 0 / 3</span></div>
+              </article>
+
+              <article class="panel" id="firdaPosFinalQuickPanel" hidden>
+                <div class="panel-head"><div><span class="eyebrow">FIRDA • 4.3.4 FINAL VALIDATION</span><h2>Validasi Gain Final Steering • LEFT</h2></div><span class="status-chip waiting" id="firdaPosFinalModeState">RUNTIME</span></div>
+                <p class="hint">Masukkan gain posisi final hasil 4.3.1–4.3.3. FOC Q Kp 0.80013 dan Q Ki 75 tetap dikunci. Validasi ±5° sebanyak 5 cycle untuk repeatability gain final.</p>
+                <div class="run-grid">
+                  <label>Final Position Kp<input id="firdaPosFinalKp" type="number" step="0.0001" value="0.0375"></label>
+                  <label>Final Position Ki<input id="firdaPosFinalKi" type="number" step="0.0001" value="0.0025"></label>
+                  <label>Final Position Kd<input id="firdaPosFinalKd" type="number" step="0.0001" value="0"></label>
+                  <label>Actual Kp / Ki / Kd<input id="firdaPosFinalActual" type="text" value="-- / -- / --" readonly></label>
+                </div>
+                <div class="button-row" style="margin-top:10px;flex-wrap:wrap"><button class="primary-btn" id="firdaPosFinalAuto">START VALIDASI FINAL • ±5° • 5 CYCLE</button><button class="danger-btn" id="firdaPosFinalStop">STOP POSITION</button></div>
+                <div class="record-footer" style="margin-top:10px"><span id="firdaPosFinalState">Masukkan gain final lalu START.</span><span id="firdaPosFinalLive">Target --° • Actual --° • Error --° • Iq -- A</span><span id="firdaPosFinalCycleCount">Cycle: 0 / 5</span></div>
+              </article>
+
+              <article class="panel" id="firdaResponseQuickPanel" hidden>
+                <div class="panel-head"><div><span class="eyebrow" id="firdaResponseEyebrow">FIRDA • 4.4 VALIDASI RESPONS</span><h2 id="firdaResponseTitle">Validasi Respons Steering • LEFT</h2></div><span class="status-chip waiting" id="firdaResponseModeState">RUNTIME</span></div>
+                <p class="hint" id="firdaResponseHint">Gain final dikunci: Position Kp 0.0375, Ki 0.0025, Kd 0; FOC Q Kp 0.80013, Q Ki 75. Sistem center otomatis, menjalankan skenario, menyimpan CSV/XLSX/PNG, lalu kembali Runtime.</p>
+                <div class="run-grid">
+                  <label>Final Position Kp<input type="text" value="0.0375" readonly></label>
+                  <label>Final Position Ki<input type="text" value="0.0025" readonly></label>
+                  <label>Final Position Kd<input type="text" value="0" readonly></label>
+                  <label>Actual Kp / Ki / Kd<input id="firdaResponseActual" type="text" value="-- / -- / --" readonly></label>
+                </div>
+                <div class="button-row" style="margin-top:10px;flex-wrap:wrap"><button class="primary-btn" id="firdaResponseAuto">START PENGUJIAN OTOMATIS</button><button class="danger-btn" id="firdaResponseStop">STOP POSITION</button></div>
+                <div class="record-footer" style="margin-top:10px"><span id="firdaResponseState">Siap.</span><span id="firdaResponseLive">Target --° • Actual --° • Error --° • Iq -- A</span><span id="firdaResponseCount">Cycle: 0 / 0</span></div>
+              </article>
+
+              <article class="panel" id="firdaLoadQuickPanel" hidden>
+                <div class="panel-head"><div><span class="eyebrow" id="firdaLoadEyebrow">FIRDA • 4.5 UJI BEBAN STEERING</span><h2 id="firdaLoadTitle">Uji Beban Steering • LEFT</h2></div><span class="status-chip waiting" id="firdaLoadModeState">RUNTIME</span></div>
+                <p class="hint" id="firdaLoadHint">Roda depan harus menyentuh tanah. Robot diam dan joystick tidak digunakan saat recording. Galon harus diletakkan pada posisi chassis yang sama untuk setiap kondisi.</p>
+                <div class="run-grid">
+                  <label>Beban pengujian<input id="firdaLoadLevel" type="text" value="--" readonly></label>
+                  <label>Final Position PID<input type="text" value="Kp 0.0375 • Ki 0.0025 • Kd 0" readonly></label>
+                  <label>FOC PI final<input type="text" value="Kp 0.80013 • Ki 75" readonly></label>
+                  <label>Actual Pos Kp / Ki / Kd<input id="firdaLoadActual" type="text" value="-- / -- / --" readonly></label>
+                </div>
+                <label class="hint" style="display:flex;gap:8px;align-items:center;margin-top:10px"><input id="firdaLoadReady" type="checkbox"> Saya sudah memastikan jumlah galon benar, beban aman, roda depan di tanah, robot diam, dan joystick netral/tidak digunakan.</label>
+                <div class="button-row" style="margin-top:10px;flex-wrap:wrap"><button class="primary-btn" id="firdaLoadAuto">START UJI BEBAN • −20° / 0° / +20° • 3 CYCLE</button><button class="danger-btn" id="firdaLoadStop">STOP POSITION</button></div>
+                <div class="record-footer" style="margin-top:10px"><span id="firdaLoadState">Siapkan beban lalu centang konfirmasi.</span><span id="firdaLoadLive">Target --° • Actual --° • Error --° • Iq -- A • Imotor -- A</span><span id="firdaLoadCount">Cycle: 0 / 3</span></div>
               </article>
 
               <div id="report41TimedPanel" hidden></div>
@@ -1032,7 +1185,7 @@
   <script src="/camera_geometry.js?v=20260910-stage2-v1" defer></script>
   <script src="/analysis_session.js?v=20260910-stage2-v2" defer></script>
   <script src="/diagnostics.js?v=20260910-stage2-v1" defer></script>
-  <script src="/core.js?v=20260918-firda-live-v4" defer></script>
+  <script src="/core.js?v=20260918-firda-load-v7" defer></script>
   <script src="/navigation.js?v=20260918-goalchecker-v1" defer></script>
   <script src="/map_editor.js?v=20260918-map-editor-v1" defer></script>
   <script src="/perception.js?v=20260918-perception-workflow-v1" defer></script>
@@ -1040,16 +1193,16 @@
   <script src="/rm3100_calibration.js?v=20260917-rm3100-v1" defer></script>
   <script src="/esc.js?v=20260913-stage6-v1" defer></script>
   <script src="/system_views.js?v=20260918-map-editor-v1" defer></script>
-  <script src="/perception_calibration.js?v=20260918-perception-workflow-v1" defer></script>
-  <script src="/tuning_catalog.js?v=20260918-firda-live-v4" defer></script>
-  <script src="/tuning_ui.js?v=20260918-firda-421-onepage-v1" defer></script>
+  <script src="/perception_calibration.js?v=20260918-lane-axis-lock-paired-y-v4" defer></script>
+  <script src="/tuning_catalog.js?v=20260918-firda-pos-v7" defer></script>
+  <script src="/tuning_ui.js?v=20260918-firda-load-savefix-v15" defer></script>
   <script src="/tuning_charts.js?v=20260918-goalchecker-v1" defer></script>
-  <script src="/tuning_trials.js?v=20260918-firda-valid-v3" defer></script>
+  <script src="/tuning_trials.js?v=20260918-firda-table-live-v4" defer></script>
   <script src="/navigation_tuning_policy.js?v=20260916-yellow-flow-v1" defer></script>
-  <script src="/tuning_evidence.js?v=20260918-firda-live-v4" defer></script>
+  <script src="/tuning_evidence.js?v=20260918-firda-load-preflight-v9" defer></script>
   <script src="/report_41_timed.js?v=20260916-r41-summary-graph-v1" defer></script>
   <script src="/imu_heading_validation.js?v=20260916-report-integer-seconds-v1" defer></script>
-  <script src="/perception_bab4.js?v=20260918-cpu-preflight-v2" defer></script>
+  <script src="/perception_bab4.js?v=20260918-independent-lane-xy-v3" defer></script>
   <script src="/config.js?v=20260916-yellow-flow-v1" defer></script>
   <script src="/ekf_report_tools.js?v=20260917-r423-3cycle-v1" defer></script>
   <script src="/export_tools.js?v=20260916-report-integer-seconds-v1" defer></script>

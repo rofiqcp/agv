@@ -38,14 +38,14 @@ function normalizedExperimentGraphs(x=selectedExperiment){return (x?.graphCaptio
 function graphSourcePaths(x=selectedExperiment){const src=[...Object.values(x?.liveSeries||{})];for(const g of normalizedExperimentGraphs(x)){if(g?.xSeries)src.push(g.xSeries);if(g?.ySeries)src.push(g.ySeries);if(g?.pathKey)src.push(g.pathKey);for(const pair of (g?.pairs||[])){src.push(x?.liveSeries?.[pair?.[0]]||pair?.[0]);src.push(x?.liveSeries?.[pair?.[1]]||pair?.[1])}}return [...new Set(src.filter(Boolean))]}
 function renderSourceAudit(){if(!selectedExperiment)return;const paths=graphSourcePaths(),pills=paths.map(p=>{const v=resolveMetricPath(p),ok=v!==undefined&&v!==null;return `<span class="${ok?'ok':'wait'}"><i></i>${escapeHtml(p)}</span>`});$('sourceAvailability').innerHTML=pills.join('')||'<span class="wait"><i></i>No direct live-series binding; gunakan tabel/config evidence.</span>';const sid=String(selectedExperiment?.id||''),method=currentExp==='navigation'&&/^R4\.1\./.test(sid)?'RAW sensor / actuator telemetry (PRE-EKF) + parameter YAML':currentExp==='navigation'?'Nav2/localization telemetry + map/path + parameter YAML':currentExp==='perception'?'Camera/YOLOPv2 metrics + safety telemetry + parameter YAML':'ESC feedback + FOC telemetry + calibration/tuning YAML';setText('sourceMethod',method);setText('experimentSourceBadge',paths.some(p=>resolveMetricPath(p)!=null)?'LIVE SOURCE':'WAITING SOURCE')}
 // Recorder contract remains template-only report compatible; report recap only changes the selected schema/source mapping.
-function recordPathsForSelected(){
-  if(!selectedExperiment)return ['__meta_only__'];
+function recordPathsForSelected(x=selectedExperiment){
+  if(!x)return ['__meta_only__'];
   const out=new Set(),add=p=>{p=String(p||'').trim();if(p&&!p.startsWith('derived.'))out.add(p)};
-  const live=Object.values(selectedExperiment.liveSeries||{});
+  const live=Object.values(x.liveSeries||{});
   live.forEach(add);
-  for(const g of normalizedExperimentGraphs(selectedExperiment)){
+  for(const g of normalizedExperimentGraphs(x)){
     if(g?.xSeries)add(g.xSeries);if(g?.ySeries)add(g.ySeries);if(g?.pathKey)add(g.pathKey);
-    for(const pair of (g?.pairs||[])){add(selectedExperiment.liveSeries?.[pair?.[0]]||pair?.[0]);add(selectedExperiment.liveSeries?.[pair?.[1]]||pair?.[1])}
+    for(const pair of (g?.pairs||[])){add(x.liveSeries?.[pair?.[0]]||pair?.[0]);add(x.liveSeries?.[pair?.[1]]||pair?.[1])}
   }
   const derived=live.filter(p=>String(p).startsWith('derived.'));
   const need=(...paths)=>paths.forEach(add);
@@ -65,11 +65,27 @@ function recordPathsForSelected(){
   }
   if(currentExp==='steering'){
     if(live.some(p=>String(p).startsWith('vesc_command_state.')))need('vesc_command_state.mode','vesc_command_state.motor','vesc_command_state.value');
-    if(selectedExperiment.id==='4.2.1')need('connected.vesc_transport','vesc_maintenance_active','vesc_tool_status');
-    if(selectedExperiment.id==='4.9')need('vesc_left_values','vesc_right_values','vesc_steering_state','esc_status','esc_mux');
+    if(x.id==='4.2.1')need('connected.vesc_transport','vesc_maintenance_active','vesc_tool_status');
+    if(x.id==='4.9')need('vesc_left_values','vesc_right_values','vesc_steering_state','esc_status','esc_mux');
   }
   // Never send an empty allow-list: the server interprets empty as "record all".
   return out.size?[...out]:['__meta_only__'];
+}
+function navigationGoalMasterSections(){
+  return navigationReportList().filter(x=>/^R4\.[23]\.[1-5]$/.test(String(x?.id||'')));
+}
+function navigationGoalMasterRecordPaths(x=selectedExperiment){
+  const out=new Set(recordPathsForSelected(x));
+  if(currentExp==='navigation'&&String(x?.id||'')==='R4.4.5'){
+    for(const spec of navigationGoalMasterSections())for(const path of recordPathsForSelected(spec))out.add(path);
+    ['goal_pose','goal_state','localization_pose','nav_path','ekf_local','ekf_global','gnss_fix','gnss_quality','imu','esc_odom'].forEach(p=>out.add(p));
+  }
+  out.delete('__meta_only__');return out.size?[...out]:['__meta_only__'];
+}
+function navigationGoalMasterMetricPaths(){
+  if(recordingDomain!=='navigation'||recordingLeafId!=='R4.4.5'||!recordStartedMs)return[];
+  const out=new Set();for(const spec of navigationGoalMasterSections())for(const p of Object.values(spec.liveSeries||{}))out.add(p);
+  return [...out];
 }
 function navigationCaptureProfile(x=selectedExperiment){
   const id=String(x?.id||'');
@@ -86,7 +102,7 @@ function navigationCaptureProfile(x=selectedExperiment){
   // does not command motion, so commissioning phase qualification must not block acquisition.
   if(/^R4\.[23]\./.test(id)){
     const roots=new Set(id.startsWith('R4.2.')?['ekf_local']:['ekf_global']);
-    for(const path of recordPathsForSelected()){
+    for(const path of recordPathsForSelected(x)){
       const text=String(path||'').trim();if(!text||text==='__meta_only__'||text.startsWith('derived.'))continue;
       roots.add(text.split('.')[0]);
     }
@@ -117,7 +133,7 @@ function testRequiredRoots(x=selectedExperiment){
     const text=String(path||'');if(!text||text.startsWith('derived.'))continue;
     roots.add(text.split('.')[0]);
   }
-  if(currentExp==='steering')roots.add('foc_telemetry');
+  if(currentExp==='steering'){const firdaDirect=/^4\.[2345]\./.test(String(typeof activeFirdaEscStep==='undefined'?'':activeFirdaEscStep));roots.add(firdaDirect?'vesc_left_values':'foc_telemetry');}
   if(currentExp==='perception'){roots.add('camera_frame');roots.add('perception_performance')}
   return [...roots];
 }
@@ -129,7 +145,7 @@ function testPreflightStatus(){
   const phase=phaseGate(),navProfile=currentExp==='navigation'?navigationCaptureProfile():null,phaseRequired=currentExp!=='navigation'||navProfile.phase;
   add('Commissioning prerequisite',phaseRequired?phase.ok:true,phaseRequired?phase.reason:'Tidak diperlukan untuk akuisisi sensor/static',phaseRequired);
   if(currentExp==='steering'){
-    const link=bool(raw('connected.esc_feedback'))||bool(raw('connected.vesc_transport'));
+    const tool=obj('vesc_tool_status'),link=bool(raw('connected.esc_feedback'))||bool(raw('connected.vesc_transport'))||tool.transport_connected===true||tool.gateway_connected===true;
     add('ESC transport / feedback',link,link?'gateway/feedback tersedia':'ESC transport dan feedback belum tersedia',true);
   }else if(currentExp==='navigation'&&navProfile.actuator){
     add('ESC feedback',bool(raw('connected.esc_feedback')),bool(raw('connected.esc_feedback'))?'actuator feedback fresh':'ESC feedback belum fresh',true);
@@ -157,6 +173,56 @@ function renderTestPreflight(){
 }
 const NAV_REPORT_AUTO_STOP_SEC=60;
 let navReportAutoTimer=null,navReportAutoStopBusy=false;
+const navGoalMasterRows=new Map();
+let navGoalMasterState={armed:false,sawActive:false,successSince:0,stopping:false,lastState:''};
+function navigationGoalMasterActive(){return recordingDomain==='navigation'&&recordingLeafId==='R4.4.5'&&!!recordStartedMs}
+function resetNavigationGoalMaster(arm=false){
+  navGoalMasterRows.clear();navGoalMasterState={armed:arm,sawActive:false,successSince:0,stopping:false,lastState:''};
+}
+function captureNavigationGoalMasterCompanionRows(sec,force=false){
+  if(!navigationGoalMasterActive())return;
+  const keep=selectedExperiment;
+  try{
+    for(const spec of navigationGoalMasterSections()){
+      selectedExperiment=spec;
+      const yaml=parameterSnapshotEntries().map(x=>({key:`${x.file}:${tuningFieldsFor(spec).find(p=>(p.label||p.key||p.yamlPath)===x.label)?.yamlPath||x.key}`,label:x.label,value:x.value}));
+      let byTable=navGoalMasterRows.get(spec.id);if(!byTable){byTable=new Map();navGoalMasterRows.set(spec.id,byTable)}
+      (spec.tableColumns||[]).forEach((cols,ti)=>{if(!cols?.length)return;const a=byTable.get(ti)||[];if(a.length&&a[a.length-1].sec===sec){if(!force)return;a.pop()}a.push({sec,values:cols.map(c=>inferColumnValue(c)),yaml});while(a.length>7200)a.shift();byTable.set(ti,a)});
+    }
+  }finally{selectedExperiment=keep}
+}
+function captureNavigationGoalMasterFinalRows(){
+  if(!navigationGoalMasterActive()||!selectedExperiment)return;const sec=Math.max(0,Math.floor((Date.now()-recordStartedMs)/1000));
+  (selectedExperiment.tableColumns||[]).forEach((_,ti)=>{const a=tableRunRows.get(ti)||[];if(a.length&&a[a.length-1].sec===sec)a.pop();tableRunRows.set(ti,a)});
+  captureTemplateRows(sec);captureNavigationGoalMasterCompanionRows(sec,true);lastLabSecond=sec;
+}
+function navigationGoalMasterTableCsv(spec,ti){
+  const rows=navGoalMasterRows.get(spec.id)?.get(ti)||[],cols=spec.tableColumns?.[ti]||[];if(!rows.length||!cols.length)return null;
+  const yamlKeys=[...new Set(rows.flatMap(r=>(r.yaml||[]).map(x=>x.key)))],yamlLabels=Object.fromEntries(rows.flatMap(r=>(r.yaml||[]).map(x=>[x.key,x.label])));
+  const head=['Detik [s]',...cols,...yamlKeys.map(k=>`YAML ${k} | ${yamlLabels[k]||''}`)],esc=v=>'"'+String(v??'').replaceAll('"','""')+'"';
+  return [head.map(esc).join(','),...rows.map(r=>{const ym=Object.fromEntries((r.yaml||[]).map(x=>[x.key,x.value]));return [Number(r.sec)+1,...r.values,...yamlKeys.map(k=>ym[k]??'--')].map(esc).join(',')})].join('\n')+'\n';
+}
+async function saveNavigationGoalMasterCompanionTablesServer(){
+  if(!navigationGoalMasterActive())return[];const results=[];
+  for(const spec of navigationGoalMasterSections())for(let ti=0;ti<(spec.tableColumns||[]).length;ti++){const csv=navigationGoalMasterTableCsv(spec,ti);if(!csv)continue;const runId=reportRunId(spec,'navigation');try{const r=await writeRequest('/api/experiment/table/save',{subsystem:'navigation',id:runId,label:runId,source_experiment_id:spec.id,table_index:ti,csv}),j=await r.json();if(!r.ok)throw new Error(j.message||`HTTP ${r.status}`);results.push(j)}catch(e){toast(`Master ${displayExperimentId(spec)} Tabel ${ti+1} gagal: ${e.message}`,true)}}
+  return results;
+}
+function navigationGoalMasterCaptureTick(){
+  if(!navigationGoalMasterActive())return;if(!navGoalMasterState.armed)navGoalMasterState.armed=true;
+  const st=String(obj('goal_state').state||'').trim().toUpperCase(),terminal=['SUCCEEDED','SUCCESS','ARRIVED'],bad=['IDLE','UNKNOWN','CANCELED','CANCELLED','ABORTED','FAILED','FAILURE'];
+  if(st&&!terminal.includes(st)&&!bad.includes(st))navGoalMasterState.sawActive=true;
+  navGoalMasterState.lastState=st;
+  if(terminal.includes(st)&&navGoalMasterState.sawActive){
+    if(!navGoalMasterState.successSince){navGoalMasterState.successSince=Date.now();setText('recordMessage','4.4.5 • GOAL SUCCEEDED • final capture 0.5 s sebelum AUTO STOP + SAVE…')}
+    if(Date.now()-navGoalMasterState.successSince>=500&&!navGoalMasterState.stopping){
+      navGoalMasterState.stopping=true;Promise.resolve(stopWebRecording()).catch(()=>{}).finally(()=>{navGoalMasterState.stopping=false});
+    }
+  }else navGoalMasterState.successSince=0;
+}
+window.navigationGoalMasterMetricPaths=navigationGoalMasterMetricPaths;
+window.captureNavigationGoalMasterCompanionRows=captureNavigationGoalMasterCompanionRows;
+window.navigationGoalMasterCaptureTick=navigationGoalMasterCaptureTick;
+setInterval(navigationGoalMasterCaptureTick,250);
 function navigationReportTimedId(id=recordingLeafId||selectedExperiment?.id||''){return /^R4\.[1-3]\.\d+$/.test(String(id||''))}
 function navigationReportGenericTimedId(id=recordingLeafId||selectedExperiment?.id||''){return /^R4\.[23]\.\d+$/.test(String(id||''))}
 function clearNavigationReportAutoTimer(){if(navReportAutoTimer){clearInterval(navReportAutoTimer);navReportAutoTimer=null}navReportAutoStopBusy=false}
@@ -194,12 +260,14 @@ async function startWebRecording(){
     if(automaticTrialId())await validateTrialMotion(trialMotionSpec());
     const runId=reportRunId(),tuning_config=Object.fromEntries(parameterSnapshotEntries().map(x=>[`${x.file}:${tuningFieldsFor(selectedExperiment).find(p=>(p.label||p.key||p.yamlPath)===x.label)?.yamlPath||x.key}`,x.value]));
     const requestedRate=window.report41RequestedRate?.(sid),sampleRate=Number.isFinite(requestedRate)?requestedRate:+$('runSampleRate').value;
-    const payload={subsystem:currentExp,id:runId,source_experiment_id:selectedExperiment.id,label:runId,section_label:selectedExperiment.section||selectedExperiment.id,candidate:$('runCandidate')?.value||'baseline',variation:$('runVariation').value,condition:$('runCondition').value,sample_rate_hz:sampleRate,tuning_config,trial_inputs:trialInputsForSelected(),live_series:selectedExperiment.liveSeries||{},graphs:normalizedExperimentGraphs(selectedExperiment).map((g,i)=>({...g,title:selectedExperiment.graphCaptions?.[i]||`Grafik ${i+1}`})),record_paths:recordPathsForSelected()};
+    const masterGoal=currentExp==='navigation'&&sid==='R4.4.5',trialInputs=trialInputsForSelected();
+    if(masterGoal){trialInputs.capture_mode='GOAL_MASTER_4.2_4.3_4.4.5';trialInputs.master_sections=[...navigationGoalMasterSections().map(x=>x.id),'R4.4.5']}
+    const payload={subsystem:currentExp,id:runId,source_experiment_id:selectedExperiment.id,label:runId,section_label:selectedExperiment.section||selectedExperiment.id,candidate:$('runCandidate')?.value||'baseline',variation:$('runVariation').value,condition:$('runCondition').value,sample_rate_hz:sampleRate,tuning_config,trial_inputs:trialInputs,live_series:selectedExperiment.liveSeries||{},graphs:normalizedExperimentGraphs(selectedExperiment).map((g,i)=>({...g,title:selectedExperiment.graphCaptions?.[i]||`Grafik ${i+1}`})),record_paths:masterGoal?navigationGoalMasterRecordPaths(selectedExperiment):recordPathsForSelected(selectedExperiment)};
     const r=await writeRequest('/api/experiment/record/start',payload),j=await r.json();
     toast(j.message||'Recorder response',!r.ok);if(!r.ok)return;
-    recordStartedMs=Date.now();recordingLeafId=selectedExperiment.id;recordingDomain=currentExp;recordingRunToken=new Date(recordStartedMs).toISOString().replace(/[:.]/g,'-');window.analysisSession?.setSource('CURRENT_RECORDING');window.analysisSession?.selectTask(currentExp,selectedExperiment.id);chartEpochMs=recordStartedMs;reportEvidenceFrozen=false;reportEvidenceFrozenLeaf='';reportPathSnapshots.clear();reportSourceTableRenderMs=0;metricHistory.clear();scatterHistory.clear();scatterOrigins.clear();tableRunRows.clear();ekfGrowthState.clear();reportDerivedCache.clear();reportCostmapMetricCache={key:'',minClearance:NaN,valid:NaN};lastLabSecond=-1;lastLabTelemetryTick=-1;lastTrialArtifacts=null;setRecordingUi(true,j.recording);window.startReport41TimedEvidence?.(sid);armNavigationReportAutoTimer(sid);captureLabTelemetry();renderExperimentTable();
+    recordStartedMs=Date.now();recordingLeafId=selectedExperiment.id;recordingDomain=currentExp;recordingRunToken=new Date(recordStartedMs).toISOString().replace(/[:.]/g,'-');window.analysisSession?.setSource('CURRENT_RECORDING');window.analysisSession?.selectTask(currentExp,selectedExperiment.id);chartEpochMs=recordStartedMs;reportEvidenceFrozen=false;reportEvidenceFrozenLeaf='';reportPathSnapshots.clear();reportSourceTableRenderMs=0;metricHistory.clear();scatterHistory.clear();scatterOrigins.clear();tableRunRows.clear();ekfGrowthState.clear();reportDerivedCache.clear();reportCostmapMetricCache={key:'',minClearance:NaN,valid:NaN};lastLabSecond=-1;lastLabTelemetryTick=-1;lastTrialArtifacts=null;resetNavigationGoalMaster(masterGoal);setRecordingUi(true,j.recording);window.startReport41TimedEvidence?.(sid);armNavigationReportAutoTimer(sid);captureLabTelemetry();renderExperimentTable();
     if(automaticTrialId())await startAutomaticTrialMotion();
-    const timingNote=currentExp==='navigation'&&navigationReportTimedId(sid)?'AUTO STOP + SAVE pada 60.0 s':currentExp==='navigation'&&/^R4\.4\./.test(sid)?'MANUAL STOP • durasi bebas > 60 s':'STOP manual';
+    const timingNote=masterGoal?'MASTER 4.2 + 4.3 + 4.4.5 • AUTO STOP 0.5 s setelah Nav2 SUCCEEDED':currentExp==='navigation'&&navigationReportTimedId(sid)?'AUTO STOP + SAVE pada 60.0 s':currentExp==='navigation'&&/^R4\.4\./.test(sid)?'MANUAL STOP • durasi bebas > 60 s':'STOP manual';
     setText('recordMessage',`${displayExperimentId(selectedExperiment)} • ${automaticTrialId()?'AUTO ROS MOTION + ':''}${selectedExperiment.reportMode?'rekap laporan':'trial evidence'} • ${timingNote} • grafik reset t=0 • CSV + YAML + XLSX + PNG`)
   }catch(e){await stopAutomaticTrialMotion();toast('Start trial gagal: '+e.message,true)}
 }
@@ -207,17 +275,17 @@ async function stopWebRecording(){
   try{
     if(!recordStartedMs)return toast('Tidak ada recording aktif',true);
     if(selectedExperiment?.id!==recordingLeafId||currentExp!==recordingDomain)return toast(`Konteks recording berubah dari ${recordingLeafId}; data tidak disimpan agar template tidak tertukar`,true);
-    await stopAutomaticTrialMotion();window.finishReport41TimedEvidence?.('STOP');captureLabTelemetry();if(currentExp==='navigation'&&selectedExperiment?.reportMode===true){reportEvidenceFrozen=true;reportEvidenceFrozenLeaf=selectedExperiment.id}drawAllExperimentCharts();window.reportRefreshGraphSourceTables?.(true);const savedTables=await saveAllTemplateTablesServer();
-    const paths=savedTables.map(x=>x.path).filter(Boolean),browserGraphPngs=collectExperimentGraphPngPayload();
-    const stopPayload={table_csv_paths:paths,browser_graph_pngs:browserGraphPngs,analysis_summary:buildClientAnalysisSummary()};
-    const r=await writeRequest('/api/experiment/record/stop',stopPayload),j=await r.json();if(!r.ok)throw new Error(j.message||`HTTP ${r.status}`);
+    await stopAutomaticTrialMotion();window.finishReport41TimedEvidence?.('STOP');captureLabTelemetry();captureNavigationGoalMasterFinalRows();if(currentExp==='navigation'&&selectedExperiment?.reportMode===true){reportEvidenceFrozen=true;reportEvidenceFrozenLeaf=selectedExperiment.id}drawAllExperimentCharts();window.reportRefreshGraphSourceTables?.(true);const savedTables=await saveAllTemplateTablesServer(),masterTables=await saveNavigationGoalMasterCompanionTablesServer();
+    const paths=[...savedTables,...masterTables].map(x=>x.path).filter(Boolean),browserGraphPngs=collectExperimentGraphPngPayload();
+    const stopPayload={table_csv_paths:paths,browser_graph_pngs:browserGraphPngs,analysis_summary:buildClientAnalysisSummary()},stopTimeout=navigationGoalMasterActive()?90000:30000;
+    const r=await writeRequest('/api/experiment/record/stop',stopPayload,{timeoutMs:stopTimeout}),j=await r.json();if(!r.ok)throw new Error(j.message||`HTTP ${r.status}`);
     renderTrialArtifacts(j);await loadTrials();
     setText('recordPath',`RAW: ${j.primary_csv||j.raw_csv||'saved'}${j.xlsx_path?' • XLSX: '+j.xlsx_path:''}${j.manifest_path?' • MANIFEST: '+j.manifest_path:''}`);
     setText('recordMessage',`STOP selesai • ${recordingLeafId} • trial YAML appended • ${paths.length} tabel CSV • ${j.graph_png_paths?.length||0} PNG Matplotlib • Excel siap`);
-    const finalCursor=Math.max(0,(Date.now()-recordStartedMs)/1000);window.analysisSession?.setCursor(finalCursor,'record-stop');toast(`${recordingLeafId}: CSV + YAML trial + XLSX + PNG tersimpan`,false);setRecordingUi(false,j);recordingLeafId='';recordingDomain='';recordingRunToken='';renderExperimentTable();renderTrialRecap()
-  }catch(e){await stopAutomaticTrialMotion();if(recordStartedMs){reportEvidenceFrozen=false;reportEvidenceFrozenLeaf=''}toast('Stop/save gagal: '+e.message,true)}
+    const finalCursor=Math.max(0,(Date.now()-recordStartedMs)/1000);window.analysisSession?.setCursor(finalCursor,'record-stop');toast(`${recordingLeafId}: CSV + YAML trial + XLSX + PNG tersimpan`,false);setRecordingUi(false,j);recordingLeafId='';recordingDomain='';recordingRunToken='';renderExperimentTable();renderTrialRecap();return true
+  }catch(e){await stopAutomaticTrialMotion();if(recordStartedMs){reportEvidenceFrozen=false;reportEvidenceFrozenLeaf=''}toast('Stop/save gagal: '+e.message,true);return false}
 }
-function setRecordingUi(active,info={}){const b=$('recordToggleBtn');if(b){b.dataset.active=active?'true':'false';b.textContent=active?'■ STOP + SAVE':'● START';b.className='record-toggle '+(active?'stop':'start')}setText('labRecorderState',active?'RECORDING':'IDLE');setText('labRecorderSamples',`${info.samples||0} samples`);if(!active){clearNavigationReportAutoTimer();recordStartedMs=0;setText('recordElapsed','00:00.0')}}
+function setRecordingUi(active,info={}){const b=$('recordToggleBtn');if(b){b.dataset.active=active?'true':'false';b.textContent=active?'■ STOP + SAVE':'● START';b.className='record-toggle '+(active?'stop':'start')}setText('labRecorderState',active?'RECORDING':'IDLE');setText('labRecorderSamples',`${info.samples||0} samples`);if(!active){clearNavigationReportAutoTimer();resetNavigationGoalMaster(false);recordStartedMs=0;setText('recordElapsed','00:00.0')}}
 async function pollRecorder(){try{const r=await readRequest('/api/experiment/record/status',{timeoutMs:2200}),j=await r.json();if(!r.ok)throw new Error(j.message||`recorder HTTP ${r.status}`);setRecordingUi(!!j.active,j);if(j.active){if(!recordStartedMs&&j.started_at)recordStartedMs=Date.parse(j.started_at);if(!recordingLeafId)recordingLeafId=String(j.source_experiment_id||j.id||'');if(!recordingDomain)recordingDomain=String(j.subsystem||'');if(!recordingRunToken&&j.started_at)recordingRunToken=String(j.started_at).replace(/[:.]/g,'-')}if(j.active&&recordStartedMs){if(window.report41TimedActive?.())window.report41WriteCountdown?.();else if(navigationReportCountdownTick()){if(navigationReportGenericTimedId(recordingLeafId)&&!navReportAutoTimer)armNavigationReportAutoTimer(recordingLeafId)}else{const sec=(Date.now()-recordStartedMs)/1000,min=Math.floor(sec/60);setText('recordElapsed',`${String(min).padStart(2,'0')}:${(sec-min*60).toFixed(1).padStart(4,'0')}`)}}}catch(e){setText('labRecorderState',e.message?.includes('timeout')?'RETRYING':'UNAVAILABLE');setText('recordMessage',`Recorder status: ${e.message||'request failed'}`)}}
 $('recordToggleBtn').onclick=()=>{$('recordToggleBtn').dataset.active==='true'?stopWebRecording():startWebRecording()};if($('graphLiveMode'))$('graphLiveMode').onclick=resumeAnalysisLive;if($('qualificationPass'))$('qualificationPass').onclick=()=>submitQualification('PASS');if($('qualificationFail'))$('qualificationFail').onclick=()=>submitQualification('FAIL');if($('qualificationInvalidate'))$('qualificationInvalidate').onclick=()=>submitQualification('INVALIDATED');if($('testPreflightRefresh'))$('testPreflightRefresh').onclick=renderTestPreflight;if($('saveTableCsvBtn'))$('saveTableCsvBtn').onclick=()=>saveCurrentTemplateCsv(false);if($('saveTableExcelBtn'))$('saveTableExcelBtn').onclick=()=>{if(!lastTrialArtifacts?.xlsx_download_url)return toast('Belum ada hasil STOP dengan XLSX pada sesi ini',true);window.location.href=lastTrialArtifacts.xlsx_download_url};if($('trialCompareBtn'))$('trialCompareBtn').onclick=renderTrialComparison;if($('trialCompareClear'))$('trialCompareClear').onclick=clearTrialComparison;if($('refreshTrialsBtn'))$('refreshTrialsBtn').onclick=loadTrials;if($('optimalScaleBtn'))$('optimalScaleBtn').onclick=calculateApplyOptimalScale;if($('resetExperimentYaml'))$('resetExperimentYaml').onclick=resetSelectedExperimentYaml;if($('tuningValidateDraft'))$('tuningValidateDraft').onclick=validateTuningDrafts;if($('tuningApplyDraft'))$('tuningApplyDraft').onclick=applyTuningDrafts;if($('tuningRevertDraft'))$('tuningRevertDraft').onclick=revertTuningDrafts;if($('homographyResetBtn'))$('homographyResetBtn').onclick=()=>{perceptionCalPoints=[];renderHomographyPoints()};if($('applyHomographyBtn'))$('applyHomographyBtn').onclick=applyHomographyPoints;if($('contextCamera'))$('contextCamera').addEventListener('click',captureHomographyPoint);if($('obcalCaptureBtn'))$('obcalCaptureBtn').onclick=captureObstacleCalibrationSample;if($('obcalDistance'))$('obcalDistance').onchange=renderObstacleCalibrationWizard;if($('obcalType'))$('obcalType').onchange=renderObstacleCalibrationWizard;if($('obcalOrientation'))$('obcalOrientation').onchange=renderObstacleCalibrationWizard;if($('obcalExportCsv'))$('obcalExportCsv').onclick=exportObstacleCalibrationCsv;if($('obcalExportGraph'))$('obcalExportGraph').onclick=exportObstacleCalibrationGraph;if($('obcalReset'))$('obcalReset').onclick=resetObstacleCalibration;if($('obcalSaveApply'))$('obcalSaveApply').onclick=saveObstacleCalibrationDraft;if($('obcalApplyYaml'))$('obcalApplyYaml').onclick=applyObstacleCalibrationYaml;$('refreshExperimentConfig').onclick=async()=>{await loadConfig();renderTuningFields();toast('YAML dimuat ulang')};$('experimentSearch').oninput=renderExperimentList;$('graphClearBtn').onclick=()=>{metricHistory.clear();scatterHistory.clear();scatterOrigins.clear();tableRunRows.clear();reportPathSnapshots.clear();reportEvidenceFrozen=false;reportEvidenceFrozenLeaf='';reportSourceTableRenderMs=0;chartEpochMs=Date.now();lastLabSecond=-1;lastLabTelemetryTick=-1;renderExperimentGraphs();renderExperimentTable()};
 

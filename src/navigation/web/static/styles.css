@@ -1,11 +1,11 @@
 /* Legacy stylesheet split into ordered domain/feature modules. Keep import order: it preserves the historical cascade exactly. */
-@import url("/legacy-core.css?v=20260913-stage2-css-v1");
+@import url("/legacy-core.css?v=20260918-camera-mirror-v2");
 @import url("/experiments.css?v=20260913-stage2-css-v1");
 @import url("/navigation.css?v=20260913-stage2-css-v1");
 @import url("/perception.css?v=20260918-perception-workflow-v1");
 @import url("/hmi.css?v=20260913-stage2-css-v1");
 @import url("/tuning.css?v=20260913-stage2-css-v1");
-@import url("/perception-calibration.css?v=20260918-perception-workflow-v1");
+@import url("/perception-calibration.css?v=20260918-camera-mirror-v2");
 @import url("/domain-sidebar.css?v=20260918-firda-steering-v1");
 @import url("/engineering-workspaces.css?v=20260913-stage2-css-v1");
 @import url("/esc.css?v=20260914-robust-v2");

@@ -6,7 +6,7 @@ perception:
     pt_model_path: auto
     gpu_device: 0
     cpu_inference_fps: 2.0
-    cpu_threads: 2
+    cpu_threads: 3
     opencv_threads: 1
     torch_optimize_for_inference: true
     cpu_emergency_stop_distance_m: 0.65
@@ -34,7 +34,7 @@ perception:
     max_detections: 300
     warmup_iterations: 5
     lane_threshold: 0.5
-    overlay_alpha: 0.45
+    overlay_alpha: 0.25
     box_thickness: 2
     draw_text_labels_cpu: false
     publish_annotated: true
@@ -52,10 +52,10 @@ perception:
     rviz_publish_buffer_count: 2
     rviz_max_publish_rate_hz: 10.0
     web_preview_enabled: true
-    web_preview_fps: 5.0
+    web_preview_fps: 10.0
     web_preview_width: 640
     web_preview_height: 360
-    web_preview_jpeg_quality: 75
+    web_preview_jpeg_quality: 70
     web_preview_topic: /camera/astra/image_preview/compressed
     show_opencv_cuda_window: false
     opencv_use_cuda_opengl: true
@@ -145,12 +145,18 @@ perception:
     lane_corridor_control_enabled: true
     # Drag/drop ROS Web menyimpan empat endpoint safety line secara normalized.
     lane_corridor_manual_lines_enabled: true
-    lane_corridor_top_y_ratio: 0.18
-    lane_corridor_bottom_y_ratio: 0.96
-    lane_corridor_left_top_x_ratio: 0.42
-    lane_corridor_left_bottom_x_ratio: 0.20
-    lane_corridor_right_top_x_ratio: 0.58
-    lane_corridor_right_bottom_x_ratio: 0.80
+    # Legacy/common overlap used as sampling window. Endpoint Y below are authoritative
+    # for the four independently draggable Lane Safety handles.
+    lane_corridor_top_y_ratio: 0.7566862890516363
+    lane_corridor_bottom_y_ratio: 0.995
+    lane_corridor_left_top_x_ratio: 0.4119936758366552
+    lane_corridor_left_top_y_ratio: 0.7566862890516363
+    lane_corridor_left_bottom_x_ratio: 0.06094937772318532
+    lane_corridor_left_bottom_y_ratio: 0.995
+    lane_corridor_right_top_x_ratio: 0.6078348793686845
+    lane_corridor_right_top_y_ratio: 0.7566862890516363
+    lane_corridor_right_bottom_x_ratio: 0.9955737374849355
+    lane_corridor_right_bottom_y_ratio: 0.995
     lane_corridor_camera_height_m: 0.736
     lane_corridor_camera_pitch_deg: 0.0
     lane_corridor_safety_margin_m: 0.30

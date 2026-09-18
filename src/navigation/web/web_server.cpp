@@ -298,7 +298,7 @@ bool saveMapEditorCopy(const QJsonObject &json, QJsonObject *result, QString *me
   const QString yamlText=QStringLiteral("image: \"")+QFileInfo(pgmPath).fileName()+QStringLiteral("\"\nmode: ")+mode+QStringLiteral("\nresolution: ")+QString::number(resolution,'f',11)+QStringLiteral("\norigin: [")+QString::number(originX,'f',9)+QStringLiteral(", ")+QString::number(originY,'f',9)+QStringLiteral(", ")+QString::number(originYaw,'f',9)+QStringLiteral("]\nnegate: ")+QString::number(negate)+QStringLiteral("\noccupied_thresh: ")+QString::number(occupied,'g',12)+QStringLiteral("\nfree_thresh: ")+QString::number(free,'g',12)+QStringLiteral("\n");
   QSaveFile yf(yamlPath);if(!yf.open(QIODevice::WriteOnly)||yf.write(yamlText.toUtf8())<0||!yf.commit()){QFile::remove(pgmPath);if(message)*message=QStringLiteral("Save YAML pendamping gagal");return false;}
   QImage preview(original.width,original.height,QImage::Format_Grayscale8);for(int row=0;row<original.height;++row)std::memcpy(preview.scanLine(row),edited.constData()+static_cast<qint64>(row)*original.width,original.width);preview.save(previewPath,"PNG");
-  *result=QJsonObject{{"source_pgm",sourcePgm},{"source_yaml",sourceYaml},{"pgm_path",pgmPath},{"yaml_path",yamlPath},{"preview_path",previewPath},{"width",original.width},{"height",original.height},{"resolution",resolution},{"accepted_strokes",accepted},{"changed_cells",static_cast<double>(changed)},{"changed_area_m2",changed*resolution*resolution},{"active_map_changed",false}};
+  *result=QJsonObject{{"source_pgm",sourcePgm},{"source_yaml",sourceYaml},{"pgm_path",pgmPath},{"yaml_path",yamlPath},{"preview_path",previewPath},{"download_url",QStringLiteral("/api/map-editor/download/")+QFileInfo(pgmPath).fileName()},{"width",original.width},{"height",original.height},{"resolution",resolution},{"accepted_strokes",accepted},{"changed_cells",static_cast<double>(changed)},{"changed_area_m2",changed*resolution*resolution},{"active_map_changed",false}};
   if (message) *message = QStringLiteral("Map edit copy tersimpan; active map tidak diubah");
   return true;
 }
@@ -1416,16 +1416,36 @@ class WebRosBridge {
   }
 
   bool setPerceptionLanePreview(
-      double topY, double bottomY, double leftTop, double leftBottom,
-      double rightTop, double rightBottom, QString *message) {
+      double topY, double bottomY,
+      double leftTopX, double leftTopY, double leftBottomX, double leftBottomY,
+      double rightTopX, double rightTopY, double rightBottomX, double rightBottomY,
+      QString *message) {
     if (readOnly_) return rejectReadOnly(message);
-    const bool valid = std::isfinite(topY) && std::isfinite(bottomY) &&
-      std::isfinite(leftTop) && std::isfinite(leftBottom) &&
-      std::isfinite(rightTop) && std::isfinite(rightBottom) &&
-      topY >= 0.0 && topY <= 0.90 && bottomY >= topY + 0.05 && bottomY <= 0.995 &&
-      leftTop >= 0.0 && leftTop <= 1.0 && leftBottom >= 0.0 && leftBottom <= 1.0 &&
-      rightTop >= 0.0 && rightTop <= 1.0 && rightBottom >= 0.0 && rightBottom <= 1.0 &&
-      leftTop < rightTop && leftBottom < rightBottom;
+    const auto interpX = [](double y, double x0, double y0, double x1, double y1) {
+      const double t = std::clamp((y - y0) / std::max(1.0e-9, y1 - y0), 0.0, 1.0);
+      return x0 + t * (x1 - x0);
+    };
+    const double overlapTop = std::max(leftTopY, rightTopY);
+    const double overlapBottom = std::min(leftBottomY, rightBottomY);
+    const bool finite = std::isfinite(topY) && std::isfinite(bottomY) &&
+      std::isfinite(leftTopX) && std::isfinite(leftTopY) &&
+      std::isfinite(leftBottomX) && std::isfinite(leftBottomY) &&
+      std::isfinite(rightTopX) && std::isfinite(rightTopY) &&
+      std::isfinite(rightBottomX) && std::isfinite(rightBottomY);
+    const bool ranges = leftTopY >= 0.0 && leftTopY <= 0.95 &&
+      leftBottomY >= leftTopY + 0.05 && leftBottomY <= 0.995 &&
+      rightTopY >= 0.0 && rightTopY <= 0.95 &&
+      rightBottomY >= rightTopY + 0.05 && rightBottomY <= 0.995 &&
+      overlapBottom >= overlapTop + 0.05 &&
+      leftTopX >= 0.0 && leftTopX <= 1.0 && leftBottomX >= 0.0 && leftBottomX <= 1.0 &&
+      rightTopX >= 0.0 && rightTopX <= 1.0 && rightBottomX >= 0.0 && rightBottomX <= 1.0;
+    const bool separated = finite && ranges &&
+      interpX(overlapTop, leftTopX, leftTopY, leftBottomX, leftBottomY) + 0.005 <
+        interpX(overlapTop, rightTopX, rightTopY, rightBottomX, rightBottomY) &&
+      interpX(overlapBottom, leftTopX, leftTopY, leftBottomX, leftBottomY) + 0.005 <
+        interpX(overlapBottom, rightTopX, rightTopY, rightBottomX, rightBottomY);
+    const bool valid = finite && ranges && separated &&
+      std::abs(topY - overlapTop) <= 1.0e-6 && std::abs(bottomY - overlapBottom) <= 1.0e-6;
     if (!valid) {
       if (message) *message = "Lane preview geometry tidak valid";
       return false;
@@ -1451,10 +1471,14 @@ class WebRosBridge {
     };
     addDouble("lane_corridor_top_y_ratio", topY);
     addDouble("lane_corridor_bottom_y_ratio", bottomY);
-    addDouble("lane_corridor_left_top_x_ratio", leftTop);
-    addDouble("lane_corridor_left_bottom_x_ratio", leftBottom);
-    addDouble("lane_corridor_right_top_x_ratio", rightTop);
-    addDouble("lane_corridor_right_bottom_x_ratio", rightBottom);
+    addDouble("lane_corridor_left_top_x_ratio", leftTopX);
+    addDouble("lane_corridor_left_top_y_ratio", leftTopY);
+    addDouble("lane_corridor_left_bottom_x_ratio", leftBottomX);
+    addDouble("lane_corridor_left_bottom_y_ratio", leftBottomY);
+    addDouble("lane_corridor_right_top_x_ratio", rightTopX);
+    addDouble("lane_corridor_right_top_y_ratio", rightTopY);
+    addDouble("lane_corridor_right_bottom_x_ratio", rightBottomX);
+    addDouble("lane_corridor_right_bottom_y_ratio", rightBottomY);
     client->async_send_request(request,
       [this, client](rclcpp::Client<rcl_interfaces::srv::SetParametersAtomically>::SharedFuture future) {
         try {
@@ -3015,6 +3039,47 @@ class LocalHttpServer : public QObject {
     handle(socket, request);
   }
 
+  bool buildPerceptionZip(const QStringList &folders, const QString &zipName, QByteArray *bytes, QString *message) const {
+    if (!bytes) return false;
+    const QString rootPath = QFileInfo(agvPath(QStringLiteral("data/presepsi"))).canonicalFilePath();
+    if (rootPath.isEmpty()) { if (message) *message = QStringLiteral("Folder data/presepsi belum tersedia"); return false; }
+    QStringList names;
+    for (const QString &folder : folders) {
+      const QFileInfo info(folder); const QString canonical = info.canonicalFilePath();
+      if (canonical.isEmpty() || !info.isDir() || !canonical.startsWith(rootPath + QDir::separator())) continue;
+      names << QFileInfo(canonical).fileName();
+    }
+    names.removeDuplicates();
+    if (names.isEmpty()) { if (message) *message = QStringLiteral("Belum ada folder hasil Persepsi untuk di-ZIP"); return false; }
+    QString safeName = zipName; safeName.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9_.-]+")), QStringLiteral("_"));
+    if (!safeName.endsWith(QStringLiteral(".zip"), Qt::CaseInsensitive)) safeName += QStringLiteral(".zip");
+    const QString zipPath = QDir(QStringLiteral("/tmp")).filePath(QStringLiteral("agv_") + QString::number(QCoreApplication::applicationPid()) + QStringLiteral("_") + safeName);
+    QFile::remove(zipPath);
+    QProcess proc; proc.setProgram(QStringLiteral("/usr/bin/zip")); proc.setWorkingDirectory(rootPath);
+    QStringList args{QStringLiteral("-r"), QStringLiteral("-q"), zipPath}; args << names; proc.setArguments(args); proc.start();
+    const bool started = proc.waitForStarted(3000), done = started && proc.waitForFinished(120000);
+    if (!done || proc.exitStatus()!=QProcess::NormalExit || proc.exitCode()!=0) {
+      if (message) *message = QStringLiteral("ZIP gagal: ") + QString::fromUtf8(proc.readAllStandardError()).left(500);
+      QFile::remove(zipPath);
+      return false;
+    }
+    QFile f(zipPath); if (!f.open(QIODevice::ReadOnly)) { if (message) *message = QStringLiteral("ZIP selesai dibuat tetapi gagal dibaca"); QFile::remove(zipPath); return false; }
+    *bytes = f.readAll(); f.close(); QFile::remove(zipPath);
+    if (bytes->isEmpty()) { if (message) *message = QStringLiteral("ZIP kosong"); return false; }
+    if (message) *message = QStringLiteral("ZIP siap: ") + names.join(QStringLiteral(", "));
+    return true;
+  }
+
+  QStringList latestPerceptionFinalFolders() const {
+    const QDir root(agvPath(QStringLiteral("data/presepsi"))); QStringList out;
+    for (int i=1;i<=5;++i) {
+      const QString prefix = QStringLiteral("BAB4_F4_%1_").arg(i);
+      const QFileInfoList entries = root.entryInfoList(QStringList{prefix + QStringLiteral("*")}, QDir::Dirs | QDir::NoDotAndDotDot, QDir::Time);
+      if (!entries.isEmpty()) out << entries.first().absoluteFilePath();
+    }
+    return out;
+  }
+
   void handle(QTcpSocket *socket, const Request &request) {
     if (request.method == "GET" && request.path == "/api/events") return openSse(socket);
     if (request.method == "GET" && request.path == "/api/state") return sendJson(socket, 200, bridge_->snapshot());
@@ -3069,6 +3134,18 @@ class LocalHttpServer : public QObject {
       if (bytes.isEmpty()) return sendText(socket, 503, "text/plain; charset=utf-8", "Local costmap belum aktif");
       return sendBytes(socket, 200, "image/png", bytes, {{"Cache-Control", "no-store, max-age=0"}});
     }
+    if (request.method == "GET" && request.path.startsWith("/api/map-editor/download/")) {
+      const QString name=request.path.mid(QString("/api/map-editor/download/").size());
+      if(name.isEmpty()||QFileInfo(name).fileName()!=name||QFileInfo(name).suffix().toLower()!=QStringLiteral("pgm")||
+         !QRegularExpression(QStringLiteral("^undip_nav2_edit_[A-Za-z0-9_.-]+\\.pgm$")).match(name).hasMatch())
+        return sendText(socket,400,"text/plain; charset=utf-8","Nama file PGM tidak valid");
+      const QString navCfg=packageConfigDir("navigation","AGV_CONFIG_DIR");
+      const QString editRoot=QDir::cleanPath(QDir(navCfg).absoluteFilePath(QStringLiteral("../maps/undip/edits")));
+      const QString path=QDir(editRoot).absoluteFilePath(name);
+      QFile f(path); if(!f.open(QIODevice::ReadOnly)) return sendText(socket,404,"text/plain; charset=utf-8","PGM hasil edit tidak ditemukan");
+      const QByteArray disposition=QByteArray("attachment; filename=\"")+name.toUtf8()+"\"";
+      return sendBytes(socket,200,"image/x-portable-graymap",f.readAll(),{{"Cache-Control","no-store"},{"Content-Disposition",disposition}});
+    }
     if (request.method == "GET" && request.path == "/api/experiment/record/last.csv") {
       if (lastDownloadCsv_.isEmpty()) return sendText(socket, 404, "text/plain; charset=utf-8", "Belum ada CSV hasil Stop pada sesi server ini");
       const QByteArray disposition = QByteArray("attachment; filename=\"") + lastDownloadName_.toUtf8() + "\"";
@@ -3079,6 +3156,21 @@ class LocalHttpServer : public QObject {
       QFile f(lastXlsxPath_); if(lastXlsxPath_.isEmpty()||!f.open(QIODevice::ReadOnly)) return sendText(socket,404,"text/plain; charset=utf-8","Belum ada XLSX hasil Stop");
       const QByteArray disposition=QByteArray("attachment; filename=\"")+lastXlsxName_.toUtf8()+"\"";
       return sendBytes(socket,200,"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",f.readAll(),{{"Cache-Control","no-store"},{"Content-Disposition",disposition}});
+    }
+    if (request.method == "GET" && request.path == "/api/experiment/record/last.zip") {
+      if (lastXlsxPath_.isEmpty()) return sendText(socket,404,"text/plain; charset=utf-8","Belum ada hasil FINISH + SAVE pada sesi server ini");
+      const QString folder = QFileInfo(lastXlsxPath_).absolutePath(); QByteArray bytes; QString message;
+      const QString name = QFileInfo(folder).fileName() + QStringLiteral(".zip");
+      if (!buildPerceptionZip(QStringList{folder}, name, &bytes, &message)) return sendText(socket,404,"text/plain; charset=utf-8",message.toUtf8());
+      const QByteArray disposition=QByteArray("attachment; filename=\"")+name.toUtf8()+"\"";
+      return sendBytes(socket,200,"application/zip",bytes,{{"Cache-Control","no-store"},{"Content-Disposition",disposition}});
+    }
+    if (request.method == "GET" && request.path == "/api/perception/final-dataset/latest.zip") {
+      const QStringList folders = latestPerceptionFinalFolders(); QByteArray bytes; QString message;
+      const QString name = QStringLiteral("FINAL_DATASET_PERSEPSI_") + QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss")) + QStringLiteral(".zip");
+      if (!buildPerceptionZip(folders, name, &bytes, &message)) return sendText(socket,404,"text/plain; charset=utf-8",message.toUtf8());
+      const QByteArray disposition=QByteArray("attachment; filename=\"")+name.toUtf8()+"\"";
+      return sendBytes(socket,200,"application/zip",bytes,{{"Cache-Control","no-store"},{"Content-Disposition",disposition}});
     }
     if (request.method == "GET" && request.path.startsWith("/api/experiment/record/last-graph-") && request.path.endsWith(".png")) {
       const QString mid=request.path.mid(QString("/api/experiment/record/last-graph-").size()); bool okIndex=false;const int idx=mid.left(mid.size()-4).toInt(&okIndex)-1;
@@ -3127,7 +3219,7 @@ class LocalHttpServer : public QObject {
       const QMap<QString,QSet<QString>> allowedPaths{
         {QStringLiteral("perception:homography"),QSet<QString>{QStringLiteral("perception.ros__parameters.ground_src_points"),QStringLiteral("perception.ros__parameters.ground_dst_points")}},
         {QStringLiteral("perception:obstacle-distance"),QSet<QString>{QStringLiteral("perception.ros__parameters.obstacle_distance_calibration_coefficients")}},
-        {QStringLiteral("perception:lane-roi"),QSet<QString>{QStringLiteral("perception.ros__parameters.lane_safety_enabled"),QStringLiteral("perception.ros__parameters.lane_corridor_correction_gain_m_per_px"),QStringLiteral("perception.ros__parameters.lane_corridor_top_y_ratio"),QStringLiteral("perception.ros__parameters.lane_corridor_bottom_y_ratio"),QStringLiteral("perception.ros__parameters.lane_corridor_left_top_x_ratio"),QStringLiteral("perception.ros__parameters.lane_corridor_left_bottom_x_ratio"),QStringLiteral("perception.ros__parameters.lane_corridor_right_top_x_ratio"),QStringLiteral("perception.ros__parameters.lane_corridor_right_bottom_x_ratio"),QStringLiteral("perception.ros__parameters.nav2_obstacle_roi_enabled"),QStringLiteral("perception.ros__parameters.nav2_obstacle_roi_points")}}
+        {QStringLiteral("perception:lane-roi"),QSet<QString>{QStringLiteral("perception.ros__parameters.lane_safety_enabled"),QStringLiteral("perception.ros__parameters.lane_corridor_correction_gain_m_per_px"),QStringLiteral("perception.ros__parameters.lane_corridor_top_y_ratio"),QStringLiteral("perception.ros__parameters.lane_corridor_bottom_y_ratio"),QStringLiteral("perception.ros__parameters.lane_corridor_left_top_x_ratio"),QStringLiteral("perception.ros__parameters.lane_corridor_left_top_y_ratio"),QStringLiteral("perception.ros__parameters.lane_corridor_left_bottom_x_ratio"),QStringLiteral("perception.ros__parameters.lane_corridor_left_bottom_y_ratio"),QStringLiteral("perception.ros__parameters.lane_corridor_right_top_x_ratio"),QStringLiteral("perception.ros__parameters.lane_corridor_right_top_y_ratio"),QStringLiteral("perception.ros__parameters.lane_corridor_right_bottom_x_ratio"),QStringLiteral("perception.ros__parameters.lane_corridor_right_bottom_y_ratio"),QStringLiteral("perception.ros__parameters.nav2_obstacle_roi_enabled"),QStringLiteral("perception.ros__parameters.nav2_obstacle_roi_points")}}
       };
       if(!allowedPaths.contains(sourceTask)||proposalItems.isEmpty()||proposalItems.size()>32)return sendJson(socket,400,QJsonObject{{"ok",false},{"message","proposal source/items invalid"}});
       const QSet<QString> sourceAllowed=allowedPaths.value(sourceTask);
@@ -3284,8 +3376,11 @@ class LocalHttpServer : public QObject {
       const double nan = std::numeric_limits<double>::quiet_NaN();
       ok = bridge_->setPerceptionLanePreview(
         json.value("top_y").toDouble(nan), json.value("bottom_y").toDouble(nan),
-        json.value("left_top_x").toDouble(nan), json.value("left_bottom_x").toDouble(nan),
-        json.value("right_top_x").toDouble(nan), json.value("right_bottom_x").toDouble(nan), &message);
+        json.value("left_top_x").toDouble(nan), json.value("left_top_y").toDouble(nan),
+        json.value("left_bottom_x").toDouble(nan), json.value("left_bottom_y").toDouble(nan),
+        json.value("right_top_x").toDouble(nan), json.value("right_top_y").toDouble(nan),
+        json.value("right_bottom_x").toDouble(nan), json.value("right_bottom_y").toDouble(nan),
+        &message);
     } else if (request.path == "/api/navigation/goal") {
       ok = bridge_->publishGoal(json.value("x").toDouble(std::numeric_limits<double>::quiet_NaN()),
                                 json.value("y").toDouble(std::numeric_limits<double>::quiet_NaN()),
@@ -3634,6 +3729,11 @@ class LocalHttpServer : public QObject {
     if (subsystem == QStringLiteral("perception") && recording_ && recordingSubsystem_ == QStringLiteral("perception") &&
         recordingSourceExperimentId_.startsWith(QStringLiteral("F4.")) && recordingStartedMs_ > 0) {
       const QString runName = QStringLiteral("BAB4_") + recordingCsvStem(recordingSourceExperimentId_) + QStringLiteral("_") +
+        QDateTime::fromMSecsSinceEpoch(recordingStartedMs_).toString(QStringLiteral("yyyyMMdd_HHmmss"));
+      outputRoot = QDir(dataRoot).filePath(runName);
+    } else if (subsystem == QStringLiteral("navigation") && recordingSubsystem_ == QStringLiteral("navigation") &&
+               recordingSourceExperimentId_ == QStringLiteral("R4.4.5") && recordingStartedMs_ > 0) {
+      const QString runName = QStringLiteral("BAB4_GOAL_MASTER_4_4_5_") +
         QDateTime::fromMSecsSinceEpoch(recordingStartedMs_).toString(QStringLiteral("yyyyMMdd_HHmmss"));
       outputRoot = QDir(dataRoot).filePath(runName);
     }
@@ -4178,6 +4278,11 @@ class LocalHttpServer : public QObject {
       const QString runName = QStringLiteral("BAB4_") + recordingCsvStem(recordingSourceExperimentId_) + QStringLiteral("_") +
         QDateTime::fromMSecsSinceEpoch(recordingStartedMs_).toString(QStringLiteral("yyyyMMdd_HHmmss"));
       outputRoot = QDir(dataRoot).filePath(runName);
+    } else if (recordingSubsystem_ == QStringLiteral("navigation") &&
+               recordingSourceExperimentId_ == QStringLiteral("R4.4.5") && recordingStartedMs_ > 0) {
+      const QString runName = QStringLiteral("BAB4_GOAL_MASTER_4_4_5_") +
+        QDateTime::fromMSecsSinceEpoch(recordingStartedMs_).toString(QStringLiteral("yyyyMMdd_HHmmss"));
+      outputRoot = QDir(dataRoot).filePath(runName);
     }
     if (!QDir().mkpath(outputRoot)) {
       if (message) *message = QStringLiteral("Gagal membuat folder data: ") + outputRoot;
@@ -4277,6 +4382,8 @@ class LocalHttpServer : public QObject {
       (*result)["trial_yaml"] = trialStorePath();
       (*result)["trial_saved"] = trialSaved;
       (*result)["artifacts_saved"] = artifactsSaved;
+      (*result)["zip_download_url"] = QStringLiteral("/api/experiment/record/last.zip");
+      (*result)["final_dataset_zip_download_url"] = QStringLiteral("/api/perception/final-dataset/latest.zip");
     }
     if (message) *message = csvMessage + QStringLiteral(" | ") + trialMessage + QStringLiteral(" | ") + artifactMessage + QStringLiteral(" | ") + manifestMessage;
     recordingRows_.clear(); recordingTuningConfig_.clear(); recordingPaths_.clear();
