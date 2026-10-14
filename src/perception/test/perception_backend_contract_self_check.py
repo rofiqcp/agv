@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static contract for OFF(camera-only)/CPU(.pt direct)/GPU(TensorRT)."""
+"""Static contract for web-lazy CPU/OpenVINO + direct PT fallback + optional GPU(TensorRT)."""
 from pathlib import Path
 import sys
 import yaml
@@ -72,15 +72,62 @@ require("camera_only_node" in autonomous and "camera_only_enabled" in autonomous
 require("importlib.util.find_spec" not in autonomous, "autonomous CPU validation must not probe Python ONNX modules")
 require("model CPU tidak ditemukan/kosong" in autonomous, "CPU model fail-fast validation missing")
 
-require(params.get("perception_mode") == "off", "Mini-PC YAML must default to camera-only/lazy perception")
-require(params.get("inference_enabled") is False, "YOLOPv2 inference must default OFF")
+require(params.get("perception_mode") == "off", "Mini-PC YAML must keep web-lazy CPU ownership under perception_mode=off")
+require(params.get("inference_enabled") is True, "Web-lazy Mini-PC runtime must default inference ON for Bab IV perception")
 require("web_lazy_cpu_enabled" in autonomous and "perception_inference_enabled" in autonomous,
         "web mode must keep one lazy CPU camera owner with explicit inference toggle")
+require("default_value='true'" in autonomous and "perception_inference_enabled" in autonomous,
+        "autonomous web-lazy inference launch default must remain ON")
+require("PERCEPTION_HAVE_OPENVINO" in cpu and "OpenVINO backend loaded" in cpu,
+        "CPU backend must retain OpenVINO acceleration with direct PT fallback")
+require("find_library(TURBOJPEG_LIBRARY NAMES turbojpeg)" in cmake and "${TURBOJPEG_LIBRARY}" in cmake,
+        "CPU MJPEG capture must link libturbojpeg")
+require("tjDecompress2" in cpu and "TJFLAG_FASTDCT" in cpu and
+        "TJFLAG_FASTDCT | TJFLAG_STOPONWARNING" not in cpu,
+        "MJPEG decoder must accept recoverable warnings and reject fatal decode errors")
+require("direct_capture_ever_worked_" in cpu and "DIRECT_V4L2_RECONNECT_WAIT" in cpu and
+        "OpenCV fallback dilewati" in cpu and "direct_v4l2_restart_timeout_sec_" in cpu and "rclcpp::shutdown()" in cpu,
+        "After direct V4L2 has worked, transient faults must retry direct capture then cleanly respawn instead of sticking to OpenCV MJPEG fallback")
+require(params.get("opencv_capture_fallback_enabled") is False,
+        "Mini-PC research profile must reject OpenCV MJPEG fallback")
+require(float(params.get("direct_v4l2_restart_timeout_sec", 0.0)) >= 5.0,
+        "Direct V4L2 restart watchdog timeout missing")
+require(params.get("rgb_width") == 640 and params.get("rgb_height") == 480 and
+        params.get("v4l2_pixel_format") == "YUYV" and
+        params.get("capture_normalize_to_output") is True and
+        params.get("capture_output_width") == 1280 and params.get("capture_output_height") == 720,
+        "Mini-PC camera profile must capture 640x480 and normalize to calibrated 1280x720 output")
+for token in ("normalizeCaptureFrame", "capture_source_width", "capture_output_width",
+              "capture_normalize_to_output_"):
+    require(token in cpu, f"Capture normalization contract missing: {token}")
+require(params.get("raw_publish_width") == 640 and params.get("raw_publish_height") == 360 and
+        "raw_publish_width_" in cpu and "cv::INTER_AREA" in cpu,
+        "Python semantic image transport must use the lightweight 640x360 raw publish path")
+require("if (!raw_resized) publishCameraInfo" in cpu and
+        "Do not publish mismatched intrinsics" in cpu,
+        "Resized semantic transport must not publish mismatched CameraInfo intrinsics")
+require(float(params.get("camera_reopen_stale_sec", 0.0)) >= 1.0 and
+        "stale_sec < camera_reopen_stale_sec_" in cpu and
+        "FRAME_READ_FAILED_STALE" in cpu,
+        "Camera recovery must require both miss streak and last-good-frame staleness before reopen")
+require("VIDIOC_REQBUFS" in cpu and "release.count = 0" in cpu and
+        "for (int attempt = 0; attempt < 12; ++attempt)" in cpu,
+        "Direct V4L2 recovery must release MMAP driver buffers and allow a warm-up window after reopen")
 require(params.get("pt_model_path") == "auto", "YAML PT path must use portable auto discovery")
 require(float(params.get("cpu_inference_fps", 0.0)) >= 0.5, "CPU inference FPS missing")
 require(1 <= int(params.get("cpu_threads", 0)) <= 4, "CPU thread policy must use a bounded mini-PC thread count")
 for token in ("lane_metrics_topic", "drivable_space_topic", "perception_obstacle_metrics_topic", "near_field_state_topic"):
     require(token in cpu, f"CPU GUI/BAB IV topic contract missing: {token}")
+require(params.get("lane_classical_fallback_enabled") is True,
+        "Indoor/tape lane fallback must be explicitly enabled in the Mini-PC research profile")
+for token in ("applyClassicalLaneFallback", "lane_classical_fallback_active",
+              "lane_classical_left_samples", "lane_classical_right_samples",
+              "CLASSICAL_FALLBACK", "lane_classical_min_samples_per_side_"):
+    require(token in cpu, f"Classical lane fallback contract missing: {token}")
+require("lane_pixels >=" in cpu and "drivable_pixels >=" in cpu and
+        "left_points.size()) < lane_classical_min_samples_per_side_" in cpu and
+        "right_points.size()) < lane_classical_min_samples_per_side_" in cpu,
+        "Classical lane fallback must be fail-closed and require both boundaries")
 for token in ("pipeline_p95_ms", "capture_dropped_total", "mean_gradient", "road_width_m"):
     require(token in cpu, f"CPU acquisition metric missing: {token}")
 
@@ -89,6 +136,6 @@ for source, label in ((cpu, "CPU"), (gpu, "GPU")):
             f"{label} backend does not enforce metric calibration")
 
 print("PASS perception backend contract")
-print("off=camera-only | cpu=TorchScript .pt direct LibTorch | gpu=CUDA/TensorRT")
+print("off=web-lazy CPU owner | OpenVINO preferred | TorchScript .pt fallback | gpu=optional CUDA/TensorRT")
 
 require('TORCH_CXX11_ABI' in cmake and 'compiled_with_cxx11_abi' in cmake, 'Torch CXX11 ABI guard missing')

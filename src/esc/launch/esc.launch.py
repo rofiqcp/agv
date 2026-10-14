@@ -1,4 +1,4 @@
-"""ESC runtime: exactly two nodes, motor_teleop + esc_ackermann."""
+"""ESC runtime: teleop, Ackermann owner, VESC bridge, and steering recovery guard."""
 import os
 from pathlib import Path
 from ament_index_python.packages import get_package_share_directory
@@ -36,6 +36,7 @@ def generate_launch_description():
         DeclareLaunchArgument("start_teleop", default_value="true"),
         DeclareLaunchArgument("start_ackermann", default_value="true"),
         DeclareLaunchArgument("start_vesc_tool_bridge", default_value="true"),
+        DeclareLaunchArgument("start_steering_recovery_guard", default_value="true"),
         DeclareLaunchArgument("transport_mode", default_value="direct_vesc"),
         DeclareLaunchArgument("serial_device", default_value="auto"),
         DeclareLaunchArgument("serial_enabled", default_value="true"),
@@ -59,6 +60,7 @@ def generate_launch_description():
         executable="motor_teleop",
         name="motor_teleop",
         output="screen",
+        respawn=True, respawn_delay=1.0,
         condition=IfCondition(LaunchConfiguration("start_teleop")),
         parameters=[
             teleop_params,
@@ -121,4 +123,17 @@ def generate_launch_description():
         parameters=[vesc_tool_params, {"use_sim_time": ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)}],
     )
 
-    return LaunchDescription(args + [teleop, ackermann, vesc_tool])
+    steering_recovery = Node(
+        package="esc",
+        executable="steering_recovery_guard.py",
+        name="steering_recovery_guard",
+        output="screen",
+        respawn=True, respawn_delay=2.0,
+        condition=IfCondition(PythonExpression([
+            "'", LaunchConfiguration("start_steering_recovery_guard"), "'.lower() == 'true' and '",
+            LaunchConfiguration("integration_bypass"), "'.lower() != 'true'"
+        ])),
+        parameters=[{"use_sim_time": ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)}],
+    )
+
+    return LaunchDescription(args + [teleop, ackermann, vesc_tool, steering_recovery])

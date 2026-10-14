@@ -113,15 +113,21 @@ def generate_launch_description() -> LaunchDescription:
     camera_executable = lib_dir / "camera_only_node"
     cpu_executable = lib_dir / "perception_cpu_node"
     gpu_executable = lib_dir / "perception_node"
+    semantic_executable = lib_dir / "semantic_obstacle_node.py"
     camera_available = camera_executable.is_file() and os.access(camera_executable, os.X_OK)
     cpu_available = cpu_executable.is_file() and os.access(cpu_executable, os.X_OK)
     gpu_available = gpu_executable.is_file() and os.access(gpu_executable, os.X_OK)
+    semantic_available = semantic_executable.is_file() and os.access(semantic_executable, os.X_OK)
     config = LaunchConfiguration("config_file")
     mode = LaunchConfiguration("perception_mode")
     respawn = PythonExpression(["'", LaunchConfiguration("respawn_node"), "' == 'true'"])
     cpu_enabled = PythonExpression(["'", mode, "' == 'cpu' and ", str(cpu_available)])
     gpu_enabled = PythonExpression(["'", mode, "' == 'gpu' and ", str(gpu_available)])
     mode_off = PythonExpression(["'", mode, "' == 'off' and ", str(camera_available)])
+    semantic_enabled = PythonExpression([
+        "'", mode, "' != 'off' and '", LaunchConfiguration("enable_semantic_detection"),
+        "' == 'true' and ", str(semantic_available)
+    ])
     invalid = PythonExpression(["'", mode, "' not in ['off', 'cpu', 'gpu']"])
     unavailable = PythonExpression([
         "('", mode, "' == 'off' and not ", str(camera_available), ") or ('",
@@ -176,6 +182,12 @@ def generate_launch_description() -> LaunchDescription:
             **common,
         }],
     )
+    semantic = Node(
+        package="perception", executable="semantic_obstacle_node.py", name="semantic_obstacle",
+        output="screen", emulate_tty=True, condition=IfCondition(semantic_enabled),
+        respawn=respawn, respawn_delay=3.0,
+        parameters=[config],
+    )
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -184,8 +196,8 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("engine_path", default_value=os.environ.get(
             "YOLOP_ENGINE_PATH", str(_agv_root() / "models" / "yolopv2.engine"))),
         DeclareLaunchArgument("pt_model_path", default_value=default_pt_model),
-        DeclareLaunchArgument("cpu_inference_fps", default_value="2.0"),
-        DeclareLaunchArgument("cpu_threads", default_value="0"),
+        DeclareLaunchArgument("cpu_inference_fps", default_value="5.0"),
+        DeclareLaunchArgument("cpu_threads", default_value="4"),
         DeclareLaunchArgument("rgb_device", default_value="auto"),
         DeclareLaunchArgument("rgb_width", default_value="1280"),
         DeclareLaunchArgument("rgb_height", default_value="720"),
@@ -198,14 +210,16 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument("camera_metric_calibration_validated", default_value="false"),
         DeclareLaunchArgument("enable_lane_safety", default_value="false"),
         DeclareLaunchArgument("lane_safety_mode", default_value="monitor"),
+        DeclareLaunchArgument("enable_semantic_detection", default_value="true"),
         DeclareLaunchArgument("respawn_node", default_value="true"),
         SetEnvironmentVariable("CUDA_MODULE_LOADING", "LAZY"),
         OpaqueFunction(function=_validate_request, args=[camera_available, cpu_available, gpu_available]),
         LogInfo(condition=IfCondition(mode_off), msg="[PERCEPTION] mode=OFF; camera-only aktif, model/inference tidak dijalankan"),
         LogInfo(condition=IfCondition(cpu_enabled), msg="[PERCEPTION] mode=CPU; yolopv2.pt dibaca langsung via LibTorch, tanpa ONNX"),
         LogInfo(condition=IfCondition(gpu_enabled), msg="[PERCEPTION] backend=GPU CUDA/TensorRT"),
+        LogInfo(condition=IfCondition(semantic_enabled), msg="[PERCEPTION] semantic detector aktif untuk human/car/motorcycle"),
         LogInfo(condition=IfCondition(invalid), msg="[PERCEPTION] ERROR perception_mode wajib off, cpu, atau gpu"),
         LogInfo(condition=IfCondition(unavailable),
                 msg="[PERCEPTION] ERROR executable backend tidak tersedia pada build ini"),
-        camera, cpu, gpu,
+        camera, cpu, gpu, semantic,
     ])

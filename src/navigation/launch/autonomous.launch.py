@@ -206,7 +206,7 @@ def _cleanup_stale_workspace_runtime(nav_share: str, esc_share: str, astra_share
         'lifecycle_manager_map', 'lifecycle_manager_smoother', 'lifecycle_manager_navigation',
         'ekf_filter_node_odom', 'ekf_filter_node_map', 'localization_core',
         'navigation_core', 'mppi_closed_loop_supervisor', 'perception',
-        'esc_ackermann', 'motor_teleop', 'vesc_tool_bridge', 'stmf4_hmi_bridge', 'mag_heading_fusion',
+        'esc_ackermann', 'motor_teleop', 'vesc_tool_bridge', 'steering_recovery_guard', 'stmf4_hmi_bridge', 'mag_heading_fusion',
         'data_imu_node', 'data_cuav_node', 'robot_state_publisher', 'rviz2_autonomous',
     )
 
@@ -757,7 +757,7 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('perception_mode', default_value=configured_mode),
         DeclareLaunchArgument('engine_path', default_value=engine_path),
         DeclareLaunchArgument('pt_model_path', default_value=pt_model_path),
-        DeclareLaunchArgument('perception_inference_enabled', default_value='false', description='YOLOPv2 inference lazy toggle; false keeps camera-only lightweight startup'),
+        DeclareLaunchArgument('perception_inference_enabled', default_value='true', description='YOLOPv2 inference enabled by default; GUI may disable it explicitly when camera-only mode is desired'),
         DeclareLaunchArgument('enable_semantic_calibration', default_value='true', description='Enable the auxiliary Torch semantic detector used by obstacle calibration in web mode'),
         DeclareLaunchArgument('cpu_inference_fps', default_value=str(cpu_fps_default)),
         DeclareLaunchArgument('cpu_threads', default_value=str(cpu_threads_default)),
@@ -769,6 +769,7 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('enable_keyboard', default_value='true'),
         DeclareLaunchArgument('start_esc_ackermann', default_value='true'),
         DeclareLaunchArgument('start_vesc_tool_bridge', default_value='true'),
+        DeclareLaunchArgument('start_steering_recovery_guard', default_value='true'),
         DeclareLaunchArgument('start_hmi', default_value='true'),
         DeclareLaunchArgument('hmi_port', default_value='auto'),
         DeclareLaunchArgument('esc_transport_mode', default_value='direct_vesc'),
@@ -782,12 +783,12 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument('gnss_port', default_value='auto'),
         DeclareLaunchArgument('imu_port', default_value='auto'),
         DeclareLaunchArgument('rgb_device', default_value='auto'),
-        DeclareLaunchArgument('rgb_width', default_value='1280'),
-        DeclareLaunchArgument('rgb_height', default_value='720'),
-        DeclareLaunchArgument('camera_fps', default_value='30'),
+        DeclareLaunchArgument('rgb_width', default_value='640'),
+        DeclareLaunchArgument('rgb_height', default_value='480'),
+        DeclareLaunchArgument('camera_fps', default_value='15'),
         DeclareLaunchArgument('gpu_device', default_value='0'),
         DeclareLaunchArgument('strict_camera_mode', default_value='false'),
-        DeclareLaunchArgument('v4l2_pixel_format', default_value='MJPEG'),
+        DeclareLaunchArgument('v4l2_pixel_format', default_value='YUYV'),
         DeclareLaunchArgument('allow_mjpeg_cpu_fallback', default_value='true'),
         DeclareLaunchArgument('use_v4l2_userptr_zero_copy', default_value='false'),
         DeclareLaunchArgument('camera_metric_calibration_validated', default_value=str(camera_metric_default).lower()),
@@ -872,6 +873,7 @@ def generate_launch_description() -> LaunchDescription:
             'start_ackermann': LaunchConfiguration('start_esc_ackermann'),
             # esc.launch.py is the single authority that applies integration_bypass.
             'start_vesc_tool_bridge': LaunchConfiguration('start_vesc_tool_bridge'),
+            'start_steering_recovery_guard': LaunchConfiguration('start_steering_recovery_guard'),
             'transport_mode': LaunchConfiguration('esc_transport_mode'),
             'serial_device': LaunchConfiguration('esc_port'),
             'serial_enabled': LaunchConfiguration('esc_serial_enabled'),
@@ -985,8 +987,11 @@ def generate_launch_description() -> LaunchDescription:
         LaunchConfiguration('perception_mode'), "' == 'gpu' and not ",
         str(perception_gpu_executable_available), ")",
     ])
-    # Perception guard selalu hidup ketika model inference aktif. Sebelum homography
-    # metriks tervalidasi ia hanya boleh melakukan camera-health + image near-field STOP.
+    # Supervisor observability tetap hidup pada web lazy-CPU agar status/STOP guard
+    # tersedia untuk Final Dataset. Command authority tetap HANYA milik perception_enabled.
+    perception_supervisor_enabled = PythonExpression([
+        "(", perception_enabled, ") or (", web_lazy_cpu_enabled, ")",
+    ])
     # Full obstacle/path SLOW/AVOID tetap terkunci oleh kalibrasi metriks.
     perception_safety_enabled = perception_enabled
     perception_metric_safety_enabled = PythonExpression([
@@ -1007,7 +1012,7 @@ def generate_launch_description() -> LaunchDescription:
         'allow_mjpeg_cpu_fallback': ParameterValue(LaunchConfiguration('allow_mjpeg_cpu_fallback'), value_type=bool),
         'use_v4l2_userptr_zero_copy': ParameterValue(LaunchConfiguration('use_v4l2_userptr_zero_copy'), value_type=bool),
         'camera_hotplug_retry': True,
-        'camera_retry_interval_sec': 2.0,
+        'camera_retry_interval_sec': 1.0,
         'camera_retry_log_interval_sec': 10.0,
         'allow_resolution_fallback_for_fps': False,
         'enable_integrated_perception_runtime': True,
@@ -1019,7 +1024,7 @@ def generate_launch_description() -> LaunchDescription:
         'publish_lane_metrics': False, 'publish_obstacle_metrics': False,
         'publish_detections': False, 'publish_raw_rgb': True,
         'publish_only_when_subscribed': True, 'async_rviz_publish': True,
-        'rviz_publish_buffer_count': 2, 'rviz_max_publish_rate_hz': 8.0,
+        'rviz_publish_buffer_count': 2, 'rviz_max_publish_rate_hz': 4.0,
         'show_opencv_cuda_window': False, 'draw_text_labels_cpu': False,
         'annotated_topic': '/camera/yolop/image_annotated',
         'metric_frame_id': 'base_footprint',
@@ -1049,6 +1054,15 @@ def generate_launch_description() -> LaunchDescription:
     perception_cpu = Node(
         package='perception', executable='perception_cpu_node', name='perception',
         output='screen', emulate_tty=True, condition=IfCondition(perception_cpu_enabled),
+        additional_env={
+            'OCL_ICD_VENDORS': '/home/sirobo/agv/.local-intel-opencl-24reg/icd',
+            'LD_LIBRARY_PATH':
+                '/home/sirobo/agv/.venv-openvino/lib/python3.10/site-packages/openvino/libs:'
+                '/home/sirobo/agv/.local-intel-opencl-24reg/root/usr/lib/x86_64-linux-gnu:'
+                '/home/sirobo/agv/.local-intel-opencl-24reg/root/usr/lib/x86_64-linux-gnu/intel-opencl:'
+                '/home/sirobo/agv/.local-intel-opencl-24reg/root/usr/local/lib:'
+                + os.environ.get('LD_LIBRARY_PATH', ''),
+        },
         respawn=PythonExpression(["'", LaunchConfiguration('perception_respawn'), "' == 'true'"]),
         respawn_delay=5.0,
         parameters=[camera_params, {
@@ -1161,7 +1175,7 @@ def generate_launch_description() -> LaunchDescription:
     trajectory_safety = Node(
         package='navigation', executable='trajectory_safety_supervisor',
         name='trajectory_safety_supervisor', output='screen',
-        condition=IfCondition(perception_safety_enabled),
+        condition=IfCondition(perception_supervisor_enabled),
         respawn=True, respawn_delay=2.0,
         parameters=[trajectory_safety_params, {
             'metric_obstacle_safety_enabled': ParameterValue(
@@ -1175,9 +1189,13 @@ def generate_launch_description() -> LaunchDescription:
     # trajectory-safety command dimatikan, NavigationCore kembali memakai smoother Nav2.
     # Supervisor tetap hidup selama perception aktif agar path-relevant cloud untuk
     # local costmap/diagnostic tetap tersedia pada mode commissioning.
+    # Supervisor is always the autonomy command authority whenever it is running.
+    # With metric calibration disabled it remains GUARD_ONLY for normal Nav2, while
+    # Final Dataset 4.5 can use its bounded final-trial controller without bypassing
+    # E-stop, camera health, stale-command, finite-command, or watchdog guards.
     autonomy_source = PythonExpression([
         "'/cmd_vel/autonomy_integrated' if ('", LaunchConfiguration('enable_trajectory_safety'),
-        "' == 'true' and (", perception_safety_enabled,
+        "' == 'true' and (", perception_supervisor_enabled,
         ")) else '/cmd_vel_nav_raw'",
     ])
     navigation_core = Node(
@@ -1253,7 +1271,8 @@ def generate_launch_description() -> LaunchDescription:
         condition=IfCondition(mode_gui),
     )
 
-    # Native C++ browser HMI. Deployment contract is fixed to localhost:5000.
+    # Native C++ browser HMI. Deployment contract keeps port 5000 fixed;
+    # bind_address comes from navigation_core.yaml (0.0.0.0 for operator LAN access).
     web_gui = Node(
         package='navigation', executable='agv_web_gui', name='agv_web_gui', output='screen',
         condition=IfCondition(mode_web),

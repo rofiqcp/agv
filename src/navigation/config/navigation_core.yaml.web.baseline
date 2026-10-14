@@ -8,7 +8,7 @@ navigation_core:
     action_name: navigate_to_pose
     lifecycle_manager_service: /lifecycle_manager_navigation/manage_nodes
     map_topic: /map
-    defer_nav2_startup_until_localization: true
+    defer_nav2_startup_until_localization: false
     map_nav2_startup_settle_sec: 2.5
     collision_monitor_enabled: false
     command_rate_hz: 20.0
@@ -35,7 +35,7 @@ navigation_core:
     runtime_esc_loss_grace_sec: 1.5
     runtime_wheel_slip_stop_sec: 1.5
     require_camera_metric_calibration: false
-    camera_metric_calibration_validated: false
+    camera_metric_calibration_validated: true
     require_steering_calibration_for_autonomy: true
     steering_calibration_validated: false
     require_steering_circle_calibration_for_autonomy: true

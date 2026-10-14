@@ -60,6 +60,29 @@ async function saveExperimentExcel(){
   downloadBlob(`${safe}_${stamp()}.xlsx`,'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',binary);
   toast(`Excel ${sheets.length} sheet didownload`)
 }
+
+function expSimpleSheetXml(title,head,rows){
+  const lastCol=expColName(Math.max(0,head.length-1)),widths=head.map((h,ci)=>Math.min(52,Math.max(10,String(h??'').length+2,...rows.map(r=>String(r?.[ci]??'').length+2))));
+  let xml=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="3" topLeftCell="A4" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols>${widths.map((w,i)=>`<col min="${i+1}" max="${i+1}" width="${w}" customWidth="1"/>`).join('')}</cols><sheetData>`;
+  xml+=`<row r="1" ht="24" customHeight="1">${expCell('A1',title,1)}</row><row r="2"></row><row r="3">${head.map((h,i)=>expCell(`${expColName(i)}3`,h,2)).join('')}</row>`;
+  rows.forEach((r,ri)=>{const rn=ri+4;xml+=`<row r="${rn}">${head.map((_,ci)=>expCell(`${expColName(ci)}${rn}`,r?.[ci]??'',3)).join('')}</row>`});
+  xml+=`</sheetData><autoFilter ref="A3:${lastCol}${Math.max(3,rows.length+3)}"/><mergeCells count="1"><mergeCell ref="A1:${lastCol}1"/></mergeCells><pageMargins left="0.25" right="0.25" top="0.5" bottom="0.5" header="0.2" footer="0.2"/></worksheet>`;return xml;
+}
+function downloadSimpleXlsx(filename,sheetName,title,head,rows){
+  if(!Array.isArray(head)||!head.length||!Array.isArray(rows)||!rows.length){toast('Belum ada data untuk dibuat Excel',true);return false}
+  const safeSheet=String(sheetName||'Rekap').replace(/[\\\/?*\[\]:]/g,' ').slice(0,31)||'Rekap';
+  const files=[
+    {name:'[Content_Types].xml',data:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>'},
+    {name:'_rels/.rels',data:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'},
+    {name:'xl/workbook.xml',data:`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${expXml(safeSheet)}" sheetId="1" r:id="rId1"/></sheets></workbook>`},
+    {name:'xl/_rels/workbook.xml.rels',data:'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'},
+    {name:'xl/styles.xml',data:expStylesXml()},
+    {name:'xl/worksheets/sheet1.xml',data:expSimpleSheetXml(title,head,rows)}
+  ];
+  const binary=expZipStore(files);downloadBlob(filename.endsWith('.xlsx')?filename:filename+'.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',binary);return true;
+}
+window.downloadSimpleXlsx=downloadSimpleXlsx;
+
 function expGuiCsv(tableIndex){const {head,rows}=expTableMatrix(tableIndex);if(!head.length||!rows.length)return null;const esc=v=>'"'+String(v??'').replaceAll('"','""')+'"';return [head.map(esc).join(','),...rows.map(r=>r.map(esc).join(','))].join('\n')+'\n'}
 function saveAllGuiCsv(){
   if(!selectedExperiment)return;

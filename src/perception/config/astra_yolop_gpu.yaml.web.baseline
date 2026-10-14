@@ -102,7 +102,7 @@ perception:
     metric_forward_offset_m: 0.0
     metric_lateral_offset_m: 0.0
     metric_minimum_forward_m: 0.2
-    metric_maximum_forward_m: 4.0
+    metric_maximum_forward_m: 5.5
     metric_maximum_abs_left_m: 2.5
     lane_vehicle_width_m: 0.55
     lane_minimum_road_width_m: 3.5
@@ -169,7 +169,7 @@ perception:
     state_confirm_frames: 3
     release_confirm_frames: 5
     lost_confirm_frames: 2
-    object_points_topic: /perception/object_points
+    object_points_topic: /perception/yolop_object_points
     object_clearing_points_topic: /perception/object_clearing_points
     obstacle_markers_topic: /perception/obstacle_markers
     perception_obstacle_metrics_topic: /perception/obstacle_metrics
@@ -178,8 +178,9 @@ perception:
     raw_detection_log_period_sec: 0.5
     minimum_obstacle_confidence: 0.3
     # 1..5 m obstacle calibration wizard. [human_scale, human_bias_m, motorcycle_scale, motorcycle_bias_m]
-    # Identity until real samples are captured and saved from ROSWeb.
-    obstacle_distance_calibration_coefficients: [1.0, 0.0, 1.0, 0.0]
+    # Human fit terbaru: dataset 2026-09-19 11:38, metric_fit 3..5 m (12 sampel, 4 orientasi).
+    # d_cal = 2.44343820352538 * d_raw - 1.5177445571240646. Motor belum cukup data fit -> identity.
+    obstacle_distance_calibration_coefficients: [2.44343820352538, -1.5177445571240646, 1.0, 0.0]
     accept_all_detected_classes_as_obstacles: true
     safety_obstacle_class_ids:
     - 0
@@ -193,7 +194,7 @@ perception:
     points_per_box: 5
     obstacle_cloud_max_publish_rate_hz: 12.0
     clearing_fov_deg: 100.0
-    clearing_range_m: 4.5
+    clearing_range_m: 6.0
     clearing_ray_count: 41
     track_match_distance_m: 0.9
     track_ema_alpha: 0.45
@@ -218,7 +219,7 @@ perception:
     lane_blend_gain: 1.0
     minimum_speed_for_yaw_limit_mps: 0.1
     obstacle_forward_min_m: 0.2
-    obstacle_forward_max_m: 3.0
+    obstacle_forward_max_m: 5.5
     obstacle_lateral_margin_m: 0.3
     minimum_obstacle_width_m: 0.2
     blocked_confirm_frames: 3
@@ -245,7 +246,7 @@ perception:
     near_field_min_drivable_fraction: 0.12
     near_field_confirm_frames: 2
     near_field_release_frames: 5
-    camera_metric_calibration_validated: false
+    camera_metric_calibration_validated: true
 
 semantic_obstacle:
   ros__parameters:

@@ -23,16 +23,17 @@ assert 'cv::line(image, top_left, top_right' not in src
 assert 'cv::line(image, bottom_left, bottom_right' not in src
 assert 'TRAPEZOID' not in src
 assert 'result.raw_lane_mask_detected =' in src
-assert 'result.lane_mask_detected = result.left_valid || result.right_valid' in src
+assert 'result.lane_mask_detected = left_lane_valid || right_lane_valid' in src
 assert 'DRIVABLE_INTERNAL_LANE_IGNORED' in src
 assert 'drawOuterLaneBoundaryOverlay' in src
 assert 'red.copyTo(annotated, lane)' not in src
-assert 'edge_gate_px = std::max(18.0, 0.18 * road_width_px)' in src
+assert 'const double edge_gate_px = std::clamp(' in src
 assert 'if (!result.drivable_detected)' in src
 assert 'result.left_status = "UNKNOWN"' in src
 assert 'result.left_valid ? laneCorridorStatus(true, result.left_gap_px) : "GREEN"' in src
-assert '5 kondisi input' in bab4 and '100 trial' in bab4
-assert 'green_outer' in bab4 and 'green_drivable' in bab4
+assert '6 kondisi × 10 pengulangan' in bab4 and '60 trial' in bab4
+for token in ['left_yellow','left_red','right_yellow','right_red','gray']:
+    assert token in bab4, token
 assert 'Internal Lane Ignored' in bab4
 assert cfg['lane_corridor_far_lookahead_m'] == 3.8
 assert abs(cfg['lane_corridor_safety_margin_m'] - 0.30) < 1e-9

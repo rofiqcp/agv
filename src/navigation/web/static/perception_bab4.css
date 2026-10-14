@@ -132,3 +132,87 @@
 .per-bab4-preview-stats>div{min-width:0;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,.022)}
 .per-bab4-preview-stats span{display:block;font:800 7px ui-monospace;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px}.per-bab4-preview-stats b{display:block;font:850 9px/1.35 ui-monospace;color:var(--text);overflow-wrap:anywhere}
 @media(max-width:1000px){.per-bab4-preview-grid{grid-template-columns:1fr}.per-bab4-preview-media{min-height:280px}}@media(max-width:620px){.per-bab4-preview-stats{grid-template-columns:1fr}.per-bab4-preview-media{min-height:220px}.per-bab4-folder-actions{display:grid;grid-template-columns:1fr}.per-bab4-folder-actions>*{width:100%}}
+
+/* FINAL 4.3 Lane Safety — preview + 6-condition success-rate workflow */
+.per-lane-geometry-strip{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin:8px 0 10px;padding:8px 10px;border:1px solid rgba(49,168,255,.22);border-radius:9px;background:rgba(49,168,255,.035)}
+.per-lane-geometry-strip b{font:900 8px ui-monospace;color:var(--blue);margin-right:4px}.per-lane-geometry-strip span{font:800 8px ui-monospace;color:#cfe2e2;border:1px solid var(--border);border-radius:999px;padding:4px 7px;background:rgba(255,255,255,.025)}
+.per-bab4-final-mode[data-bab4="F4.3"] .per-bab4-operator-preview{max-width:100%;overflow:hidden}.per-bab4-final-mode[data-bab4="F4.3"] .per-bab4-preview-grid{grid-template-columns:minmax(0,1.35fr) minmax(320px,.85fr);width:100%;max-width:100%;min-width:0;overflow:hidden;align-items:start}.per-bab4-final-mode[data-bab4="F4.3"] .per-bab4-preview-media{min-width:0!important;width:100%!important;max-width:100%!important;min-height:0!important;aspect-ratio:16/9}.per-bab4-final-mode[data-bab4="F4.3"] .per-bab4-preview-media img,.per-bab4-final-mode[data-bab4="F4.3"] .per-bab4-preview-media canvas{max-width:100%!important}.per-lane-preview-side{display:grid;gap:8px;align-content:start;min-width:0;max-width:100%}.per-lane-side-cards{display:grid;grid-template-columns:1fr 1fr;gap:8px}.per-lane-side-card{border:1px solid var(--border);border-radius:10px;padding:10px;background:#071315;min-width:0}
+.per-lane-side-card span{display:block;font:900 8px ui-monospace;color:var(--muted);letter-spacing:.08em}.per-lane-side-card b{display:block;margin:5px 0 4px;font:900 12px/1.3 ui-monospace;overflow-wrap:anywhere}.per-lane-side-card small,.per-lane-side-card em{display:block;font:800 8px/1.4 ui-monospace;font-style:normal;color:#9dc0bd}
+.per-lane-side-card.green{border-color:rgba(72,224,164,.52);box-shadow:inset 3px 0 #48e0a4}.per-lane-side-card.green b{color:#48e0a4}.per-lane-side-card.yellow{border-color:rgba(255,200,107,.58);box-shadow:inset 3px 0 #ffc86b}.per-lane-side-card.yellow b{color:#ffc86b}
+.per-lane-side-card.red{border-color:rgba(255,102,119,.62);box-shadow:inset 3px 0 #ff6677}.per-lane-side-card.red b{color:#ff6677}.per-lane-side-card.gray{border-color:rgba(143,168,169,.5);box-shadow:inset 3px 0 #8fa8a9}.per-lane-side-card.gray b{color:#b7c8c9}
+.per-lane-batch-controls{display:grid!important;grid-template-columns:1fr 1fr!important;gap:7px!important;margin:0!important;padding:9px!important;border:1px solid rgba(72,224,164,.22);border-radius:10px;background:rgba(72,224,164,.025)}.per-lane-batch-controls>label{grid-column:1/-1}
+.per-lane-control-state{border:1px solid var(--border);border-radius:8px;padding:8px;background:rgba(255,255,255,.02)}.per-lane-control-state span{display:block;font:800 7px ui-monospace;color:var(--muted);text-transform:uppercase}.per-lane-control-state b{display:block;margin-top:4px;font:850 9px/1.35 ui-monospace;color:var(--text)}
+.per-lane-test-hint{grid-column:1/-1;padding:8px 9px;border:1px solid rgba(49,168,255,.22);border-radius:8px;background:rgba(49,168,255,.035);font:750 8px/1.45 ui-monospace;color:var(--muted)}.per-lane-test-hint b{color:#d8eeee}.per-lane-batch-actions{grid-column:1/-1!important;display:grid!important;grid-template-columns:1fr 1fr!important;gap:7px!important}.per-lane-batch-actions button{min-height:40px}.per-lane-batch-actions #perLaneRun10{grid-column:1/-1;min-height:48px;font-size:10px}.per-lane-extra-graphs canvas{display:block;width:100%;height:230px;border:1px solid var(--border);border-radius:9px;background:#071113}
+.per-bab4-final-mode[data-bab4="F4.3"] #perBab4PreviewStats{display:none!important}.per-bab4-final-mode[data-bab4="F4.3"] #perBab4ReportExtensions section:has(#perBab4HysState){display:none!important}
+@media(max-width:1000px){.per-lane-side-cards{grid-template-columns:1fr 1fr}.per-lane-batch-controls{grid-template-columns:1fr 1fr!important}}@media(max-width:620px){.per-lane-side-cards,.per-lane-batch-controls,.per-lane-batch-actions{grid-template-columns:1fr!important}.per-lane-extra-graphs canvas{height:210px}}
+
+
+/* FINAL 4.2 Object Detection - 10x capture / 30 s */
+.per-bab4-final-mode[data-bab4="F4.2"] .per-bab4-preview-grid{grid-template-columns:minmax(560px,1.5fr) minmax(390px,.9fr)}
+.per-f42-preview-side{display:grid;gap:8px;align-content:start;min-width:0}
+.per-f42-batch-controls{display:grid;grid-template-columns:1fr 1fr;gap:7px;padding:9px;border:1px solid rgba(72,224,164,.24);border-radius:10px;background:rgba(72,224,164,.025)}
+.per-f42-batch-controls>label{display:grid;gap:4px;color:var(--muted);font-size:8px}
+.per-f42-batch-controls select{height:38px;width:100%;min-width:0;border:1px solid var(--border2);border-radius:8px;background:var(--input);color:var(--text);padding:6px 8px}
+.per-f42-control-state{min-width:0;border:1px solid var(--border);border-radius:8px;padding:8px 9px;background:rgba(255,255,255,.02)}
+.per-f42-control-state span{display:block;font:800 7px ui-monospace;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.per-f42-control-state b{display:block;margin-top:4px;font:850 9px/1.35 ui-monospace;color:var(--text);overflow-wrap:anywhere}
+.per-f42-batch-actions{grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.per-f42-batch-actions #perF42Run10{grid-column:1/-1;min-height:48px;font-size:10px}
+.per-f42-batch-actions button{min-height:40px}
+.per-f42-test-hint{grid-column:1/-1;padding:8px 9px;border:1px solid rgba(49,168,255,.22);border-radius:8px;background:rgba(49,168,255,.035);font:750 8px/1.45 ui-monospace;color:var(--muted)}
+.per-f42-test-hint b{color:#d8eeee}
+.per-f42-extra-graphs canvas{display:block;width:100%;height:230px;border:1px solid var(--border);border-radius:9px;background:#071113}
+.per-bab4-final-mode[data-bab4="F4.2"] #perBab4ReportExtensions section:has(#perBab4NegativeState){display:none!important}
+.per-bab4-final-mode[data-bab4-view="results"][data-bab4="F4.2"] #perF42BatchControls{display:none!important}
+@media(max-width:1000px){.per-bab4-final-mode[data-bab4="F4.2"] .per-bab4-preview-grid{grid-template-columns:1fr}.per-f42-batch-controls{grid-template-columns:1fr 1fr}}
+@media(max-width:620px){.per-f42-batch-controls,.per-f42-batch-actions{grid-template-columns:1fr}.per-f42-batch-actions #perF42Run10{grid-column:auto}.per-f42-extra-graphs canvas{height:210px}}
+
+
+/* FINAL 4.2 layout collision fix v2 */
+.per-bab4-final-mode[data-bab4="F4.2"] .per-bab4-preview-grid{
+  grid-template-columns:minmax(0,2fr) minmax(360px,.82fr)!important;
+  width:100%;
+  max-width:100%;
+  overflow:hidden;
+}
+.per-bab4-final-mode[data-bab4="F4.2"] .per-bab4-preview-media{
+  min-width:0!important;
+  width:100%!important;
+  max-width:100%!important;
+  overflow:hidden!important;
+}
+.per-bab4-final-mode[data-bab4="F4.2"] .per-f42-preview-side{
+  min-width:0!important;
+  width:100%!important;
+  max-width:100%!important;
+  overflow:hidden;
+}
+.per-bab4-final-mode[data-bab4="F4.2"] #perBab4PreviewImage,
+.per-bab4-final-mode[data-bab4="F4.2"] #perBab4PreviewOverlay{
+  max-width:100%!important;
+}
+.per-bab4-final-mode[data-bab4="F4.2"] .per-bab4-preview-stats{
+  grid-template-columns:1fr 1fr;
+  min-width:0;
+}
+@media(max-width:1180px){
+  .per-bab4-final-mode[data-bab4="F4.2"] .per-bab4-preview-grid{grid-template-columns:1fr!important}
+}
+
+.per-bab4-final-mode[data-bab4="F4.2"] #perBab4OperatorPreview{max-width:100%;overflow:hidden}
+.per-bab4-final-mode[data-bab4="F4.2"] .per-bab4-preview-grid>*{min-width:0;max-width:100%}
+
+/* F4.2 master-session workflow */
+.per-bab4-final-mode[data-bab4="F4.2"] #perF42MasterStart{grid-column:1/-1;min-height:48px;font-size:10px}
+.per-bab4-final-mode[data-bab4="F4.2"] #perF42FullDownload{min-height:46px;font-size:10px}
+.per-bab4-final-mode[data-bab4="F4.2"] #perBab4FolderActions{display:grid;gap:8px}
+.per-bab4-final-mode[data-bab4="F4.2"] #perBab4FolderActions .per-f42-test-hint{width:100%}
+
+.per-bab4-final-mode[data-bab4="F4.2"] .per-f42-reset-actions{grid-template-columns:1fr 1fr}
+.per-bab4-final-mode[data-bab4="F4.2"] .danger-btn{
+  min-height:40px;border:1px solid rgba(255,86,96,.55);border-radius:8px;
+  background:rgba(255,86,96,.12);color:#ffd7db;font-weight:850;cursor:pointer;
+}
+.per-bab4-final-mode[data-bab4="F4.2"] .danger-btn:hover:not(:disabled){background:rgba(255,86,96,.20)}
+.per-bab4-final-mode[data-bab4="F4.2"] .danger-btn:disabled{opacity:.45;cursor:not-allowed}
+@media(max-width:620px){.per-bab4-final-mode[data-bab4="F4.2"] .per-f42-reset-actions{grid-template-columns:1fr}}

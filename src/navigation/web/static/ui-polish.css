@@ -169,6 +169,22 @@
 @media(max-width:1180px){.navigation-tuning-policy{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:680px){.navigation-tuning-policy{grid-template-columns:1fr}}
 
+/* One-step tuning apply + runtime match status. */
+.tuning-quick-apply{display:grid;grid-template-columns:minmax(220px,1fr) auto auto auto auto;align-items:stretch;gap:8px;margin:10px 0 8px;padding:8px;border:1px solid rgba(92,146,144,.22);border-radius:10px;background:rgba(8,20,22,.76)}
+.tuning-quick-apply>button{min-height:42px;white-space:nowrap}
+.tuning-match-card{display:flex;flex-direction:column;justify-content:center;min-width:0;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:#091416}
+.tuning-match-card span{font-size:8px;font-weight:800;letter-spacing:.08em;color:var(--muted)}
+.tuning-match-card b{margin:2px 0;font-size:13px;letter-spacing:.03em;color:var(--text)}
+.tuning-match-card small{font-size:8.5px;line-height:1.35;color:var(--dim)}
+.tuning-match-card[data-state="match"]{border-color:rgba(72,224,164,.48);background:rgba(72,224,164,.08)}
+.tuning-match-card[data-state="match"] b{color:#65ddb0}
+.tuning-match-card[data-state="draft"],.tuning-match-card[data-state="applying"],.tuning-match-card[data-state="verify"]{border-color:rgba(255,198,70,.48);background:rgba(255,198,70,.08)}
+.tuning-match-card[data-state="draft"] b,.tuning-match-card[data-state="applying"] b,.tuning-match-card[data-state="verify"] b{color:#ffd16d}
+.tuning-match-card[data-state="error"],.tuning-match-card[data-state="next-start"]{border-color:rgba(255,123,138,.48);background:rgba(255,123,138,.08)}
+.tuning-match-card[data-state="error"] b,.tuning-match-card[data-state="next-start"] b{color:#ff8794}
+@media(max-width:920px){.tuning-quick-apply{grid-template-columns:1fr 1fr}.tuning-match-card{grid-column:1/-1}}
+@media(max-width:560px){.tuning-quick-apply{grid-template-columns:1fr}.tuning-match-card{grid-column:auto}}
+
 /* N0 timing contract: distinguish configured targets from measured runtime output. */
 .n0-timing-guide{margin-top:0;overflow:hidden}
 .n0-timing-head{align-items:center}
@@ -196,3 +212,36 @@
 @media(max-width:1360px){.n0-rate-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.n0-rate-card-esc{grid-column:span 1}}
 @media(max-width:900px){.n0-rate-grid{grid-template-columns:1fr 1fr}.n0-interpretation{grid-template-columns:1fr}}
 @media(max-width:620px){.n0-rate-grid{grid-template-columns:1fr}.n0-timing-head{align-items:flex-start;flex-direction:column}.n0-rate-card p{min-height:0}}
+
+/* BAB4 TUNING CANDIDATE PANEL */
+.bab4-candidate-box{margin-top:10px;padding:10px;border:1px solid var(--border);border-radius:10px;background:var(--panel-soft,rgba(255,255,255,.025));display:grid;gap:8px}
+.bab4-candidate-head{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap}
+.bab4-candidate-head b{font-size:11px;letter-spacing:.08em}
+.bab4-candidate-head span,.bab4-candidate-foot{font-size:11px;opacity:.75}
+.bab4-candidate-row{display:grid;grid-template-columns:minmax(92px,auto) 1fr;gap:10px;align-items:start}
+.bab4-candidate-row button{min-height:34px}
+.bab4-candidate-row div{display:grid;gap:3px}
+.bab4-candidate-row div>b{font-size:11px}
+.bab4-candidate-row small{line-height:1.35;opacity:.82}
+.bab4-candidate-row button:disabled{opacity:.45;cursor:not-allowed}
+
+/* BAB IV NAVIGATION DATA PACKAGE */
+.navigation-data-package-panel{border-color:rgba(72,224,164,.26);background:linear-gradient(145deg,rgba(7,26,24,.98),rgba(7,17,19,.98))}
+.navigation-package-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin:12px 0}
+.navigation-package-summary>div,.navigation-package-metrics>div{padding:10px;border:1px solid rgba(91,181,173,.16);border-radius:10px;background:rgba(255,255,255,.025);display:grid;gap:3px}
+.navigation-package-summary span,.navigation-package-metrics span,.navigation-package-path span{font-size:10px;letter-spacing:.07em;opacity:.68}
+.navigation-package-summary b{font-size:18px}.navigation-package-note{padding:10px 12px;border-radius:10px;background:rgba(76,146,255,.07);font-size:12px;line-height:1.45;margin-bottom:12px}
+.navigation-package-list{display:grid;gap:12px}.navigation-package-card{padding:14px;border:1px solid rgba(91,181,173,.2);border-radius:13px;background:rgba(0,0,0,.14);display:grid;gap:12px}
+.navigation-package-card.highlight{border-color:rgba(72,224,164,.8);box-shadow:0 0 0 2px rgba(72,224,164,.10),0 12px 28px rgba(0,0,0,.18)}
+.navigation-package-card>header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.navigation-package-card>header>div:first-child{display:grid;gap:3px}
+.navigation-package-index{font-size:10px;letter-spacing:.09em;opacity:.65}.navigation-package-card header b{font-size:15px}.navigation-package-card header small{opacity:.68}
+.navigation-package-badges{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.navigation-package-metrics{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:7px}
+.navigation-package-metrics b{font-size:12px;overflow-wrap:anywhere}.navigation-package-path{display:grid;gap:5px}.navigation-package-path code{padding:8px 10px;border-radius:8px;background:rgba(0,0,0,.18);overflow-wrap:anywhere}
+.navigation-package-actions{justify-content:flex-end}.navigation-package-actions a.disabled{pointer-events:none;opacity:.42}.navigation-package-actions a{text-decoration:none}
+.navigation-package-mode #commissioningRoadmap,.navigation-package-mode #trialGuidePanel,.navigation-package-mode #qualificationPanel,.navigation-package-mode #testPreflightPanel,
+.navigation-package-mode .run-console,.navigation-package-mode .graph-workspace,.navigation-package-mode .lab-two-col,.navigation-package-mode .table-workspace,
+.navigation-package-mode #trialRecapPanel,.navigation-package-mode #reportDocumentFlow,.navigation-package-mode #n0TimingGuide,.navigation-package-mode #report41TimedPanel,
+.navigation-package-mode .tuning-unified-state,.navigation-package-mode .tuning-mode-guide{display:none!important}
+.navigation-package-mode #navigationDataPackagePanel{display:block!important}
+@media(max-width:900px){.navigation-package-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.navigation-package-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:560px){.navigation-package-card>header{display:grid}.navigation-package-badges{justify-content:flex-start}.navigation-package-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}

@@ -1847,6 +1847,75 @@ private:
     return std::isfinite(erpm) && std::isfinite(steering_deg);
   }
 
+  void applyDriveDirectionGuard(double &requested_erpm, std::string &source)
+  {
+    const auto now_steady = std::chrono::steady_clock::now();
+    const double original_requested_erpm = requested_erpm;
+    double actual_erpm = 0.0;
+    bool feedback_fresh = false;
+    {
+      std::lock_guard<std::mutex> lock(feedback_mutex_);
+      actual_erpm = measured_erpm_;
+      if (right_values_seen_) {
+        const double age = std::chrono::duration<double>(now_steady - right_values_time_).count();
+        feedback_fresh = age >= 0.0 && age <= serial_ack_timeout_sec_;
+      }
+    }
+
+    const auto sign = [](double v) { return v > 0.0 ? 1 : (v < 0.0 ? -1 : 0); };
+    const int command_sign = sign(requested_erpm);
+    if (command_sign != 0 && drive_direction_last_command_sign_ != 0 &&
+        command_sign != drive_direction_last_command_sign_) {
+      drive_direction_guard_grace_until_ = now_steady +
+        std::chrono::milliseconds(drive_direction_guard_reversal_grace_ms_);
+      drive_direction_guard_mismatch_samples_ = 0;
+    }
+    if (command_sign != 0) drive_direction_last_command_sign_ = command_sign;
+
+    if (drive_direction_guard_latched_) {
+      const bool neutral = std::abs(requested_erpm) < drive_zero_command_deadband_erpm_;
+      const bool stopped = feedback_fresh &&
+        std::abs(actual_erpm) < drive_direction_guard_clear_erpm_;
+      if (neutral && stopped) {
+        ++drive_direction_guard_clear_samples_;
+        if (drive_direction_guard_clear_samples_ >= drive_direction_guard_clear_required_samples_) {
+          drive_direction_guard_latched_ = false;
+          drive_direction_guard_mismatch_samples_ = 0;
+          drive_direction_guard_clear_samples_ = 0;
+          drive_direction_last_command_sign_ = 0;
+          RCLCPP_WARN(get_logger(), "[ESC-SAFETY] drive direction latch cleared at neutral/stopped");
+        }
+      } else {
+        drive_direction_guard_clear_samples_ = 0;
+      }
+      if (drive_direction_guard_latched_) {
+        requested_erpm = 0.0;
+        source = "DRIVE_DIRECTION_FAULT_STOP";
+        return;
+      }
+    }
+
+    if (!feedback_fresh || std::abs(requested_erpm) < drive_direction_guard_min_erpm_ ||
+        std::abs(actual_erpm) < drive_direction_guard_min_erpm_ ||
+        now_steady < drive_direction_guard_grace_until_ ||
+        sign(requested_erpm) == sign(actual_erpm)) {
+      drive_direction_guard_mismatch_samples_ = 0;
+      return;
+    }
+
+    ++drive_direction_guard_mismatch_samples_;
+    if (drive_direction_guard_mismatch_samples_ >= drive_direction_guard_required_samples_) {
+      drive_direction_guard_latched_ = true;
+      drive_direction_guard_clear_samples_ = 0;
+      requested_erpm = 0.0;
+      source = "DRIVE_DIRECTION_FAULT_STOP";
+      RCLCPP_ERROR(
+        get_logger(),
+        "[ESC-SAFETY] opposite drive direction latched: target=%.1f eRPM actual=%.1f eRPM; forcing drive zero",
+        original_requested_erpm, actual_erpm);
+    }
+  }
+
   void controlTick()
   {
     const auto t = now();
@@ -1934,6 +2003,14 @@ private:
       protocol_cmd_deg = physicalToVescPositionDeg(steering_deg);
     }
 
+
+    // Independent host-side protection for an ESC speed-feedback sign fault.
+    // Firmware owns the primary guard, but this layer also protects older images
+    // and bad persisted direction settings: a sustained opposite-sign response
+    // is latched to zero until the operator releases the command and the wheel
+    // is nearly stopped. Intentional direct reversals receive a bounded grace
+    // interval to brake through zero without false-tripping.
+    applyDriveDirectionGuard(right_erpm, effective_source);
 
     geometry_msgs::msg::Twist actuator = selected.twist;
     // Publish the actuator-boundary command, not the pre-lock request.
@@ -3138,6 +3215,16 @@ private:
   bool drive_erpm_lock_enabled_{false};
   double drive_erpm_lock_abs_{8000.0};
   double drive_zero_command_deadband_erpm_{75.0};
+  double drive_direction_guard_min_erpm_{300.0};
+  double drive_direction_guard_clear_erpm_{150.0};
+  int drive_direction_guard_required_samples_{4};
+  int drive_direction_guard_clear_required_samples_{25};
+  int drive_direction_guard_reversal_grace_ms_{600};
+  bool drive_direction_guard_latched_{false};
+  int drive_direction_guard_mismatch_samples_{0};
+  int drive_direction_guard_clear_samples_{0};
+  int drive_direction_last_command_sign_{0};
+  std::chrono::steady_clock::time_point drive_direction_guard_grace_until_{};
   double zero_hold_feedback_deadband_erpm_{1100.0};
   int zero_hold_feedback_release_samples_{3};
   bool zero_hold_feedback_latched_{false};

@@ -1,44 +1,68 @@
 perception:
   ros__parameters:
     perception_mode: 'off'
-    inference_enabled: false
+    inference_enabled: true
     engine_path: models/yolopv2.engine
     pt_model_path: auto
+    inference_backend: 'openvino_gpu_fp16'
+    openvino_model_path: models/yolopv2_openvino.xml
     gpu_device: 0
-    cpu_inference_fps: 2.0
-    cpu_threads: 3
+    cpu_inference_fps: 10.0
+    cpu_threads: 4
     opencv_threads: 1
     torch_optimize_for_inference: true
     cpu_emergency_stop_distance_m: 0.65
     cpu_emergency_half_width_m: 0.55
     rgb_device: auto
-    rgb_width: 1280
-    rgb_height: 720
+    rgb_width: 640
+    rgb_height: 480
     fps: 30
+    capture_normalize_to_output: true
+    capture_output_width: 1280
+    capture_output_height: 720
     allow_resolution_fallback_for_fps: false
     strict_camera_mode: false
     camera_hotplug_retry: true
-    camera_retry_interval_sec: 2.0
-    camera_read_fail_threshold: 5
-    camera_online_good_frames: 3
+    camera_retry_interval_sec: 0.5
+    camera_read_fail_threshold: 3
+    camera_online_good_frames: 2
+    camera_reopen_stale_sec: 0.5
     camera_block_watchdog_sec: 2.5
     camera_retry_log_interval_sec: 30.0
-    v4l2_pixel_format: MJPEG
+    direct_v4l2_capture_enabled: true
+    opencv_capture_fallback_enabled: false
+    direct_v4l2_restart_timeout_sec: 8.0
+    direct_v4l2_timeout_ms: 350
+    v4l2_pixel_format: YUYV
     allow_mjpeg_cpu_fallback: true
     use_v4l2_userptr_zero_copy: false
-    v4l2_buffer_count: 3
+    v4l2_buffer_count: 6
     flip_horizontal: true
-    confidence_threshold: 0.1
+    confidence_threshold: 0.03
     iou_threshold: 0.45
     max_candidates: 16384
     max_detections: 300
     warmup_iterations: 5
     lane_threshold: 0.5
+    # Hanya lane evidence yang dekat tepi komponen drivable ego yang dipakai
+    # sebagai lane boundary. Marka internal di tengah jalan ditolak.
+    drivable_component_filter_enabled: true
+    lane_boundary_filter_enabled: true
+    lane_boundary_edge_fraction: 0.10
+    lane_boundary_min_edge_px: 12
+    lane_boundary_max_edge_px: 80
+    lane_boundary_outer_margin_px: 20
+    lane_boundary_temporal_hold_frames: 1
+    lane_boundary_min_pixels: 40
     overlay_alpha: 0.25
     box_thickness: 2
     draw_text_labels_cpu: false
     publish_annotated: true
     publish_raw_rgb: true
+    # Python SSDLite only needs semantic geometry; keep C++ perception at
+    # calibrated 1280x720 but publish a lighter 16:9 image to Python.
+    raw_publish_width: 640
+    raw_publish_height: 360
     publish_masks: false
     publish_drivable_mask: false
     publish_lane_mask: true
@@ -53,9 +77,10 @@ perception:
     rviz_max_publish_rate_hz: 10.0
     web_preview_enabled: true
     web_preview_fps: 10.0
-    web_preview_width: 640
-    web_preview_height: 360
-    web_preview_jpeg_quality: 70
+    web_overlay_max_age_sec: 0.5
+    web_preview_width: 400
+    web_preview_height: 225
+    web_preview_jpeg_quality: 55
     web_preview_topic: /camera/astra/image_preview/compressed
     show_opencv_cuda_window: false
     opencv_use_cuda_opengl: true
@@ -105,7 +130,7 @@ perception:
     metric_forward_offset_m: 0.0
     metric_lateral_offset_m: 0.0
     metric_minimum_forward_m: 0.2
-    metric_maximum_forward_m: 4.0
+    metric_maximum_forward_m: 5.5
     metric_maximum_abs_left_m: 2.5
     lane_vehicle_width_m: 0.55
     lane_minimum_road_width_m: 3.5
@@ -143,20 +168,33 @@ perception:
     # camera pitch URDF = 0 deg. fx/fy/cx/cy di bawah merepresentasikan FOV kamera.
     lane_corridor_overlay_enabled: true
     lane_corridor_control_enabled: true
+    # Fail-closed fallback untuk lane indoor/tape ketika head segmentation YOLOPv2
+    # menghasilkan mask lane+drivable kosong. Hanya aktif jika dua boundary lolos.
+    lane_classical_fallback_enabled: true
+    lane_classical_white_min_gray: 145
+    lane_classical_white_max_saturation: 110
+    lane_classical_yellow_h_min: 12
+    lane_classical_yellow_h_max: 42
+    lane_classical_yellow_s_min: 70
+    lane_classical_yellow_v_min: 100
+    lane_classical_roi_top_ratio: 0.50
+    lane_classical_search_half_width_ratio: 0.20
+    lane_classical_min_samples_per_side: 8
+    lane_classical_line_thickness_px: 7
     # Drag/drop ROS Web menyimpan empat endpoint safety line secara normalized.
     lane_corridor_manual_lines_enabled: true
     # Legacy/common overlap used as sampling window. Endpoint Y below are authoritative
     # for the four independently draggable Lane Safety handles.
-    lane_corridor_top_y_ratio: 0.7566862890516363
-    lane_corridor_bottom_y_ratio: 0.995
-    lane_corridor_left_top_x_ratio: 0.4119936758366552
-    lane_corridor_left_top_y_ratio: 0.7566862890516363
-    lane_corridor_left_bottom_x_ratio: 0.06094937772318532
-    lane_corridor_left_bottom_y_ratio: 0.995
-    lane_corridor_right_top_x_ratio: 0.6078348793686845
-    lane_corridor_right_top_y_ratio: 0.7566862890516363
-    lane_corridor_right_bottom_x_ratio: 0.9955737374849355
-    lane_corridor_right_bottom_y_ratio: 0.995
+    lane_corridor_top_y_ratio: 0.6413796699731158
+    lane_corridor_bottom_y_ratio: 0.9933021229257439
+    lane_corridor_left_top_x_ratio: 0.4113614043524613
+    lane_corridor_left_top_y_ratio: 0.6413796699731158
+    lane_corridor_left_bottom_x_ratio: 0.2593164080606285
+    lane_corridor_left_bottom_y_ratio: 0.9933021229257439
+    lane_corridor_right_top_x_ratio: 0.5879183276165755
+    lane_corridor_right_top_y_ratio: 0.6413796699731158
+    lane_corridor_right_bottom_x_ratio: 0.7452137845323075
+    lane_corridor_right_bottom_y_ratio: 0.9933021229257439
     lane_corridor_camera_height_m: 0.736
     lane_corridor_camera_pitch_deg: 0.0
     lane_corridor_safety_margin_m: 0.30
@@ -185,7 +223,7 @@ perception:
     state_confirm_frames: 3
     release_confirm_frames: 5
     lost_confirm_frames: 2
-    object_points_topic: /perception/object_points
+    object_points_topic: /perception/yolop_object_points
     # Bottom-center bbox harus berada di trapezoid ini sebelum menjadi obstacle Nav2.
     # Urutan titik: top-left, top-right, bottom-right, bottom-left (x,y normalized).
     nav2_obstacle_roi_enabled: true
@@ -198,9 +236,11 @@ perception:
     raw_detection_markers_topic: /perception/raw_detection_markers
     raw_detection_log_period_sec: 0.5
     minimum_obstacle_confidence: 0.3
-    # 1..5 m obstacle calibration wizard. [human_scale, human_bias_m, motorcycle_scale, motorcycle_bias_m]
-    # Identity until real samples are captured and saved from ROSWeb.
-    obstacle_distance_calibration_coefficients: [1.0, 0.0, 1.0, 0.0]
+    # Legacy homography-affine calibration kept for audit/backward compatibility.
+    # HUMAN runtime no longer uses this 3..5 m affine for nav2_forward_m; semantic_obstacle
+    # uses the 1..5 m bbox-height model below. Motorcycle remains identity until a
+    # dedicated motorcycle distance dataset is available.
+    obstacle_distance_calibration_coefficients: [2.44343820352538, -1.5177445571240646, 1.0, 0.0]
     accept_all_detected_classes_as_obstacles: true
     safety_obstacle_class_ids:
     - 0
@@ -214,8 +254,8 @@ perception:
     points_per_box: 5
     obstacle_cloud_max_publish_rate_hz: 12.0
     clearing_fov_deg: 100.0
-    clearing_range_m: 4.5
-    clearing_ray_count: 41
+    clearing_range_m: 6.0
+    clearing_ray_count: 121
     track_match_distance_m: 0.9
     track_ema_alpha: 0.45
     track_confirm_hits: 3
@@ -239,7 +279,7 @@ perception:
     lane_blend_gain: 1.0
     minimum_speed_for_yaw_limit_mps: 0.1
     obstacle_forward_min_m: 0.2
-    obstacle_forward_max_m: 3.0
+    obstacle_forward_max_m: 5.5
     obstacle_lateral_margin_m: 0.3
     minimum_obstacle_width_m: 0.2
     blocked_confirm_frames: 3
@@ -266,15 +306,82 @@ perception:
     near_field_min_drivable_fraction: 0.12
     near_field_confirm_frames: 2
     near_field_release_frames: 5
-    camera_metric_calibration_validated: false
+    camera_metric_calibration_validated: true
 
 semantic_obstacle:
   ros__parameters:
     input_topic: /camera/astra/image_raw
     output_topic: /perception/semantic_detections
     status_topic: /perception/semantic_status
-    score_threshold: 0.20
-    inference_hz: 2.0
+    # Low model floor is exported only as evaluation_candidates for BAB IV.
+    # Safety/runtime detections still use the adaptive thresholds below.
+    score_threshold: 0.05
+    strict_score_threshold: 0.30
+    close_range_score_threshold: 0.20
+    close_range_min_bbox_height_fraction: 0.20
+    person_motor_conflict_iou: 0.60
+    person_motor_conflict_area_ratio_min: 0.55
+    person_motor_min_score_margin: 0.08
+    same_class_nms_iou: 0.35
+    same_class_nms_iom: 0.55
+    points_per_box: 3
+    obstacle_max_abs_left_m: 2.50
+    fallback_metric_max_abs_left_m: 2.00
+    minimum_obstacle_width_m: 0.30
+    # HUMAN forward distance model fitted from obstacle_calibration_40 latest
+    # multi-orientation dataset (1-5 m): d = 7.1447892353 - 6.01911242 * bbox_h.
+    person_bbox_distance_intercept_m: 7.1447892353
+    person_bbox_distance_slope_m: -6.01911242
+    person_bbox_distance_min_m: 0.50
+    person_bbox_distance_max_m: 5.50
+    semantic_clearing_points_topic: /perception/semantic_clearing_points
+    human_clear_confirm_misses: 3
+    # 4.5A world-fixed HUMAN memory: keep the obstacle in odom while camera FOV
+    # rotates away, and release only after the obstacle is behind the vehicle.
+    obstacle_memory_enabled: true
+    obstacle_memory_guard_topic: /perception/final_trial_guard
+    obstacle_memory_width_m: 0.55
+    obstacle_memory_release_behind_m: 0.80
+    obstacle_memory_release_confirm_updates: 3
+    human_detection_hold_sec: 2.0
+    human_track_continue_min_score: 0.08
+    human_track_iou_min: 0.10
+    human_track_center_distance_max: 0.12
+    human_track_height_ratio_min: 0.55
+    human_track_max_without_strong_sec: 4.0
+    semantic_watchdog_enabled: true
+    semantic_watchdog_inference_timeout_sec: 2.5
+    semantic_watchdog_output_timeout_sec: 3.0
+    semantic_watchdog_upstream_fresh_sec: 2.0
+    semantic_watchdog_startup_grace_sec: 8.0
+    human_clear_burst_frames: 3
+    human_clear_half_width_m: 0.75
+    human_clear_extra_forward_m: 0.80
+    human_clear_ray_count: 31
+    human_clear_history_size: 16
+    human_clear_motion_threshold_m: 0.25
+    human_remark_delay_sec: 0.08
+    human_remark_timer_hz: 20.0
+    boundary_points_topic: /perception/drivable_boundary_points
+    fallback_full_costmap_clear_enabled: true
+    fallback_full_costmap_clear_cooldown_sec: 2.0
+    fallback_full_clear_confirm_frames: 3
+    boundary_fresh_timeout_sec: 1.0
+    local_costmap_clear_service: /local_costmap/clear_entirely_local_costmap
+    human_clear_stale_timeout_sec: 1.20
+    human_clear_watchdog_hz: 10.0
+    inference_hz: 10.0
+    semantic_letterbox_input: false
+    semantic_input_size: 320
+    semantic_center_crop_fraction: 0.80
+    person_acquire_score_threshold: 0.18
+    person_acquire_min_bbox_height_fraction: 0.30
+    person_safety_min_bbox_height_fraction: 0.28
+    human_distance_history_size: 5
+    human_distance_bbox_jump_ratio: 0.22
+    human_distance_jump_confirm_frames: 2
+    human_distance_alpha_approach: 0.65
+    human_distance_alpha_recede: 0.25
     cpu_threads: 1
     enabled: true
     torch_hub_dir: models/torch

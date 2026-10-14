@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dependency-light contract for the native C++ localhost web HMI."""
+"""Dependency-light contract for the native C++ ROS Web HMI on fixed port 5000."""
 from pathlib import Path
 import sys
 from web_static_bundle import read_app_bundle, read_css_bundle
@@ -20,16 +20,20 @@ web_js = js + "\n" + vesc_js
 cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
 auto = (ROOT / "launch/autonomous.launch.py").read_text(encoding="utf-8")
 gui = (ROOT / "launch/gui.launch.py").read_text(encoding="utf-8")
+nav_core = (ROOT / "config/navigation_core.yaml").read_text(encoding="utf-8")
 
 for path in (STATIC/"index.html", STATIC/"styles.css", STATIC/"core.js", STATIC/"navigation.js", STATIC/"tuning_catalog.js", STATIC/"config.js"):
     if not path.is_file() or path.stat().st_size < 1000:
         fail(f"web asset missing/too small: {path}")
 for token in ("add_executable(agv_web_gui", "Qt5::Network", "web/static", "agv_web_gui"):
     if token not in cmake: fail(f"CMake web integration missing {token}")
-for token in ("start_web_gui", "agv_web_gui", "localhost:5000"):
+for token in ("start_web_gui", "agv_web_gui", "port 5000"):
     if token not in auto: fail(f"autonomous launch web contract missing {token}")
-for token in ('ROS Web wajib localhost (127.0.0.1)', 'ROS Web wajib port 5000', 'bindAddress_ = "127.0.0.1"', 'port_ = 5000'):
-    if token not in cpp: fail(f"strict localhost:5000 web contract missing {token}")
+for token in ('declare_parameter<std::string>("bind_address", "127.0.0.1")', 'bindAddress_ != "0.0.0.0"',
+              'ROS Web bind_address tidak valid', 'ROS Web wajib port 5000', 'configuredPort != 5000', 'port_ = 5000'):
+    if token not in cpp: fail(f"fixed-port/LAN-capable web contract missing {token}")
+if "bind_address: 0.0.0.0" not in nav_core or "port: 5000" not in nav_core:
+    fail("active navigation_core must expose ROS Web on LAN while keeping port 5000 fixed")
 if "start_web_gui" not in gui:
     fail("gui launch does not forward start_web_gui")
 for endpoint in ("/api/events", "/api/state", "/api/health", "/api/camera.jpg", "/api/map.png",
@@ -115,9 +119,11 @@ for token in ("baselinePathForConfig", "ensureConfigBaseline", "baselineYamlValu
               "applyConfigChanges", "safe_batch_restart", "batch_backups",
               "baseline_data", "/api/config/revert", "Legacy direct config write dinonaktifkan", "USE_CONFIG_TRANSACTION"):
     if token not in cpp: fail(f"YAML baseline/revert backend missing {token}")
-for token in ('id="resetExperimentYaml"', '*.web.baseline', '.web.bak.*'):
+for token in ('id="resetExperimentYaml"', 'Stage Baseline Awal', 'id="configResetBtn">Stage Baseline</button>'):
     if token not in html: fail(f"YAML baseline/reset UI missing {token}")
-for token in ("baselineConfigValue", "resetSelectedExperimentYaml", "Stage Baseline"):
+for token in ('QStringLiteral(".web.baseline")', 'QStringLiteral(".web.bak.")'):
+    if token not in cpp: fail(f"YAML baseline/backup backend filename contract missing {token}")
+for token in ("baselineConfigValue", "resetSelectedExperimentYaml", "Baseline Awal", "baseline staged"):
     if token not in js: fail(f"YAML baseline/reset frontend missing {token}")
 for name in ("vehicle.yaml", "navigation_core.yaml", "nav2_ackermann.yaml", "ekf.yaml",
              "localization_cpp.yaml", "gnss.yaml", "imu.yaml", "stage3_navigation.yaml",

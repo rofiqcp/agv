@@ -61,6 +61,10 @@ install(
   TARGETS motor_teleop ackermann_controller_server vesc_tool_bridge
   DESTINATION lib/${PROJECT_NAME})
 
+install(PROGRAMS
+  scripts/steering_recovery_guard.py
+  DESTINATION lib/${PROJECT_NAME})
+
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 
 ament_package()

@@ -29,15 +29,26 @@
 #include <opencv2/core.hpp>
 #include <torch/script.h>
 #include <torch/torch.h>
+#ifdef PERCEPTION_HAVE_OPENVINO
+#include <openvino/openvino.hpp>
+#endif
 #include <opencv2/imgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/videoio.hpp>
+#include <turbojpeg.h>
+
+#include <linux/videodev2.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <sys/poll.h>
+#include <fcntl.h>
 
 #include <algorithm>
 #include <atomic>
 #include <array>
 #include <chrono>
 #include <cctype>
+#include <cerrno>
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
@@ -152,6 +163,12 @@ struct LaneCorridorDecision
   int internal_lane_rows{0};
   int left_samples{0};
   int right_samples{0};
+  int left_lane_samples{0};
+  int right_lane_samples{0};
+  int left_drivable_edge_samples{0};
+  int right_drivable_edge_samples{0};
+  std::string left_boundary_source{"NONE"};
+  std::string right_boundary_source{"NONE"};
   std::vector<cv::Point> left_outer_points;
   std::vector<cv::Point> right_outer_points;
   double drivable_fraction{0.0};
@@ -235,6 +252,281 @@ int resolveCpuThreadCount(int requested)
   if (hardware <= 2U) return 1;
   return std::clamp(static_cast<int>(hardware) - 2, 1, 4);
 }
+
+// CPU-only V4L2 capture: poll() memberi timeout nyata sehingga camera thread tidak
+// dapat menggantung beberapa detik di VideoCapture::read(). MMAP menjaga overhead
+// rendah, dan semua buffer siap dibuang sampai tersisa frame paling baru.
+class CpuV4L2Capture final
+{
+public:
+  ~CpuV4L2Capture() {
+    closeDevice();
+    if (jpeg_decompressor_ != nullptr) {
+      tjDestroy(jpeg_decompressor_);
+      jpeg_decompressor_ = nullptr;
+    }
+  }
+  CpuV4L2Capture() = default;
+  CpuV4L2Capture(const CpuV4L2Capture &) = delete;
+  CpuV4L2Capture & operator=(const CpuV4L2Capture &) = delete;
+
+  bool openDevice(
+    const std::string & requested_path, int width, int height, int fps,
+    const std::string & pixel_format, int requested_buffers)
+  {
+    closeDevice();
+    std::string path = requested_path;
+    if (!path.empty() && std::all_of(path.begin(), path.end(), [](unsigned char c) {
+      return std::isdigit(c) != 0;
+    })) {
+      path = "/dev/video" + path;
+    }
+    if (path.empty() || ::access(path.c_str(), R_OK | W_OK) != 0) return false;
+
+    fd_ = ::open(path.c_str(), O_RDWR | O_NONBLOCK, 0);
+    if (fd_ < 0) return false;
+
+    v4l2_capability capability{};
+    if (xioctl(fd_, VIDIOC_QUERYCAP, &capability) < 0 ||
+      !(capability.capabilities & V4L2_CAP_VIDEO_CAPTURE) ||
+      !(capability.capabilities & V4L2_CAP_STREAMING))
+    {
+      closeDevice();
+      return false;
+    }
+
+    pixel_format_ = pixel_format == "YUYV" ? V4L2_PIX_FMT_YUYV : V4L2_PIX_FMT_MJPEG;
+    v4l2_format format{};
+    format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    format.fmt.pix.width = static_cast<uint32_t>(width);
+    format.fmt.pix.height = static_cast<uint32_t>(height);
+    format.fmt.pix.pixelformat = pixel_format_;
+    format.fmt.pix.field = V4L2_FIELD_ANY;
+    if (xioctl(fd_, VIDIOC_S_FMT, &format) < 0 || format.fmt.pix.pixelformat != pixel_format_) {
+      closeDevice();
+      return false;
+    }
+    width_ = static_cast<int>(format.fmt.pix.width);
+    height_ = static_cast<int>(format.fmt.pix.height);
+    bytes_per_line_ = static_cast<size_t>(format.fmt.pix.bytesperline);
+    if (pixel_format_ == V4L2_PIX_FMT_YUYV) {
+      bytes_per_line_ = std::max(bytes_per_line_, static_cast<size_t>(width_) * 2U);
+    }
+
+    v4l2_streamparm streamparm{};
+    streamparm.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    streamparm.parm.capture.timeperframe.numerator = 1;
+    streamparm.parm.capture.timeperframe.denominator = static_cast<uint32_t>(std::max(1, fps));
+    if (xioctl(fd_, VIDIOC_S_PARM, &streamparm) < 0) {
+      std::memset(&streamparm, 0, sizeof(streamparm));
+      streamparm.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+      (void)xioctl(fd_, VIDIOC_G_PARM, &streamparm);
+    }
+    const auto numerator = streamparm.parm.capture.timeperframe.numerator;
+    const auto denominator = streamparm.parm.capture.timeperframe.denominator;
+    actual_fps_ = numerator > 0U && denominator > 0U ?
+      static_cast<double>(denominator) / static_cast<double>(numerator) :
+      static_cast<double>(fps);
+
+    v4l2_requestbuffers request{};
+    request.count = static_cast<uint32_t>(std::clamp(requested_buffers, 2, 8));
+    request.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    request.memory = V4L2_MEMORY_MMAP;
+    if (xioctl(fd_, VIDIOC_REQBUFS, &request) < 0 || request.count < 2U) {
+      closeDevice();
+      return false;
+    }
+
+    buffers_.resize(request.count);
+    for (uint32_t index = 0; index < request.count; ++index) {
+      v4l2_buffer query{};
+      query.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+      query.memory = V4L2_MEMORY_MMAP;
+      query.index = index;
+      if (xioctl(fd_, VIDIOC_QUERYBUF, &query) < 0) {
+        closeDevice();
+        return false;
+      }
+      void * address = ::mmap(
+        nullptr, query.length, PROT_READ | PROT_WRITE, MAP_SHARED, fd_, query.m.offset);
+      if (address == MAP_FAILED) {
+        closeDevice();
+        return false;
+      }
+      buffers_[index] = Buffer{address, static_cast<size_t>(query.length)};
+    }
+
+    for (uint32_t index = 0; index < buffers_.size(); ++index) {
+      if (!queue(index)) {
+        closeDevice();
+        return false;
+      }
+    }
+    v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    if (xioctl(fd_, VIDIOC_STREAMON, &type) < 0) {
+      closeDevice();
+      return false;
+    }
+    streaming_ = true;
+    device_path_ = path;
+    return true;
+  }
+
+  bool readFrame(cv::Mat & frame, int timeout_ms)
+  {
+    frame.release();
+    if (fd_ < 0 || !streaming_) return false;
+    pollfd pfd{};
+    pfd.fd = fd_;
+    pfd.events = POLLIN;
+    const int ready = ::poll(&pfd, 1, std::max(1, timeout_ms));
+    if (ready == 0) return false;
+    if (ready < 0) {
+      if (errno == EINTR) return false;
+      throw std::runtime_error("poll(V4L2 CPU) failed: " + std::string(std::strerror(errno)));
+    }
+    if (!(pfd.revents & (POLLIN | POLLPRI))) return false;
+
+    v4l2_buffer latest{};
+    if (!dequeue(latest)) return false;
+
+    // Bila consumer tertinggal, kosongkan antrean non-blocking dan pertahankan
+    // hanya buffer terbaru. Buffer lama langsung dikembalikan ke driver.
+    for (size_t attempt = 1; attempt < buffers_.size(); ++attempt) {
+      v4l2_buffer newer{};
+      if (!dequeue(newer)) break;
+      queue(latest.index);
+      latest = newer;
+    }
+
+    bool decoded = false;
+    try {
+      if (latest.index < buffers_.size() && latest.bytesused > 0U) {
+        const Buffer & source = buffers_[latest.index];
+        if (pixel_format_ == V4L2_PIX_FMT_MJPEG) {
+          const size_t jpeg_size = std::min<size_t>(latest.bytesused, source.length);
+          const auto * jpeg_data = static_cast<const unsigned char *>(source.address);
+          if (jpeg_decompressor_ == nullptr) jpeg_decompressor_ = tjInitDecompress();
+          int jpeg_width = 0, jpeg_height = 0, jpeg_subsamp = 0, jpeg_colorspace = 0;
+          if (jpeg_decompressor_ != nullptr && jpeg_size > 4U &&
+            tjDecompressHeader3(
+              jpeg_decompressor_, jpeg_data, static_cast<unsigned long>(jpeg_size),
+              &jpeg_width, &jpeg_height, &jpeg_subsamp, &jpeg_colorspace) == 0 &&
+            jpeg_width > 0 && jpeg_height > 0)
+          {
+            frame.create(jpeg_height, jpeg_width, CV_8UC3);
+            // Accept recoverable JPEG warnings from UVC MJPEG. TurboJPEG
+            // only aborts on fatal errors when STOPONWARNING is omitted.
+            // This preserves usable frames instead of converting non-fatal
+            // codec warnings into camera drops/reopen cycles.
+            if (tjDecompress2(
+                jpeg_decompressor_, jpeg_data, static_cast<unsigned long>(jpeg_size), frame.data,
+                jpeg_width, static_cast<int>(frame.step), jpeg_height, TJPF_BGR, TJFLAG_FASTDCT) != 0)
+            {
+              frame.release();
+            }
+          }
+        } else if (pixel_format_ == V4L2_PIX_FMT_YUYV) {
+          cv::Mat yuyv(
+            height_, width_, CV_8UC2, source.address,
+            bytes_per_line_ > 0U ? bytes_per_line_ : static_cast<size_t>(width_) * 2U);
+          cv::cvtColor(yuyv, frame, cv::COLOR_YUV2BGR_YUY2);
+        }
+        decoded = !frame.empty() && frame.type() == CV_8UC3;
+      }
+    } catch (...) {
+      queue(latest.index);
+      throw;
+    }
+    queue(latest.index);
+    return decoded;
+  }
+
+  bool isOpen() const {return fd_ >= 0 && streaming_;}
+  int width() const {return width_;}
+  int height() const {return height_;}
+  double actualFps() const {return actual_fps_;}
+  const std::string & devicePath() const {return device_path_;}
+
+  void closeDevice()
+  {
+    if (fd_ >= 0 && streaming_) {
+      v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+      (void)xioctl(fd_, VIDIOC_STREAMOFF, &type);
+      streaming_ = false;
+    }
+    for (auto & buffer : buffers_) {
+      if (buffer.address && buffer.address != MAP_FAILED && buffer.length > 0U) {
+        ::munmap(buffer.address, buffer.length);
+      }
+    }
+    buffers_.clear();
+    if (fd_ >= 0) {
+      v4l2_requestbuffers release{};
+      release.count = 0;
+      release.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+      release.memory = V4L2_MEMORY_MMAP;
+      (void)xioctl(fd_, VIDIOC_REQBUFS, &release);
+    }
+    if (fd_ >= 0) {
+      ::close(fd_);
+      fd_ = -1;
+    }
+    device_path_.clear();
+    width_ = height_ = 0;
+    actual_fps_ = 0.0;
+    bytes_per_line_ = 0U;
+  }
+
+private:
+  struct Buffer
+  {
+    void * address{nullptr};
+    size_t length{0U};
+  };
+
+  static int xioctl(int fd, unsigned long request, void * argument)
+  {
+    int result;
+    do {
+      result = ::ioctl(fd, request, argument);
+    } while (result == -1 && errno == EINTR);
+    return result;
+  }
+
+  bool dequeue(v4l2_buffer & buffer)
+  {
+    buffer = v4l2_buffer{};
+    buffer.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    buffer.memory = V4L2_MEMORY_MMAP;
+    if (xioctl(fd_, VIDIOC_DQBUF, &buffer) < 0) {
+      if (errno == EAGAIN || errno == EINTR) return false;
+      throw std::runtime_error("VIDIOC_DQBUF CPU failed: " + std::string(std::strerror(errno)));
+    }
+    return buffer.index < buffers_.size();
+  }
+
+  bool queue(uint32_t index)
+  {
+    if (fd_ < 0 || index >= buffers_.size()) return false;
+    v4l2_buffer buffer{};
+    buffer.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    buffer.memory = V4L2_MEMORY_MMAP;
+    buffer.index = index;
+    return xioctl(fd_, VIDIOC_QBUF, &buffer) == 0;
+  }
+
+  int fd_{-1};
+  bool streaming_{false};
+  int width_{0};
+  int height_{0};
+  double actual_fps_{0.0};
+  size_t bytes_per_line_{0U};
+  uint32_t pixel_format_{V4L2_PIX_FMT_MJPEG};
+  tjhandle jpeg_decompressor_{nullptr};
+  std::string device_path_;
+  std::vector<Buffer> buffers_;
+};
 
 }  // namespace
 
@@ -374,6 +666,7 @@ public:
     publishEmergency(inference_enabled_.load());
 
     capture_thread_ = std::thread([this]() { captureLoop(); });
+    visual_publish_thread_ = std::thread([this]() { visualPublishLoop(); });
     const auto inference_period = std::chrono::duration<double>(1.0 / inference_fps_);
     inference_timer_ = create_wall_timer(
       std::chrono::duration_cast<std::chrono::nanoseconds>(inference_period),
@@ -394,6 +687,7 @@ public:
   {
     capture_stop_.store(true);
     if (capture_thread_.joinable()) capture_thread_.join();
+    if (visual_publish_thread_.joinable()) visual_publish_thread_.join();
     if (capture_.isOpened()) capture_.release();
   }
 
@@ -401,6 +695,8 @@ private:
   void declareParameters()
   {
     declare_parameter<std::string>("pt_model_path", "auto");
+    declare_parameter<std::string>("inference_backend", "libtorch_cpu");
+    declare_parameter<std::string>("openvino_model_path", "models/yolopv2_openvino.xml");
     declare_parameter<bool>("inference_enabled", false);
     declare_parameter<double>("cpu_inference_fps", 2.0);
     // Benchmark full-stack i5-7500 menunjukkan 2 thread paling stabil; 3-4 thread
@@ -412,6 +708,9 @@ private:
     declare_parameter<int>("rgb_width", 1280);
     declare_parameter<int>("rgb_height", 720);
     declare_parameter<int>("fps", 30);
+    declare_parameter<bool>("capture_normalize_to_output", false);
+    declare_parameter<int>("capture_output_width", 1280);
+    declare_parameter<int>("capture_output_height", 720);
     declare_parameter<std::string>("v4l2_pixel_format", "MJPEG");
     declare_parameter<bool>("strict_camera_mode", false);
     declare_parameter<bool>("flip_horizontal", true);
@@ -419,17 +718,34 @@ private:
     declare_parameter<double>("camera_retry_interval_sec", 2.0);
     declare_parameter<int>("camera_read_fail_threshold", 5);
     declare_parameter<int>("camera_online_good_frames", 3);
+    declare_parameter<double>("camera_reopen_stale_sec", 1.2);
     declare_parameter<double>("camera_block_watchdog_sec", 2.5);
+    declare_parameter<bool>("direct_v4l2_capture_enabled", true);
+    declare_parameter<bool>("opencv_capture_fallback_enabled", true);
+    declare_parameter<double>("direct_v4l2_restart_timeout_sec", 20.0);
+    declare_parameter<int>("direct_v4l2_timeout_ms", 350);
+    declare_parameter<int>("v4l2_buffer_count", 3);
     declare_parameter<double>("confidence_threshold", 0.10);
     declare_parameter<double>("iou_threshold", 0.45);
     declare_parameter<double>("lane_threshold", 0.50);
+    declare_parameter<bool>("drivable_component_filter_enabled", true);
+    declare_parameter<bool>("lane_boundary_filter_enabled", true);
+    declare_parameter<double>("lane_boundary_edge_fraction", 0.10);
+    declare_parameter<int>("lane_boundary_min_edge_px", 12);
+    declare_parameter<int>("lane_boundary_max_edge_px", 80);
+    declare_parameter<int>("lane_boundary_outer_margin_px", 20);
+    declare_parameter<int>("lane_boundary_temporal_hold_frames", 1);
+    declare_parameter<int>("lane_boundary_min_pixels", 40);
     declare_parameter<int>("max_candidates", 16384);
     declare_parameter<int>("max_detections", 300);
     declare_parameter<bool>("publish_annotated", true);
     declare_parameter<bool>("publish_raw_rgb", true);
+    declare_parameter<int>("raw_publish_width", 0);
+    declare_parameter<int>("raw_publish_height", 0);
     declare_parameter<double>("rviz_max_publish_rate_hz", 10.0);
     declare_parameter<bool>("web_preview_enabled", true);
     declare_parameter<double>("web_preview_fps", 5.0);
+    declare_parameter<double>("web_overlay_max_age_sec", 1.5);
     declare_parameter<int>("web_preview_width", 640);
     declare_parameter<int>("web_preview_height", 360);
     declare_parameter<int>("web_preview_jpeg_quality", 75);
@@ -478,6 +794,17 @@ private:
     // Offset pixel disediakan hanya untuk fine-calibration pemasangan kamera nyata.
     declare_parameter<bool>("lane_corridor_overlay_enabled", true);
     declare_parameter<bool>("lane_corridor_control_enabled", true);
+    declare_parameter<bool>("lane_classical_fallback_enabled", true);
+    declare_parameter<int>("lane_classical_white_min_gray", 145);
+    declare_parameter<int>("lane_classical_white_max_saturation", 110);
+    declare_parameter<int>("lane_classical_yellow_h_min", 12);
+    declare_parameter<int>("lane_classical_yellow_h_max", 42);
+    declare_parameter<int>("lane_classical_yellow_s_min", 70);
+    declare_parameter<int>("lane_classical_yellow_v_min", 100);
+    declare_parameter<double>("lane_classical_roi_top_ratio", 0.50);
+    declare_parameter<double>("lane_classical_search_half_width_ratio", 0.20);
+    declare_parameter<int>("lane_classical_min_samples_per_side", 8);
+    declare_parameter<int>("lane_classical_line_thickness_px", 7);
     declare_parameter<bool>("lane_corridor_manual_lines_enabled", true);
     declare_parameter<double>("lane_corridor_top_y_ratio", 0.02);
     declare_parameter<double>("lane_corridor_bottom_y_ratio", 0.98);
@@ -595,6 +922,9 @@ private:
   void readParameters()
   {
     pt_model_path_ = resolveCpuModelPath(get_parameter("pt_model_path").as_string());
+    inference_backend_ = get_parameter("inference_backend").as_string();
+    openvino_model_path_ = resolveAgvPath(
+      fs::path(get_parameter("openvino_model_path").as_string())).string();
     inference_enabled_.store(get_parameter("inference_enabled").as_bool());
     inference_fps_ = get_parameter("cpu_inference_fps").as_double();
     cpu_threads_ = resolveCpuThreadCount(get_parameter("cpu_threads").as_int());
@@ -604,6 +934,9 @@ private:
     requested_width_ = get_parameter("rgb_width").as_int();
     requested_height_ = get_parameter("rgb_height").as_int();
     camera_fps_ = get_parameter("fps").as_int();
+    capture_normalize_to_output_ = get_parameter("capture_normalize_to_output").as_bool();
+    capture_output_width_ = get_parameter("capture_output_width").as_int();
+    capture_output_height_ = get_parameter("capture_output_height").as_int();
     pixel_format_ = get_parameter("v4l2_pixel_format").as_string();
     strict_camera_mode_ = get_parameter("strict_camera_mode").as_bool();
     flip_horizontal_ = get_parameter("flip_horizontal").as_bool();
@@ -613,18 +946,36 @@ private:
       std::clamp<std::int64_t>(get_parameter("camera_read_fail_threshold").as_int(), 2, 30));
     camera_online_good_frames_ = static_cast<int>(
       std::clamp<std::int64_t>(get_parameter("camera_online_good_frames").as_int(), 1, 30));
+    camera_reopen_stale_sec_ = std::clamp(
+      get_parameter("camera_reopen_stale_sec").as_double(), 0.5, 5.0);
     camera_block_watchdog_sec_ = std::clamp(
       get_parameter("camera_block_watchdog_sec").as_double(), 1.0, 15.0);
+    direct_v4l2_capture_enabled_ = get_parameter("direct_v4l2_capture_enabled").as_bool();
+    opencv_capture_fallback_enabled_ = get_parameter("opencv_capture_fallback_enabled").as_bool();
+    direct_v4l2_restart_timeout_sec_ = get_parameter("direct_v4l2_restart_timeout_sec").as_double();
+    direct_v4l2_timeout_ms_ = get_parameter("direct_v4l2_timeout_ms").as_int();
+    v4l2_buffer_count_ = get_parameter("v4l2_buffer_count").as_int();
     confidence_threshold_ = static_cast<float>(get_parameter("confidence_threshold").as_double());
     iou_threshold_ = static_cast<float>(get_parameter("iou_threshold").as_double());
     lane_threshold_ = static_cast<float>(get_parameter("lane_threshold").as_double());
+    drivable_component_filter_enabled_ = get_parameter("drivable_component_filter_enabled").as_bool();
+    lane_boundary_filter_enabled_ = get_parameter("lane_boundary_filter_enabled").as_bool();
+    lane_boundary_edge_fraction_ = get_parameter("lane_boundary_edge_fraction").as_double();
+    lane_boundary_min_edge_px_ = get_parameter("lane_boundary_min_edge_px").as_int();
+    lane_boundary_max_edge_px_ = get_parameter("lane_boundary_max_edge_px").as_int();
+    lane_boundary_outer_margin_px_ = get_parameter("lane_boundary_outer_margin_px").as_int();
+    lane_boundary_temporal_hold_frames_ = get_parameter("lane_boundary_temporal_hold_frames").as_int();
+    lane_boundary_min_pixels_ = get_parameter("lane_boundary_min_pixels").as_int();
     max_candidates_ = get_parameter("max_candidates").as_int();
     max_detections_ = get_parameter("max_detections").as_int();
     publish_annotated_ = get_parameter("publish_annotated").as_bool();
     publish_raw_ = get_parameter("publish_raw_rgb").as_bool();
+    raw_publish_width_ = get_parameter("raw_publish_width").as_int();
+    raw_publish_height_ = get_parameter("raw_publish_height").as_int();
     visual_publish_rate_hz_ = get_parameter("rviz_max_publish_rate_hz").as_double();
     web_preview_enabled_ = get_parameter("web_preview_enabled").as_bool();
     web_preview_fps_ = get_parameter("web_preview_fps").as_double();
+    web_overlay_max_age_sec_ = get_parameter("web_overlay_max_age_sec").as_double();
     web_preview_width_ = get_parameter("web_preview_width").as_int();
     web_preview_height_ = get_parameter("web_preview_height").as_int();
     web_preview_jpeg_quality_ = get_parameter("web_preview_jpeg_quality").as_int();
@@ -670,6 +1021,28 @@ private:
     lane_safety_enabled_ = get_parameter("lane_safety_enabled").as_bool();
     lane_corridor_overlay_enabled_ = get_parameter("lane_corridor_overlay_enabled").as_bool();
     lane_corridor_control_enabled_ = get_parameter("lane_corridor_control_enabled").as_bool();
+    lane_classical_fallback_enabled_ = get_parameter("lane_classical_fallback_enabled").as_bool();
+    lane_classical_white_min_gray_ = std::clamp(
+      static_cast<int>(get_parameter("lane_classical_white_min_gray").as_int()), 80, 250);
+    lane_classical_white_max_saturation_ = std::clamp(
+      static_cast<int>(get_parameter("lane_classical_white_max_saturation").as_int()), 0, 255);
+    lane_classical_yellow_h_min_ = std::clamp(
+      static_cast<int>(get_parameter("lane_classical_yellow_h_min").as_int()), 0, 179);
+    lane_classical_yellow_h_max_ = std::clamp(
+      static_cast<int>(get_parameter("lane_classical_yellow_h_max").as_int()),
+      lane_classical_yellow_h_min_, 179);
+    lane_classical_yellow_s_min_ = std::clamp(
+      static_cast<int>(get_parameter("lane_classical_yellow_s_min").as_int()), 0, 255);
+    lane_classical_yellow_v_min_ = std::clamp(
+      static_cast<int>(get_parameter("lane_classical_yellow_v_min").as_int()), 0, 255);
+    lane_classical_roi_top_ratio_ = std::clamp(
+      get_parameter("lane_classical_roi_top_ratio").as_double(), 0.30, 0.80);
+    lane_classical_search_half_width_ratio_ = std::clamp(
+      get_parameter("lane_classical_search_half_width_ratio").as_double(), 0.05, 0.40);
+    lane_classical_min_samples_per_side_ = std::clamp(
+      static_cast<int>(get_parameter("lane_classical_min_samples_per_side").as_int()), 4, 60);
+    lane_classical_line_thickness_px_ = std::clamp(
+      static_cast<int>(get_parameter("lane_classical_line_thickness_px").as_int()), 3, 21);
     lane_corridor_manual_lines_enabled_ = get_parameter("lane_corridor_manual_lines_enabled").as_bool();
     lane_corridor_top_y_ratio_ = get_parameter("lane_corridor_top_y_ratio").as_double();
     lane_corridor_bottom_y_ratio_ = get_parameter("lane_corridor_bottom_y_ratio").as_double();
@@ -813,21 +1186,47 @@ private:
     if (pt_path.extension() != ".pt" && pt_path.extension() != ".torchscript") {
       throw std::runtime_error("CPU backend membutuhkan model TorchScript .pt/.torchscript: " + pt_model_path_);
     }
+    const std::array<std::string, 4> valid_backends{
+      "libtorch_cpu", "openvino_cpu", "openvino_gpu_fp32", "openvino_gpu_fp16"};
+    if (std::find(valid_backends.begin(), valid_backends.end(), inference_backend_) ==
+      valid_backends.end())
+    {
+      throw std::runtime_error(
+        "inference_backend wajib libtorch_cpu/openvino_cpu/openvino_gpu_fp32/openvino_gpu_fp16");
+    }
+    if (inference_backend_.rfind("openvino_", 0) == 0 &&
+      (!regularNonEmptyFile(openvino_model_path_) ||
+       fs::path(openvino_model_path_).extension() != ".xml"))
+    {
+      throw std::runtime_error("OpenVINO IR .xml tidak ditemukan/invalid: " + openvino_model_path_);
+    }
     inference_fps_ = std::clamp(inference_fps_, 0.5, 30.0);
     cpu_threads_ = std::clamp(cpu_threads_, 1, 64);
     opencv_threads_ = std::clamp(opencv_threads_, 1, 8);
     requested_width_ = std::max(320, requested_width_);
     requested_height_ = std::max(240, requested_height_);
     camera_fps_ = std::clamp(camera_fps_, 1, 60);
+    capture_output_width_ = std::clamp(capture_output_width_, 320, 3840);
+    capture_output_height_ = std::clamp(capture_output_height_, 240, 2160);
     std::transform(pixel_format_.begin(), pixel_format_.end(), pixel_format_.begin(),
       [](unsigned char value) {return static_cast<char>(std::toupper(value));});
     if (pixel_format_ != "MJPEG" && pixel_format_ != "YUYV") {
       throw std::runtime_error("v4l2_pixel_format CPU harus MJPEG atau YUYV");
     }
     retry_sec_ = std::clamp(retry_sec_, 0.5, 30.0);
+    direct_v4l2_restart_timeout_sec_ = std::clamp(direct_v4l2_restart_timeout_sec_, 5.0, 120.0);
+    direct_v4l2_timeout_ms_ = std::clamp(direct_v4l2_timeout_ms_, 80, 1000);
+    v4l2_buffer_count_ = std::clamp(v4l2_buffer_count_, 2, 8);
     confidence_threshold_ = std::clamp(confidence_threshold_, 0.01F, 0.99F);
     iou_threshold_ = std::clamp(iou_threshold_, 0.01F, 0.99F);
     lane_threshold_ = std::clamp(lane_threshold_, 0.01F, 0.99F);
+    lane_boundary_edge_fraction_ = std::clamp(lane_boundary_edge_fraction_, 0.02, 0.20);
+    lane_boundary_min_edge_px_ = std::clamp(lane_boundary_min_edge_px_, 4, 120);
+    lane_boundary_max_edge_px_ = std::clamp(
+      lane_boundary_max_edge_px_, lane_boundary_min_edge_px_, 240);
+    lane_boundary_outer_margin_px_ = std::clamp(lane_boundary_outer_margin_px_, 0, 120);
+    lane_boundary_temporal_hold_frames_ = std::clamp(lane_boundary_temporal_hold_frames_, 0, 2);
+    lane_boundary_min_pixels_ = std::clamp(lane_boundary_min_pixels_, 8, 5000);
     max_candidates_ = std::clamp(max_candidates_, 100, 100000);
     max_detections_ = std::clamp(max_detections_, 1, 1000);
     overlay_alpha_ = std::clamp(overlay_alpha_, 0.0, 1.0);
@@ -890,6 +1289,7 @@ private:
     lane_corridor_max_correction_m_ = std::clamp(lane_corridor_max_correction_m_, 0.0, 1.0);
     visual_publish_rate_hz_ = std::clamp(visual_publish_rate_hz_, 1.0, 30.0);
     web_preview_fps_ = std::clamp(web_preview_fps_, 1.0, 12.0);
+    web_overlay_max_age_sec_ = std::clamp(web_overlay_max_age_sec_, 0.3, 3.0);
     web_preview_width_ = std::clamp(web_preview_width_, 160, requested_width_);
     web_preview_height_ = std::clamp(web_preview_height_, 90, requested_height_);
     web_preview_jpeg_quality_ = std::clamp(web_preview_jpeg_quality_, 40, 95);
@@ -1013,11 +1413,96 @@ private:
     return outputs;
   }
 
+#ifdef PERCEPTION_HAVE_OPENVINO
+  std::vector<cv::Mat> forwardOpenVino(const cv::Mat & input)
+  {
+    if (!ov_infer_request_ || !ov_compiled_model_) {
+      throw std::runtime_error("OpenVINO infer request belum siap");
+    }
+    cv::Mat rgb, rgb_float;
+    cv::cvtColor(input, rgb, cv::COLOR_BGR2RGB);
+    rgb.convertTo(rgb_float, CV_32FC3, 1.0 / 255.0);
+
+    ov::Tensor tensor(
+      ov::element::f32,
+      ov::Shape{1U, 3U, static_cast<size_t>(rgb.rows), static_cast<size_t>(rgb.cols)});
+    float * dst = tensor.data<float>();
+    const size_t plane = static_cast<size_t>(rgb.rows * rgb.cols);
+    std::vector<cv::Mat> channels;
+    channels.reserve(3U);
+    for (size_t c = 0; c < 3U; ++c) {
+      channels.emplace_back(rgb.rows, rgb.cols, CV_32F, dst + c * plane);
+    }
+    cv::split(rgb_float, channels);
+
+    ov_infer_request_->set_input_tensor(tensor);
+    ov_infer_request_->infer();
+
+    std::vector<cv::Mat> outputs;
+    for (const auto & port : ov_compiled_model_->outputs()) {
+      const ov::Tensor out = ov_infer_request_->get_tensor(port);
+      if (out.get_element_type() != ov::element::f32) {
+        throw std::runtime_error("OpenVINO output bukan f32");
+      }
+      std::vector<int> sizes;
+      sizes.reserve(out.get_shape().size());
+      for (size_t dim : out.get_shape()) sizes.push_back(static_cast<int>(dim));
+      cv::Mat view(
+        static_cast<int>(sizes.size()), sizes.data(), CV_32F,
+        const_cast<float *>(out.data<const float>()));
+      outputs.push_back(view.clone());
+    }
+    return outputs;
+  }
+#endif
+
   void loadModel()
   {
     if (model_loaded_.load()) return;
     std::lock_guard<std::mutex> lock(model_mutex_);
     if (model_loaded_.load()) return;
+#ifdef PERCEPTION_HAVE_OPENVINO
+    if (inference_backend_.rfind("openvino_", 0) == 0) {
+      try {
+        ov_core_ = std::make_unique<ov::Core>();
+        auto model = ov_core_->read_model(openvino_model_path_);
+        model->reshape(
+          ov::Shape{1U, 3U, static_cast<size_t>(MODEL_HEIGHT), static_cast<size_t>(MODEL_WIDTH)});
+        ov::AnyMap config;
+        config["PERFORMANCE_HINT"] = std::string("LATENCY");
+        std::string device = "CPU";
+        if (inference_backend_.rfind("openvino_gpu_", 0) == 0) {
+          device = "GPU";
+          config["INFERENCE_PRECISION_HINT"] =
+            inference_backend_ == "openvino_gpu_fp16" ? std::string("f16") : std::string("f32");
+        } else {
+          config["INFERENCE_NUM_THREADS"] = cpu_threads_;
+        }
+        ov_compiled_model_ = std::make_unique<ov::CompiledModel>(
+          ov_core_->compile_model(model, device, config));
+        ov_infer_request_ = std::make_unique<ov::InferRequest>(
+          ov_compiled_model_->create_infer_request());
+        active_backend_ = inference_backend_;
+        cv::Mat zero_image = cv::Mat::zeros(MODEL_HEIGHT, MODEL_WIDTH, CV_8UC3);
+        auto outputs = forwardOpenVino(zero_image);
+        validateOutputs(outputs);
+        model_loaded_.store(true);
+        torch_optimized_active_ = false;
+        RCLCPP_INFO(
+          get_logger(), "OpenVINO backend loaded: %s model=%s",
+          active_backend_.c_str(), openvino_model_path_.c_str());
+        return;
+      } catch (const std::exception & error) {
+        RCLCPP_WARN(
+          get_logger(), "OpenVINO %s gagal: %s; fallback LibTorch",
+          inference_backend_.c_str(), error.what());
+        active_backend_ = "libtorch_cpu_fallback";
+        ov_infer_request_.reset();
+        ov_compiled_model_.reset();
+        ov_core_.reset();
+      }
+    }
+#endif
     torch::set_num_threads(cpu_threads_);
     // Inter-op parallelism >1 mudah meng-oversubscribe Mini-PC ketika OpenCV,
     // ROS executor, GUI, dan LibTorch aktif bersamaan.
@@ -1030,6 +1515,7 @@ private:
     };
 
     try {
+      if (active_backend_ != "libtorch_cpu_fallback") active_backend_ = "libtorch_cpu";
       auto loaded = torch::jit::load(pt_model_path_, torch::kCPU);
       loaded.eval();
       if (torch_optimize_for_inference_) {
@@ -1213,7 +1699,7 @@ private:
 
   bool openCamera()
   {
-    if (capture_.isOpened()) return true;
+    if (direct_capture_.isOpen() || capture_.isOpened()) return true;
     if (!hotplug_retry_ && last_open_attempt_.time_since_epoch().count() != 0) return false;
     const auto t = std::chrono::steady_clock::now();
     if (last_open_attempt_.time_since_epoch().count() != 0 &&
@@ -1221,20 +1707,109 @@ private:
     last_open_attempt_ = t;
 
     const auto candidates = candidateCameraDevices();
+
+    if (direct_v4l2_capture_enabled_) {
+      for (const auto & device : candidates) {
+        try {
+          if (!direct_capture_.openDevice(
+              device, requested_width_, requested_height_, camera_fps_,
+              pixel_format_, v4l2_buffer_count_))
+          {
+            continue;
+          }
+
+          cv::Mat probe;
+          bool frame_ok = false;
+          // UVC/MJPEG devices can need several frames after STREAMON/reopen before
+          // producing a clean JPEG. Give the direct path a real warm-up window.
+          for (int attempt = 0; attempt < 12; ++attempt) {
+            if (direct_capture_.readFrame(
+                probe, std::max(500, direct_v4l2_timeout_ms_)) &&
+              !probe.empty() && probe.type() == CV_8UC3)
+            {
+              frame_ok = true;
+              break;
+            }
+          }
+
+          const bool resolution_matches =
+            direct_capture_.width() == requested_width_ &&
+            direct_capture_.height() == requested_height_;
+          const bool fps_matches =
+            direct_capture_.actualFps() > 0.0 &&
+            std::abs(direct_capture_.actualFps() - static_cast<double>(camera_fps_)) <=
+              std::max(1.0, 0.05 * static_cast<double>(camera_fps_));
+
+          if (!frame_ok || (strict_camera_mode_ && (!resolution_matches || !fps_matches))) {
+            direct_capture_.closeDevice();
+            continue;
+          }
+
+          direct_capture_active_ = true;
+          direct_capture_ever_worked_ = true;
+          direct_reconnect_started_ = std::chrono::steady_clock::time_point{};
+          camera_read_fail_streak_ = 0;
+          camera_good_frame_streak_ = 1;
+          RCLCPP_INFO(
+            get_logger(),
+            "Kamera CPU direct V4L2: %s %dx%d @ %.1f FPS | MMAP=%d timeout=%d ms",
+            direct_capture_.devicePath().c_str(),
+            direct_capture_.width(), direct_capture_.height(), direct_capture_.actualFps(),
+            v4l2_buffer_count_, direct_v4l2_timeout_ms_);
+          return true;
+        } catch (const std::exception & error) {
+          direct_capture_.closeDevice();
+          RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 5000,
+            "Direct V4L2 gagal pada %s: %s; mencoba kandidat/fallback berikutnya",
+            device.c_str(), error.what());
+        }
+      }
+      direct_capture_active_ = false;
+      if (direct_capture_ever_worked_) {
+        if (direct_reconnect_started_.time_since_epoch().count() == 0) direct_reconnect_started_ = t;
+        const double reconnect_age = std::chrono::duration<double>(t - direct_reconnect_started_).count();
+        publishConnected(false);
+        publishHealth(false, "DIRECT_V4L2_RECONNECT_WAIT");
+        if (reconnect_age >= direct_v4l2_restart_timeout_sec_) {
+          RCLCPP_ERROR(
+            get_logger(),
+            "Direct V4L2 gagal pulih %.1f s; shutdown node agar launch respawn membuka ulang kamera dengan bersih",
+            reconnect_age);
+          rclcpp::shutdown();
+          return false;
+        }
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 5000,
+          "Direct V4L2 pernah aktif; OpenCV fallback dilewati, retry direct (%.1f/%.1f s)",
+          reconnect_age, direct_v4l2_restart_timeout_sec_);
+        return false;
+      }
+      if (!opencv_capture_fallback_enabled_) {
+        publishConnected(false);
+        publishHealth(false, "DIRECT_V4L2_STARTUP_WAIT");
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 5000,
+          "Direct V4L2 belum siap; OpenCV fallback disabled, menunggu retry direct");
+        return false;
+      }
+    }
+
+    // Compatibility fallback is startup-only. Once direct V4L2 has proven usable,
+    // transient read faults must recover back to direct capture rather than getting
+    // stuck in OpenCV's MJPEG decoder (which may accept/print corrupt frames).
     for (const auto & device : candidates) {
       cv::VideoCapture candidate;
       if (!configureCameraCandidate(device, candidate)) continue;
       capture_ = std::move(candidate);
+      direct_capture_active_ = false;
       camera_read_fail_streak_ = 0;
       camera_good_frame_streak_ = 1;
-      // configureCameraCandidate already dequeued one real BGR frame. Delay the
-      // ONLINE edge until a few consecutive capture-loop frames also succeed;
-      // this prevents USB/V4L2 status flapping on transient open/read glitches.
       const double actual_width = capture_.get(cv::CAP_PROP_FRAME_WIDTH);
       const double actual_height = capture_.get(cv::CAP_PROP_FRAME_HEIGHT);
       const double actual_fps = capture_.get(cv::CAP_PROP_FPS);
-      RCLCPP_INFO(
-        get_logger(), "Kamera CPU terbuka: %s %.0fx%.0f @ %.1f FPS",
+      RCLCPP_WARN(
+        get_logger(), "Kamera CPU fallback OpenCV: %s %.0fx%.0f @ %.1f FPS",
         device.c_str(), actual_width, actual_height, actual_fps);
       return true;
     }
@@ -1369,13 +1944,364 @@ private:
     const float * ll = outputs[7].ptr<float>();
     cv::Mat da_small(MODEL_HEIGHT, MODEL_WIDTH, CV_8UC1);
     cv::Mat ll_small(MODEL_HEIGHT, MODEL_WIDTH, CV_8UC1);
+    float ll_min = std::numeric_limits<float>::infinity();
+    float ll_max = -std::numeric_limits<float>::infinity();
+    double ll_sum = 0.0;
+    size_t ll_above = 0U;
+    size_t da_foreground = 0U;
     for (size_t i = 0; i < plane; ++i) {
-      da_small.data[i] = da[plane + i] > da[i] ? 255U : 0U;
-      ll_small.data[i] = ll[i] > lane_threshold_ ? 255U : 0U;
+      const float llv = ll[i];
+      ll_min = std::min(ll_min, llv);
+      ll_max = std::max(ll_max, llv);
+      ll_sum += static_cast<double>(llv);
+      if (llv > lane_threshold_) ++ll_above;
+      const bool da_fg = da[plane + i] > da[i];
+      if (da_fg) ++da_foreground;
+      da_small.data[i] = da_fg ? 255U : 0U;
+      ll_small.data[i] = llv > lane_threshold_ ? 255U : 0U;
     }
+    lane_logit_min_.store(std::isfinite(ll_min) ? static_cast<double>(ll_min) : 0.0);
+    lane_logit_max_.store(std::isfinite(ll_max) ? static_cast<double>(ll_max) : 0.0);
+    lane_logit_mean_.store(plane > 0U ? ll_sum / static_cast<double>(plane) : 0.0);
+    lane_threshold_fraction_.store(
+      plane > 0U ? static_cast<double>(ll_above) / static_cast<double>(plane) : 0.0);
+    drivable_foreground_fraction_.store(
+      plane > 0U ? static_cast<double>(da_foreground) / static_cast<double>(plane) : 0.0);
     const cv::Rect valid_roi(pad_x_, pad_y_, resized_width_, resized_height_);
     cv::resize(da_small(valid_roi), drivable, cv::Size(width, height), 0.0, 0.0, cv::INTER_NEAREST);
     cv::resize(ll_small(valid_roi), lane, cv::Size(width, height), 0.0, 0.0, cv::INTER_NEAREST);
+  }
+
+  bool applyClassicalLaneFallback(
+    const cv::Mat & frame, cv::Mat & drivable, cv::Mat & lane)
+  {
+    lane_classical_fallback_active_.store(false);
+    lane_classical_left_samples_.store(0);
+    lane_classical_right_samples_.store(0);
+    if (!lane_classical_fallback_enabled_ || frame.empty() || frame.type() != CV_8UC3) return false;
+
+    const int lane_pixels = lane.empty() ? 0 : cv::countNonZero(lane);
+    const int drivable_pixels = drivable.empty() ? 0 : cv::countNonZero(drivable);
+    const int drivable_min_pixels = std::max(200, frame.rows * frame.cols / 500);
+    if (lane_pixels >= std::max(8, lane_boundary_min_pixels_ / 2) ||
+      drivable_pixels >= drivable_min_pixels)
+    {
+      return false;
+    }
+
+    cv::Mat hsv, gray, white_mask, yellow_mask, color_mask;
+    cv::cvtColor(frame, hsv, cv::COLOR_BGR2HSV);
+    cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
+    cv::inRange(
+      hsv, cv::Scalar(0, 0, lane_classical_white_min_gray_),
+      cv::Scalar(179, lane_classical_white_max_saturation_, 255), white_mask);
+    cv::inRange(
+      hsv,
+      cv::Scalar(lane_classical_yellow_h_min_, lane_classical_yellow_s_min_, lane_classical_yellow_v_min_),
+      cv::Scalar(lane_classical_yellow_h_max_, 255, 255), yellow_mask);
+    cv::bitwise_or(white_mask, yellow_mask, color_mask);
+
+    const int top_y = std::clamp(
+      static_cast<int>(std::lround(lane_classical_roi_top_ratio_ * frame.rows)),
+      0, frame.rows - 2);
+    const int bottom_y = std::clamp(
+      static_cast<int>(std::lround(lane_corridor_bottom_y_ratio_ * frame.rows)),
+      top_y + 1, frame.rows - 1);
+    if (top_y > 0) color_mask.rowRange(0, top_y).setTo(0);
+    if (bottom_y + 1 < frame.rows) color_mask.rowRange(bottom_y + 1, frame.rows).setTo(0);
+    cv::morphologyEx(
+      color_mask, color_mask, cv::MORPH_OPEN,
+      cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3)));
+    cv::morphologyEx(
+      color_mask, color_mask, cv::MORPH_CLOSE,
+      cv::getStructuringElement(cv::MORPH_RECT, cv::Size(5, 5)));
+
+    std::vector<cv::Point2f> left_points, right_points;
+    const int half_search = std::max(
+      20, static_cast<int>(std::lround(lane_classical_search_half_width_ratio_ * frame.cols)));
+    const int center = frame.cols / 2;
+
+    auto nearestRunCenter = [&](const uint8_t * row, int begin, int end, double expected) -> int {
+      begin = std::clamp(begin, 0, frame.cols - 1);
+      end = std::clamp(end, 0, frame.cols - 1);
+      if (begin > end) return -1;
+      int best = -1;
+      double best_error = std::numeric_limits<double>::infinity();
+      for (int x = begin; x <= end;) {
+        while (x <= end && row[x] == 0U) ++x;
+        if (x > end) break;
+        const int run_begin = x;
+        while (x <= end && row[x] > 0U) ++x;
+        const int run_end = x - 1;
+        if (run_end - run_begin + 1 < 2) continue;
+        const int run_center = (run_begin + run_end) / 2;
+        const double error = std::abs(static_cast<double>(run_center) - expected);
+        if (error < best_error) {best_error = error; best = run_center;}
+      }
+      return best;
+    };
+
+    for (int y = top_y; y <= bottom_y; y += 3) {
+      const auto expected = laneSafetyLineAtRow(y, frame.cols, frame.rows);
+      const uint8_t * row = color_mask.ptr<uint8_t>(y);
+      const int left = nearestRunCenter(
+        row,
+        static_cast<int>(std::lround(expected.left_x)) - half_search,
+        std::min(center - 4, static_cast<int>(std::lround(expected.left_x)) + half_search),
+        expected.left_x);
+      const int right = nearestRunCenter(
+        row,
+        std::max(center + 4, static_cast<int>(std::lround(expected.right_x)) - half_search),
+        static_cast<int>(std::lround(expected.right_x)) + half_search,
+        expected.right_x);
+      if (left >= 0) left_points.emplace_back(static_cast<float>(left), static_cast<float>(y));
+      if (right >= 0) right_points.emplace_back(static_cast<float>(right), static_cast<float>(y));
+    }
+
+    lane_classical_left_samples_.store(static_cast<int>(left_points.size()));
+    lane_classical_right_samples_.store(static_cast<int>(right_points.size()));
+    if (static_cast<int>(left_points.size()) < lane_classical_min_samples_per_side_ ||
+      static_cast<int>(right_points.size()) < lane_classical_min_samples_per_side_)
+    {
+      return false;
+    }
+    const double min_span = 0.15 * static_cast<double>(frame.rows);
+    if ((left_points.back().y - left_points.front().y) < min_span ||
+      (right_points.back().y - right_points.front().y) < min_span)
+    {
+      return false;
+    }
+
+    auto fitX = [](const std::vector<cv::Point2f> & points, int y, double & x) -> bool {
+      cv::Vec4f fit;
+      cv::fitLine(points, fit, cv::DIST_L2, 0.0, 0.01, 0.01);
+      const double vx = fit[0], vy = fit[1], x0 = fit[2], y0 = fit[3];
+      if (!std::isfinite(vx) || !std::isfinite(vy) || !std::isfinite(x0) ||
+        !std::isfinite(y0) || std::abs(vy) < 1.0e-4)
+      {
+        return false;
+      }
+      x = x0 + (static_cast<double>(y) - y0) * vx / vy;
+      return std::isfinite(x);
+    };
+
+    double ltop=0.0,lbottom=0.0,rtop=0.0,rbottom=0.0;
+    if (!fitX(left_points, top_y, ltop) || !fitX(left_points, bottom_y, lbottom) ||
+      !fitX(right_points, top_y, rtop) || !fitX(right_points, bottom_y, rbottom))
+    {
+      return false;
+    }
+    auto saneWidth = [&](double lx, double rx, double min_ratio) {
+      const double width = rx - lx;
+      return lx >= 0.0 && rx <= static_cast<double>(frame.cols - 1) &&
+        width >= min_ratio * frame.cols && width <= 0.95 * frame.cols;
+    };
+    // Perspective convergence is naturally narrow above the actual safety
+    // sampling window. Keep the bottom strict, allow a narrow but non-crossed
+    // upper fit, and require the corridor to widen toward the vehicle.
+    const double top_width = rtop - ltop;
+    const double bottom_width = rbottom - lbottom;
+    const double dy = static_cast<double>(std::max(1, bottom_y - top_y));
+    const double left_slope = (lbottom - ltop) / dy;
+    const double right_slope = (rbottom - rtop) / dy;
+    const auto expected_top = laneSafetyLineAtRow(top_y, frame.cols, frame.rows);
+    const auto expected_bottom = laneSafetyLineAtRow(bottom_y, frame.cols, frame.rows);
+    const double expected_left_slope =
+      (expected_bottom.left_x - expected_top.left_x) / dy;
+    const double expected_right_slope =
+      (expected_bottom.right_x - expected_top.right_x) / dy;
+    const auto slopeConsistent = [](double actual, double expected) {
+      if (!std::isfinite(actual) || !std::isfinite(expected) ||
+        std::abs(expected) < 1.0e-4 || actual * expected <= 0.0)
+      {
+        return false;
+      }
+      const double ratio = std::abs(actual / expected);
+      return ratio >= 0.25 && ratio <= 3.0;
+    };
+    const auto p90Residual = [top_y, bottom_y](
+      const std::vector<cv::Point2f> & points, double x_top, double x_bottom)
+    {
+      std::vector<double> residuals;
+      residuals.reserve(points.size());
+      const double span = static_cast<double>(std::max(1, bottom_y - top_y));
+      for (const auto & p : points) {
+        const double t = (static_cast<double>(p.y) - top_y) / span;
+        const double predicted = x_top + t * (x_bottom - x_top);
+        residuals.push_back(std::abs(static_cast<double>(p.x) - predicted));
+      }
+      if (residuals.empty()) return std::numeric_limits<double>::infinity();
+      std::sort(residuals.begin(), residuals.end());
+      const size_t index = std::min(
+        residuals.size() - 1U,
+        static_cast<size_t>(std::floor(0.90 * static_cast<double>(residuals.size() - 1U))));
+      return residuals[index];
+    };
+    const double max_fit_residual_px = std::max(12.0, 0.04 * frame.cols);
+    const double left_p90 = p90Residual(left_points, ltop, lbottom);
+    const double right_p90 = p90Residual(right_points, rtop, rbottom);
+    if (!saneWidth(ltop, rtop, 0.04) || !saneWidth(lbottom, rbottom, 0.12) ||
+      bottom_width <= top_width ||
+      !slopeConsistent(left_slope, expected_left_slope) ||
+      !slopeConsistent(right_slope, expected_right_slope) ||
+      left_p90 > max_fit_residual_px || right_p90 > max_fit_residual_px)
+    {
+      return false;
+    }
+
+    const cv::Point left_top(
+      std::clamp(static_cast<int>(std::lround(ltop)), 0, frame.cols - 1), top_y);
+    const cv::Point left_bottom(
+      std::clamp(static_cast<int>(std::lround(lbottom)), 0, frame.cols - 1), bottom_y);
+    const cv::Point right_top(
+      std::clamp(static_cast<int>(std::lround(rtop)), 0, frame.cols - 1), top_y);
+    const cv::Point right_bottom(
+      std::clamp(static_cast<int>(std::lround(rbottom)), 0, frame.cols - 1), bottom_y);
+
+    lane = cv::Mat::zeros(frame.rows, frame.cols, CV_8UC1);
+    cv::line(lane, left_top, left_bottom, cv::Scalar(255), lane_classical_line_thickness_px_, cv::LINE_AA);
+    cv::line(lane, right_top, right_bottom, cv::Scalar(255), lane_classical_line_thickness_px_, cv::LINE_AA);
+
+    drivable = cv::Mat::zeros(frame.rows, frame.cols, CV_8UC1);
+    std::vector<cv::Point> polygon{left_top, right_top, right_bottom, left_bottom};
+    cv::fillConvexPoly(drivable, polygon, cv::Scalar(255), cv::LINE_8);
+    cv::morphologyEx(
+      drivable, drivable, cv::MORPH_CLOSE,
+      cv::getStructuringElement(cv::MORPH_RECT, cv::Size(5, 5)));
+
+    lane_classical_fallback_active_.store(true);
+    return true;
+  }
+
+  void keepEgoConnectedDrivable(cv::Mat & drivable) const
+  {
+    if (!drivable_component_filter_enabled_ || drivable.empty() || drivable.type() != CV_8UC1) return;
+
+    cv::morphologyEx(
+      drivable, drivable, cv::MORPH_CLOSE,
+      cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(7, 7)));
+    cv::morphologyEx(
+      drivable, drivable, cv::MORPH_OPEN,
+      cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3)));
+
+    cv::Mat labels, stats, centroids;
+    const int count = cv::connectedComponentsWithStats(
+      drivable, labels, stats, centroids, 8, CV_32S);
+    if (count <= 2) return;
+
+    const int x0 = static_cast<int>(std::lround(0.30 * drivable.cols));
+    const int x1 = static_cast<int>(std::lround(0.70 * drivable.cols));
+    const int y0 = static_cast<int>(std::lround(0.72 * drivable.rows));
+    std::vector<int> anchor_hits(static_cast<size_t>(count), 0);
+    for (int y = std::clamp(y0, 0, drivable.rows - 1); y < drivable.rows; ++y) {
+      const int * row = labels.ptr<int>(y);
+      for (int x = std::clamp(x0, 0, drivable.cols - 1);
+        x <= std::clamp(x1, 0, drivable.cols - 1); x += 2)
+      {
+        const int label = row[x];
+        if (label > 0 && label < count) ++anchor_hits[static_cast<size_t>(label)];
+      }
+    }
+
+    int best = -1;
+    int best_hits = -1;
+    int best_area = -1;
+    for (int label = 1; label < count; ++label) {
+      const int area = stats.at<int>(label, cv::CC_STAT_AREA);
+      const int hits = anchor_hits[static_cast<size_t>(label)];
+      if (hits > best_hits || (hits == best_hits && area > best_area)) {
+        best = label;
+        best_hits = hits;
+        best_area = area;
+      }
+    }
+    if (best <= 0 || best_area < std::max(100, drivable.rows * drivable.cols / 200)) {
+      drivable.setTo(0);
+      return;
+    }
+    cv::compare(labels, best, drivable, cv::CMP_EQ);
+    cv::morphologyEx(
+      drivable, drivable, cv::MORPH_CLOSE,
+      cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5)));
+  }
+
+  cv::Mat roadEdgeGate(const cv::Mat & drivable) const
+  {
+    cv::Mat gate = cv::Mat::zeros(drivable.size(), CV_8UC1);
+    if (drivable.empty() || drivable.type() != CV_8UC1) return gate;
+    const int start_y = std::clamp(
+      static_cast<int>(std::lround(0.34 * drivable.rows)), 0, drivable.rows - 1);
+    for (int y = start_y; y < drivable.rows; ++y) {
+      const auto * row = drivable.ptr<uint8_t>(y);
+      const int center = drivable.cols / 2;
+      int road_left = -1, road_right = -1;
+      int best_distance = drivable.cols + 1, best_length = -1;
+      for (int x = 0; x < drivable.cols;) {
+        while (x < drivable.cols && row[x] == 0U) ++x;
+        if (x >= drivable.cols) break;
+        const int run_left = x;
+        while (x < drivable.cols && row[x] > 0U) ++x;
+        const int run_right = x - 1;
+        const int run_length = run_right - run_left + 1;
+        if (run_length < 20) continue;
+        const int distance = center < run_left ? run_left - center :
+          center > run_right ? center - run_right : 0;
+        if (distance < best_distance || (distance == best_distance && run_length > best_length)) {
+          best_distance = distance;
+          best_length = run_length;
+          road_left = run_left;
+          road_right = run_right;
+        }
+      }
+      if (road_left < 0 || road_right <= road_left + 20) continue;
+
+      const double road_width = static_cast<double>(road_right - road_left + 1);
+      const int edge_band = std::clamp(
+        static_cast<int>(std::lround(lane_boundary_edge_fraction_ * road_width)),
+        lane_boundary_min_edge_px_, lane_boundary_max_edge_px_);
+      const int left0 = std::max(0, road_left - lane_boundary_outer_margin_px_);
+      const int left1 = std::min(drivable.cols - 1, road_left + edge_band);
+      const int right0 = std::max(0, road_right - edge_band);
+      const int right1 = std::min(drivable.cols - 1, road_right + lane_boundary_outer_margin_px_);
+      if (left0 <= left1) gate.row(y).colRange(left0, left1 + 1).setTo(255);
+      if (right0 <= right1) gate.row(y).colRange(right0, right1 + 1).setTo(255);
+    }
+    return gate;
+  }
+
+  void filterLaneBoundary(
+    const cv::Mat & raw_lane, const cv::Mat & drivable, cv::Mat & boundary_lane)
+  {
+    if (!lane_boundary_filter_enabled_) {
+      boundary_lane = raw_lane.clone();
+      return;
+    }
+    const cv::Mat gate = roadEdgeGate(drivable);
+    cv::bitwise_and(raw_lane, gate, boundary_lane);
+    cv::morphologyEx(
+      boundary_lane, boundary_lane, cv::MORPH_CLOSE,
+      cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3)));
+
+    const int pixels = cv::countNonZero(boundary_lane);
+    if (pixels >= lane_boundary_min_pixels_) {
+      last_boundary_lane_ = boundary_lane.clone();
+      boundary_lane_miss_frames_ = 0;
+      return;
+    }
+
+    if (lane_boundary_temporal_hold_frames_ > 0 &&
+      !last_boundary_lane_.empty() && last_boundary_lane_.size() == boundary_lane.size() &&
+      boundary_lane_miss_frames_ < lane_boundary_temporal_hold_frames_)
+    {
+      cv::Mat held;
+      cv::bitwise_and(last_boundary_lane_, gate, held);
+      if (cv::countNonZero(held) >= std::max(8, lane_boundary_min_pixels_ / 2)) {
+        boundary_lane = held;
+        ++boundary_lane_miss_frames_;
+        return;
+      }
+    }
+    boundary_lane_miss_frames_ = lane_boundary_temporal_hold_frames_;
   }
 
   void prepareHomography(int width, int height)
@@ -2077,6 +3003,15 @@ private:
       static_cast<double>(count);
   }
 
+  static double robustMedianGap(std::vector<double> gaps)
+  {
+    if (gaps.empty()) return std::numeric_limits<double>::quiet_NaN();
+    std::sort(gaps.begin(), gaps.end());
+    const size_t n = gaps.size();
+    if ((n & 1U) != 0U) return gaps[n / 2U];
+    return 0.5 * (gaps[n / 2U - 1U] + gaps[n / 2U]);
+  }
+
   std::string laneCorridorStatus(bool valid, double gap_px) const
   {
     if (!valid || !std::isfinite(gap_px)) return "UNKNOWN";
@@ -2176,8 +3111,15 @@ private:
     const int bottom_y = std::clamp(static_cast<int>(std::lround(lane.rows * bottom_ratio)), top_y + 1, lane.rows - 1);
     std::vector<double> left_gaps;
     std::vector<double> right_gaps;
+    std::vector<double> left_drivable_edge_gaps;
+    std::vector<double> right_drivable_edge_gaps;
+    std::vector<cv::Point> left_drivable_edge_points;
+    std::vector<cv::Point> right_drivable_edge_points;
     left_gaps.reserve(static_cast<size_t>((bottom_y - top_y) / lane_corridor_sample_stride_px_ + 2));
     right_gaps.reserve(left_gaps.capacity());
+    left_drivable_edge_gaps.reserve(left_gaps.capacity());
+    right_drivable_edge_gaps.reserve(left_gaps.capacity());
+    const int drivable_edge_start_y = top_y + (bottom_y - top_y) / 3;
     uint64_t drivable_pixels = 0U;
     uint64_t corridor_pixels = 0U;
 
@@ -2230,11 +3172,27 @@ private:
         }
       }
       if (road_left < 0 || road_right <= road_left + 20) continue;
+      const double road_width_px = static_cast<double>(road_right - road_left + 1);
+
+      // Fallback boundary dari tepi area drivable hanya boleh memakai bagian bawah
+      // ROI (lebih stabil terhadap horizon/low-light), komponen yang benar-benar
+      // memuat center kendaraan, dan run jalan yang cukup lebar. Ini mencegah patch
+      // foreground kecil/terpisah di kejauhan menjadi pemicu RED palsu.
+      if (y >= drivable_edge_start_y && best_distance == 0 &&
+        road_width_px >= 0.30 * static_cast<double>(lane.cols))
+      {
+        left_drivable_edge_gaps.push_back(left_line - static_cast<double>(road_left));
+        right_drivable_edge_gaps.push_back(static_cast<double>(road_right) - right_line);
+        left_drivable_edge_points.emplace_back(road_left, y);
+        right_drivable_edge_points.emplace_back(road_right, y);
+      }
 
       // Dari seluruh lane-mask, hanya kandidat terluar yang dekat tepi drivable area
       // yang boleh menjadi boundary. Marka sepeda/marka internal jauh dari tepi ditolak.
-      const double road_width_px = static_cast<double>(road_right - road_left + 1);
-      const double edge_gate_px = std::max(18.0, 0.18 * road_width_px);
+      const double edge_gate_px = std::clamp(
+        lane_boundary_edge_fraction_ * road_width_px,
+        static_cast<double>(lane_boundary_min_edge_px_),
+        static_cast<double>(lane_boundary_max_edge_px_));
       const int edge_margin = std::max(4, static_cast<int>(std::lround(0.02 * lane.cols)));
       const int left_min = std::max(0, road_left - edge_margin);
       const int left_max = std::min(center_i, road_right);
@@ -2283,18 +3241,53 @@ private:
       result.raw_lane_rows >= lane_corridor_minimum_valid_rows_;
     result.internal_lane_ignored =
       result.internal_lane_rows >= lane_corridor_minimum_valid_rows_;
-    result.left_samples = static_cast<int>(left_gaps.size());
-    result.right_samples = static_cast<int>(right_gaps.size());
-    result.left_valid =
-      result.drivable_detected && result.left_samples >= lane_corridor_minimum_valid_rows_;
-    result.right_valid =
-      result.drivable_detected && result.right_samples >= lane_corridor_minimum_valid_rows_;
-    result.lane_mask_detected = result.left_valid || result.right_valid;
-    if (result.left_valid) result.left_gap_px = robustClosestGap(left_gaps);
-    if (result.right_valid) result.right_gap_px = robustClosestGap(right_gaps);
+    result.left_lane_samples = static_cast<int>(left_gaps.size());
+    result.right_lane_samples = static_cast<int>(right_gaps.size());
+    result.left_drivable_edge_samples = static_cast<int>(left_drivable_edge_gaps.size());
+    result.right_drivable_edge_samples = static_cast<int>(right_drivable_edge_gaps.size());
+    const bool left_lane_valid =
+      result.drivable_detected && result.left_lane_samples >= lane_corridor_minimum_valid_rows_;
+    const bool right_lane_valid =
+      result.drivable_detected && result.right_lane_samples >= lane_corridor_minimum_valid_rows_;
+    const bool left_drivable_edge_valid =
+      result.drivable_detected &&
+      result.left_drivable_edge_samples >= lane_corridor_minimum_valid_rows_;
+    const bool right_drivable_edge_valid =
+      result.drivable_detected &&
+      result.right_drivable_edge_samples >= lane_corridor_minimum_valid_rows_;
+    result.lane_mask_detected = left_lane_valid || right_lane_valid;
+
+    result.left_valid = false;
+    result.right_valid = false;
+    result.left_samples = 0;
+    result.right_samples = 0;
+    if (left_lane_valid) {
+      result.left_valid = true;
+      result.left_samples = result.left_lane_samples;
+      result.left_gap_px = robustClosestGap(left_gaps);
+      result.left_boundary_source = "OUTER_LANE";
+    } else if (left_drivable_edge_valid) {
+      result.left_valid = true;
+      result.left_samples = result.left_drivable_edge_samples;
+      result.left_gap_px = robustMedianGap(left_drivable_edge_gaps);
+      result.left_boundary_source = "DRIVABLE_EDGE";
+      result.left_outer_points = left_drivable_edge_points;
+    }
+    if (right_lane_valid) {
+      result.right_valid = true;
+      result.right_samples = result.right_lane_samples;
+      result.right_gap_px = robustClosestGap(right_gaps);
+      result.right_boundary_source = "OUTER_LANE";
+    } else if (right_drivable_edge_valid) {
+      result.right_valid = true;
+      result.right_samples = result.right_drivable_edge_samples;
+      result.right_gap_px = robustMedianGap(right_drivable_edge_gaps);
+      result.right_boundary_source = "DRIVABLE_EDGE";
+      result.right_outer_points = right_drivable_edge_points;
+    }
 
     // Warna Lane Safety harus fail-closed terhadap validitas drivable area.
-    // Lane-mask tanpa drivable yang valid tidak dipercaya sebagai batas jalan.
+    // Lane-mask maupun drivable-edge tanpa drivable yang valid tidak dipercaya.
     if (!result.drivable_detected) {
       result.left_status = "UNKNOWN";
       result.right_status = "UNKNOWN";
@@ -2305,11 +3298,17 @@ private:
       return result;
     }
 
-    // Drivable valid + lane tidak ada / hanya marka internal => tetap GREEN/CLEAR.
-    // Hanya outer boundary tervalidasi yang boleh menghasilkan YELLOW/RED.
+    // Prioritas boundary: outer lane-mark tervalidasi. Jika tidak ada marka,
+    // tepi komponen drivable ego menjadi fallback sekunder yang eksplisit.
     result.left_status = result.left_valid ? laneCorridorStatus(true, result.left_gap_px) : "GREEN";
     result.right_status = result.right_valid ? laneCorridorStatus(true, result.right_gap_px) : "GREEN";
-    if (result.left_valid || result.right_valid) result.evidence_mode = "DRIVABLE_OUTER_LANE";
+    const bool outer_lane_used =
+      result.left_boundary_source == "OUTER_LANE" || result.right_boundary_source == "OUTER_LANE";
+    const bool drivable_edge_used =
+      result.left_boundary_source == "DRIVABLE_EDGE" || result.right_boundary_source == "DRIVABLE_EDGE";
+    if (outer_lane_used && drivable_edge_used) result.evidence_mode = "DRIVABLE_HYBRID_BOUNDARY";
+    else if (outer_lane_used) result.evidence_mode = "DRIVABLE_OUTER_LANE";
+    else if (drivable_edge_used) result.evidence_mode = "DRIVABLE_EDGE_FALLBACK";
     else if (result.raw_lane_mask_detected && result.internal_lane_ignored)
       result.evidence_mode = "DRIVABLE_INTERNAL_LANE_IGNORED";
     else result.evidence_mode = "DRIVABLE_ONLY";
@@ -2457,6 +3456,34 @@ private:
       state = safety::NORMAL;
     }
 
+    // Camera frame is horizontally flipped before inference. Normalize all
+    // published/control lane semantics back to the physical/operator frame so
+    // LEFT/RIGHT in ROS, Final Dataset and steering control are identical to
+    // the mirrored Overview shown to the operator. The display overlay already
+    // captured a copy of the raw-image corridor above, so its pixels remain correct.
+    double published_left_clearance = left_clearance;
+    double published_right_clearance = right_clearance;
+    if (flip_horizontal_) {
+      std::swap(published_left_clearance, published_right_clearance);
+      effective_center_error = -effective_center_error;
+      if (state == safety::RECENTER_LEFT) state = safety::RECENTER_RIGHT;
+      else if (state == safety::RECENTER_RIGHT) state = safety::RECENTER_LEFT;
+      if (decision.state == safety::RECENTER_LEFT) decision.state = safety::RECENTER_RIGHT;
+      else if (decision.state == safety::RECENTER_RIGHT) decision.state = safety::RECENTER_LEFT;
+      std::swap(corridor.left_status, corridor.right_status);
+      std::swap(corridor.left_gap_px, corridor.right_gap_px);
+      std::swap(corridor.left_penetration_px, corridor.right_penetration_px);
+      std::swap(corridor.left_correction_m, corridor.right_correction_m);
+      std::swap(corridor.left_recenter_latched, corridor.right_recenter_latched);
+      std::swap(corridor.left_valid, corridor.right_valid);
+      std::swap(corridor.left_samples, corridor.right_samples);
+      std::swap(corridor.left_lane_samples, corridor.right_lane_samples);
+      std::swap(corridor.left_drivable_edge_samples, corridor.right_drivable_edge_samples);
+      std::swap(corridor.left_boundary_source, corridor.right_boundary_source);
+      if (corridor.recommendation == "RECENTER_LEFT") corridor.recommendation = "RECENTER_RIGHT";
+      else if (corridor.recommendation == "RECENTER_RIGHT") corridor.recommendation = "RECENTER_LEFT";
+    }
+
     {
       std::lock_guard<std::mutex> lock(state_mutex_);
       latest_lane_state_ = state;
@@ -2467,14 +3494,25 @@ private:
       have_lane_ = true;
     }
     const double confidence = std::clamp(static_cast<double>(valid_rows) / 12.0, 0.0, 1.0);
+    const double left_gap_m_est = corridor.left_valid ?
+      corridor.left_gap_px * lane_corridor_correction_gain_m_per_px_ :
+      std::numeric_limits<double>::quiet_NaN();
+    const double right_gap_m_est = corridor.right_valid ?
+      corridor.right_gap_px * lane_corridor_correction_gain_m_per_px_ :
+      std::numeric_limits<double>::quiet_NaN();
     std::ostringstream json;
     json << std::boolalpha << std::fixed << std::setprecision(4)
          << "{\"backend\":\"cpu\",\"valid\":" << effective_valid
          << ",\"drivable_valid\":" << valid
+         << ",\"physical_frame\":true"
+         << ",\"evidence_source\":\"" << (lane_classical_fallback_active_.load() ? "CLASSICAL_FALLBACK" : "YOLOPV2_SEGMENTATION") << "\""
+         << ",\"classical_fallback_active\":" << lane_classical_fallback_active_.load()
+         << ",\"classical_left_samples\":" << lane_classical_left_samples_.load()
+         << ",\"classical_right_samples\":" << lane_classical_right_samples_.load()
          << ",\"state\":\"" << state << "\",\"critical\":" << decision.critical
          << ",\"reason\":\"" << decision.reason << "\""
-         << ",\"left_clearance_m\":" << left_clearance
-         << ",\"right_clearance_m\":" << right_clearance
+         << ",\"left_clearance_m\":" << published_left_clearance
+         << ",\"right_clearance_m\":" << published_right_clearance
          << ",\"center_error_m\":" << effective_center_error
          << ",\"drivable_center_error_m\":" << center_error
          << ",\"heading_error_rad\":" << heading_error
@@ -2496,6 +3534,11 @@ private:
          << "\",\"right_status\":\"" << corridor.right_status
          << "\",\"left_gap_px\":" << corridor.left_gap_px
          << ",\"right_gap_px\":" << corridor.right_gap_px
+         << ",\"left_gap_m_est\":";
+    if (std::isfinite(left_gap_m_est)) json << left_gap_m_est; else json << "null";
+    json << ",\"right_gap_m_est\":";
+    if (std::isfinite(right_gap_m_est)) json << right_gap_m_est; else json << "null";
+    json << ",\"gap_scale_m_per_px\":" << lane_corridor_correction_gain_m_per_px_
          << ",\"left_penetration_px\":" << corridor.left_penetration_px
          << ",\"right_penetration_px\":" << corridor.right_penetration_px
          << ",\"left_correction_m\":" << corridor.left_correction_m
@@ -2508,7 +3551,13 @@ private:
          << ",\"correction_error_px\":" << corridor.correction_error_px
          << ",\"left_samples\":" << corridor.left_samples
          << ",\"right_samples\":" << corridor.right_samples
-         << ",\"recommendation\":\"" << corridor.recommendation << "\"}"
+         << ",\"left_lane_samples\":" << corridor.left_lane_samples
+         << ",\"right_lane_samples\":" << corridor.right_lane_samples
+         << ",\"left_drivable_edge_samples\":" << corridor.left_drivable_edge_samples
+         << ",\"right_drivable_edge_samples\":" << corridor.right_drivable_edge_samples
+         << ",\"left_boundary_source\":\"" << corridor.left_boundary_source
+         << "\",\"right_boundary_source\":\"" << corridor.right_boundary_source
+         << "\",\"recommendation\":\"" << corridor.recommendation << "\"}"
          << ",\"stamp_ns\":" << stamp.nanoseconds() << '}';
     std_msgs::msg::String message;
     message.data = json.str();
@@ -2575,6 +3624,12 @@ private:
     json << std::fixed << std::setprecision(3)
          << "{\"backend\":\"camera_only\",\"inference_enabled\":false"
          << ",\"capture_fps\":" << capture_fps_.load()
+         << ",\"capture_source_width\":" << requested_width_
+         << ",\"capture_source_height\":" << requested_height_
+         << ",\"capture_source_fps_target\":" << camera_fps_
+         << ",\"capture_normalized\":" << (capture_normalize_to_output_ ? "true" : "false")
+         << ",\"capture_output_width\":" << (capture_normalize_to_output_ ? capture_output_width_ : requested_width_)
+         << ",\"capture_output_height\":" << (capture_normalize_to_output_ ? capture_output_height_ : requested_height_)
          << ",\"capture_frames_total\":" << capture_frames_total_.load()
          << ",\"capture_dropped_total\":" << capture_dropped_total_.load()
          << ",\"capture_overwrite_total\":" << capture_overwrite_total_.load()
@@ -2587,6 +3642,36 @@ private:
     performance_pub_->publish(performance);
   }
 
+  void normalizeCaptureFrame(cv::Mat &frame) const
+  {
+    if (!capture_normalize_to_output_ || frame.empty()) return;
+    if (frame.cols == capture_output_width_ && frame.rows == capture_output_height_) return;
+
+    const double target_aspect =
+      static_cast<double>(capture_output_width_) / static_cast<double>(capture_output_height_);
+    const double source_aspect =
+      static_cast<double>(frame.cols) / static_cast<double>(frame.rows);
+    cv::Rect roi(0, 0, frame.cols, frame.rows);
+
+    if (source_aspect > target_aspect) {
+      const int crop_width = std::max(
+        1, std::min(frame.cols, static_cast<int>(std::lround(frame.rows * target_aspect))));
+      roi.x = std::max(0, (frame.cols - crop_width) / 2);
+      roi.width = crop_width;
+    } else if (source_aspect < target_aspect) {
+      const int crop_height = std::max(
+        1, std::min(frame.rows, static_cast<int>(std::lround(frame.cols / target_aspect))));
+      roi.y = std::max(0, (frame.rows - crop_height) / 2);
+      roi.height = crop_height;
+    }
+
+    cv::Mat normalized;
+    cv::resize(
+      frame(roi), normalized, cv::Size(capture_output_width_, capture_output_height_),
+      0.0, 0.0, cv::INTER_LINEAR);
+    frame = std::move(normalized);
+  }
+
   void captureLoop()
   {
     while (rclcpp::ok() && !capture_stop_.load()) {
@@ -2597,29 +3682,58 @@ private:
           std::chrono::steady_clock::now().time_since_epoch()).count(),
         std::memory_order_release);
       capture_read_in_progress_.store(true, std::memory_order_release);
-      const bool read_ok = capture_.read(frame);
+      bool read_ok = false;
+      try {
+        read_ok = direct_capture_active_ ?
+          direct_capture_.readFrame(frame, direct_v4l2_timeout_ms_) :
+          capture_.read(frame);
+      } catch (const std::exception & error) {
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 5000,
+          "Camera capture exception: %s", error.what());
+        read_ok = false;
+      }
       capture_read_in_progress_.store(false, std::memory_order_release);
       if (!read_ok || frame.empty() || frame.type() != CV_8UC3) {
         ++capture_dropped_total_;
         ++camera_read_fail_streak_;
         camera_good_frame_streak_ = 0;
-        if (camera_read_fail_streak_ < camera_read_fail_threshold_) {
+
+        const auto fail_now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count();
+        const auto last_good_ns = last_good_capture_ns_.load(std::memory_order_acquire);
+        const double stale_sec = last_good_ns > 0 ?
+          static_cast<double>(fail_now_ns - last_good_ns) / 1.0e9 :
+          std::numeric_limits<double>::infinity();
+
+        // Do not turn a short burst of corrupt/truncated UVC MJPEG frames into
+        // a multi-second outage. Reopen only after both the miss-count and
+        // last-good-frame age prove that the stream is genuinely stale.
+        if (camera_read_fail_streak_ < camera_read_fail_threshold_ ||
+            stale_sec < camera_reopen_stale_sec_)
+        {
           std::this_thread::sleep_for(10ms);
           continue;
         }
+
+        if (direct_capture_active_) direct_capture_.closeDevice();
         capture_.release();
+        direct_capture_active_ = false;
+        const int failed_streak = camera_read_fail_streak_;
         camera_read_fail_streak_ = 0;
         publishConnected(false);
-        publishHealth(false, "FRAME_READ_FAILED_STREAK");
+        publishHealth(false, "FRAME_READ_FAILED_STALE");
         publishEmergency(inference_enabled_.load());
         RCLCPP_WARN_THROTTLE(
           get_logger(), *get_clock(), 5000,
-          "Camera read gagal %d frame berturut-turut; reopen V4L2", camera_read_fail_threshold_);
+          "Camera read gagal %d frame; last-good stale %.3f s >= %.3f s -> reopen V4L2",
+          failed_streak, stale_sec, camera_reopen_stale_sec_);
         continue;
       }
       camera_read_fail_streak_ = 0;
       camera_good_frame_streak_ = std::min(camera_good_frame_streak_ + 1, camera_online_good_frames_);
       if (camera_good_frame_streak_ == camera_online_good_frames_) publishConnected(true);
+      normalizeCaptureFrame(frame);
       if (flip_horizontal_) cv::flip(frame, frame, 1);
       const auto steady_now = std::chrono::steady_clock::now();
       last_good_capture_ns_.store(
@@ -2651,31 +3765,135 @@ private:
         if (dt > 1.0e-6) {const double f = 1.0 / dt; const double old_fps = capture_fps_.load(); capture_fps_.store(old_fps <= 0.0 ? f : 0.12 * f + 0.88 * old_fps);}
       }
       last_capture_time_ = steady_now;
-      const double since_visual = last_raw_publish_time_.time_since_epoch().count() == 0 ? 1e9 :
+    }
+  }
+
+  void visualPublishLoop()
+  {
+    uint64_t last_raw_sequence = 0U;
+    uint64_t last_preview_sequence = 0U;
+    while (rclcpp::ok() && !capture_stop_.load()) {
+      const auto steady_now = std::chrono::steady_clock::now();
+      const double since_raw = last_raw_publish_time_.time_since_epoch().count() == 0 ? 1e9 :
         std::chrono::duration<double>(steady_now - last_raw_publish_time_).count();
-      if (publish_raw_ && since_visual >= 1.0 / visual_publish_rate_hz_) {
-        publishImage(raw_pub_, ros_stamp, frame, "bgr8");
-        publishCameraInfo(ros_stamp, frame.cols, frame.rows);
-        last_raw_publish_time_ = steady_now;
+      const double since_preview = last_camera_only_preview_publish_time_.time_since_epoch().count() == 0 ? 1e9 :
+        std::chrono::duration<double>(steady_now - last_camera_only_preview_publish_time_).count();
+      bool raw_due = publish_raw_ && since_raw >= 1.0 / visual_publish_rate_hz_;
+      bool preview_due = web_preview_enabled_ && compressed_preview_pub_ &&
+        compressed_preview_pub_->get_subscription_count() > 0U &&
+        since_preview >= 1.0 / web_preview_fps_;
+      if (!raw_due && !preview_due) {
+        std::this_thread::sleep_for(2ms);
+        continue;
       }
-      const double since_preview = last_web_preview_publish_time_.time_since_epoch().count() == 0 ? 1e9 :
-        std::chrono::duration<double>(steady_now - last_web_preview_publish_time_).count();
-      if (!inference_enabled_.load() && web_preview_enabled_ && compressed_preview_pub_ &&
-        compressed_preview_pub_->get_subscription_count() > 0U && since_preview >= 1.0 / web_preview_fps_)
+
+      cv::Mat frame;
+      rclcpp::Time stamp{0, 0, RCL_ROS_TIME};
+      uint64_t sequence = 0U;
       {
+        std::lock_guard<std::mutex> lock(frame_mutex_);
+        if (!latest_frame_.empty()) {
+          sequence = latest_frame_sequence_;
+          raw_due = raw_due && sequence != last_raw_sequence;
+          preview_due = preview_due && sequence != last_preview_sequence;
+          if (raw_due || preview_due) {
+            frame = latest_frame_.clone();
+            stamp = latest_frame_stamp_;
+          }
+        }
+      }
+      if (frame.empty()) {
+        std::this_thread::sleep_for(2ms);
+        continue;
+      }
+
+      if (raw_due) {
+        cv::Mat raw_frame = frame;
+        const bool raw_resized =
+          raw_publish_width_ > 0 && raw_publish_height_ > 0 &&
+          (frame.cols != raw_publish_width_ || frame.rows != raw_publish_height_);
+        if (raw_resized) {
+          cv::resize(
+            frame, raw_frame, cv::Size(raw_publish_width_, raw_publish_height_),
+            0.0, 0.0, cv::INTER_AREA);
+        }
+        publishImage(raw_pub_, stamp, raw_frame, "bgr8");
+        // CameraInfo calibration is defined at the calibrated full-resolution
+        // image. Do not publish mismatched intrinsics alongside a resized
+        // semantic transport frame; semantic metric projection scales its own
+        // calibration using image width/height.
+        if (!raw_resized) publishCameraInfo(stamp, raw_frame.cols, raw_frame.rows);
+        last_raw_publish_time_ = std::chrono::steady_clock::now();
+        last_raw_sequence = sequence;
+      }
+
+      if (preview_due) {
         cv::Mat preview;
-        cv::resize(frame, preview, cv::Size(web_preview_width_, web_preview_height_), 0.0, 0.0, cv::INTER_AREA);
+        cv::resize(
+          frame, preview, cv::Size(web_preview_width_, web_preview_height_),
+          0.0, 0.0, cv::INTER_AREA);
+
+        bool overlay_applied = false;
+        if (inference_enabled_.load()) {
+          cv::Mat overlay_drivable;
+          cv::Mat overlay_lane;
+          LaneCorridorDecision overlay_corridor;
+          std::chrono::steady_clock::time_point overlay_time{};
+          bool overlay_valid = false;
+          {
+            std::lock_guard<std::mutex> lock(overlay_mutex_);
+            overlay_valid = latest_overlay_valid_;
+            overlay_time = latest_overlay_steady_;
+            if (overlay_valid) {
+              overlay_drivable = latest_overlay_drivable_.clone();
+              overlay_lane = latest_overlay_lane_.clone();
+              overlay_corridor = latest_overlay_corridor_;
+            }
+          }
+          const double overlay_age_sec =
+            overlay_time.time_since_epoch().count() == 0 ? 1e9 :
+            std::chrono::duration<double>(steady_now - overlay_time).count();
+          if (overlay_valid && overlay_age_sec <= web_overlay_max_age_sec_ &&
+            overlay_drivable.size() == preview.size() &&
+            overlay_lane.size() == preview.size())
+          {
+            cv::Mat green(preview.size(), CV_8UC3, cv::Scalar(0, 255, 0));
+            cv::Mat drivable_tint = preview.clone();
+            green.copyTo(drivable_tint, overlay_drivable);
+            cv::addWeighted(
+              preview, 1.0 - overlay_alpha_, drivable_tint, overlay_alpha_, 0.0, preview);
+
+            if (cv::countNonZero(overlay_lane) > 0) {
+              cv::dilate(
+                overlay_lane, overlay_lane,
+                cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3)));
+              cv::Mat red_tint = preview.clone();
+              cv::Mat red(preview.size(), CV_8UC3, cv::Scalar(0, 0, 255));
+              red.copyTo(red_tint, overlay_lane);
+              cv::addWeighted(preview, 0.68, red_tint, 0.32, 0.0, preview);
+            }
+            // Hanya dua Lane Safety lines; outer-boundary putih sengaja tidak digambar.
+            drawLaneCorridorOverlay(preview, overlay_corridor);
+            overlay_applied = true;
+          }
+        }
+
         std::vector<uchar> jpeg;
-        if (cv::imencode(".jpg", preview, jpeg, {cv::IMWRITE_JPEG_QUALITY, web_preview_jpeg_quality_}) && !jpeg.empty()) {
+        if (cv::imencode(
+          ".jpg", preview, jpeg,
+          {cv::IMWRITE_JPEG_QUALITY, web_preview_jpeg_quality_}) && !jpeg.empty())
+        {
           sensor_msgs::msg::CompressedImage message;
-          message.header.stamp = ros_stamp;
+          message.header.stamp = stamp;
           message.header.frame_id = frame_id_;
-          message.format = "jpeg; source=camera_raw";
+          message.format = overlay_applied ?
+            "jpeg; source=yolop_annotated" : "jpeg; source=camera_raw";
           message.data.assign(jpeg.begin(), jpeg.end());
           compressed_preview_pub_->publish(std::move(message));
           ++web_preview_published_total_;
         }
-        last_web_preview_publish_time_ = steady_now;
+        last_camera_only_preview_publish_time_ = std::chrono::steady_clock::now();
+        last_preview_sequence = sequence;
       }
     }
   }
@@ -2718,14 +3936,24 @@ private:
       const cv::Mat input = letterbox(frame);
       const auto inference_started = std::chrono::steady_clock::now();
       const double preprocess_ms = std::chrono::duration<double, std::milli>(inference_started - preprocess_started).count();
-      std::vector<cv::Mat> outputs = forwardTorch(input);
+      std::vector<cv::Mat> outputs;
+#ifdef PERCEPTION_HAVE_OPENVINO
+      if (active_backend_.rfind("openvino_", 0) == 0) outputs = forwardOpenVino(input);
+      else outputs = forwardTorch(input);
+#else
+      outputs = forwardTorch(input);
+#endif
       const auto decode_started = std::chrono::steady_clock::now();
       const double inference_ms = std::chrono::duration<double, std::milli>(decode_started - inference_started).count();
       validateOutputs(outputs);
       auto detections = decodeDetections(outputs, frame.cols, frame.rows);
       cv::Mat drivable;
+      cv::Mat raw_lane;
       cv::Mat lane;
-      decodeMasks(outputs, frame.cols, frame.rows, drivable, lane);
+      decodeMasks(outputs, frame.cols, frame.rows, drivable, raw_lane);
+      applyClassicalLaneFallback(frame, drivable, raw_lane);
+      keepEgoConnectedDrivable(drivable);
+      filterLaneBoundary(raw_lane, drivable, lane);
       const auto geometry_started = std::chrono::steady_clock::now();
       const double decode_ms = std::chrono::duration<double, std::milli>(geometry_started - decode_started).count();
 
@@ -2751,7 +3979,31 @@ private:
       const auto boundary_points = buildDrivableBoundary(
         drivable, lane_valid, left_clearance, right_clearance, center_error,
         heading_error, road_width, valid_rows);
-      LaneCorridorDecision lane_corridor = evaluateLaneCorridor(lane, drivable);
+      // Keputusan safety tetap melihat raw YOLO lane evidence, lalu fungsi
+      // evaluateLaneCorridor melakukan validasi terhadap tepi drivable. Mask
+      // `lane` di atas khusus boundary-only untuk publish dan visual operator.
+      LaneCorridorDecision lane_corridor = evaluateLaneCorridor(raw_lane, drivable);
+
+      // Snapshot display-only untuk web preview. Safety/control tidak pernah
+      // membaca snapshot ini; keduanya tetap memakai hasil inference saat ini.
+      {
+        cv::Mat drivable_preview;
+        cv::Mat lane_preview;
+        cv::resize(
+          drivable, drivable_preview,
+          cv::Size(web_preview_width_, web_preview_height_),
+          0.0, 0.0, cv::INTER_NEAREST);
+        cv::resize(
+          lane, lane_preview,
+          cv::Size(web_preview_width_, web_preview_height_),
+          0.0, 0.0, cv::INTER_NEAREST);
+        std::lock_guard<std::mutex> lock(overlay_mutex_);
+        latest_overlay_drivable_ = std::move(drivable_preview);
+        latest_overlay_lane_ = std::move(lane_preview);
+        latest_overlay_corridor_ = lane_corridor;
+        latest_overlay_steady_ = std::chrono::steady_clock::now();
+        latest_overlay_valid_ = true;
+      }
 
       object_pub_->publish(makeObstacleCloud(stamp, confirmed_obstacles));
       boundary_pub_->publish(makeCloud(stamp, boundary_points));
@@ -2774,70 +4026,39 @@ private:
       if (false && publish_raw_) publishImage(raw_pub_, stamp, frame, "bgr8");
       if (publish_drivable_) publishImage(drivable_pub_, stamp, drivable, "mono8");
       if (publish_lane_) publishImage(lane_pub_, stamp, lane, "mono8");
-      const bool web_wants_annotated = web_preview_enabled_ && compressed_preview_pub_ &&
-        compressed_preview_pub_->get_subscription_count() > 0U;
       const bool rviz_wants_annotated = annotated_pub_->get_subscription_count() > 0U;
-      if (publish_annotated_ && (rviz_wants_annotated || web_wants_annotated)) {
-        cv::Mat annotated = frame.clone();
+      if (publish_annotated_ && rviz_wants_annotated) {
+        cv::Mat rviz_annotated = frame.clone();
         cv::Mat green(frame.size(), CV_8UC3, cv::Scalar(0, 255, 0));
-        green.copyTo(annotated, drivable);
-        cv::addWeighted(frame, 1.0 - overlay_alpha_, annotated, overlay_alpha_, 0.0, annotated);
+        green.copyTo(rviz_annotated, drivable);
+        cv::addWeighted(
+          frame, 1.0 - overlay_alpha_, rviz_annotated, overlay_alpha_, 0.0, rviz_annotated);
 
-        // Visual diagnostic saja: tampilkan raw lane-mask YOLOPv2 dalam cyan tipis.
-        // Mask kontrol asli tidak diubah; dilasi hanya pada salinan visual agar marka
-        // tipis tetap terlihat jelas pada preview ROS Web 640x360.
         if (!lane.empty()) {
           cv::Mat lane_visual;
           cv::dilate(
             lane, lane_visual,
             cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3)));
-          cv::Mat lane_tint = annotated.clone();
-          cv::Mat cyan(frame.size(), CV_8UC3, cv::Scalar(255, 255, 0));
-          cyan.copyTo(lane_tint, lane_visual);
-          cv::addWeighted(annotated, 0.72, lane_tint, 0.28, 0.0, annotated);
+          cv::Mat red_tint = rviz_annotated.clone();
+          cv::Mat red(frame.size(), CV_8UC3, cv::Scalar(0, 0, 255));
+          red.copyTo(red_tint, lane_visual);
+          cv::addWeighted(rviz_annotated, 0.68, red_tint, 0.32, 0.0, rviz_annotated);
         }
-
-        // Outer-boundary tervalidasi tetap netral putih, terpisah dari raw lane-mask.
-        drawOuterLaneBoundaryOverlay(annotated, lane_corridor);
-        // Dua garis Lane Safety berasal dari empat titik hasil APPLY dan warnanya
-        // mengikuti UNKNOWN/GREEN/YELLOW/RED runtime.
-        drawLaneCorridorOverlay(annotated, lane_corridor);
-        // YOLOPv2 raw heads are intentionally class-agnostic in this runtime.
-        // Do not burn their low-confidence geometry boxes into the ROS Web camera:
-        // obstacle calibration overlays only the selected COCO semantic candidate.
-        // RViz still retains raw geometry boxes for engineering diagnostics.
-        if (rviz_wants_annotated) {
-          cv::Mat rviz_annotated = annotated.clone();
-          for (const auto & d : detections) {
-            const cv::Point p1(static_cast<int>(d.x1), static_cast<int>(d.y1));
-            const cv::Point p2(static_cast<int>(d.x2), static_cast<int>(d.y2));
-            cv::rectangle(rviz_annotated, p1, p2, cv::Scalar(0, 255, 255), box_thickness_);
-            std::ostringstream label;
-            label << "obstacle " << std::fixed << std::setprecision(2) << d.score;
-            cv::putText(rviz_annotated, label.str(), cv::Point(p1.x, std::max(16, p1.y - 6)),
-              cv::FONT_HERSHEY_SIMPLEX, 0.48, cv::Scalar(0, 255, 255), 1, cv::LINE_AA);
-          }
-          publishImage(annotated_pub_, stamp, rviz_annotated, "bgr8");
-          ++rviz_published_total_;
+        drawLaneCorridorOverlay(rviz_annotated, lane_corridor);
+        for (const auto & d : detections) {
+          const cv::Point p1(static_cast<int>(d.x1), static_cast<int>(d.y1));
+          const cv::Point p2(static_cast<int>(d.x2), static_cast<int>(d.y2));
+          cv::rectangle(rviz_annotated, p1, p2, cv::Scalar(0, 255, 255), box_thickness_);
+          std::ostringstream label;
+          label << "obstacle " << std::fixed << std::setprecision(2) << d.score;
+          cv::putText(
+            rviz_annotated, label.str(),
+            cv::Point(p1.x, std::max(16, p1.y - 6)),
+            cv::FONT_HERSHEY_SIMPLEX, 0.48,
+            cv::Scalar(0, 255, 255), 1, cv::LINE_AA);
         }
-        const auto web_now = std::chrono::steady_clock::now();
-        const double since_web = last_web_preview_publish_time_.time_since_epoch().count() == 0 ? 1e9 :
-          std::chrono::duration<double>(web_now - last_web_preview_publish_time_).count();
-        if (web_wants_annotated && since_web >= 1.0 / web_preview_fps_) {
-          cv::Mat preview;
-          cv::resize(annotated, preview, cv::Size(web_preview_width_, web_preview_height_), 0.0, 0.0, cv::INTER_AREA);
-          std::vector<uchar> jpeg;
-          if (cv::imencode(".jpg", preview, jpeg, {cv::IMWRITE_JPEG_QUALITY, web_preview_jpeg_quality_}) && !jpeg.empty()) {
-            sensor_msgs::msg::CompressedImage message;
-            message.header.stamp = stamp;
-            message.header.frame_id = frame_id_;
-            message.format = "jpeg; source=yolop_annotated";
-            message.data.assign(jpeg.begin(), jpeg.end());
-            compressed_preview_pub_->publish(std::move(message));
-            ++web_preview_published_total_;
-          }
-          last_web_preview_publish_time_ = web_now;
-        }
+        publishImage(annotated_pub_, stamp, rviz_annotated, "bgr8");
+        ++rviz_published_total_;
       }
 
       const auto finished = std::chrono::steady_clock::now();
@@ -2875,7 +4096,8 @@ private:
       std_msgs::msg::String performance;
       std::ostringstream json;
       json << std::fixed << std::setprecision(3)
-           << "{\"backend\":\"cpu\",\"inference_enabled\":true,\"window_frames\":" << timing.size()
+           << "{\"backend\":\"" << active_backend_
+           << "\",\"inference_enabled\":true,\"window_frames\":" << timing.size()
            << ",\"pipeline_fps\":" << performance_fps_
            << ",\"pipeline_fps_ema\":" << performance_fps_
            << ",\"pipeline_ms_per_frame\":" << mean_ms
@@ -2885,6 +4107,12 @@ private:
            << ",\"pipeline_max_ms\":" << max_ms
            << ",\"pipeline_std_ms\":" << std_ms
            << ",\"capture_fps\":" << capture_fps_.load()
+           << ",\"capture_source_width\":" << requested_width_
+           << ",\"capture_source_height\":" << requested_height_
+           << ",\"capture_source_fps_target\":" << camera_fps_
+           << ",\"capture_normalized\":" << (capture_normalize_to_output_ ? "true" : "false")
+           << ",\"capture_output_width\":" << (capture_normalize_to_output_ ? capture_output_width_ : requested_width_)
+           << ",\"capture_output_height\":" << (capture_normalize_to_output_ ? capture_output_height_ : requested_height_)
            << ",\"frame_age_ms\":" << frame_age_ms
            << ",\"preprocess_ms\":" << preprocess_ms
            << ",\"inference_ms\":" << inference_ms
@@ -2911,6 +4139,16 @@ private:
            << ",\"camera_stddev\":" << image_stddev
            << ",\"camera_mean_gradient\":" << mean_gradient
            << ",\"extreme_fraction\":" << extreme_fraction
+           << ",\"lane_logit_min\":" << lane_logit_min_.load()
+           << ",\"lane_logit_max\":" << lane_logit_max_.load()
+           << ",\"lane_logit_mean\":" << lane_logit_mean_.load()
+           << ",\"lane_threshold\":" << lane_threshold_
+           << ",\"lane_threshold_fraction\":" << lane_threshold_fraction_.load()
+           << ",\"drivable_foreground_fraction\":" << drivable_foreground_fraction_.load()
+           << ",\"lane_classical_fallback_active\":" << (lane_classical_fallback_active_.load() ? "true" : "false")
+           << ",\"lane_classical_left_samples\":" << lane_classical_left_samples_.load()
+           << ",\"lane_classical_right_samples\":" << lane_classical_right_samples_.load()
+           << ",\"lane_evidence_source\":\"" << (lane_classical_fallback_active_.load() ? "CLASSICAL_FALLBACK" : "YOLOPV2_SEGMENTATION") << "\""
            << ",\"timing_scope\":\"inferenceTick_total\"}";
       performance.data = json.str();
       performance_pub_->publish(performance);
@@ -3053,6 +4291,8 @@ private:
 
   torch::jit::script::Module module_;
   cv::VideoCapture capture_;
+  CpuV4L2Capture direct_capture_;
+  bool direct_capture_active_{false};
   cv::Mat homography_;
   int homography_width_{0};
   int homography_height_{0};
@@ -3063,6 +4303,14 @@ private:
   int resized_height_{MODEL_HEIGHT};
 
   std::string pt_model_path_;
+  std::string inference_backend_{"libtorch_cpu"};
+  std::string active_backend_{"libtorch_cpu"};
+  std::string openvino_model_path_;
+#ifdef PERCEPTION_HAVE_OPENVINO
+  std::unique_ptr<ov::Core> ov_core_;
+  std::unique_ptr<ov::CompiledModel> ov_compiled_model_;
+  std::unique_ptr<ov::InferRequest> ov_infer_request_;
+#endif
   std::atomic_bool inference_enabled_{false};
   std::atomic_bool model_loaded_{false};
   std::mutex model_mutex_;
@@ -3075,6 +4323,9 @@ private:
   int requested_width_{1280};
   int requested_height_{720};
   int camera_fps_{30};
+  bool capture_normalize_to_output_{false};
+  int capture_output_width_{1280};
+  int capture_output_height_{720};
   std::string pixel_format_{"MJPEG"};
   bool strict_camera_mode_{false};
   bool flip_horizontal_{true};
@@ -3082,8 +4333,16 @@ private:
   double retry_sec_{2.0};
   int camera_read_fail_threshold_{5};
   int camera_online_good_frames_{3};
+  bool direct_v4l2_capture_enabled_{true};
+  bool opencv_capture_fallback_enabled_{true};
+  bool direct_capture_ever_worked_{false};
+  double direct_v4l2_restart_timeout_sec_{20.0};
+  std::chrono::steady_clock::time_point direct_reconnect_started_{};
+  int direct_v4l2_timeout_ms_{350};
+  int v4l2_buffer_count_{3};
   int camera_read_fail_streak_{0};
   int camera_good_frame_streak_{0};
+  double camera_reopen_stale_sec_{1.2};
   float confidence_threshold_{0.10F};
   float iou_threshold_{0.45F};
   float lane_threshold_{0.50F};
@@ -3091,9 +4350,12 @@ private:
   int max_detections_{300};
   bool publish_annotated_{true};
   bool publish_raw_{true};
+  int raw_publish_width_{0};
+  int raw_publish_height_{0};
   double visual_publish_rate_hz_{10.0};
   bool web_preview_enabled_{true};
   double web_preview_fps_{5.0};
+  double web_overlay_max_age_sec_{1.5};
   int web_preview_width_{640};
   int web_preview_height_{360};
   int web_preview_jpeg_quality_{75};
@@ -3120,8 +4382,32 @@ private:
   double lane_state_timeout_sec_{0.50};
   bool camera_metric_calibration_validated_{false};
   bool lane_safety_enabled_{false};
+  bool drivable_component_filter_enabled_{true};
+  bool lane_boundary_filter_enabled_{true};
+  double lane_boundary_edge_fraction_{0.10};
+  int lane_boundary_min_edge_px_{12};
+  int lane_boundary_max_edge_px_{80};
+  int lane_boundary_outer_margin_px_{20};
+  int lane_boundary_temporal_hold_frames_{1};
+  int lane_boundary_min_pixels_{40};
+  cv::Mat last_boundary_lane_;
+  int boundary_lane_miss_frames_{0};
   bool lane_corridor_overlay_enabled_{true};
   bool lane_corridor_control_enabled_{true};
+  bool lane_classical_fallback_enabled_{true};
+  int lane_classical_white_min_gray_{145};
+  int lane_classical_white_max_saturation_{110};
+  int lane_classical_yellow_h_min_{12};
+  int lane_classical_yellow_h_max_{42};
+  int lane_classical_yellow_s_min_{70};
+  int lane_classical_yellow_v_min_{100};
+  double lane_classical_roi_top_ratio_{0.50};
+  double lane_classical_search_half_width_ratio_{0.20};
+  int lane_classical_min_samples_per_side_{8};
+  int lane_classical_line_thickness_px_{7};
+  std::atomic_bool lane_classical_fallback_active_{false};
+  std::atomic<int> lane_classical_left_samples_{0};
+  std::atomic<int> lane_classical_right_samples_{0};
   bool lane_corridor_manual_lines_enabled_{true};
   double lane_corridor_top_y_ratio_{0.02};
   double lane_corridor_bottom_y_ratio_{0.98};
@@ -3230,7 +4516,13 @@ private:
   uint64_t consumed_frame_sequence_{0U};
   std::atomic_bool capture_stop_{false};
   std::thread capture_thread_;
+  std::thread visual_publish_thread_;
   std::atomic<double> capture_fps_{0.0};
+  std::atomic<double> lane_logit_min_{0.0};
+  std::atomic<double> lane_logit_max_{0.0};
+  std::atomic<double> lane_logit_mean_{0.0};
+  std::atomic<double> lane_threshold_fraction_{0.0};
+  std::atomic<double> drivable_foreground_fraction_{0.0};
   std::atomic<uint64_t> capture_frames_total_{0U};
   std::atomic<uint64_t> capture_overwrite_total_{0U};
   std::atomic<uint64_t> web_preview_published_total_{0U};
@@ -3240,7 +4532,15 @@ private:
   double camera_block_watchdog_sec_{2.5};
   std::chrono::steady_clock::time_point last_capture_time_{};
   std::chrono::steady_clock::time_point last_raw_publish_time_{};
+  std::chrono::steady_clock::time_point last_camera_only_preview_publish_time_{};
   std::chrono::steady_clock::time_point last_web_preview_publish_time_{};
+
+  std::mutex overlay_mutex_;
+  cv::Mat latest_overlay_drivable_;
+  cv::Mat latest_overlay_lane_;
+  LaneCorridorDecision latest_overlay_corridor_;
+  std::chrono::steady_clock::time_point latest_overlay_steady_{};
+  bool latest_overlay_valid_{false};
 
   std::mutex state_mutex_;
   geometry_msgs::msg::Twist last_nav_cmd_;

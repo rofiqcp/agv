@@ -366,6 +366,7 @@ private:
     // Planning cloud tidak dibatasi hanya pada current path. MPPI harus melihat
     // obstacle di corridor alternatif kiri/kanan sebelum memilih avoidance.
     declare_parameter<double>("planning_min_forward_m", 0.15);
+    declare_parameter<double>("final_obstacle_rear_keep_m", 0.90);
     declare_parameter<double>("planning_max_abs_lateral_m", 2.6);
     declare_parameter<double>("path_horizon_m", 4.0);
     // Swept-command hanya lapisan reaksi sangat dekat. Keputusan obstacle normal
@@ -446,6 +447,8 @@ private:
     planning_lateral_margin_m_ = std::max(trajectory_lateral_margin_m_, get_parameter("planning_lateral_margin_m").as_double());
     planning_corridor_half_width_m_ = 0.5 * vehicle_width_m_ + planning_lateral_margin_m_;
     planning_min_forward_m_ = std::max(0.0, get_parameter("planning_min_forward_m").as_double());
+    final_obstacle_rear_keep_m_ = std::clamp(
+      get_parameter("final_obstacle_rear_keep_m").as_double(), 0.40, 2.0);
     planning_max_abs_lateral_m_ = std::max(0.5, get_parameter("planning_max_abs_lateral_m").as_double());
     path_horizon_m_ = std::max(0.5, get_parameter("path_horizon_m").as_double());
     command_collision_horizon_m_ =
@@ -576,10 +579,19 @@ private:
         drivable_envelope_ = std::move(envelope);
       });
 
+    final_trial_sub_ = create_subscription<std_msgs::msg::String>(
+      "/perception/final_trial_guard", stateQos(), [this](std_msgs::msg::String::SharedPtr msg) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        final_trial_mode_=extractStringField(msg->data,"mode","STOP");
+        final_trial_condition_=extractStringField(msg->data,"condition","");
+        final_trial_received_=now();
+      });
     lane_state_sub_ = create_subscription<std_msgs::msg::String>(
       lane_state_topic_, sensor_qos,
       [this](std_msgs::msg::String::SharedPtr msg) {
         std::lock_guard<std::mutex> lock(mutex_);
+        lane_left_=extractStringField(msg->data,"left_status","UNKNOWN");
+        lane_right_=extractStringField(msg->data,"right_status","UNKNOWN");
         lane_state_ = extractStringField(msg->data, "state", "UNKNOWN");
         lane_recommendation_ = extractStringField(msg->data, "recommendation", "UNKNOWN");
         lane_valid_ = extractBoolField(msg->data, "valid", false);
@@ -743,12 +755,16 @@ private:
     PathSnapshot path;
     geometry_msgs::msg::Twist nav_cmd;
     bool nav_cmd_fresh = false;
+    bool final_obstacle_trial_active = false;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       last_obstacle_stream_ = t;
       obstacle_stream_seen_ = true;
       path = buildPathSnapshotUnlocked(t);
       nav_cmd_fresh = nav_cmd_.valid && fresh(nav_cmd_.received, nav_cmd_timeout_sec_, t);
+      final_obstacle_trial_active =
+        final_trial_mode_ == "OBSTACLE" &&
+        fresh(final_trial_received_, 1.5, t);
       if (nav_cmd_fresh) nav_cmd = nav_cmd_.msg;
     }
     const std::vector<BasePoint> command_path = nav_cmd_fresh ?
@@ -807,7 +823,7 @@ private:
     double closest_obstacle_right_edge = std::numeric_limits<double>::infinity();
     double closest_obstacle_left_edge = -std::numeric_limits<double>::infinity();
     int closest_obstacle_track_id = -1;
-    if (cloud_layout_ok && path.valid && msg->point_step > 0U) {
+    if (cloud_layout_ok && msg->point_step > 0U) {
       const size_t count = msg->data.size() / msg->point_step;
       filtered.data.reserve(msg->data.size());
       planning_filtered.data.reserve(msg->data.size());
@@ -818,12 +834,11 @@ private:
         if (!std::isfinite(x) || !std::isfinite(y)) continue;
         ++candidate_count;
         const BasePoint obstacle{x, y};
-        const CorridorHit hit = pointToCorridor(
-          obstacle, path.points, path_corridor_half_width_m_, path_horizon_m_);
-        // Planner harus melihat obstacle di seluruh ruang manuver lokal, bukan hanya
-        // yang dekat current/global path. Dengan begitu alternate corridor tidak
-        // dipilih ke arah obstacle yang sebelumnya disembunyikan oleh path filter.
-        if (x >= planning_min_forward_m_ && x <= path_horizon_m_ &&
+        // Local costmap represents live environment and must not depend on an
+        // already-existing plan. This allows obstacle marking before Send Goal.
+        const double planning_min_x = final_obstacle_trial_active ?
+          -final_obstacle_rear_keep_m_ : planning_min_forward_m_;
+        if (x >= planning_min_x && x <= path_horizon_m_ &&
             std::abs(y) <= planning_max_abs_lateral_m_) {
           planning_filtered.data.insert(
             planning_filtered.data.end(), record, record + msg->point_step);
@@ -836,6 +851,9 @@ private:
             minimum_command_along = std::min(minimum_command_along, command_hit.along_path_m);
           }
         }
+        if (!path.valid) continue;
+        const CorridorHit hit = pointToCorridor(
+          obstacle, path.points, path_corridor_half_width_m_, path_horizon_m_);
         if (!hit.relevant) continue;
         filtered.data.insert(filtered.data.end(), record, record + msg->point_step);
         ++relevant_count;
@@ -906,6 +924,7 @@ private:
   void controlTick()
   {
     const auto t = now();
+    std::string final_mode, final_condition, lane_left, lane_right;bool final_fresh=false;
     geometry_msgs::msg::Twist nav{};
     geometry_msgs::msg::Twist advisory{};
     bool nav_fresh = false;
@@ -937,6 +956,8 @@ private:
 
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      final_mode=final_trial_mode_;final_condition=final_trial_condition_;final_fresh=fresh(final_trial_received_,1.5,t);
+      lane_left=lane_left_;lane_right=lane_right_;
       nav_fresh = nav_cmd_.valid && fresh(nav_cmd_.received, nav_cmd_timeout_sec_, t);
       if (nav_fresh) nav = nav_cmd_.msg;
       advisory_fresh = advisory_cmd_.valid && fresh(advisory_cmd_.received, advisory_timeout_sec_, t);
@@ -975,11 +996,19 @@ private:
 
     const bool commissioning_bypass = get_parameter("commissioning_bypass_enabled").as_bool();
     const bool metric_guard_active = metric_obstacle_safety_enabled_ && !commissioning_bypass;
+    const bool final_lane_trial_active =
+      !commissioning_bypass && final_mode == "LANE" && final_fresh;
+    const bool final_obstacle_gate_active =
+      !commissioning_bypass && final_mode == "OBSTACLE_GATE" && final_fresh;
+    const bool final_lane_stream_required = final_mode == "LANE";
+    const bool final_obstacle_stream_required = final_mode == "OBSTACLE";
     const bool drivable_fresh = drivable.valid && fresh(drivable.received, drivable_timeout_sec_, t);
     const FreeCorridor free_corridor = drivable_fresh ? evaluateFreeCorridor(
       drivable, closest_obstacle_forward, closest_obstacle_right_edge, closest_obstacle_left_edge,
       vehicle_width_m_, avoidance_side_margin_m_, avoidance_boundary_lookup_tolerance_m_) : FreeCorridor{};
 
+    if(final_mode=="LANE"||final_mode=="OBSTACLE"||final_mode=="OBSTACLE_GATE")
+      nav.linear.x=std::min(nav.linear.x,0.20);
     geometry_msgs::msg::Twist output = nav;
     std::string decision = "NAV2_PASS";
     double speed_scale = 1.0;
@@ -995,7 +1024,18 @@ private:
       std::max(immediate_command_hard_stop_m_, required_stop_distance) : immediate_command_hard_stop_m_;
     const double effective_slow_distance_m = std::max(slow_path_distance_m_, effective_hard_stop_m + 0.60);
 
-    if (!nav_fresh) {
+    if(final_mode!="IDLE"&&(final_mode=="STOP"||!final_fresh)) {
+      decision="FINAL_TRIAL_STOP";output=geometry_msgs::msg::Twist{};
+    } else if(final_obstacle_gate_active) {
+      // Nav2 is allowed to plan and MPPI is allowed to evaluate trajectories,
+      // but actuator motion remains zero until Web finalTick verifies that the
+      // HUMAN world-memory is latched, represented in the costmap, and a new
+      // post-latch path has reached the controller.
+      decision="FINAL_TRIAL_PLANNER_GATE_STOP";output=geometry_msgs::msg::Twist{};
+    } else if((final_lane_stream_required && !lane_fresh) ||
+              (final_obstacle_stream_required && !obstacle_stream_fresh)) {
+      decision="FINAL_TRIAL_STREAM_STALE_STOP";output=geometry_msgs::msg::Twist{};
+    } else if (!nav_fresh) {
       decision = "NAV_CMD_STALE_STOP";
       output = geometry_msgs::msg::Twist{};
     } else if (!commissioning_bypass && emergency) {
@@ -1067,27 +1107,85 @@ private:
         }
       }
 
-      const bool recenter = !commissioning_bypass && lane_safety_enabled_ && !path_obstacle_near && lane_fresh && lane_valid &&
-        (lane_state == "RECENTER_LEFT" || lane_state == "RECENTER_RIGHT");
-      if (recenter && advisory_fresh) {
-        const double speed_cap = lane_critical ? critical_lane_speed_mps_ : warning_lane_speed_mps_;
-        if (output.linear.x > 0.0) output.linear.x = std::min(output.linear.x, speed_cap);
-        output.angular.z = (1.0 - lane_advisory_blend_) * output.angular.z +
-          lane_advisory_blend_ * advisory.angular.z;
-        decision = lane_critical ? "LANE_CRITICAL_RECENTER" : "LANE_RECENTER";
-      } else if (!commissioning_bypass && lane_safety_enabled_ && !path_obstacle_near &&
-                 lane_fresh && lane_valid && lane_recommendation == "WARNING") {
-        // Yellow lane zone is longitudinal-only safety: reduce speed while preserving
-        // Nav2 steering. Steering authority begins only after RED/recenter latch.
-        if (output.linear.x > 0.0) output.linear.x = std::min(output.linear.x, warning_lane_speed_mps_);
-        decision = "LANE_WARNING_SLOW";
-      } else if (!commissioning_bypass && lane_safety_enabled_ && stop_on_lane_lost_ && lane_fresh &&
-                 (!lane_valid || lane_state == "LANE_LOST")) {
-        decision = "LANE_LOST_STOP";
-        output = geometry_msgs::msg::Twist{};
+      if (final_lane_trial_active && !path_obstacle_near) {
+        const bool gg = lane_left == "GREEN" && lane_right == "GREEN";
+        const bool yg = lane_left == "YELLOW" && lane_right == "GREEN";
+        const bool rg = lane_left == "RED" && lane_right == "GREEN";
+        const bool gy = lane_left == "GREEN" && lane_right == "YELLOW";
+        const bool gr = lane_left == "GREEN" && lane_right == "RED";
+        const bool allowed_green = final_condition == "center" ||
+          final_condition == "left_yellow" || final_condition == "left_red" ||
+          final_condition == "right_yellow" || final_condition == "right_red";
+        const bool standalone_left_yellow = final_condition == "left_yellow";
+        const bool standalone_right_yellow = final_condition == "right_yellow";
+        if (!lane_fresh || !lane_valid || final_condition == "gray") {
+          decision = "FINAL_LANE_INVALID_STOP";
+          output = geometry_msgs::msg::Twist{};
+        } else if (gg && allowed_green) {
+          if (output.linear.x > 0.0) {
+            const bool warning_only =
+              final_condition == "left_yellow" || final_condition == "right_yellow";
+            const double cap = (final_condition == "center" || warning_only) ? 0.20 : 0.15;
+            output.linear.x = std::min(output.linear.x, cap);
+          }
+          output.angular.z = 0.0;
+          decision = final_condition == "center" ? "FINAL_LANE_STRAIGHT" :
+            ((final_condition == "left_yellow" || final_condition == "right_yellow") ?
+              "FINAL_LANE_WARNING_CLEARED_GREEN" : "FINAL_LANE_RECOVERED_GREEN");
+        } else if (yg && standalone_left_yellow) {
+          if (output.linear.x > 0.0) output.linear.x = std::min(output.linear.x, warning_lane_speed_mps_);
+          output.angular.z = 0.0;
+          decision = "FINAL_LANE_WARNING_LEFT_NO_STEER";
+        } else if (yg && final_condition == "left_red") {
+          if (output.linear.x > 0.0) output.linear.x = std::min(output.linear.x, 0.10);
+          output.angular.z = -0.02;
+          decision = "FINAL_LANE_RED_LEFT_RECOVERY_YELLOW";
+        } else if (rg && final_condition == "left_red") {
+          if (output.linear.x > 0.0) output.linear.x = std::min(output.linear.x, 0.10);
+          output.angular.z = -0.04;
+          decision = "FINAL_LANE_RED_LEFT_RECENTER";
+        } else if (gy && standalone_right_yellow) {
+          if (output.linear.x > 0.0) output.linear.x = std::min(output.linear.x, warning_lane_speed_mps_);
+          output.angular.z = 0.0;
+          decision = "FINAL_LANE_WARNING_RIGHT_NO_STEER";
+        } else if (gy && final_condition == "right_red") {
+          if (output.linear.x > 0.0) output.linear.x = std::min(output.linear.x, 0.10);
+          output.angular.z = 0.02;
+          decision = "FINAL_LANE_RED_RIGHT_RECOVERY_YELLOW";
+        } else if (gr && final_condition == "right_red") {
+          if (output.linear.x > 0.0) output.linear.x = std::min(output.linear.x, 0.10);
+          output.angular.z = 0.04;
+          decision = "FINAL_LANE_RED_RIGHT_RECENTER";
+        } else {
+          decision = "FINAL_LANE_UNEXPECTED_STATE_STOP";
+          output = geometry_msgs::msg::Twist{};
+        }
+      } else {
+        const bool recenter = !commissioning_bypass && lane_safety_enabled_ && !path_obstacle_near && lane_fresh && lane_valid &&
+          (lane_state == "RECENTER_LEFT" || lane_state == "RECENTER_RIGHT");
+        if (recenter && advisory_fresh) {
+          const double speed_cap = lane_critical ? critical_lane_speed_mps_ : warning_lane_speed_mps_;
+          if (output.linear.x > 0.0) output.linear.x = std::min(output.linear.x, speed_cap);
+          output.angular.z = (1.0 - lane_advisory_blend_) * output.angular.z +
+            lane_advisory_blend_ * advisory.angular.z;
+          decision = lane_critical ? "LANE_CRITICAL_RECENTER" : "LANE_RECENTER";
+        } else if (!commissioning_bypass && lane_safety_enabled_ && !path_obstacle_near &&
+                   lane_fresh && lane_valid && lane_recommendation == "WARNING") {
+          if (output.linear.x > 0.0) output.linear.x = std::min(output.linear.x, warning_lane_speed_mps_);
+          decision = "LANE_WARNING_SLOW";
+        } else if (!commissioning_bypass && lane_safety_enabled_ && stop_on_lane_lost_ && lane_fresh &&
+                   (!lane_valid || lane_state == "LANE_LOST")) {
+          decision = "LANE_LOST_STOP";
+          output = geometry_msgs::msg::Twist{};
+        }
       }
     }
 
+    if(final_mode=="LANE"&&final_fresh&&output.linear.x>0) {
+      // Standalone YELLOW remains warning-only; RED recovery through YELLOW is
+      // handled explicitly above by the RED trial condition.
+      if(final_condition=="center"&&lane_left=="GREEN"&&lane_right=="GREEN"&&decision=="NAV2_PASS")output.angular.z=0.0;
+    }
     if (!finiteTwist(output)) {
       decision = "NONFINITE_COMMAND_STOP";
       output = geometry_msgs::msg::Twist{};
@@ -1107,6 +1205,8 @@ private:
     ss << std::boolalpha << std::fixed << std::setprecision(3)
        << "decision=" << decision
        << ";nav_fresh=" << nav_fresh
+       << ";final_trial_supported=true"
+       << ";final_trial_mode=" << final_mode
        << ";path_valid=" << path.valid
        << ";path_source=" << (path.source.empty() ? "none" : path.source)
        << ";camera_connected=" << camera_ok
@@ -1233,6 +1333,7 @@ private:
   double planning_lateral_margin_m_{0.65};
   double planning_corridor_half_width_m_{0.95};
   double planning_min_forward_m_{0.15};
+  double final_obstacle_rear_keep_m_{0.90};
   double planning_max_abs_lateral_m_{2.6};
   double path_horizon_m_{4.0};
   double command_collision_horizon_m_{0.90};
@@ -1261,6 +1362,9 @@ private:
   bool stop_on_lane_lost_{false};
   bool use_local_plan_when_available_{true};
 
+  std::string final_trial_mode_{"IDLE"}, final_trial_condition_, lane_left_, lane_right_;
+  rclcpp::Time final_trial_received_{0,0,RCL_ROS_TIME};
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr final_trial_sub_;
   TimedTwist nav_cmd_;
   TimedTwist advisory_cmd_;
   TimedPath global_plan_;

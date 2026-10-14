@@ -31,7 +31,7 @@ trajectory_safety_supervisor:
     perception_performance_timeout_sec: 2.0
 
     # Launch overrides metric_obstacle_safety_enabled from physical calibration state.
-    metric_obstacle_safety_enabled: false
+    metric_obstacle_safety_enabled: true
     # Commissioning-only bypass; never default ON. Global E-stop/ESC watchdog remain active.
     commissioning_bypass_enabled: false
     latency_compensation_enabled: true
@@ -45,7 +45,7 @@ trajectory_safety_supervisor:
     planning_lateral_margin_m: 0.65
     planning_min_forward_m: 0.15
     planning_max_abs_lateral_m: 2.6
-    path_horizon_m: 4.0
+    path_horizon_m: 5.5
     command_collision_horizon_m: 2.0
     command_collision_sample_step_m: 0.05
     command_collision_lateral_margin_m: 0.2

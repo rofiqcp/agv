@@ -49,3 +49,9 @@ body.sidebar-collapsed .sidebar-firda-head,body.sidebar-collapsed .sidebar-firda
 @media(max-width:620px){.context-summary-grid{grid-template-columns:repeat(2,1fr)}}
 
 
+
+/* FIRDA ESC final: on ESC domain, show only the pink thesis tree; hide the legacy duplicate tuning tree. */
+#contextNav[data-domain="esc"] .sidebar-tuning-head:not(.sidebar-tools-head),
+#contextNav[data-domain="esc"] .sidebar-tuning-group,
+#contextNav[data-domain="esc"] .tuning-nav{display:none!important}
+#contextNav[data-domain="esc"] .sidebar-firda-head{margin-top:10px}

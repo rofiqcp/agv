@@ -1,0 +1,42 @@
+body[data-per-locked="1"] #page-experiments .workbench-main > *:not(#perLockedBab4Panel){display:none!important}
+body[data-per-locked="1"] #perLockedBab4Panel{display:block!important}
+.per-locked-bab4{display:block;min-width:0;padding:0}
+.lf-head{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;margin-bottom:12px;padding:18px;border:1px solid var(--line);border-radius:14px;background:var(--panel)}
+.lf-head h2{margin:3px 0 5px;font-size:22px}.lf-head p{margin:0;max-width:900px;color:var(--muted)}
+.lf-nav{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-bottom:12px}
+.lf-nav button{display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-height:64px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--text);cursor:pointer}
+.lf-nav button.active{border-color:var(--green);box-shadow:inset 0 0 0 1px var(--green)}.lf-nav em{font-style:normal;color:var(--muted);font-size:12px}.lf-nav b{font-size:13px}
+.lf-layout{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(340px,.85fr);gap:12px;align-items:start}
+.lf-preview,.lf-control,.lf-lower{border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:14px;min-width:0}
+.lf-preview-head,.lf-section-title{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:10px}.lf-section-title{align-items:flex-start;flex-direction:column}.lf-section-title b{font-size:17px}.lf-section-title span{color:var(--muted);font-size:12px}
+.lf-preview-stage{position:relative;overflow:hidden;border-radius:10px;background:#03090a;aspect-ratio:16/9;min-height:260px}
+.lf-preview-stage #v3CameraImage{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:none;transform:scaleX(-1)!important;z-index:1}
+.lf-preview-stage .v3-camera-empty{position:absolute;inset:0;display:grid;place-items:center;color:#8fa5a7;z-index:0}
+.lf-preview-stage #v3Overlay{position:absolute;inset:0;width:100%;height:100%;z-index:2;pointer-events:none}
+#lfOverlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:5}
+.lf-live-strip{margin-top:8px;padding:8px 10px;border-radius:8px;background:var(--panel2);font:12px ui-monospace,monospace;white-space:normal}
+.lf-control label{display:grid;gap:5px;margin-bottom:9px;font-size:12px;color:var(--muted)}
+.lf-control input,.lf-control select{width:100%;box-sizing:border-box}
+.lf-actions{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}.lf-actions button{min-height:38px}
+.lf-kpis,.lf-result-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:10px 0;min-width:0;max-width:100%}.lf-kpis>div,.lf-result-grid>div{padding:10px;border:1px solid var(--line);border-radius:9px;background:var(--panel2);min-width:0;overflow:hidden}.lf-kpis span,.lf-result-grid span{display:block;color:var(--muted);font-size:11px;min-width:0;overflow-wrap:anywhere}.lf-kpis b,.lf-result-grid b{display:block;margin-top:4px;min-width:0;max-width:100%;overflow-wrap:anywhere;word-break:break-word}
+.lf-progress{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin:10px 0}.lf-progress span{display:flex;justify-content:space-between;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel2);font-size:12px}.lf-progress span.done{border-color:var(--green)}.lf-progress em{font-style:normal}
+.lf-main-progress,.lf-capture-status{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:10px;border:1px solid var(--line);border-radius:9px;background:var(--panel2);margin:9px 0}.lf-capture-status{flex-wrap:wrap}.lf-main-progress span,.lf-capture-status span{color:var(--muted);font-size:12px}
+.lf-expected,.lf-message,.lf-ready{display:block;padding:10px;border:1px solid var(--line);border-radius:9px;background:var(--panel2);margin:9px 0;font-size:12px}.lf-ready{display:flex!important;grid-template-columns:auto 1fr!important;align-items:flex-start;gap:8px}.lf-ready input{width:auto!important;margin-top:2px}
+.lf-countdown{display:grid;place-items:center;min-height:72px;margin:10px 0;border:1px solid var(--line);border-radius:10px;background:var(--panel2);font-size:26px;font-weight:900}
+.lf-subtabs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}.lf-subtabs button{padding:11px;border:1px solid var(--line);border-radius:9px;background:var(--panel2);color:var(--text);font-weight:800}.lf-subtabs button.active{border-color:var(--green);box-shadow:inset 0 0 0 1px var(--green)}
+.lf-lower{margin-top:12px;overflow:hidden}.lf-table-wrap{overflow:auto;max-height:370px}.lf-table-wrap table{min-width:780px}
+#v3Chart{display:block;width:100%;max-width:100%;height:auto;box-sizing:border-box}
+body[data-per-locked="1"] #page-experiments .experiment-sidebar{min-width:220px}
+body[data-per-locked="1"] #page-experiments .workbench-grid{align-items:start}
+@media(max-width:1050px){.lf-layout{grid-template-columns:1fr}.lf-nav{grid-template-columns:repeat(3,1fr)}}
+.v3-nav45-card{margin:0 0 12px;padding:10px;border:1px solid var(--line);border-radius:10px;background:#050b0d;overflow:hidden}
+.v3-nav45-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:8px;color:var(--text);font-size:12px}.v3-nav45-head span{color:var(--muted);font-size:10px;text-align:right}
+#v3Map45{display:block;width:100%;height:300px;border:1px solid rgba(130,165,170,.25);border-radius:8px;background:#050b0d}
+.v3-pass{color:#48e0a4!important}.v3-fail{color:#ff7b8a!important}
+@media(max-width:680px){.lf-nav{grid-template-columns:repeat(2,1fr)}.lf-kpis,.lf-result-grid,.lf-progress{grid-template-columns:1fr}.lf-head{flex-direction:column}#v3Map45{height:250px}.v3-nav45-head{align-items:flex-start;flex-direction:column}.v3-nav45-head span{text-align:left}}
+
+/* Clean Perception navigation: Final Dataset is navigated only from the four locked workspace tabs. */
+body.perception-workspace-tabs #contextNav .obcal-shortcut,
+body.perception-workspace-tabs #contextNav .tuning-nav,
+body.perception-workspace-tabs #contextNav .sidebar-tuning-group,
+body.perception-workspace-tabs #contextNav .sidebar-tuning-head:not(.sidebar-tools-head){display:none!important}

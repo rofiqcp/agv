@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#07100f">
   <link rel="icon" href="data:,">
   <title>ADV Operator Console</title>
-  <link rel="stylesheet" href="/styles.css?v=20260918-camera-mirror-v2">
+  <link rel="stylesheet" href="/styles.css?v=20260927-esc-final-v4">
   <link rel="stylesheet" href="/tokens.css?v=20260913-stage6-v1">
   <link rel="stylesheet" href="/base.css?v=20260913-stage6-v1">
   <link rel="stylesheet" href="/shell.css?v=20260913-stage6-v1">
@@ -14,10 +14,11 @@
   <link rel="stylesheet" href="/responsive.css?v=20260913-stage6-v1">
   <link rel="stylesheet" href="/accessibility.css?v=20260913-stage6-v1">
   <link rel="stylesheet" href="/workspaces.css?v=20260913-stage6-v1">
-  <link rel="stylesheet" href="/perception_bab4.css?v=20260918-lane-mask-final-flip-v2">
+  <link rel="stylesheet" href="/perception_bab4.css?v=20260920-f42-reset-v5">
+  <link rel="stylesheet" href="/perception_bab4_locked.css?v=20260922-p3-v5">
   <link rel="stylesheet" href="/single-navigation.css?v=20260914-single-nav-v1">
   <link rel="stylesheet" href="/rm3100-calibration.css?v=20260917-rm3100-v1">
-  <link rel="stylesheet" href="/ui-polish.css?v=20260918-firda-steering-v1">
+  <link rel="stylesheet" href="/ui-polish.css?v=20260919-bab4-package-v1">
   <link rel="stylesheet" href="/map_editor.css?v=20260918-map-editor-v1">
 </head>
 <body>
@@ -196,7 +197,7 @@
                 <div class="nav-rail-head"><span>MISSION</span><b id="navGoalStateRail">IDLE</b></div>
                 <label>X <input type="number" step="0.01" id="goalX" value="0"></label>
                 <label>Y <input type="number" step="0.01" id="goalY" value="0"></label>
-                <label>Yaw <input type="number" step="1" id="goalYaw" value="0"><small>deg</small></label>
+                <label>Yaw <input type="number" step="1" id="goalYaw" value="0"><small>deg • AUTO APPROACH saat SEND</small></label>
                 <div class="nav-rail-actions nav-goal-actions"><button class="primary-btn" id="sendGoalBtn">SEND GOAL</button><button class="danger-btn" id="cancelGoalBtn">CANCEL GOAL</button><button class="soft-btn" id="clearGoalBtn">CLEAR GOAL</button></div><div class="nav-goal-block-reason" id="navGoalBlockReason">Checking navigation readiness…</div>
               </section>
               <section class="nav-rail-section nav-initial-section" id="navInitialSection">
@@ -364,9 +365,9 @@
           </div>
           <article class="panel perception-calibration-panel" id="perceptionCalibrationSection">
             <div class="panel-head"><div><span class="eyebrow">PERCEPTION CALIBRATION</span><h2>Obstacle + Lane Safety Calibration</h2></div><span class="status-chip waiting" id="perceptionCalStatus">YAML</span></div>
-            <div class="perception-cal-order-note"><b>Urutan kalibrasi</b><span>1. Obstacle Calibration (Manusia/Motor × orientasi × 1–5 m) • 2. Lane Safety Calibration (LT/LB/RT/RB)</span></div>
+            <div class="perception-cal-order-note"><b>Urutan kalibrasi</b><span>1. Obstacle Calibration (manusia menghadap mobil × 1–5 m) • 2. Lane Safety Calibration (LT/LB/RT/RB)</span></div>
             <div class="perception-cal-subtabs" role="tablist" aria-label="Jenis kalibrasi persepsi">
-              <button type="button" class="active" id="perceptionObstacleCalTab" role="tab" aria-selected="true" aria-controls="perceptionObstacleCalHost"><b>1. OBSTACLE CALIBRATION</b><span>Manusia + Motor • 40 kombinasi</span></button>
+              <button type="button" class="active" id="perceptionObstacleCalTab" role="tab" aria-selected="true" aria-controls="perceptionObstacleCalHost"><b>1. OBSTACLE CALIBRATION</b><span>Human only • menghadap mobil • 5 jarak</span></button>
               <button type="button" id="perceptionLaneCalTab" role="tab" aria-selected="false" aria-controls="laneSafetyCalibrationCard"><b>2. LANE SAFETY CALIBRATION</b><span>LT / LB / RT / RB • drag 4 titik</span></button>
             </div>
             <div id="perceptionObstacleCalHost" class="perception-obstacle-cal-host"></div>
@@ -888,102 +889,206 @@
                 </div>
               </article>
 
-              <article class="panel" id="firdaPosKpQuickPanel" hidden>
-                <div class="panel-head">
-                  <div><span class="eyebrow">FIRDA • 4.3.1 ONE-PAGE TEST</span><h2>Tuning Kp Posisi Steering • LEFT</h2></div>
-                  <span class="status-chip waiting" id="firdaPosKpModeState">RUNTIME</span>
-                </div>
-                <p class="hint"><b>FOC dikunci:</b> Q Kp 0.80013, Q Ki 75. Position Ki = 0 dan Kd = 0 selama tuning Kp. Uji otomatis memakai step fisik ±5° (VESC POS 150/180/210), 3 siklus, runtime-only, lalu STOP + SAVE.</p>
+
+              <article class="panel" id="firdaZnQuickPanel" hidden>
+                <div class="panel-head"><div><span class="eyebrow">FIRDA • 4.3.1 IDENTIFIKASI R-L</span><h2>Identifikasi Respons Steering & Ziegler–Nichols • LEFT</h2></div><span class="status-chip waiting" id="firdaZnModeState">RUNTIME</span></div>
+                <p class="hint"><b>Metode:</b> center steering, lalu step Iq* singkat. GUI merekam command current, Iq aktual, dan respons sudut. Isi R dan L dari reaction curve/tangent lalu klik HITUNG ZN. Jika respons berbentuk ramp atau tidak memenuhi bentuk reaction curve, jangan memaksa nilai R-L.</p>
                 <div class="run-grid">
-                  <label>Position Kp candidate<input id="firdaPosKpValue" type="number" min="0" max="1" step="0.0001" value="0.0125"></label>
-                  <label>Fixed Position Ki<input type="text" value="0" readonly></label>
-                  <label>Fixed Position Kd<input type="text" value="0" readonly></label>
-                  <label>Actual Pos Kp / Ki / Kd<input id="firdaPosActual" type="text" value="-- / -- / --" readonly></label>
+                  <label>Iq* step (A)<input id="firdaZnIqStep" type="number" min="0.1" max="1.0" step="0.1" value="0.5"></label>
+                  <label>Durasi step (s)<input id="firdaZnStepDuration" type="number" min="0.2" max="1.0" step="0.1" value="0.6"></label>
+                  <label>R reaction rate [deg/s/A]<input id="firdaZnR" type="number" min="0" step="any" placeholder="isi dari grafik"></label>
+                  <label>L dead time (s)<input id="firdaZnL" type="number" min="0" step="any" placeholder="isi dari grafik"></label>
+                  <label>Kp ZN<input id="firdaZnKp" type="text" value="--" readonly></label>
+                  <label>Ki ZN<input id="firdaZnKi" type="text" value="--" readonly></label>
+                  <label>Kd ZN<input id="firdaZnKd" type="text" value="--" readonly></label>
+                  <label>Formula<input type="text" value="Kp=1.2/(R·L), Ti=2L, Td=0.5L" readonly></label>
                 </div>
+                <label class="hint" style="display:flex;gap:8px;align-items:center;margin-top:10px"><input id="firdaZnReady" type="checkbox"> Roda steering aman/terangkat, kendaraan diam, area gerak bebas, dan siap dihentikan bila gerak tidak normal.</label>
                 <div class="button-row" style="margin-top:10px;flex-wrap:wrap">
-                  <button class="soft-btn" id="firdaPosKpPresetLow">Kp 0.0125</button>
-                  <button class="soft-btn" id="firdaPosKpPresetMid">Kp 0.0250</button>
-                  <button class="soft-btn" id="firdaPosKpPresetHigh">Kp 0.0375</button>
-                  <button class="primary-btn" id="firdaPosKpAuto">START TEST OTOMATIS • ±5° • 3 CYCLE</button>
-                  <button class="danger-btn" id="firdaPosKpStop">STOP POSITION</button>
+                  <button class="soft-btn" id="firdaZnCalc">HITUNG ZN DARI R / L</button>
+                  <button class="primary-btn" id="firdaZnAuto">START IDENTIFIKASI R-L • RECORD + SAVE</button>
+                  <button class="danger-btn" id="firdaZnStop">STOP CURRENT</button>
                 </div>
-                <div class="record-footer" style="margin-top:10px">
-                  <span id="firdaPosKpState">Pilih Kp lalu START TEST OTOMATIS.</span>
-                  <span id="firdaPosKpLive">Target --° • Actual --° • Error --° • Iq -- A</span>
-                  <span id="firdaPosKpCycleCount">Cycle: 0 / 3</span>
-                </div>
+                <div class="record-footer" style="margin-top:10px"><span id="firdaZnState">Siap identifikasi R-L.</span><span id="firdaZnLive">Iq* -- A • Iq -- A • Steering --°</span><span id="firdaZnResult">ZN: --</span></div>
               </article>
 
-              <article class="panel" id="firdaPosKiQuickPanel" hidden>
-                <div class="panel-head"><div><span class="eyebrow">FIRDA • 4.3.2 ONE-PAGE TEST</span><h2>Tuning Ki Posisi Steering • LEFT</h2></div><span class="status-chip waiting" id="firdaPosKiModeState">RUNTIME</span></div>
-                <p class="hint">Gunakan Kp posisi hasil 4.3.1. Kd = 0 selama tuning Ki. Uji otomatis memakai step fisik ±5°, 3 cycle, runtime-only.</p>
+              <article class="panel" id="firdaZnBaselinePanel" hidden>
+                <div class="panel-head"><div><span class="eyebrow">FIRDA • 4.3.2 BASELINE ZN</span><h2>Baseline PID Ziegler–Nichols • 0 → +5 → 0 → −5 → 0°</h2></div><span class="status-chip waiting" id="firdaZnBaselineModeState">RUNTIME</span></div>
+                <p class="hint">Baseline ZN adalah titik awal tuning, bukan gain final. Gunakan hasil 4.3.1 dan uji 3 cycle. Nilai tetap runtime-only selama pengujian.</p>
                 <div class="run-grid">
-                  <label>Fixed Position Kp<input id="firdaPosKiFixedKp" type="number" step="0.0001" value="0.0250"></label>
-                  <label>Position Ki candidate<input id="firdaPosKiValue" type="number" step="0.0001" value="0.0025"></label>
+                  <label>Kp baseline ZN<input id="firdaZnBaseKp" type="number" min="0" max="1" step="any" placeholder="hasil 4.3.1"></label>
+                  <label>Ki baseline ZN<input id="firdaZnBaseKi" type="number" min="0" max="1" step="any" placeholder="hasil 4.3.1"></label>
+                  <label>Kd baseline ZN<input id="firdaZnBaseKd" type="number" min="0" max="0.5" step="any" placeholder="hasil 4.3.1"></label>
+                  <label>Actual Kp / Ki / Kd<input id="firdaZnBaseActual" type="text" value="-- / -- / --" readonly></label>
+                </div>
+                <div class="button-row" style="margin-top:10px;flex-wrap:wrap"><button class="primary-btn" id="firdaZnBaselineAuto">START BASELINE ZN • ±5° • 3 CYCLE</button><button class="danger-btn" id="firdaZnBaselineStop">STOP POSITION</button></div>
+                <div class="record-footer" style="margin-top:10px"><span id="firdaZnBaselineState">Menunggu hasil 4.3.1.</span><span id="firdaZnBaselineLive">Setpoint --° • Actual --° • Error --° • RMSE --° • Iq -- A</span><span id="firdaZnBaselineCount">Cycle: 0 / 3</span></div>
+              </article>
+<article class="panel" id="firdaPosKpQuickPanel" hidden>
+                <div class="panel-head"><div><span class="eyebrow">FIRDA • 4.3.3 Kp COARSE / FINE</span><h2>Pengujian Variasi Kp Posisi • LEFT</h2></div><span class="status-chip waiting" id="firdaPosKpModeState">RUNTIME</span></div>
+                <p class="hint">Jika R-L 4.3.1 tidak valid, uji Kp posisi manual mulai 0,0125; tombol 0,50× hingga 1,50× memakai acuan eksperimen 0,025 (bukan hasil ZN). Kolom Position Kp candidate dapat diisi langsung. Ki=0 dan Kd=0 selama tahap Kp.</p>
+                <div class="run-grid">
+                  <label>Tahap<select id="firdaPosKpStage"><option value="coarse">COARSE</option><option value="fine">FINE</option></select></label>
+                  <label>Kp ZN baseline<input id="firdaPosKpZn" type="text" value="--" readonly></label>
+                  <label>Faktor × KpZN<input id="firdaPosKpFactor" type="number" min="0" max="3" step="0.01" value="1.0"></label>
+                  <label>Position Kp candidate<input id="firdaPosKpValue" type="number" min="0" max="1" step="any" placeholder="KpZN × faktor"></label>
+                  <label>Fixed Position Ki<input type="text" value="0" readonly></label>
+                  <label>Fixed Position Kd<input type="text" value="0" readonly></label>
+                  <label>Actual Kp / Ki / Kd<input id="firdaPosActual" type="text" value="-- / -- / --" readonly></label>
+                </div>
+                <div class="button-row" style="margin-top:10px;flex-wrap:wrap">
+                  <button class="soft-btn" id="firdaPosKpPresetLow">0.50×</button><button class="soft-btn" id="firdaPosKpPresetMid">0.75×</button><button class="soft-btn" id="firdaPosKpPresetHigh">1.00×</button><button class="soft-btn" id="firdaPosKpPreset125">1.25×</button><button class="soft-btn" id="firdaPosKpPreset150">1.50×</button>
+                  <button class="primary-btn" id="firdaPosKpAuto">START TEST Kp • ±5° • 3 CYCLE</button><button class="danger-btn" id="firdaPosKpStop">STOP POSITION</button>
+                </div>
+                <div class="record-footer" style="margin-top:10px"><span id="firdaPosKpState">Hitung ZN dulu, pilih faktor, lalu START.</span><span id="firdaPosKpLive">Setpoint --° • Actual --° • Error --° • RMSE --° • Iq -- A</span><span id="firdaPosKpCycleCount">Cycle: 0 / 3</span></div>
+              </article>
+<article class="panel" id="firdaPosKiQuickPanel" hidden>
+                <div class="panel-head"><div><span class="eyebrow">FIRDA • 4.3.4 Ki COARSE / FINE</span><h2>Pengujian Variasi Ki Posisi • LEFT</h2></div><span class="status-chip waiting" id="firdaPosKiModeState">RUNTIME</span></div>
+                <p class="hint">Kp terpilih 4.3.3 dikunci. Coarse Ki: 0×, 0.50×, 1.00×, 1.50×, 2.00× KiZN. Nilai 0 wajib menjadi pembanding signifikansi Ki. Kd=0.</p>
+                <div class="run-grid">
+                  <label>Tahap<select id="firdaPosKiStage"><option value="coarse">COARSE</option><option value="fine">FINE</option></select></label>
+                  <label>Fixed Position Kp<input id="firdaPosKiFixedKp" type="number" step="any" placeholder="hasil 4.3.3"></label>
+                  <label>Ki ZN baseline<input id="firdaPosKiZn" type="text" value="--" readonly></label>
+                  <label>Faktor × KiZN<input id="firdaPosKiFactor" type="number" min="0" max="4" step="0.01" value="1.0"></label>
+                  <label>Position Ki candidate<input id="firdaPosKiValue" type="number" min="0" max="1" step="any" placeholder="KiZN × faktor"></label>
                   <label>Fixed Position Kd<input type="text" value="0" readonly></label>
                   <label>Actual Kp / Ki / Kd<input id="firdaPosKiActual" type="text" value="-- / -- / --" readonly></label>
                 </div>
-                <div class="button-row" style="margin-top:10px;flex-wrap:wrap">
-                  <button class="soft-btn" id="firdaPosKiPresetLow">Ki 0.0025</button><button class="soft-btn" id="firdaPosKiPresetMid">Ki 0.0050</button><button class="soft-btn" id="firdaPosKiPresetHigh">Ki 0.0100</button>
-                  <button class="primary-btn" id="firdaPosKiAuto">START TEST OTOMATIS • ±5° • 3 CYCLE</button><button class="danger-btn" id="firdaPosKiStop">STOP POSITION</button>
-                </div>
-                <div class="record-footer" style="margin-top:10px"><span id="firdaPosKiState">Set Kp terpilih, pilih Ki, lalu START.</span><span id="firdaPosKiLive">Target --° • Actual --° • Error --° • Iq -- A</span><span id="firdaPosKiCycleCount">Cycle: 0 / 3</span></div>
+                <div class="button-row" style="margin-top:10px;flex-wrap:wrap"><button class="soft-btn" id="firdaPosKiPreset0">0×</button><button class="soft-btn" id="firdaPosKiPresetLow">0.50×</button><button class="soft-btn" id="firdaPosKiPresetMid">1.00×</button><button class="soft-btn" id="firdaPosKiPresetHigh">1.50×</button><button class="soft-btn" id="firdaPosKiPreset200">2.00×</button><button class="primary-btn" id="firdaPosKiAuto">START TEST Ki • ±5° • 3 CYCLE</button><button class="danger-btn" id="firdaPosKiStop">STOP POSITION</button></div>
+                <div class="record-footer" style="margin-top:10px"><span id="firdaPosKiState">Isi Kp terpilih, pilih faktor Ki, lalu START.</span><span id="firdaPosKiLive">Setpoint --° • Actual --° • Error --° • RMSE --° • Iq -- A</span><span id="firdaPosKiCycleCount">Cycle: 0 / 3</span></div>
               </article>
-
-              <article class="panel" id="firdaPosKdQuickPanel" hidden>
-                <div class="panel-head"><div><span class="eyebrow">FIRDA • 4.3.3 ONE-PAGE TEST</span><h2>Tuning Kd Posisi Steering • LEFT</h2></div><span class="status-chip waiting" id="firdaPosKdModeState">RUNTIME</span></div>
-                <p class="hint">Gunakan Kp dan Ki terpilih dari 4.3.1–4.3.2. Uji Kd dengan step fisik ±5°, 3 cycle, runtime-only.</p>
+<article class="panel" id="firdaPosKdQuickPanel" hidden>
+                <div class="panel-head"><div><span class="eyebrow">FIRDA • 4.3.5 Kd COARSE / FINE</span><h2>Pengujian Variasi Kd Posisi • LEFT</h2></div><span class="status-chip waiting" id="firdaPosKdModeState">RUNTIME</span></div>
+                <p class="hint">Kp/Ki terpilih dikunci. Kd=0 wajib diuji, lalu 0.50×, 1.00×, 1.50×, 2.00× KdZN. Gunakan Kd hanya jika memberi perbaikan terukur.</p>
                 <div class="run-grid">
-                  <label>Fixed Position Kp<input id="firdaPosKdFixedKp" type="number" step="0.0001" value="0.0250"></label>
-                  <label>Fixed Position Ki<input id="firdaPosKdFixedKi" type="number" step="0.0001" value="0.0050"></label>
-                  <label>Position Kd candidate<input id="firdaPosKdValue" type="number" step="0.0001" value="0"></label>
+                  <label>Tahap<select id="firdaPosKdStage"><option value="coarse">COARSE</option><option value="fine">FINE</option></select></label>
+                  <label>Fixed Position Kp<input id="firdaPosKdFixedKp" type="number" step="any" placeholder="hasil 4.3.3"></label>
+                  <label>Fixed Position Ki<input id="firdaPosKdFixedKi" type="number" step="any" placeholder="hasil 4.3.4"></label>
+                  <label>Kd ZN baseline<input id="firdaPosKdZn" type="text" value="--" readonly></label>
+                  <label>Faktor × KdZN<input id="firdaPosKdFactor" type="number" min="0" max="4" step="0.01" value="0"></label>
+                  <label>Position Kd candidate<input id="firdaPosKdValue" type="number" min="0" max="0.5" step="any" value="0"></label>
                   <label>Actual Kp / Ki / Kd<input id="firdaPosKdActual" type="text" value="-- / -- / --" readonly></label>
                 </div>
-                <div class="button-row" style="margin-top:10px;flex-wrap:wrap">
-                  <button class="soft-btn" id="firdaPosKdPreset0">Kd 0</button><button class="soft-btn" id="firdaPosKdPreset2">Kd 0.0020</button><button class="soft-btn" id="firdaPosKdPreset4">Kd 0.0040</button>
-                  <button class="primary-btn" id="firdaPosKdAuto">START TEST OTOMATIS • ±5° • 3 CYCLE</button><button class="danger-btn" id="firdaPosKdStop">STOP POSITION</button>
-                </div>
-                <div class="record-footer" style="margin-top:10px"><span id="firdaPosKdState">Set Kp/Ki terpilih, pilih Kd, lalu START.</span><span id="firdaPosKdLive">Target --° • Actual --° • Error --° • Iq -- A</span><span id="firdaPosKdCycleCount">Cycle: 0 / 3</span></div>
+                <div class="button-row" style="margin-top:10px;flex-wrap:wrap"><button class="soft-btn" id="firdaPosKdPreset0">0×</button><button class="soft-btn" id="firdaPosKdPreset050">0.50×</button><button class="soft-btn" id="firdaPosKdPreset2">1.00×</button><button class="soft-btn" id="firdaPosKdPreset150">1.50×</button><button class="soft-btn" id="firdaPosKdPreset4">2.00×</button><button class="primary-btn" id="firdaPosKdAuto">START TEST Kd • ±5° • 3 CYCLE</button><button class="danger-btn" id="firdaPosKdStop">STOP POSITION</button></div>
+                <div class="record-footer" style="margin-top:10px"><span id="firdaPosKdState">Isi Kp/Ki terpilih, pilih faktor Kd, lalu START.</span><span id="firdaPosKdLive">Setpoint --° • Actual --° • Error --° • RMSE --° • Iq -- A</span><span id="firdaPosKdCycleCount">Cycle: 0 / 3</span></div>
               </article>
-
-              <article class="panel" id="firdaPosFinalQuickPanel" hidden>
-                <div class="panel-head"><div><span class="eyebrow">FIRDA • 4.3.4 FINAL VALIDATION</span><h2>Validasi Gain Final Steering • LEFT</h2></div><span class="status-chip waiting" id="firdaPosFinalModeState">RUNTIME</span></div>
-                <p class="hint">Masukkan gain posisi final hasil 4.3.1–4.3.3. FOC Q Kp 0.80013 dan Q Ki 75 tetap dikunci. Validasi ±5° sebanyak 5 cycle untuk repeatability gain final.</p>
+<article class="panel" id="firdaPosFinalQuickPanel" hidden>
+                <div class="panel-head"><div><span class="eyebrow">FIRDA • 4.3.6 GAIN AKHIR</span><h2>Penetapan Gain Akhir & Handoff Firmware • LEFT</h2></div><span class="status-chip waiting" id="firdaPosFinalModeState">RUNTIME</span></div>
+                <p class="hint">Masukkan gain yang terpilih berdasarkan hasil 4.3.3–4.3.5. GUI tidak menetapkan pemenang sebelumnya. Validasi ±5° sebanyak 5 cycle; setelah sukses nilai ini menjadi acuan 4.4–4.6 pada browser.</p>
                 <div class="run-grid">
-                  <label>Final Position Kp<input id="firdaPosFinalKp" type="number" step="0.0001" value="0.0375"></label>
-                  <label>Final Position Ki<input id="firdaPosFinalKi" type="number" step="0.0001" value="0.0025"></label>
-                  <label>Final Position Kd<input id="firdaPosFinalKd" type="number" step="0.0001" value="0"></label>
+                  <label>Final Position Kp<input id="firdaPosFinalKp" type="number" min="0" max="1" step="any" placeholder="hasil 4.3.3"></label>
+                  <label>Final Position Ki<input id="firdaPosFinalKi" type="number" min="0" max="1" step="any" placeholder="hasil 4.3.4"></label>
+                  <label>Final Position Kd<input id="firdaPosFinalKd" type="number" min="0" max="0.5" step="any" placeholder="hasil 4.3.5"></label>
                   <label>Actual Kp / Ki / Kd<input id="firdaPosFinalActual" type="text" value="-- / -- / --" readonly></label>
                 </div>
                 <div class="button-row" style="margin-top:10px;flex-wrap:wrap"><button class="primary-btn" id="firdaPosFinalAuto">START VALIDASI FINAL • ±5° • 5 CYCLE</button><button class="danger-btn" id="firdaPosFinalStop">STOP POSITION</button></div>
-                <div class="record-footer" style="margin-top:10px"><span id="firdaPosFinalState">Masukkan gain final lalu START.</span><span id="firdaPosFinalLive">Target --° • Actual --° • Error --° • Iq -- A</span><span id="firdaPosFinalCycleCount">Cycle: 0 / 5</span></div>
+                <div class="record-footer" style="margin-top:10px"><span id="firdaPosFinalState">Masukkan gain hasil pengujian lalu START.</span><span id="firdaPosFinalLive">Setpoint --° • Actual --° • Error --° • RMSE --° • Iq -- A</span><span id="firdaPosFinalCycleCount">Cycle: 0 / 5</span></div>
               </article>
-
-              <article class="panel" id="firdaResponseQuickPanel" hidden>
-                <div class="panel-head"><div><span class="eyebrow" id="firdaResponseEyebrow">FIRDA • 4.4 VALIDASI RESPONS</span><h2 id="firdaResponseTitle">Validasi Respons Steering • LEFT</h2></div><span class="status-chip waiting" id="firdaResponseModeState">RUNTIME</span></div>
-                <p class="hint" id="firdaResponseHint">Gain final dikunci: Position Kp 0.0375, Ki 0.0025, Kd 0; FOC Q Kp 0.80013, Q Ki 75. Sistem center otomatis, menjalankan skenario, menyimpan CSV/XLSX/PNG, lalu kembali Runtime.</p>
+<article class="panel" id="firdaResponseQuickPanel" hidden>
+                <div class="panel-head"><div><span class="eyebrow" id="firdaResponseEyebrow">FIRDA • 4.4 VALIDASI GAIN AKHIR</span><h2 id="firdaResponseTitle">Validasi Respons Steering • LEFT</h2></div><span class="status-chip waiting" id="firdaResponseModeState">RUNTIME</span></div>
+                <p class="hint" id="firdaResponseHint">Gain final harus berasal dari validasi 4.3.6. Sistem center otomatis, menjalankan skenario, menyimpan CSV/XLSX/PNG, lalu kembali Runtime.</p>
                 <div class="run-grid">
-                  <label>Final Position Kp<input type="text" value="0.0375" readonly></label>
-                  <label>Final Position Ki<input type="text" value="0.0025" readonly></label>
-                  <label>Final Position Kd<input type="text" value="0" readonly></label>
+                  <label>Final Position Kp<input id="firdaResponseFinalKp" type="text" value="--" readonly></label>
+                  <label>Final Position Ki<input id="firdaResponseFinalKi" type="text" value="--" readonly></label>
+                  <label>Final Position Kd<input id="firdaResponseFinalKd" type="text" value="--" readonly></label>
                   <label>Actual Kp / Ki / Kd<input id="firdaResponseActual" type="text" value="-- / -- / --" readonly></label>
                 </div>
                 <div class="button-row" style="margin-top:10px;flex-wrap:wrap"><button class="primary-btn" id="firdaResponseAuto">START PENGUJIAN OTOMATIS</button><button class="danger-btn" id="firdaResponseStop">STOP POSITION</button></div>
-                <div class="record-footer" style="margin-top:10px"><span id="firdaResponseState">Siap.</span><span id="firdaResponseLive">Target --° • Actual --° • Error --° • Iq -- A</span><span id="firdaResponseCount">Cycle: 0 / 0</span></div>
+                <div class="record-footer" style="margin-top:10px"><span id="firdaResponseState">Siap setelah gain final 4.3.6 tersedia.</span><span id="firdaResponseLive">Setpoint --° • Actual --° • Error --° • RMSE --° • Iq -- A</span><span id="firdaResponseCount">Cycle: 0 / 0</span></div>
               </article>
-
-              <article class="panel" id="firdaLoadQuickPanel" hidden>
-                <div class="panel-head"><div><span class="eyebrow" id="firdaLoadEyebrow">FIRDA • 4.5 UJI BEBAN STEERING</span><h2 id="firdaLoadTitle">Uji Beban Steering • LEFT</h2></div><span class="status-chip waiting" id="firdaLoadModeState">RUNTIME</span></div>
-                <p class="hint" id="firdaLoadHint">Roda depan harus menyentuh tanah. Robot diam dan joystick tidak digunakan saat recording. Galon harus diletakkan pada posisi chassis yang sama untuk setiap kondisi.</p>
+<article class="panel" id="firdaLoadQuickPanel" hidden>
+                <div class="panel-head"><div><span class="eyebrow" id="firdaLoadEyebrow">FIRDA • 4.5 BEBAN & TORSI STEERING</span><h2 id="firdaLoadTitle">Uji Beban Steering • LEFT</h2></div><span class="status-chip waiting" id="firdaLoadModeState">RUNTIME</span></div>
+                <p class="hint" id="firdaLoadHint">Roda depan menyentuh tanah. Robot diam dan joystick tidak digunakan selama recording.</p>
                 <div class="run-grid">
-                  <label>Beban pengujian<input id="firdaLoadLevel" type="text" value="--" readonly></label>
-                  <label>Final Position PID<input type="text" value="Kp 0.0375 • Ki 0.0025 • Kd 0" readonly></label>
+                  <label>Beban pengujian<select id="firdaLoadLevel"><option value="0">0 galon</option><option value="1">1 galon</option><option value="2">2 galon</option><option value="3">3 galon</option></select></label>
+                  <label>Final Position PID<input id="firdaLoadFinalPid" type="text" value="BELUM DITETAPKAN" readonly></label>
                   <label>FOC PI final<input type="text" value="Kp 0.80013 • Ki 75" readonly></label>
                   <label>Actual Pos Kp / Ki / Kd<input id="firdaLoadActual" type="text" value="-- / -- / --" readonly></label>
                 </div>
-                <label class="hint" style="display:flex;gap:8px;align-items:center;margin-top:10px"><input id="firdaLoadReady" type="checkbox"> Saya sudah memastikan jumlah galon benar, beban aman, roda depan di tanah, robot diam, dan joystick netral/tidak digunakan.</label>
-                <div class="button-row" style="margin-top:10px;flex-wrap:wrap"><button class="primary-btn" id="firdaLoadAuto">START UJI BEBAN • −20° / 0° / +20° • 3 CYCLE</button><button class="danger-btn" id="firdaLoadStop">STOP POSITION</button></div>
-                <div class="record-footer" style="margin-top:10px"><span id="firdaLoadState">Siapkan beban lalu centang konfirmasi.</span><span id="firdaLoadLive">Target --° • Actual --° • Error --° • Iq -- A • Imotor -- A</span><span id="firdaLoadCount">Cycle: 0 / 3</span></div>
+                <div class="run-grid" id="firdaTorqueFields" hidden style="margin-top:10px">
+                  <label>Force peak F (N)<input id="firdaTorqueForce" type="number" min="0" step="any" placeholder="hasil force gauge"></label>
+                  <label>Lever arm r (m)<input id="firdaTorqueArm" type="number" min="0" step="any" placeholder="jarak tegak lurus"></label>
+                  <label>Torque τ = F × r<input id="firdaTorqueNm" type="text" value="-- N·m" readonly></label>
+                  <label>Keterangan<input type="text" value="torsi keluaran mekanisme, bukan shaft BLDC" readonly></label>
+                </div>
+                <label class="hint" style="display:flex;gap:8px;align-items:center;margin-top:10px"><input id="firdaLoadReady" type="checkbox"> Jumlah galon benar, beban aman, roda depan di tanah, robot diam, dan joystick netral/tidak digunakan.</label>
+                <div class="button-row" style="margin-top:10px;flex-wrap:wrap"><button class="primary-btn" id="firdaLoadAuto">START TRACKING BEBAN • ±20° • 3 CYCLE</button><button class="soft-btn" id="firdaTorqueSave" hidden>SAVE TORSI CSV</button><button class="danger-btn" id="firdaLoadStop">STOP POSITION</button></div>
+                <div class="record-footer" style="margin-top:10px"><span id="firdaLoadState">Pilih beban lalu centang konfirmasi.</span><span id="firdaLoadLive">Setpoint --° • Actual --° • Error --° • RMSE --° • Iq -- A • Imotor -- A</span><span id="firdaLoadCount">Cycle: 0 / 3</span></div>
+              </article>
+
+              <article class="panel" id="firdaFinalRecapPanel" hidden>
+                <div class="panel-head">
+                  <div><span class="eyebrow">FIRDA • 4.6.1 FINAL PARAMETER READBACK</span><h2>Verifikasi Parameter Akhir FOC & Position Controller • LEFT</h2></div>
+                  <span class="status-chip waiting" id="firdaFinalRecapState">WAIT 0/3</span>
+                </div>
+                <p class="hint"><b>Tidak ada gerakan motor.</b> Fitur ini hanya membaca ulang parameter controller dan konfigurasi steering sebanyak 3 kali. Tidak menulis YAML/EEPROM dan tidak mengubah gain. Nilai Position Kp/Ki dapat tampil terkuantisasi oleh resolusi controller (0.001).</p>
+                <div class="button-row">
+                  <button class="primary-btn" id="firdaFinalRead1">READBACK 1</button>
+                  <button class="primary-btn" id="firdaFinalRead2">READBACK 2</button>
+                  <button class="primary-btn" id="firdaFinalRead3">READBACK 3</button>
+                  <button class="soft-btn" id="firdaFinalSave" disabled>SAVE REKAP CSV</button><button class="primary-btn" id="firdaFinalSaveExcel" disabled>SAVE REKAP EXCEL</button>
+                  <button class="warning-btn" id="firdaFinalReset">RESET READBACK</button>
+                </div>
+                <div class="record-footer"><span id="firdaFinalRecapMessage">Kendaraan diam • ESC online • klik READBACK 1 → 2 → 3.</span><span id="firdaFinalRecapLive">LEFT fault -- • encoder -- • Vbus -- V</span></div>
+                <div class="table-scroll">
+                  <table class="data-table"><thead><tr><th>Parameter</th><th>Acuan final</th><th>Readback 1</th><th>Readback 2</th><th>Readback 3</th><th>Unit</th><th>Status</th></tr></thead><tbody id="firdaFinalRecapBody"><tr><td colspan="7">Belum ada readback.</td></tr></tbody></table>
+                </div>
+                <p class="tuning-note" id="firdaFinalRecapNote">PASS diberikan setelah 3 readback konsisten dan parameter yang memiliki acuan sesuai toleransi representasi controller. FOC D-gain/current filter hanya didokumentasikan dan diuji konsistensinya karena bukan parameter yang dipilih pada tuning Q-axis 4.2.</p>
+              </article>
+
+              <article class="panel" id="firdaPerformanceRecapPanel" hidden>
+                <div class="panel-head">
+                  <div><span class="eyebrow">FIRDA • 4.6.2 REKAP KINERJA STEERING</span><h2>Rekap Hasil Validasi Steering • Data 4.4 Terkunci</h2></div>
+                  <span class="status-chip waiting" id="firdaPerformanceRecapState">LOADING</span>
+                </div>
+                <p class="hint">Tidak ada gerakan motor. GUI merangkum file final 4.4.1–4.4.5. Endpoint steady-state dihitung dari 0.7 s terakhir pada setiap plateau target. Uji beban 4.5 belum dimasukkan karena dijadwalkan indoor.</p>
+                <div class="button-row">
+                  <button class="primary-btn" id="firdaPerformanceReload">REFRESH REKAP 4.4</button>
+                  <button class="soft-btn" id="firdaPerformanceSave" disabled>SAVE REKAP CSV</button><button class="primary-btn" id="firdaPerformanceSaveExcel" disabled>SAVE REKAP EXCEL</button>
+                </div>
+                <div class="four-metrics" id="firdaPerformanceSummary">
+                  <div><span>Max Endpoint MAE 4.4.1</span><b id="firdaPerfMaxMae">--</b><small>deg</small></div>
+                  <div><span>Worst Repeatability SD</span><b id="firdaPerfWorstSd">--</b><small>deg</small></div>
+                  <div><span>Max Symmetry Difference</span><b id="firdaPerfSymDiff">--</b><small>deg</small></div>
+                  <div><span>Peak Iq 4.4</span><b id="firdaPerfPeakIq">--</b><small>A</small></div>
+                </div>
+                <div class="record-footer"><span id="firdaPerformanceMessage">Memuat rekap final 4.4…</span><span id="firdaPerformanceLoadStatus">4.5: PENDING INDOOR</span></div>
+                <h3>Tracking & Step — Steady-State Endpoint</h3>
+                <div class="table-scroll"><table class="data-table"><thead><tr><th>Pengujian</th><th>Target</th><th>Actual mean</th><th>Signed error</th><th>Endpoint MAE</th><th>SD repeat</th><th>N</th></tr></thead><tbody id="firdaPerformanceTrackingBody"><tr><td colspan="7">Memuat data…</td></tr></tbody></table></div>
+                <h3>Repeatability 4.4.4</h3>
+                <div class="table-scroll"><table class="data-table"><thead><tr><th>Target</th><th>Actual mean</th><th>Endpoint MAE</th><th>SD antar repeat</th><th>Range</th><th>N</th></tr></thead><tbody id="firdaPerformanceRepeatBody"><tr><td colspan="6">Memuat data…</td></tr></tbody></table></div>
+                <h3>Simetri Kiri / Kanan 4.4.5</h3>
+                <div class="table-scroll"><table class="data-table"><thead><tr><th>Pasangan</th><th>Actual kiri</th><th>Actual kanan</th><th>Selisih magnitudo</th><th>SD kiri</th><th>SD kanan</th></tr></thead><tbody id="firdaPerformanceSymBody"><tr><td colspan="6">Memuat data…</td></tr></tbody></table></div>
+                <p class="tuning-note" id="firdaPerformanceSources">Source file: menunggu.</p>
+              </article>
+
+              <article class="panel" id="firdaIntegrationPanel" hidden>
+                <div class="panel-head"><div><span class="eyebrow">FIRDA • 4.6.3 VALIDASI INTEGRASI</span><h2>Steering LEFT pada ADV Bergerak • Teleop</h2></div><span class="status-chip waiting" id="firdaIntegrationState">READY</span></div>
+                <p class="hint"><b>GUI hanya merekam data, tidak menggerakkan kendaraan.</b> Kendaraan dikendalikan operator dengan joystick pada mode Runtime. Skenario: lurus → +10° → center → −10° → center → +20° → center → −20° → center, ulang 3 cycle bila area aman.</p>
+                <div class="four-metrics">
+                  <div><span>Steering Target</span><b id="firdaIntegrationTarget">--</b><small>deg</small></div>
+                  <div><span>Steering Actual</span><b id="firdaIntegrationActual">--</b><small>deg</small></div>
+                  <div><span>Steering Error</span><b id="firdaIntegrationError">--</b><small>deg</small></div>
+                  <div><span>Vehicle Speed</span><b id="firdaIntegrationSpeed">--</b><small>m/s</small></div>
+                </div>
+                <label class="hint"><input id="firdaIntegrationReady" type="checkbox"> Area aman, roda di tanah, mode Runtime, joystick siap, dan operator siap menghentikan kendaraan.</label>
+                <div class="button-row"><button class="primary-btn" id="firdaIntegrationStart">START RECORDING INTEGRASI</button><button class="danger-btn" id="firdaIntegrationStop" disabled>STOP + SAVE</button></div>
+                <div class="record-footer"><span id="firdaIntegrationMessage">Centang kondisi aman lalu START. Setelah START, gerakkan ADV dengan joystick sesuai skenario 3 cycle.</span><span id="firdaIntegrationLive">Iq -- A • Imotor -- A • Duty -- • Fault -- • Mux --</span></div>
+              </article>
+
+              <article class="panel navigation-data-package-panel" id="navigationDataPackagePanel" hidden>
+                <div class="panel-head">
+                  <div><span class="eyebrow">4.5 DATA PACKAGE</span><h2>ZIP Data 4.2–4.4</h2><small>Setiap SEND GOAL yang selesai dibuat menjadi REPORT ZIP rapi: 4.2 / 4.3 / 4.4 → tiap subbab berisi Excel tabel sesuai GUI dan PNG grafik aktual. Overlay 3-profile hanya dibuat untuk 4.2/4.3 setelah Baseline + Candidate A + Candidate B lengkap. Raw mission tetap disimpan internal di NUC.</small></div>
+                  <div class="panel-actions"><span class="status-chip waiting" id="navigationPackageState">LOADING</span><button class="soft-btn" id="navigationPackageRefresh">↻ Refresh</button></div>
+                </div>
+                <div class="navigation-package-summary">
+                  <div><span>TOTAL PACKAGE</span><b id="navigationPackageCount">0</b></div>
+                  <div><span>READY</span><b id="navigationPackageReady">0</b></div>
+                  <div><span>SUCCESS</span><b id="navigationPackageSuccess">0</b></div>
+                  <div><span>STORAGE</span><b id="navigationPackageBytes">0 MB</b></div>
+                </div>
+                <div class="navigation-package-note">FIELD DATA ONLY untuk run baru: tabel 1 Hz tanpa backfill/synthetic fill dan grafik dari canvas GUI mission. Jika ada detik/grafik yang hilang, package wajib INCOMPLETE, bukan diisi dummy. 4.1 tetap terpisah. DELETE tidak menyentuh YAML/config tuning.</div>
+                <div id="navigationPackageList" class="navigation-package-list"><div class="empty-state">Belum ada package data 4.2–4.4.</div></div>
               </article>
 
               <div id="report41TimedPanel" hidden></div>
@@ -997,13 +1102,24 @@
 
               <div class="lab-two-col">
                 <article class="panel tuning-editor">
-                  <div class="panel-head"><div><span class="eyebrow">PARAMETER TUNING</span><h2>YAML Aktual</h2><small class="hint">Baseline immutable: <code>*.web.baseline</code> • backup setiap apply: <code>.web.bak.*</code></small></div><div class="panel-actions"><button class="soft-btn" id="tuningValidateDraft" data-help-key="action.tuning.validate">Validate Draft</button><button class="primary-btn" id="tuningApplyDraft" data-help-key="action.tuning.apply" disabled>Apply Validated + Save</button><button class="soft-btn" id="tuningRevertDraft" data-help-key="action.tuning.revert" disabled>Revert Draft</button><button class="warning-btn" id="restoreStepEntryYaml" hidden>↶ Stage Step Entry</button><button class="warning-btn" id="resetExperimentYaml" hidden data-help-key="action.tuning.baseline">↶ Stage Baseline Awal</button><button class="soft-btn" id="refreshExperimentConfig">Reload Runtime/YAML</button></div></div>
-                  <div class="tuning-note" id="tuningNote">CURRENT YAML diteruskan ke step berikutnya. Candidate hanya menjadi BEST setelah evidence direview dan qualification PASS; step yang belum diriset tidak mengubah YAML.</div>
+                  <div class="panel-head"><div><span class="eyebrow">PARAMETER TUNING</span><h2>Nilai Aktif Sistem</h2><small class="hint">Nilai yang tampil adalah YAML aktif yang benar-benar dipakai ROS saat status ACTIVE MATCH. Edit nilai → APPLY TUNING → runtime diverifikasi.</small></div><div class="panel-actions"><button class="soft-btn" id="tuningValidateDraft" hidden data-help-key="action.tuning.validate">Validate Draft</button><button class="primary-btn" id="tuningApplyDraft" hidden data-help-key="action.tuning.apply" disabled>Apply Validated + Save</button><button class="soft-btn" id="tuningRevertDraft" hidden data-help-key="action.tuning.revert" disabled>Revert Draft</button><button class="warning-btn" id="restoreStepEntryYaml" hidden>↶ Stage Step Entry</button><button class="warning-btn" id="resetExperimentYaml" hidden data-help-key="action.tuning.baseline">↶ Stage Baseline Awal</button><button class="soft-btn" id="refreshExperimentConfig">Reload Runtime/YAML</button></div></div>
+                  <div class="tuning-note" id="tuningNote">Untuk BAB 4.2–4.4, BASELINE = snapshot nilai aktif sistem sebelum tuning sesi dimulai. Baseline historis lama tidak ditampilkan. RESTORE BASELINE menyiapkan nilai aktif awal sebagai DRAFT, lalu APPLY TUNING + ACTIVE MATCH untuk benar-benar kembali.</div>
                   <div class="navigation-tuning-policy" id="navigationTuningPolicy" hidden>
                     <div><span>URUTAN</span><b id="tuningStepOrder">STEP --</b><small id="tuningStepPrereq">--</small></div>
                     <div><span>CARRY FORWARD</span><b id="tuningCarryState">INHERIT CURRENT YAML</b><small id="tuningCarryDetail">--</small></div>
                     <div><span>YAML YANG DITUNING</span><b id="tuningEditableCount">0 YAML TUNABLE</b><small id="tuningEditableList">--</small></div>
                     <div><span>RESET / ROLLBACK</span><b>STEP ENTRY ≠ BASELINE AWAL</b><small id="tuningResetDetail">--</small></div>
+                  </div>
+                  <div class="tuning-quick-apply" id="tuningQuickApply">
+                    <div class="tuning-match-card" id="tuningMatchCard" data-state="unknown">
+                      <span>RUNTIME TUNING</span>
+                      <b id="tuningMatchStatus">VERIFY</b>
+                      <small id="tuningMatchDetail">Belum diverifikasi terhadap parameter ROS runtime.</small>
+                    </div>
+                    <button class="primary-btn" id="tuningQuickApplyBtn">APPLY TUNING</button>
+                    <button class="soft-btn" id="tuningQuickVerifyBtn">VERIFY MATCH</button>
+                    <button class="warning-btn" id="tuningQuickBaselineBtn" title="Kembali ke nilai aktif sistem sebelum tuning sesi dimulai">↶ RESTORE BASELINE</button>
+                    <button class="soft-btn" id="tuningQuickDiscardBtn">BATALKAN DRAFT</button>
                   </div>
                   <div id="tuningFields" class="tuning-fields"><div class="empty-state">Pilih subpengujian.</div></div>
                 </article>
@@ -1031,8 +1147,8 @@
                 </div>
                 <section class="obstacle-cal-wizard" id="obstacleCalibrationWizard" hidden>
                   <div class="obcal-head">
-                    <div><span class="eyebrow">OBSTACLE CALIBRATION</span><b>Manusia + Motor • 4 orientasi • jarak real 1–5 meter</b><p>Pilih Object → Orientasi → Jarak. Setelah bbox target stabil tekan OK / Capture. Kombinasi yang sudah tersimpan otomatis LOCK dan baru dapat dipilih lagi setelah RESET pada tabel.</p></div>
-                    <span class="status-chip waiting" id="obcalState">0 / 40</span>
+                    <div><span class="eyebrow">OBSTACLE CALIBRATION</span><b>Manusia • menghadap mobil • jarak real 1–5 meter</b><p>Posisikan satu manusia menghadap mobil/kamera, pilih jarak 1–5 m, tunggu bounding box stabil, lalu tekan OK / Capture. Setiap jarak yang tersimpan otomatis LOCK.</p></div>
+                    <span class="status-chip waiting" id="obcalState">0 / 5</span>
                   </div>
                   <div class="obcal-top-grid">
                     <div class="obcal-preview">
@@ -1042,8 +1158,8 @@
                     </div>
                     <div class="obcal-input">
                       <span class="eyebrow">CURRENT MEASUREMENT</span>
-                      <label>Object<select id="obcalType"><option value="human">1. Manusia</option><option value="motorcycle">2. Motor</option></select></label>
-                      <label>Sisi / orientasi<select id="obcalOrientation"><option value="front">1. Depan</option><option value="rear">2. Belakang</option><option value="left">3. Samping Kiri</option><option value="right">4. Samping Kanan</option></select></label>
+                      <label>Objek<select id="obcalType" disabled><option value="human">Manusia</option></select></label>
+                      <label>Orientasi<select id="obcalOrientation" disabled><option value="front">Menghadap mobil / kamera</option></select></label>
                       <label>Jarak real dari kamera<select id="obcalDistance"><option value="1">1 meter</option><option value="2">2 meter</option><option value="3">3 meter</option><option value="4">4 meter</option><option value="5">5 meter</option></select></label>
                       <div class="obcal-selection-state" id="obcalSelectionState">BELUM DIKALIBRASI</div>
                       <div class="obcal-rule" id="obcalRule">Ukur jarak real, pastikan bounding box sesuai target, lalu klik OK / Capture.</div>
@@ -1053,18 +1169,18 @@
                       <span class="eyebrow">CALIBRATION PROGRESS</span>
                       <div id="obcalProgress" class="obcal-progress"></div>
                       <div class="obcal-progress-bar"><i id="obcalProgressBar"></i></div>
-                      <small id="obcalProgressText">0 / 40 kombinasi selesai</small>
+                      <small id="obcalProgressText">0 / 5 jarak selesai</small>
                     </div>
                   </div>
                   <div class="obcal-bottom-grid">
-                    <div class="obcal-table-wrap"><div class="obcal-subhead"><b>Calibration Data Table</b><span>1–2 m = near-field reference • 3–5 m = metric fit bila ground contact valid</span></div><div class="table-scroll"><table class="data-table obcal-table"><thead><tr><th>GT</th><th>Type</th><th>Orientasi</th><th>Conf</th><th>U</th><th>V</th><th>Raw X</th><th>Cal X</th><th>Error</th><th>Clipped</th><th>Use</th><th>Status / Aksi</th></tr></thead><tbody id="obcalTableBody"></tbody></table></div></div>
+                    <div class="obcal-table-wrap"><div class="obcal-subhead"><b>Calibration Data Table</b><span>5 titik jarak manusia; fit memakai titik metric valid yang tidak clipped.</span></div><div class="table-scroll"><table class="data-table obcal-table"><thead><tr><th>GT</th><th>Objek</th><th>Orientasi</th><th>Conf</th><th>U</th><th>V</th><th>Raw X</th><th>Cal X</th><th>Error</th><th>Clipped</th><th>Use</th><th>Status / Aksi</th></tr></thead><tbody id="obcalTableBody"></tbody></table></div></div>
                     <div class="obcal-chart-wrap"><div class="obcal-subhead"><b>Actual vs Estimated Distance</b><span id="obcalFitSummary">Belum cukup data</span></div><canvas id="obcalChart" width="720" height="360"></canvas></div>
                   </div>
                   <div class="obcal-actions">
-                    <div class="obcal-result"><span class="eyebrow">CALIBRATION RESULT</span><b id="obcalResultTitle">WAITING 1–5 m</b><small id="obcalResultDetail">Lengkapi 40 capture: 5 jarak × 2 object × 4 orientasi.</small></div>
-                    <button class="soft-btn" id="obcalExportCsv">Export CSV</button><button class="soft-btn" id="obcalExportGraph">Export Graph PNG</button><button class="warning-btn" id="obcalReset">Reset All</button><button class="soft-btn" id="obcalSaveApply" disabled>SAVE CALIBRATION</button><button class="primary-btn" id="obcalApplyYaml" disabled>APPLY TO YAML</button>
+                    <div class="obcal-result"><span class="eyebrow">CALIBRATION RESULT</span><b id="obcalResultTitle">WAITING 1–5 m</b><small id="obcalResultDetail">Lengkapi 5 capture manusia: 1 m, 2 m, 3 m, 4 m, dan 5 m.</small></div>
+                    <button class="soft-btn" id="obcalExportCsv">Export CSV</button><button class="soft-btn" id="obcalExportGraph">Export Graph PNG</button><button class="warning-btn" id="obcalReset">Reset All</button><button class="primary-btn" id="obcalSaveApply" disabled>SAVE TO YAML</button>
                   </div>
-                  <p class="tuning-note">SAVE baru aktif setelah 40/40 lengkap. SAVE menghitung koefisien dan memvalidasi diff; APPLY TO YAML baru aktif setelah hasil SAVE tervalidasi. Reset satu baris akan membuka kembali kombinasi Object + Orientasi + Jarak tersebut.</p>
+                  <p class="tuning-note">SAVE TO YAML aktif setelah 5/5 jarak selesai dan fit human valid. Tombol ini menyimpan koefisien human ke YAML; koefisien non-human yang sudah ada tetap dipertahankan.</p>
                 </section>
                 <section class="homography-assistant" id="homographyAssistant" hidden>
                   <div class="homography-head"><div><span class="eyebrow">METRIC CALIBRATION ASSISTANT</span><b>Click-to-GT Homography Points</b></div><span id="homographyPointCount">0/4 POINTS</span></div>
@@ -1086,7 +1202,11 @@
                 <div id="trialOptimalState" class="tuning-note">Setiap STOP menambah satu trial ke YAML. Tandai beberapa run untuk side-by-side comparison sebelum memilih konfigurasi final.</div>
                 <div id="trialComparePanel" class="trial-compare-panel" hidden></div>
                 <div class="table-scroll"><table class="data-table"><thead id="trialRecapHead"></thead><tbody id="trialRecapBody"><tr><td>Belum ada trial.</td></tr></tbody></table></div>
-                <div class="button-row" id="trialArtifactActions" hidden><a class="soft-btn" id="downloadTrialXlsx" href="/api/experiment/record/last.xlsx">Download Excel (.xlsx)</a><span id="trialGraphDownloads"></span></div>
+                <div id="trialArtifactActions" hidden>
+                  <div class="tuning-note" id="trialArtifactHint">Pilih satu atau beberapa trial pada kolom Cmp. File hasil akan muncul di bawah tabel ini.</div>
+                  <div id="trialArtifactPersistentList"></div>
+                  <div class="button-row" id="trialArtifactLatest" hidden><a class="soft-btn" id="downloadTrialCsv" href="/api/experiment/record/last.csv" download>Download CSV</a><a class="soft-btn" id="downloadTrialXlsx" href="/api/experiment/record/last.xlsx" download>Download Excel (.xlsx)</a><span id="trialGraphDownloads"></span></div>
+                </div>
               </article>
 
               <article class="panel audit-ribbon">
@@ -1182,30 +1302,35 @@
   </aside>
   <div class="toast-stack" id="toastStack" aria-live="polite"></div>
   <div class="modal-backdrop" id="confirmModal"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmText" tabindex="-1"><span class="eyebrow">CONFIRM ACTION</span><h2 id="confirmTitle">Confirm</h2><p id="confirmText"></p><div class="button-row"><button class="soft-btn grow" id="confirmNo">Cancel</button><button class="danger-btn grow" id="confirmYes">Continue</button></div></div></div>
-  <script src="/camera_geometry.js?v=20260910-stage2-v1" defer></script>
+  <script src="/camera_geometry.js?v=20260922-preview-v3" defer></script>
   <script src="/analysis_session.js?v=20260910-stage2-v2" defer></script>
-  <script src="/diagnostics.js?v=20260910-stage2-v1" defer></script>
-  <script src="/core.js?v=20260918-firda-load-v7" defer></script>
-  <script src="/navigation.js?v=20260918-goalchecker-v1" defer></script>
+  <script src="/diagnostics.js?v=20260919-goalpos-gnssgui-v1" defer></script>
+  <script src="/core.js?v=20260927-obcal-human5-v1" defer></script>
+  <script src="/navigation.js?v=20260923-global-replan-v2" defer></script>
   <script src="/map_editor.js?v=20260918-map-editor-v1" defer></script>
   <script src="/perception.js?v=20260918-perception-workflow-v1" defer></script>
-  <script src="/sensors.js?v=20260914-mag-ekf-v1" defer></script>
+  <script src="/sensors.js?v=20260919-goalpos-gnssgui-v1" defer></script>
   <script src="/rm3100_calibration.js?v=20260917-rm3100-v1" defer></script>
   <script src="/esc.js?v=20260913-stage6-v1" defer></script>
-  <script src="/system_views.js?v=20260918-map-editor-v1" defer></script>
-  <script src="/perception_calibration.js?v=20260918-lane-axis-lock-paired-y-v4" defer></script>
-  <script src="/tuning_catalog.js?v=20260918-firda-pos-v7" defer></script>
-  <script src="/tuning_ui.js?v=20260918-firda-load-savefix-v15" defer></script>
-  <script src="/tuning_charts.js?v=20260918-goalchecker-v1" defer></script>
-  <script src="/tuning_trials.js?v=20260918-firda-table-live-v4" defer></script>
+  <script src="/system_views.js?v=20260919-goalpos-gnssgui-v1" defer></script>
+  <script src="/perception_calibration.js?v=20260927-human-front-5distance-v1" defer></script>
+  <script src="/tuning_catalog.js?v=20260927-esc-final-v4" defer></script>
+  <script src="/navigation_packages.js?v=20260919-global-profile-v4" defer></script>
+  <script src="/firda_462_recap_data.js?v=20260920-locked44-v1" defer></script>
+  <script src="/firda_461_saved_data.js?v=20260920-saved-v1" defer></script>
+  <script src="/firda_saved_artifacts.js?v=20260920-070535-v1" defer></script>
+  <script src="/tuning_ui.js?v=20260927-esc-final-v4" defer></script>
+  <script src="/tuning_charts.js?v=20260919-goalpos-gnssgui-v1" defer></script>
+  <script src="/tuning_trials.js?v=20260920-dynamic-selected-v1" defer></script>
   <script src="/navigation_tuning_policy.js?v=20260916-yellow-flow-v1" defer></script>
-  <script src="/tuning_evidence.js?v=20260918-firda-load-preflight-v9" defer></script>
+  <script src="/tuning_evidence.js?v=20260927-esc-final-v4" defer></script>
   <script src="/report_41_timed.js?v=20260916-r41-summary-graph-v1" defer></script>
   <script src="/imu_heading_validation.js?v=20260916-report-integer-seconds-v1" defer></script>
-  <script src="/perception_bab4.js?v=20260918-independent-lane-xy-v3" defer></script>
+  <!-- Legacy perception_bab4.js disabled: backend-session v6 is the single Final Dataset implementation. -->
   <script src="/config.js?v=20260916-yellow-flow-v1" defer></script>
   <script src="/ekf_report_tools.js?v=20260917-r423-3cycle-v1" defer></script>
-  <script src="/export_tools.js?v=20260916-report-integer-seconds-v1" defer></script>
+  <script src="/export_tools.js?v=20260920-firda-excel-fix-v1" defer></script>
+  <script src="/perception_bab4_locked.js?v=20260926-heartbeat-worker-v50" defer></script>
   <script src="/report_dual_export.js?v=20260916-report-integer-seconds-v1" defer></script>
   <script src="/boot.js?v=20260913-stage6-v1" defer></script>
   <script src="/vesc_workbench.js?v=20260914-robust-v2" defer></script>

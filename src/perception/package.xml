@@ -27,6 +27,8 @@
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>python3-opencv</exec_depend>
   <exec_depend>python3-pip</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
   <!-- torch dipasang pada system Python target agar CMake dapat menemukan LibTorch.
        onnx/onnxruntime hanya opsional untuk tool konversi engine GPU. -->
   <export>

@@ -53,26 +53,35 @@
   }
 
   class CameraFrameStore {
-    constructor({url='/api/camera.jpg',intervalMs=250,canFetch=()=>true}={}){
-      this.url=url;this.intervalMs=Math.max(100,intervalMs);this.canFetch=canFetch;this.targets=new Map();this.timer=0;this.busy=false;this.lastUrl='';this.lastFrame=null;this.failures=0;this.lastError='';
+    constructor({url='/api/camera.jpg',intervalMs=250,canFetch=()=>true,frameStamp=()=>0}={}){
+      this.url=url;this.intervalMs=Math.max(100,intervalMs);this.canFetch=canFetch;this.frameStamp=frameStamp;this.targets=new Map();this.timer=0;this.busy=false;this.lastUrl='';this.lastFrame=null;this.lastFetchedStamp=0;this.failures=0;this.lastError='';
     }
     subscribe(key,{img,placeholder=null,isActive=()=>true,onFrame=null}={}){
-      this.targets.set(key,{img,placeholder,isActive,onFrame});this.start();return()=>{this.targets.delete(key);if(!this.targets.size)this.stop()};
+      const target={img,placeholder,isActive,onFrame};this.targets.set(key,target);
+      // Rehydrate a newly-created <img> immediately from the last good frame.
+      // This prevents blank/black preview when a live panel rebuilds its DOM.
+      if(this.lastFrame?.url&&img){img.src=this.lastFrame.url;img.style.display='block';if(placeholder)placeholder.style.display='none';if(onFrame)queueMicrotask(()=>onFrame(this.lastFrame,img))}
+      this.start();return()=>{this.targets.delete(key);if(!this.targets.size)this.stop()};
     }
     start(){if(!this.timer)this.timer=global.setInterval(()=>this.tick(),this.intervalMs);this.tick()}
     stop(){if(this.timer)global.clearInterval(this.timer);this.timer=0}
     activeTargets(){return [...this.targets.values()].filter(t=>t.img&&t.isActive())}
     async tick(){
       if(this.busy)return;const targets=this.activeTargets();if(!targets.length)return;
-      if(!this.canFetch()){for(const t of targets){if(t.placeholder){t.placeholder.textContent='CAMERA DISCONNECTED';t.placeholder.style.display='grid'}}return}
+      if(!this.canFetch()){for(const t of targets){if(this.lastFrame?.url&&t.img){t.img.src=this.lastFrame.url;t.img.style.display='block';if(t.placeholder)t.placeholder.style.display='none'}else if(t.placeholder){t.placeholder.textContent='CAMERA DISCONNECTED';t.placeholder.style.display='grid'}}return}
+      const sourceStamp=Number(this.frameStamp?.()||0);if(sourceStamp>0&&sourceStamp===this.lastFetchedStamp)return;
       this.busy=true;
       try{
         const fetcher=global.AGVFetchWithTimeout||((u,o)=>fetch(u,o)),r=await fetcher(`${this.url}?frame=${Date.now()}`,{cache:'no-store'},2200);if(!r.ok)throw new Error(`camera HTTP ${r.status}`);const blob=await r.blob(),url=URL.createObjectURL(blob),probe=new Image();
         await new Promise((resolve,reject)=>{probe.onload=resolve;probe.onerror=reject;probe.src=url});
-        const frame={url,width:probe.naturalWidth,height:probe.naturalHeight,atMs:Date.now(),bytes:blob.size};this.failures=0;this.lastError='';
-        for(const t of targets){t.img.src=url;t.img.style.display='block';if(t.placeholder)t.placeholder.style.display='none';if(t.onFrame)t.onFrame(frame,t.img)}
-        const old=this.lastUrl;this.lastUrl=url;this.lastFrame=frame;if(old&&old!==url)global.setTimeout(()=>URL.revokeObjectURL(old),1000);
-      }catch(e){this.failures++;this.lastError=e?.agvCode||e?.message||'FRAME_ERROR';const state=this.lastError==='REQUEST_TIMEOUT'?'RETRYING':'NO FRAME',stamp=new Date().toLocaleTimeString('id-ID');for(const t of targets){if(t.placeholder){t.placeholder.textContent=`${state} • ${stamp}`;t.placeholder.style.display='grid'}}}finally{this.busy=false}
+        const frame={url,width:probe.naturalWidth,height:probe.naturalHeight,atMs:Date.now(),bytes:blob.size};if(sourceStamp>0)this.lastFetchedStamp=sourceStamp;this.failures=0;this.lastError='';
+        // Commit the frame BEFORE touching targets. A Bab-4 live render can replace
+        // the <img> while this fetch/decode is in flight; new subscribers must see
+        // the newest frame immediately rather than inherit the soon-to-be-revoked URL.
+        const old=this.lastUrl;this.lastUrl=url;this.lastFrame=frame;
+        for(const t of this.activeTargets()){t.img.src=url;t.img.style.display='block';if(t.placeholder)t.placeholder.style.display='none';if(t.onFrame)t.onFrame(frame,t.img)}
+        if(old&&old!==url)global.setTimeout(()=>URL.revokeObjectURL(old),3000);
+      }catch(e){this.failures++;this.lastError=e?.agvCode||e?.message||'FRAME_ERROR';const state=this.lastError==='REQUEST_TIMEOUT'?'RETRYING':'NO FRAME',stamp=new Date().toLocaleTimeString('id-ID');for(const t of this.activeTargets()){if(this.lastFrame?.url&&t.img){t.img.src=this.lastFrame.url;t.img.style.display='block';if(t.placeholder)t.placeholder.style.display='none'}else if(t.placeholder){t.placeholder.textContent=`${state} • ${stamp}`;t.placeholder.style.display='grid'}}}finally{this.busy=false}
     }
   }
   global.AGVCameraGeometry=CameraGeometry;global.AGVCameraFrameStore=CameraFrameStore;

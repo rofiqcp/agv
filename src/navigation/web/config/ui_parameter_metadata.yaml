@@ -10687,6 +10687,28 @@ parameters:
     source_of_constraint: "runtime YAML SSOT + ROS Web authority audit"
     step: 0.001
 
+  nav2:controller_server.ros__parameters.FollowPath.max_robot_pose_search_dist:
+    identity: nav2:controller_server.ros__parameters.FollowPath.max_robot_pose_search_dist
+    file_key: nav2
+    yaml_path: controller_server.ros__parameters.FollowPath.max_robot_pose_search_dist
+    label: "MPPI Robot Pose Search Distance"
+    group: "NAV2"
+    level: advanced
+    type: number
+    risk: motion
+    write_authority: ros_yaml
+    requires_stationary: true
+    apply_mode: node_restart
+    metadata_complete: true
+    summary: "Jarak pencarian pose robot pada global path. Nilai harus cukup panjang agar retry FollowPath tidak mengembalikan transformed plan kosong setelah robot sudah jauh dari awal path."
+    effect_up: "Lebih robust terhadap re-send/recovery path panjang; biaya pencarian nearest-pose sedikit bertambah."
+    effect_down: "Pencarian lebih ringan tetapi dapat gagal menemukan posisi robot pada path lama setelah recovery."
+    related: ["nav2:controller_server.ros__parameters.FollowPath.prune_distance"]
+    source_of_constraint: "field failure 2026-09-19 + Nav2 MPPI path-handler audit"
+    hard_min: 4.0
+    hard_max: 1000.0
+    step: 1.0
+
   nav2:controller_server.ros__parameters.FollowPath.prune_distance:
     identity: nav2:controller_server.ros__parameters.FollowPath.prune_distance
     file_key: nav2

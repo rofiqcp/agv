@@ -31,6 +31,9 @@
 #include <QFileInfo>
 #include <QHostAddress>
 #include <QImage>
+#include <QPainter>
+#include <QPen>
+#include <QFont>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -58,6 +61,7 @@
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/twist_with_covariance_stamped.hpp>
+#include <map_msgs/msg/occupancy_grid_update.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <nav_msgs/msg/path.hpp>
@@ -84,6 +88,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include "agv_experiment_catalog.hpp"
+#include "bab4_perception_session.hpp"
 
 using namespace std::chrono_literals;
 
@@ -556,7 +561,40 @@ bool patchExistingYamlScalar(const QString &filePath, const QString &yamlPath, c
   }
   if (hash >= 0) comment = QStringLiteral(" ") + rest.mid(hash).trimmed();
   const QString originalScalar = (hash >= 0 ? rest.left(hash) : rest).trimmed();
-  lines[target] = prefix + QStringLiteral(" ") + jsonScalarPreservingYamlType(value, originalScalar) + comment;
+  if (value.isArray() && originalScalar.isEmpty()) {
+    // Block-style ROS arrays (e.g. process_noise_covariance:\n  - 0.05 ...)
+    // cannot be replaced by an inline value while leaving their old "- item"
+    // children in place. Collapse the complete child sequence atomically.
+    const int parentIndent = raw.size() - raw.trimmed().size();
+    int blockEnd = target + 1;
+    QStringList originalItems;
+    while (blockEnd < lines.size()) {
+      const QString childRaw = lines[blockEnd];
+      const QString child = childRaw.trimmed();
+      if (child.isEmpty()) { ++blockEnd; continue; }
+      const int childIndent = childRaw.size() - childRaw.trimmed().size();
+      // yaml-cpp accepts block sequence entries at the same indentation as
+      // the parent key ("key:\n- item" / indented equivalent). Keep those
+      // entries in this block; stop on the next sibling mapping key.
+      if (childIndent < parentIndent || (childIndent == parentIndent && !child.startsWith('-'))) break;
+      if (child.startsWith('-')) {
+        QString token = child.mid(1).trimmed();
+        const int childHash = token.indexOf('#');
+        if (childHash >= 0) token = token.left(childHash).trimmed();
+        if (!token.isEmpty()) originalItems << token;
+      }
+      ++blockEnd;
+    }
+    const QString typeHint = originalItems.isEmpty()
+      ? QStringLiteral("[]")
+      : QStringLiteral("[") + originalItems.join(QStringLiteral(", ")) + QStringLiteral("]");
+    lines[target] = prefix + QStringLiteral(" ") + jsonScalarPreservingYamlType(value, typeHint) + comment;
+    if (blockEnd > target + 1) {
+      lines.erase(lines.begin() + target + 1, lines.begin() + blockEnd);
+    }
+  } else {
+    lines[target] = prefix + QStringLiteral(" ") + jsonScalarPreservingYamlType(value, originalScalar) + comment;
+  }
   const QByteArray candidate = lines.join('\n').toUtf8();
   try { YAML::Load(candidate.constData()); }
   catch (const std::exception &e) {
@@ -937,19 +975,21 @@ class WebRosBridge {
     tfListener_ = std::make_shared<tf2_ros::TransformListener>(*tfBuffer_, node_, false);
     bindAddress_ = QString::fromStdString(node_->declare_parameter<std::string>("bind_address", "127.0.0.1"));
     const auto configuredPort = node_->declare_parameter<std::int64_t>("port", 5000);
-    // Deployment contract: the operator ROS Web must stay loopback-only on
-    // localhost:5000. Reject overrides instead of silently exposing another
-    // interface/port, so launch, footer, bookmarks and safety assumptions agree.
-    if (bindAddress_ != "127.0.0.1" && bindAddress_ != "localhost") {
-      throw std::invalid_argument("ROS Web wajib localhost (127.0.0.1)");
+    // Port tetap dikunci ke 5000, tetapi bind address boleh loopback atau
+    // 0.0.0.0 agar ROS Web dapat diakses dari browser operator di LAN.
+    if (bindAddress_ != "127.0.0.1" && bindAddress_ != "localhost" && bindAddress_ != "0.0.0.0") {
+      QHostAddress configuredAddress;
+      if (!configuredAddress.setAddress(bindAddress_)) {
+        throw std::invalid_argument("ROS Web bind_address tidak valid");
+      }
     }
     if (configuredPort != 5000) {
       throw std::invalid_argument("ROS Web wajib port 5000");
     }
-    bindAddress_ = "127.0.0.1";
     port_ = 5000;
     readOnly_ = node_->declare_parameter<bool>("read_only", false);
     cameraJpegFps_ = std::clamp(node_->declare_parameter<double>("camera_jpeg_fps", 5.0), 0.5, 12.0);
+    cameraFullresFallbackEnabled_ = node_->declare_parameter<bool>("camera_fullres_fallback_enabled", false);
     setupRos();
     executor_ = std::make_shared<rclcpp::executors::MultiThreadedExecutor>(rclcpp::ExecutorOptions(), 2);
     executor_->add_node(node_);
@@ -1138,8 +1178,14 @@ class WebRosBridge {
     // the old launch argument. Keep the persistent YAML transaction, but apply this
     // one parameter through its proven dynamic callback after any required respawns.
     const QString driveErpmPath = QStringLiteral("esc_ackermann.ros__parameters.drive_erpm_per_mps");
+    const QSet<QString> liveEscTuningPaths{
+      QStringLiteral("esc_ackermann.ros__parameters.odom_v_variance_base"),
+      QStringLiteral("esc_ackermann.ros__parameters.odom_yaw_rate_variance_base")
+    };
     std::optional<double> driveErpmLiveTarget;
     QSet<QString> restartNodes;
+    QJsonArray liveNav2Changes;
+    QJsonArray liveEscTuningChanges;
     bool hasRuntimeTarget = false;
     for (const QJsonValue &value : changes) {
       if (!value.isObject()) continue;
@@ -1151,6 +1197,23 @@ class WebRosBridge {
       if (fileKey == QStringLiteral("esc") && path == driveErpmPath) {
         const QJsonValue expected = expectedRuntimeValue(fileKey, path);
         if (expected.isDouble()) driveErpmLiveTarget = expected.toDouble();
+        continue;
+      }
+      // BAB IV Candidate A/B only tune ESC odometry covariance. Restarting
+      // esc_ackermann for those two estimation parameters would unnecessarily
+      // reset the serial/teleop actuator path. Apply them live and verify so
+      // motor control, steering mapping and joystick behavior stay untouched.
+      if (fileKey == QStringLiteral("esc") && liveEscTuningPaths.contains(path)) {
+        liveEscTuningChanges.append(change);
+        continue;
+      }
+      // autonomous.launch.py materializes nav2_ackermann.yaml into a /tmp
+      // vehicle-SSOT file once at launch. Killing planner/controller here would
+      // respawn them from that stale temp file and undo a freshly written
+      // Candidate A/B value. Nav2 scalar tuning is dynamically settable, so
+      // apply it live and verify instead of restarting these lifecycle nodes.
+      if (fileKey == QStringLiteral("nav2")) {
+        liveNav2Changes.append(change);
         continue;
       }
       for (const auto &target : targets) restartNodes.insert(target.first);
@@ -1185,7 +1248,20 @@ class WebRosBridge {
       signaled += stopped;
       restartResults.append(QJsonObject{{"node", nodeName}, {"matched_processes", pids.size()}, {"signaled", stopped}});
     }
-    result["mode"] = driveErpmLiveTarget.has_value() ? "safe_batch_restart_plus_live_drive_scale" : "safe_batch_restart";
+    const bool hasLiveNav2 = !liveNav2Changes.isEmpty();
+    const bool hasLiveEscTuning = !liveEscTuningChanges.isEmpty();
+    if (driveErpmLiveTarget.has_value() && hasLiveNav2 && hasLiveEscTuning)
+      result["mode"] = "safe_batch_restart_plus_live_nav2_plus_live_esc_cov_plus_drive_scale";
+    else if (hasLiveNav2 && hasLiveEscTuning)
+      result["mode"] = "safe_batch_restart_plus_live_nav2_plus_live_esc_cov";
+    else if (hasLiveNav2)
+      result["mode"] = "safe_batch_restart_plus_live_nav2";
+    else if (hasLiveEscTuning)
+      result["mode"] = "safe_batch_restart_plus_live_esc_cov";
+    else if (driveErpmLiveTarget.has_value())
+      result["mode"] = "safe_batch_restart_plus_live_drive_scale";
+    else
+      result["mode"] = "safe_batch_restart";
     result["restart"] = restartResults;
     result["signaled_processes"] = signaled;
     if (signaled == 0 && !restartNodes.isEmpty() && !driveErpmLiveTarget.has_value()) {
@@ -1197,6 +1273,68 @@ class WebRosBridge {
     }
 
     if (signaled > 0) std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    if (hasLiveNav2) {
+      QJsonArray liveResults;
+      bool liveOk = true;
+      QString liveError;
+      for (const QJsonValue &value : liveNav2Changes) {
+        const QJsonObject change = value.toObject();
+        const QString fileKey = change.value("file_key").toString();
+        const QString path = change.value("path").toString();
+        const QString parameterName = parameterNameForYamlPath(path);
+        const QJsonValue expected = expectedRuntimeValue(fileKey, path);
+        const auto targets = runtimeTargetsForChange(fileKey, path);
+        for (const auto &target : targets) {
+          QString oneMessage;
+          const bool oneOk = setRuntimeScalarParameter(target.second, parameterName, expected, &oneMessage);
+          liveResults.append(QJsonObject{{"file_key",fileKey},{"path",path},{"node",target.second},
+            {"parameter",parameterName},{"expected",expected},{"ok",oneOk},{"message",oneMessage}});
+          if (!oneOk) {
+            liveOk = false;
+            liveError = oneMessage;
+            break;
+          }
+        }
+        if (!liveOk) break;
+      }
+      result["nav2_live_apply"] = liveResults;
+      if (!liveOk) {
+        result["status"] = "RUNTIME_MISMATCH";
+        result["message"] = QStringLiteral("Nav2 live apply gagal: ") + liveError;
+        result["runtime_match"] = false;
+        update("runtime_config_apply", result);
+        return result;
+      }
+    }
+    if (hasLiveEscTuning) {
+      QJsonArray liveResults;
+      bool liveOk = true;
+      QString liveError;
+      for (const QJsonValue &value : liveEscTuningChanges) {
+        const QJsonObject change = value.toObject();
+        const QString path = change.value("path").toString();
+        const QString parameterName = parameterNameForYamlPath(path);
+        const QJsonValue expected = expectedRuntimeValue(QStringLiteral("esc"), path);
+        QString oneMessage;
+        const bool oneOk = setRuntimeScalarParameter(
+          QStringLiteral("/esc_ackermann"), parameterName, expected, &oneMessage);
+        liveResults.append(QJsonObject{{"file_key","esc"},{"path",path},{"node","/esc_ackermann"},
+          {"parameter",parameterName},{"expected",expected},{"ok",oneOk},{"message",oneMessage}});
+        if (!oneOk) {
+          liveOk = false;
+          liveError = oneMessage;
+          break;
+        }
+      }
+      result["esc_cov_live_apply"] = liveResults;
+      if (!liveOk) {
+        result["status"] = "RUNTIME_MISMATCH";
+        result["message"] = QStringLiteral("ESC covariance live apply gagal: ") + liveError;
+        result["runtime_match"] = false;
+        update("runtime_config_apply", result);
+        return result;
+      }
+    }
     if (driveErpmLiveTarget.has_value()) {
       QString liveMessage;
       const bool liveOk = setDriveErpmPerMps(*driveErpmLiveTarget, &liveMessage);
@@ -1252,6 +1390,10 @@ class WebRosBridge {
         : QStringLiteral("Batch restart selesai tetapi sebagian parameter runtime belum MATCH; jangan mulai run tuning dulu.");
     update("runtime_config_apply", result);
     return result;
+  }
+
+  void publishFinalGuard(const QString &mode,const QString &condition) {
+    std_msgs::msg::String m;m.data=QJsonDocument(QJsonObject{{"mode",mode},{"condition",condition}}).toJson(QJsonDocument::Compact).toStdString();finalGuardPub_->publish(m);
   }
 
   bool publishGoal(double x, double y, double yawRad, QString *message) {
@@ -1565,6 +1707,54 @@ class WebRosBridge {
     return true;
   }
 
+  bool publishFinalTrialVelocity(double speedMps, double yawRateRad, bool active, QString *message) {
+    if (readOnly_) return rejectReadOnly(message);
+    if (!trialTwistPub_ || !trialSourcePub_) { if(message)*message="Final trial publisher belum siap"; return false; }
+    if (!std::isfinite(speedMps) || !std::isfinite(yawRateRad)) { if(message)*message="Final trial command tidak finite"; return false; }
+    if (active) {
+      if (boolState("system.estop")) { if(message)*message="Final trial ditolak: E-stop aktif"; return false; }
+      if (boolState("vesc_maintenance_active")) { if(message)*message="Final trial ditolak: maintenance aktif"; return false; }
+      if (!boolState("connected.esc_feedback") || !boolState("connected.esc_ready")) {
+        if(message) *message="Final trial ditolak: ESC feedback/ready belum siap";
+        return false;
+      }
+      if (std::abs(speedMps) > 0.22 + 1.0e-9 || std::abs(yawRateRad) > 0.18 + 1.0e-9) {
+        if(message)*message=QString("Final trial command melebihi limit: v=%1 w=%2").arg(speedMps,0,'f',3).arg(yawRateRad,0,'f',3);
+        return false;
+      }
+    }
+
+    geometry_msgs::msg::Twist cmd;
+    double steeringDeg=0.0, encodedAngular=0.0;
+    if (active) {
+      cmd.linear.x=speedMps;
+      const double wheelbase=sourceConfigNumber("vehicle","vehicle.ros__parameters.effective_wheelbase_m",0.70);
+      const double track=sourceConfigNumber("vehicle","vehicle.ros__parameters.track_width_m",0.48);
+      const double steerLimit=sourceConfigNumber("esc","esc_ackermann.ros__parameters.steering_physical_operational_limit_deg",28.0);
+      const double yawMaxDeg=sourceConfigNumber("teleop","motor_teleop.ros__parameters.yaw_max_deg_s",80.0);
+      if(std::abs(speedMps)>=0.05&&std::abs(yawRateRad)>1.0e-6){
+        const double kappa=yawRateRad/speedMps;
+        const double centerRadius=1.0/std::abs(kappa);
+        const double innerRadius=std::max(1.0e-6,centerRadius-0.5*track);
+        const double innerAngle=std::atan(wheelbase/innerRadius);
+        // ROS +yaw = LEFT, physical steering +deg = RIGHT.
+        steeringDeg=-std::copysign(innerAngle,kappa)*180.0/kPi;
+        steeringDeg=std::clamp(steeringDeg,-steerLimit,steerLimit);
+      }
+      const double frac=steerLimit>1.0e-9?steeringDeg/steerLimit:0.0;
+      encodedAngular=std::clamp(frac,-1.0,1.0)*yawMaxDeg*kPi/180.0;
+      cmd.angular.z=encodedAngular;
+    }
+    std_msgs::msg::String src; src.data=active ? "WEB_TRIAL" : "STOP";
+    trialTwistPub_->publish(cmd); trialSourcePub_->publish(src);
+    update("web_trial_motion",QJsonObject{{"active",active},{"speed_mps",active?speedMps:0.0},
+      {"requested_yaw_rate_rad_s",active?yawRateRad:0.0},{"steering_deg",active?steeringDeg:0.0},
+      {"encoded_manual_angular_z",active?encodedAngular:0.0},{"at_ms",nowMs()}});
+    if(message)*message=active ? QString("FINAL WEB_TRIAL v=%1 m/s steer=%2 deg (w_req=%3)")
+      .arg(speedMps,0,'f',3).arg(steeringDeg,0,'f',2).arg(yawRateRad,0,'f',3) : "FINAL WEB_TRIAL stop";
+    return true;
+  }
+
   bool setSteeringCalibrationMode(bool enabled, QString *message) {
     if (readOnly_) return rejectReadOnly(message);
     if (enabled) {
@@ -1615,6 +1805,7 @@ class WebRosBridge {
   int port_{5000};
   bool readOnly_{false};
   double cameraJpegFps_{5.0};
+  bool cameraFullresFallbackEnabled_{false};
   mutable std::mutex stateMutex_;
   QJsonObject state_;
   QJsonObject updated_;
@@ -1631,6 +1822,17 @@ class WebRosBridge {
   std::chrono::steady_clock::time_point lastCompressedCameraSeen_{};
   std::chrono::steady_clock::time_point lastGlobalCostmapEncode_{};
   std::chrono::steady_clock::time_point lastLocalCostmapEncode_{};
+  nav_msgs::msg::OccupancyGrid localCostmapGrid_{};
+  bool localCostmapGridReady_{false};
+  std::mutex costmapAlignmentMutex_;
+  double alignmentOdomX_{0.0};
+  double alignmentOdomY_{0.0};
+  double alignmentOdomYaw_{0.0};
+  bool alignmentOdomReady_{false};
+  std::chrono::steady_clock::time_point alignmentOdomSeen_{};
+  std::vector<std::pair<double,double>> latestPlanningPoints_{};
+  std::string latestPlanningFrame_{};
+  std::chrono::steady_clock::time_point latestPlanningSeen_{};
   std::vector<rclcpp::SubscriptionBase::SharedPtr> subscriptions_;
   std::unique_ptr<tf2_ros::Buffer> tfBuffer_;
   std::shared_ptr<tf2_ros::TransformListener> tfListener_;
@@ -1640,6 +1842,7 @@ class WebRosBridge {
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr vescToolCommandPub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr initialPosePub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr hmiRequestPub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr finalGuardPub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr trialTwistPub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr trialSourcePub_;
 
@@ -1768,6 +1971,92 @@ class WebRosBridge {
     return out;
   }
 
+  bool setRuntimeScalarParameter(const QString &nodeName, const QString &parameterName,
+                               const QJsonValue &expected, QString *message) {
+    if (parameterName.isEmpty() || expected.isUndefined() || expected.isArray() || expected.isObject()) {
+      if (message) *message = QStringLiteral("Runtime scalar parameter tidak valid");
+      return false;
+    }
+    auto getClient=node_->create_client<rcl_interfaces::srv::GetParameters>(
+      (nodeName+QStringLiteral("/get_parameters")).toStdString());
+    if(!getClient->wait_for_service(1200ms)){
+      if(message)*message=QStringLiteral("GetParameters unavailable: ")+nodeName;
+      return false;
+    }
+    auto getReq=std::make_shared<rcl_interfaces::srv::GetParameters::Request>();
+    getReq->names.push_back(parameterName.toStdString());
+    auto getFuture=getClient->async_send_request(getReq);
+    if(getFuture.wait_for(1500ms)!=std::future_status::ready){
+      if(message)*message=QStringLiteral("Timeout membaca tipe runtime: ")+nodeName+QStringLiteral(" ")+parameterName;
+      return false;
+    }
+    rcl_interfaces::msg::ParameterValue current;
+    try{
+      const auto response=getFuture.get();
+      if(response->values.empty()){
+        if(message)*message=QStringLiteral("Parameter runtime tidak ditemukan: ")+parameterName;
+        return false;
+      }
+      current=response->values.front();
+    }catch(const std::exception &e){
+      if(message)*message=QString::fromUtf8(e.what());
+      return false;
+    }
+
+    rcl_interfaces::msg::Parameter p;
+    p.name=parameterName.toStdString();
+    p.value.type=current.type;
+    using PT=rcl_interfaces::msg::ParameterType;
+    switch(current.type){
+      case PT::PARAMETER_BOOL:
+        if(!expected.isBool()){if(message)*message=QStringLiteral("Tipe bool runtime tidak cocok");return false;}
+        p.value.bool_value=expected.toBool(); break;
+      case PT::PARAMETER_INTEGER:
+        if(!expected.isDouble()){if(message)*message=QStringLiteral("Tipe integer runtime tidak cocok");return false;}
+        p.value.integer_value=static_cast<int64_t>(std::llround(expected.toDouble())); break;
+      case PT::PARAMETER_DOUBLE:
+        if(!expected.isDouble()){if(message)*message=QStringLiteral("Tipe double runtime tidak cocok");return false;}
+        p.value.double_value=expected.toDouble(); break;
+      case PT::PARAMETER_STRING:
+        if(!expected.isString()){if(message)*message=QStringLiteral("Tipe string runtime tidak cocok");return false;}
+        p.value.string_value=expected.toString().toStdString(); break;
+      default:
+        if(message)*message=QStringLiteral("Hanya scalar ROS parameter yang didukung untuk live apply");
+        return false;
+    }
+
+    auto setClient=node_->create_client<rcl_interfaces::srv::SetParametersAtomically>(
+      (nodeName+QStringLiteral("/set_parameters_atomically")).toStdString());
+    if(!setClient->wait_for_service(1200ms)){
+      if(message)*message=QStringLiteral("SetParametersAtomically unavailable: ")+nodeName;
+      return false;
+    }
+    auto req=std::make_shared<rcl_interfaces::srv::SetParametersAtomically::Request>();
+    req->parameters.push_back(p);
+    auto future=setClient->async_send_request(req);
+    if(future.wait_for(1800ms)!=std::future_status::ready){
+      if(message)*message=QStringLiteral("Timeout live apply: ")+nodeName+QStringLiteral(" ")+parameterName;
+      return false;
+    }
+    try{
+      const auto response=future.get();
+      if(!response->result.successful){
+        if(message)*message=QString::fromStdString(response->result.reason);
+        return false;
+      }
+    }catch(const std::exception &e){
+      if(message)*message=QString::fromUtf8(e.what());
+      return false;
+    }
+    const QJsonObject verify=readRuntimeParameter(nodeName,parameterName,expected);
+    if(!verify.value(QStringLiteral("match")).toBool(false)){
+      if(message)*message=QStringLiteral("Live apply selesai tetapi readback mismatch: ")+nodeName+QStringLiteral(" ")+parameterName;
+      return false;
+    }
+    if(message)*message=QStringLiteral("ACTIVE_MATCH");
+    return true;
+  }
+
   bool rejectReadOnly(QString *message) const {
     if (message) *message = "Web GUI berjalan dalam read-only mode";
     return false;
@@ -1842,7 +2131,8 @@ class WebRosBridge {
         {"/esc/armed", "connected.esc_armed"}, {"/esc/feedback_valid", "connected.esc_feedback"},
         {"/esc/drive/connected", "connected.esc_drive"}, {"/esc/steer/connected", "connected.esc_steer"},
         {"/esc/steering_calibration/controller_ready", "esc_calibration_controller_ready"},
-        {"/system/autonomy_ready", "system.autonomy_ready"}, {"/system/motion_ready", "system.motion_ready"},
+        {"/system/autonomy_ready", "system.autonomy_ready"}, {"/system/autonomy_motion_allowed", "system.autonomy_motion_allowed"},
+        {"/system/motion_ready", "system.motion_ready"},
         {"/system/planning_localization_ready", "system.planning_localization_ready"},
         {"/system/motion_localization_ready", "system.motion_localization_ready"},
         {"/system/nav2_ready", "system.nav2_ready"},
@@ -1860,7 +2150,9 @@ class WebRosBridge {
         update(channel, msg->data);
       });
     }
-    subscribe<std_msgs::msg::Bool>("/safety/estop", stateQos, [this](std_msgs::msg::Bool::ConstSharedPtr msg) {
+    // E-stop publisher is TRANSIENT_LOCAL. Use the same durability so a
+    // restarted web node immediately receives the latched safety state.
+    subscribe<std_msgs::msg::Bool>("/safety/estop", latchedQos, [this](std_msgs::msg::Bool::ConstSharedPtr msg) {
       update("system.estop", msg->data);
     });
 
@@ -2093,6 +2385,14 @@ class WebRosBridge {
         const double sinp = 2.0 * (q.w * q.y - q.z * q.x);
         const double pitch = std::abs(sinp) >= 1.0 ? std::copysign(kPi / 2.0, sinp) : std::asin(sinp);
         const double yaw = yawFromQuat(q.x, q.y, q.z, q.w);
+        if (ch == QStringLiteral("ekf_local")) {
+          std::lock_guard<std::mutex> alignLock(costmapAlignmentMutex_);
+          alignmentOdomX_ = p.x;
+          alignmentOdomY_ = p.y;
+          alignmentOdomYaw_ = yaw;
+          alignmentOdomReady_ = true;
+          alignmentOdomSeen_ = std::chrono::steady_clock::now();
+        }
         QJsonArray poseCovariance, twistCovariance;
         for (const double value : msg->pose.covariance) poseCovariance.append(value);
         for (const double value : msg->twist.covariance) twistCovariance.append(value);
@@ -2154,9 +2454,9 @@ class WebRosBridge {
       });
     };
     pathSubscribe("/plan", "nav_path");
+    // Humble MPPI publishes the controller-trimmed path on /transformed_global_plan.
+    // Do not subscribe dead aliases into the same local_path state key.
     pathSubscribe("/transformed_global_plan", "local_path");
-    pathSubscribe("/controller_server/transformed_global_plan", "local_path");
-    pathSubscribe("/local_plan", "local_path");
 
     // Nav2 Humble MPPI TrajectoryVisualizer publishes a MarkerArray on the
     // controller node's relative `trajectories` topic.  Bridge candidate and
@@ -2165,42 +2465,136 @@ class WebRosBridge {
     subscribe<visualization_msgs::msg::MarkerArray>(
       "/trajectories", sensorQos,
       [this](visualization_msgs::msg::MarkerArray::ConstSharedPtr msg) {
+        // Nav2 Humble MPPI TrajectoryVisualizer emits one Marker per sampled
+        // trajectory point using marker.pose.position (marker.points is empty).
+        // Keep compatibility with LINE_STRIP/POINTS style marker.points too.
         QJsonArray trajectories;
         size_t pointCount = 0;
         size_t optimalCount = 0;
+        size_t rawMarkerCount = 0;
+        size_t poseMarkerCount = 0;
+        size_t pointsMarkerCount = 0;
+
+        QJsonArray candidatePosePoints;
+        QJsonArray optimalPosePoints;
+        QString candidateFrame;
+        QString optimalFrame;
+        int candidateFirstId = -1;
+        int optimalFirstId = -1;
+        double lastCandidateGreen = -1.0;
+
+        auto flushCandidate = [&]() {
+          if (candidatePosePoints.size() >= 2) {
+            pointCount += static_cast<size_t>(candidatePosePoints.size());
+            trajectories.append(QJsonObject{
+              {"ns", QStringLiteral("Candidate Trajectories")},
+              {"id", candidateFirstId},
+              {"frame_id", candidateFrame},
+              {"optimal", false},
+              {"points", candidatePosePoints}});
+          }
+          candidatePosePoints = QJsonArray();
+          candidateFrame.clear();
+          candidateFirstId = -1;
+          lastCandidateGreen = -1.0;
+        };
+
         for (const auto &marker : msg->markers) {
           if (marker.action == visualization_msgs::msg::Marker::DELETE ||
-              marker.action == visualization_msgs::msg::Marker::DELETEALL || marker.points.empty()) continue;
-          QJsonArray points;
-          const size_t stride = std::max<size_t>(1, marker.points.size() / 160 + 1);
-          for (size_t i = 0; i < marker.points.size(); ++i) {
-            if (i % stride != 0 && i + 1 != marker.points.size()) continue;
-            const auto &p = marker.points[i];
-            points.append(QJsonArray{p.x, p.y, p.z});
-          }
-          if (points.size() < 2) continue;
+              marker.action == visualization_msgs::msg::Marker::DELETEALL) continue;
+          ++rawMarkerCount;
           const QString ns = QString::fromStdString(marker.ns);
           const bool optimal = ns.contains(QStringLiteral("Optimal"), Qt::CaseInsensitive);
-          if (optimal) ++optimalCount;
-          pointCount += static_cast<size_t>(points.size());
-          trajectories.append(QJsonObject{
-            {"ns", ns}, {"id", marker.id}, {"frame_id", QString::fromStdString(marker.header.frame_id)},
-            {"optimal", optimal}, {"points", points}});
+
+          if (!marker.points.empty()) {
+            ++pointsMarkerCount;
+            QJsonArray points;
+            const size_t stride = std::max<size_t>(1, marker.points.size() / 160 + 1);
+            for (size_t i = 0; i < marker.points.size(); ++i) {
+              if (i % stride != 0 && i + 1 != marker.points.size()) continue;
+              const auto &p = marker.points[i];
+              if (!std::isfinite(p.x) || !std::isfinite(p.y)) continue;
+              points.append(QJsonArray{p.x, p.y, p.z});
+            }
+            if (points.size() < 2) continue;
+            if (optimal) ++optimalCount;
+            pointCount += static_cast<size_t>(points.size());
+            trajectories.append(QJsonObject{
+              {"ns", ns}, {"id", marker.id}, {"frame_id", QString::fromStdString(marker.header.frame_id)},
+              {"optimal", optimal}, {"points", points}});
+            continue;
+          }
+
+          const auto &p = marker.pose.position;
+          if (!std::isfinite(p.x) || !std::isfinite(p.y)) continue;
+          ++poseMarkerCount;
+          const QJsonArray point{p.x, p.y, p.z};
+
+          if (optimal) {
+            if (optimalPosePoints.isEmpty()) {
+              optimalFrame = QString::fromStdString(marker.header.frame_id);
+              optimalFirstId = marker.id;
+            }
+            optimalPosePoints.append(point);
+            continue;
+          }
+
+          if (ns.contains(QStringLiteral("Candidate"), Qt::CaseInsensitive)) {
+            const double green = marker.color.g;
+            // Humble encodes progress along each candidate in color.g. It
+            // rises along a trajectory and resets to 0 for the next one.
+            if (!candidatePosePoints.isEmpty() && lastCandidateGreen >= 0.0 &&
+                green + 1.0e-6 < lastCandidateGreen) {
+              flushCandidate();
+            }
+            if (candidatePosePoints.isEmpty()) {
+              candidateFrame = QString::fromStdString(marker.header.frame_id);
+              candidateFirstId = marker.id;
+            }
+            candidatePosePoints.append(point);
+            lastCandidateGreen = green;
+          }
         }
+
+        flushCandidate();
+        if (optimalPosePoints.size() >= 2) {
+          ++optimalCount;
+          pointCount += static_cast<size_t>(optimalPosePoints.size());
+          trajectories.append(QJsonObject{
+            {"ns", QStringLiteral("Optimal Trajectory")},
+            {"id", optimalFirstId},
+            {"frame_id", optimalFrame},
+            {"optimal", true},
+            {"points", optimalPosePoints}});
+        }
+
         update("mppi_trajectories", QJsonObject{
-          {"count", trajectories.size()}, {"optimal_count", static_cast<double>(optimalCount)},
-          {"point_count", static_cast<double>(pointCount)}, {"trajectories", trajectories}});
+          {"count", trajectories.size()},
+          {"optimal_count", static_cast<double>(optimalCount)},
+          {"point_count", static_cast<double>(pointCount)},
+          {"raw_marker_count", static_cast<double>(rawMarkerCount)},
+          {"pose_marker_count", static_cast<double>(poseMarkerCount)},
+          {"points_marker_count", static_cast<double>(pointsMarkerCount)},
+          {"format", poseMarkerCount > 0 ? QStringLiteral("POSE_MARKERS_HUMBLE") : QStringLiteral("MARKER_POINTS")},
+          {"trajectories", trajectories}});
       });
 
-    const auto goalSubscribe = [this, stateQos](const char *topic) {
-      subscribe<geometry_msgs::msg::PoseStamped>(topic, stateQos, [this](geometry_msgs::msg::PoseStamped::ConstSharedPtr msg) {
+    subscribe<geometry_msgs::msg::PoseStamped>("/navigation/goal_request", stateQos,
+      [this](geometry_msgs::msg::PoseStamped::ConstSharedPtr msg) {
+        const auto &q = msg->pose.orientation;
+        const QJsonObject goal{{"x", msg->pose.position.x}, {"y", msg->pose.position.y},
+                               {"yaw", yawFromQuat(q.x, q.y, q.z, q.w)}, {"at_ms", nowMs()}};
+        update("goal_pose", goal);
+        // Dedicated edge event used by the HTTP recorder fallback. This fires for
+        // WEB, STM32 HMI, or any other publisher on /navigation/goal_request.
+        update("goal_request_event", goal);
+      });
+    subscribe<geometry_msgs::msg::PoseStamped>("/goal_pose", stateQos,
+      [this](geometry_msgs::msg::PoseStamped::ConstSharedPtr msg) {
         const auto &q = msg->pose.orientation;
         update("goal_pose", QJsonObject{{"x", msg->pose.position.x}, {"y", msg->pose.position.y},
-                                        {"yaw", yawFromQuat(q.x, q.y, q.z, q.w)}});
+                                        {"yaw", yawFromQuat(q.x, q.y, q.z, q.w)}, {"at_ms", nowMs()}});
       });
-    };
-    goalSubscribe("/navigation/goal_request");
-    goalSubscribe("/goal_pose");
 
     const auto twistSubscribe = [this, sensorQos](const char *topic, const char *channel) {
       const QString ch = QString::fromLatin1(channel);
@@ -2304,10 +2698,12 @@ class WebRosBridge {
       update("camera_frame", QJsonObject{{"width", static_cast<int>(msg->width)}, {"height", static_cast<int>(msg->height)},
                                          {"encoding", QString::fromStdString(msg->encoding)}, {"source", source}, {"at_ms", nowMs()}});
     };
-    subscribe<sensor_msgs::msg::Image>("/camera/astra/image_raw", sensorQos,
-                                      [cacheCamera](sensor_msgs::msg::Image::ConstSharedPtr msg) { cacheCamera(msg, "raw"); });
-    subscribe<sensor_msgs::msg::Image>("/camera/yolop/image_annotated", sensorQos,
-                                      [cacheCamera](sensor_msgs::msg::Image::ConstSharedPtr msg) { cacheCamera(msg, "annotated"); });
+    if (cameraFullresFallbackEnabled_) {
+      subscribe<sensor_msgs::msg::Image>("/camera/astra/image_raw", sensorQos,
+                                        [cacheCamera](sensor_msgs::msg::Image::ConstSharedPtr msg) { cacheCamera(msg, "raw"); });
+      subscribe<sensor_msgs::msg::Image>("/camera/yolop/image_annotated", sensorQos,
+                                        [cacheCamera](sensor_msgs::msg::Image::ConstSharedPtr msg) { cacheCamera(msg, "annotated"); });
+    }
 
     subscribe<nav_msgs::msg::OccupancyGrid>("/map", latchedQos, [this](nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg) {
       if (msg->info.width == 0 || msg->info.height == 0 || msg->data.empty()) return;
@@ -2363,80 +2759,238 @@ class WebRosBridge {
                                      {"frame_id", QString::fromStdString(msg->header.frame_id)}, {"at_ms", nowMs()}});
     });
 
-    // RViz-like costmap layers for the Web HMI. These are the actual Nav2
-    // OccupancyGrid outputs, not a fabricated inflation preview. Encoding is
-    // throttled and downsampled to keep the mini-PC responsive on large maps.
-    const auto cacheCostmap = [this, latchedQos](const char *topic, const char *metaKey, bool global) {
-      subscribe<nav_msgs::msg::OccupancyGrid>(topic, latchedQos,
-        [this, metaKey, global](nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg) {
-          if (msg->info.width == 0 || msg->info.height == 0 || msg->data.empty()) return;
-          const std::uint64_t cells = static_cast<std::uint64_t>(msg->info.width) * msg->info.height;
-          if (cells > msg->data.size() || cells > 100000000ULL) return;
+    // RViz-like costmap layers for the Web HMI. Nav2 commonly publishes a
+    // full OccupancyGrid once and then incremental OccupancyGridUpdate patches.
+    // The web bridge merges those updates so 4.5 always visualizes the actual
+    // rolling local costmap instead of a stale all-zero startup snapshot.
+    const auto renderCostmap = [this](const nav_msgs::msg::OccupancyGrid &msg, const char *metaKey, bool global) {
+      if (msg.info.width == 0 || msg.info.height == 0 || msg.data.empty()) return;
+      const std::uint64_t cells = static_cast<std::uint64_t>(msg.info.width) * msg.info.height;
+      if (cells > msg.data.size() || cells > 100000000ULL) return;
 
-          std::lock_guard<std::mutex> encodeLock(costmapEncodeMutex_);
-          auto &last = global ? lastGlobalCostmapEncode_ : lastLocalCostmapEncode_;
-          const auto now = std::chrono::steady_clock::now();
-          const double minPeriod = global ? 1.0 : 0.25;
-          if (last.time_since_epoch().count() != 0 &&
-              std::chrono::duration<double>(now - last).count() < minPeriod) return;
+      std::lock_guard<std::mutex> encodeLock(costmapEncodeMutex_);
+      auto &last = global ? lastGlobalCostmapEncode_ : lastLocalCostmapEncode_;
+      const auto now = std::chrono::steady_clock::now();
+      const double minPeriod = global ? 1.0 : 0.08;
+      if (last.time_since_epoch().count() != 0 &&
+          std::chrono::duration<double>(now - last).count() < minPeriod) return;
 
-          constexpr unsigned int kMaxRaster = 1600U;
-          const unsigned int largest = std::max(msg->info.width, msg->info.height);
-          const unsigned int stride = std::max(1U, (largest + kMaxRaster - 1U) / kMaxRaster);
-          const unsigned int outW = (msg->info.width + stride - 1U) / stride;
-          const unsigned int outH = (msg->info.height + stride - 1U) / stride;
-          QImage image(static_cast<int>(outW), static_cast<int>(outH), QImage::Format_RGBA8888);
-          if (image.isNull()) return;
-          image.fill(Qt::transparent);
+      constexpr unsigned int kMaxRaster = 1600U;
+      const unsigned int largest = std::max(msg.info.width, msg.info.height);
+      const unsigned int stride = std::max(1U, (largest + kMaxRaster - 1U) / kMaxRaster);
+      const unsigned int outW = (msg.info.width + stride - 1U) / stride;
+      const unsigned int outH = (msg.info.height + stride - 1U) / stride;
+      QImage image(static_cast<int>(outW), static_cast<int>(outH), QImage::Format_RGBA8888);
+      if (image.isNull()) return;
+      image.fill(Qt::transparent);
+      std::uint64_t nonzeroCells = 0;
+      std::uint64_t lethalCells = 0;
+      int maxObservedCost = 0;
+      std::vector<std::pair<double,double>> lethalWorld;
+      if (!global) lethalWorld.reserve(512);
 
-          for (unsigned int oy = 0; oy < outH; ++oy) {
-            uchar *row = image.scanLine(static_cast<int>(outH - 1U - oy));
-            for (unsigned int ox = 0; ox < outW; ++ox) {
-              int maxCost = -1;
-              const unsigned int y0 = oy * stride;
-              const unsigned int x0 = ox * stride;
-              const unsigned int y1 = std::min(msg->info.height, y0 + stride);
-              const unsigned int x1 = std::min(msg->info.width, x0 + stride);
-              for (unsigned int y = y0; y < y1; ++y) {
-                const size_t base = static_cast<size_t>(y) * msg->info.width;
-                for (unsigned int x = x0; x < x1; ++x) maxCost = std::max(maxCost, static_cast<int>(msg->data[base + x]));
-              }
-              uchar *px = row + static_cast<size_t>(ox) * 4U;
-              if (maxCost <= 0) { px[0]=0; px[1]=0; px[2]=0; px[3]=0; continue; }
-              const int bounded = std::clamp(maxCost, 1, 100);
-              const int alpha = std::clamp(42 + bounded * 2, 48, 225);
-              if (bounded >= 90) { px[0]=255; px[1]=72; px[2]=88; }
-              else if (bounded >= 50) { px[0]=255; px[1]=159; px[2]=64; }
-              else { px[0]=181; px[1]=119; px[2]=255; }
-              px[3]=static_cast<uchar>(alpha);
+      for (unsigned int oy = 0; oy < outH; ++oy) {
+        uchar *row = image.scanLine(static_cast<int>(outH - 1U - oy));
+        for (unsigned int ox = 0; ox < outW; ++ox) {
+          int maxCost = -1;
+          const unsigned int y0 = oy * stride;
+          const unsigned int x0 = ox * stride;
+          const unsigned int y1 = std::min(msg.info.height, y0 + stride);
+          const unsigned int x1 = std::min(msg.info.width, x0 + stride);
+          for (unsigned int y = y0; y < y1; ++y) {
+            const size_t base = static_cast<size_t>(y) * msg.info.width;
+            for (unsigned int x = x0; x < x1; ++x) {
+              maxCost = std::max(maxCost, static_cast<int>(msg.data[base + x]));
             }
           }
-
-          QByteArray encoded;
-          QBuffer buffer(&encoded);
-          if (!buffer.open(QIODevice::WriteOnly) || !image.save(&buffer, "PNG") || encoded.isEmpty()) return;
-          {
-            std::lock_guard<std::mutex> lock(mediaMutex_);
-            if (global) globalCostmapPng_ = encoded; else localCostmapPng_ = encoded;
+          uchar *px = row + static_cast<size_t>(ox) * 4U;
+          if (maxCost <= 0) { px[0]=0; px[1]=0; px[2]=0; px[3]=0; continue; }
+          ++nonzeroCells;
+          if (maxCost >= 99) {
+            ++lethalCells;
+            if (!global) {
+              const double cxCell = 0.5 * (static_cast<double>(x0) + static_cast<double>(x1));
+              const double cyCell = 0.5 * (static_cast<double>(y0) + static_cast<double>(y1));
+              lethalWorld.emplace_back(
+                msg.info.origin.position.x + cxCell * msg.info.resolution,
+                msg.info.origin.position.y + cyCell * msg.info.resolution);
+            }
           }
-          last = now;
-          const auto &origin = msg->info.origin.position;
-          update(QString::fromLatin1(metaKey), QJsonObject{
-            {"width", static_cast<int>(msg->info.width)}, {"height", static_cast<int>(msg->info.height)},
-            {"image_width", static_cast<int>(outW)}, {"image_height", static_cast<int>(outH)},
-            {"stride", static_cast<int>(stride)}, {"resolution", msg->info.resolution},
-            {"origin_x", origin.x}, {"origin_y", origin.y},
-            {"frame_id", QString::fromStdString(msg->header.frame_id)}, {"at_ms", nowMs()}});
+          maxObservedCost = std::max(maxObservedCost, maxCost);
+          const int bounded = std::clamp(maxCost, 1, 100);
+          const int alpha = std::clamp(42 + bounded * 2, 48, 225);
+          // Make the Nav2 risk field explicit in BAB 4.5:
+          // red = lethal/inscribed core, orange = high-cost inflation,
+          // yellow = low-cost fringe.
+          if (bounded >= 99) { px[0]=255; px[1]=64; px[2]=70; }
+          else if (bounded >= 60) { px[0]=255; px[1]=153; px[2]=45; }
+          else { px[0]=245; px[1]=204; px[2]=75; }
+          px[3]=static_cast<uchar>(alpha);
+        }
+      }
+
+      QByteArray encoded;
+      QBuffer buffer(&encoded);
+      if (!buffer.open(QIODevice::WriteOnly) || !image.save(&buffer, "PNG") || encoded.isEmpty()) return;
+      {
+        std::lock_guard<std::mutex> lock(mediaMutex_);
+        if (global) globalCostmapPng_ = encoded; else localCostmapPng_ = encoded;
+      }
+      last = now;
+      const auto &origin = msg.info.origin.position;
+      QJsonObject meta{
+        {"width", static_cast<int>(msg.info.width)}, {"height", static_cast<int>(msg.info.height)},
+        {"image_width", static_cast<int>(outW)}, {"image_height", static_cast<int>(outH)},
+        {"stride", static_cast<int>(stride)}, {"resolution", msg.info.resolution},
+        {"origin_x", origin.x}, {"origin_y", origin.y},
+        {"nonzero_cells", static_cast<double>(nonzeroCells)},
+        {"lethal_cells", static_cast<double>(lethalCells)},
+        {"max_cost", maxObservedCost},
+        {"source", global ? "full" : "full_or_updates"},
+        {"frame_id", QString::fromStdString(msg.header.frame_id)}, {"at_ms", nowMs()}};
+
+      if (!global) {
+        std::vector<std::pair<double,double>> planning;
+        std::string planningFrame;
+        double odomX = 0.0, odomY = 0.0, odomYaw = 0.0;
+        bool odomReady = false;
+        std::chrono::steady_clock::time_point planningSeen{};
+        std::chrono::steady_clock::time_point odomSeen{};
+        {
+          std::lock_guard<std::mutex> alignLock(costmapAlignmentMutex_);
+          planning = latestPlanningPoints_;
+          planningFrame = latestPlanningFrame_;
+          planningSeen = latestPlanningSeen_;
+          odomX = alignmentOdomX_;
+          odomY = alignmentOdomY_;
+          odomYaw = alignmentOdomYaw_;
+          odomReady = alignmentOdomReady_;
+          odomSeen = alignmentOdomSeen_;
+        }
+        const double planningAge =
+          planningSeen.time_since_epoch().count() == 0 ? std::numeric_limits<double>::infinity() :
+          std::chrono::duration<double>(now - planningSeen).count();
+        const double odomAge =
+          odomSeen.time_since_epoch().count() == 0 ? std::numeric_limits<double>::infinity() :
+          std::chrono::duration<double>(now - odomSeen).count();
+        const bool planningFresh = planningAge <= 1.2;
+        const bool odomFresh = odomReady && odomAge <= 1.0;
+        double maxNearest = 0.0;
+        double minNearest = std::numeric_limits<double>::infinity();
+        bool alignmentValid = planningFresh && !planning.empty() && odomFresh;
+        if (alignmentValid) {
+          for (const auto &p : planning) {
+            double px = p.first;
+            double py = p.second;
+            if (planningFrame == "base_footprint" || planningFrame == "base_link") {
+              const double c = std::cos(odomYaw), s = std::sin(odomYaw);
+              const double bx = px, by = py;
+              px = odomX + c * bx - s * by;
+              py = odomY + s * bx + c * by;
+            } else if (planningFrame != "odom") {
+              alignmentValid = false;
+              break;
+            }
+            double nearest = std::numeric_limits<double>::infinity();
+            for (const auto &cell : lethalWorld) {
+              nearest = std::min(nearest, std::hypot(px - cell.first, py - cell.second));
+            }
+            minNearest = std::min(minNearest, nearest);
+            maxNearest = std::max(maxNearest, nearest);
+          }
+        }
+        const double threshold = std::max(0.25, 2.5 * static_cast<double>(msg.info.resolution));
+        const bool alignmentPass = alignmentValid && !lethalWorld.empty() &&
+          std::isfinite(maxNearest) && maxNearest <= threshold;
+        meta.insert("planning_alignment_valid", alignmentValid);
+        meta.insert("planning_alignment_pass", alignmentPass);
+        meta.insert("planning_alignment_threshold_m", threshold);
+        meta.insert("planning_alignment_planning_count", static_cast<int>(planning.size()));
+        meta.insert("planning_alignment_lethal_count", static_cast<int>(lethalWorld.size()));
+        meta.insert("planning_alignment_max_m",
+          std::isfinite(maxNearest) ? QJsonValue(maxNearest) : QJsonValue(QJsonValue::Null));
+        meta.insert("planning_alignment_min_m",
+          std::isfinite(minNearest) ? QJsonValue(minNearest) : QJsonValue(QJsonValue::Null));
+        meta.insert("planning_alignment_age_sec",
+          std::isfinite(planningAge) ? QJsonValue(planningAge) : QJsonValue(QJsonValue::Null));
+      }
+      update(QString::fromLatin1(metaKey), meta);
+    };
+
+    const auto cacheCostmap = [this, latchedQos, renderCostmap](const char *topic, const char *metaKey, bool global) {
+      subscribe<nav_msgs::msg::OccupancyGrid>(topic, latchedQos,
+        [this, metaKey, global, renderCostmap](nav_msgs::msg::OccupancyGrid::ConstSharedPtr msg) {
+          if (!global) {
+            localCostmapGrid_ = *msg;
+            localCostmapGridReady_ = true;
+          }
+          renderCostmap(*msg, metaKey, global);
         });
     };
     cacheCostmap("/global_costmap/costmap", "global_costmap_meta", true);
     cacheCostmap("/local_costmap/costmap", "local_costmap_meta", false);
 
+    const auto updateQos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable().durability_volatile();
+    subscribe<map_msgs::msg::OccupancyGridUpdate>("/local_costmap/costmap_updates", updateQos,
+      [this, renderCostmap](map_msgs::msg::OccupancyGridUpdate::ConstSharedPtr patch) {
+        if (!localCostmapGridReady_ || patch->width == 0 || patch->height == 0 || patch->data.empty()) return;
+        const auto fullW = localCostmapGrid_.info.width;
+        const auto fullH = localCostmapGrid_.info.height;
+        if (patch->x < 0 || patch->y < 0) return;
+        const unsigned int x0 = static_cast<unsigned int>(patch->x);
+        const unsigned int y0 = static_cast<unsigned int>(patch->y);
+        if (x0 + patch->width > fullW || y0 + patch->height > fullH) return;
+        const size_t expected = static_cast<size_t>(patch->width) * patch->height;
+        if (patch->data.size() < expected) return;
+
+        for (unsigned int py = 0; py < patch->height; ++py) {
+          const size_t src = static_cast<size_t>(py) * patch->width;
+          const size_t dst = static_cast<size_t>(y0 + py) * fullW + x0;
+          std::copy_n(patch->data.begin() + static_cast<std::ptrdiff_t>(src),
+                      patch->width,
+                      localCostmapGrid_.data.begin() + static_cast<std::ptrdiff_t>(dst));
+        }
+        localCostmapGrid_.header.stamp = node_->now();
+        renderCostmap(localCostmapGrid_, "local_costmap_meta", false);
+      });
+
     const auto cloudSubscribe = [this, sensorQos](const char *topic, const char *channel) {
       const QString ch = QString::fromLatin1(channel);
       subscribe<sensor_msgs::msg::PointCloud2>(topic, sensorQos, [this, ch](sensor_msgs::msg::PointCloud2::ConstSharedPtr msg) {
-        update(ch, QJsonObject{{"count", static_cast<double>(msg->width) * static_cast<double>(msg->height)},
-                               {"frame_id", QString::fromStdString(msg->header.frame_id)}});
+        QJsonObject payload{{"count", static_cast<double>(msg->width) * static_cast<double>(msg->height)},
+                            {"frame_id", QString::fromStdString(msg->header.frame_id)}};
+        if (ch == QStringLiteral("planning_relevant_points")) {
+          int xOffset = -1, yOffset = -1;
+          for (const auto &field : msg->fields) {
+            if (field.name == "x") xOffset = static_cast<int>(field.offset);
+            else if (field.name == "y") yOffset = static_cast<int>(field.offset);
+          }
+          std::vector<std::pair<double,double>> pts;
+          QJsonArray jsonPts;
+          if (xOffset >= 0 && yOffset >= 0 && msg->point_step > 0) {
+            const size_t count = std::min<size_t>(
+              static_cast<size_t>(msg->width) * msg->height, 128U);
+            pts.reserve(count);
+            for (size_t i = 0; i < count; ++i) {
+              const size_t base = i * msg->point_step;
+              if (base + static_cast<size_t>(std::max(xOffset, yOffset)) + sizeof(float) > msg->data.size()) break;
+              float x = 0.0f, y = 0.0f;
+              std::memcpy(&x, msg->data.data() + base + static_cast<size_t>(xOffset), sizeof(float));
+              std::memcpy(&y, msg->data.data() + base + static_cast<size_t>(yOffset), sizeof(float));
+              if (!std::isfinite(x) || !std::isfinite(y)) continue;
+              pts.emplace_back(static_cast<double>(x), static_cast<double>(y));
+              jsonPts.append(QJsonArray{static_cast<double>(x), static_cast<double>(y)});
+            }
+          }
+          {
+            std::lock_guard<std::mutex> alignLock(costmapAlignmentMutex_);
+            latestPlanningPoints_ = pts;
+            latestPlanningFrame_ = msg->header.frame_id;
+            latestPlanningSeen_ = std::chrono::steady_clock::now();
+          }
+          payload.insert("points", jsonPts);
+        }
+        update(ch, payload);
       });
     };
     cloudSubscribe("/perception/object_points", "object_points");
@@ -2465,6 +3019,7 @@ class WebRosBridge {
     initialPosePub_ = node_->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>("/initialpose", 10);
     hmiRequestPub_ = node_->create_publisher<std_msgs::msg::String>("/hmi/request", 10);
     vescToolCommandPub_ = node_->create_publisher<std_msgs::msg::String>("/esc/vesc/tool_command", 20);
+    finalGuardPub_ = node_->create_publisher<std_msgs::msg::String>("/perception/final_trial_guard", rclcpp::QoS(1).reliable().transient_local());
     trialTwistPub_ = node_->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel/web_trial", 10);
     trialSourcePub_ = node_->create_publisher<std_msgs::msg::String>("/web_trial/active_source", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
   }
@@ -2864,6 +3419,1085 @@ class LocalHttpServer : public QObject {
   }
 
 
+  // Single server-owned Final Dataset trial. Browser only renews the lease.
+  QJsonObject finalTrial_;
+  QString finalToken_, finalMode_, finalCondition_, finalTargetResult_, finalSessionId_;
+  qint64 finalStart_{0}, finalGo_{0}, finalHeartbeat_{0}, finalStopAt_{0}, finalStillAt_{0}, finalGreenAt_{0};
+  int finalHeartbeatCount_{0};
+  double finalX_{0}, finalY_{0}, finalYaw_{0}, finalPrevX_{0}, finalPrevY_{0}, finalTravel_{0}, finalObstacleDistance_{0}, finalAvoidSign_{0};
+  bool finalAvoid_{false}, finalTurn_{false};
+  bool finalPreviewActive_{false};
+  qint64 finalPreviewExpire_{0};
+  QString finalPreviewSession_;
+  bool finalActive() const { const QString p=finalTrial_.value("phase").toString(); return p=="countdown"||p=="running"||p=="stopping"; }
+  bool finalFresh(const QJsonObject &s,const QString &k,qint64 maxAge) const {
+    const double t=s.value("__updated").toObject().value(k).toDouble(0);
+    return t>0 && nowMs()-t>=0 && nowMs()-t<maxAge;
+  }
+  double finalNumber(const QJsonObject &s,const QString &k) const { return s.value(k).toDouble(std::numeric_limits<double>::quiet_NaN()); }
+  bool finalDrivable(const QJsonObject &s) const {
+    const auto lane=s.value("lane_state").toObject(),c=lane.value("corridor").toObject();
+    // Motion authority requires the production lane-state validity and a valid
+    // drivable area. A raw lane mask alone is never sufficient to move.
+    const bool valid=lane.value("valid").toBool(false);
+    const bool drivable=c.value("drivable_detected").toBool(false);
+    const QString ev=c.value("evidence_mode").toString().toUpper(),rec=c.value("recommendation").toString().toUpper();
+    return valid&&drivable&&!ev.contains("NO_EVIDENCE")&&rec!="NO_MASK_EVIDENCE"&&rec!="DRIVABLE_INVALID";
+  }
+  QJsonObject finalHumanCandidate(const QJsonObject &s) const {
+    const auto sem=s.value("semantic_detections").toObject();
+    // 4.5 is a safety/integration test: use only runtime detections that
+    // passed semantic filtering. Low-floor evaluation_candidates remain for
+    // calibration/4.2 and must never open a 4.5 motion or DRY-RUN gate.
+    const QJsonArray a=sem.value("detections").toArray();
+    QJsonObject best;double score=-1.0;int bestPriority=-1;
+    for(const auto &v:a){
+      const auto o=v.toObject();const QString n=o.value("class_name").toString().toLower();
+      if(o.value("class_id").toInt(-1)!=0&&n!="person"&&n!="human")continue;
+      if(o.contains("nav2_eligible")&&!o.value("nav2_eligible").toBool(false))continue;
+      const double sc=o.value("score").toDouble(-1.0);
+      const bool safetyTracked=o.value("safety_human_valid").toBool(false);
+      if(sc<0.20&&!safetyTracked)continue;
+      const QString tracking=o.value("tracking_state").toString().toUpper();
+      const int priority=safetyTracked?2:((tracking=="STRONG"||tracking=="TRACKED"||tracking=="HELD")?1:0);
+      if(priority>bestPriority||(priority==bestPriority&&sc>score)){bestPriority=priority;score=sc;best=o;}
+    }
+    return best;
+  }
+  bool finalHumanDetected(const QJsonObject &s) const { return !finalHumanCandidate(s).isEmpty(); }
+  double finalHumanMetricDistance(const QJsonObject &s) const {
+    const QJsonObject h=finalHumanCandidate(s);
+    if(h.isEmpty())return std::numeric_limits<double>::quiet_NaN();
+    for(const char *k:{"stable_forward_m","nav2_forward_m","calibrated_forward_m","raw_forward_m","forward_m"}){
+      const QJsonValue v=h.value(k);
+      if(v.isDouble()){
+        const double x=v.toDouble(std::numeric_limits<double>::quiet_NaN());
+        if(std::isfinite(x)&&x>0.0)return x;
+      }
+    }
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  QString finalHumanReferenceError(const QJsonObject &s,const QString &condition) const {
+    bool ok=false;const int ref=condition.toInt(&ok);
+    if(!ok||ref<2||ref>5)return {};
+    const double d=finalHumanMetricDistance(s);
+    if(!std::isfinite(d))return QStringLiteral("Posisi metrik human tidak valid");
+    constexpr double kToleranceM=1.0;
+    if(std::abs(d-static_cast<double>(ref))>kToleranceM)
+      return QString("Jarak human belum sesuai referensi %1 m — terbaca %2 m (toleransi ±%3 m)")
+        .arg(ref).arg(d,0,'f',2).arg(kToleranceM,0,'f',1);
+    return {};
+  }
+  QString finalReady(const QJsonObject &s,bool starting,const QString &mode=QString(),const QString &condition=QString(),bool requireActuation=true) const {
+    for(const QString &k:{QString("connected.camera"),QString("camera_healthy")})
+      if(!s.value(k).toBool(false))return k+" belum siap";
+    if(requireActuation){
+      for(const QString &k:{QString("connected.esc_feedback"),QString("connected.esc_ready")})
+        if(!s.value(k).toBool(false))return k+" belum siap";
+    }
+    if(!s.contains("system.estop"))return "Status E-stop belum tersedia";
+    if(s.value("system.estop").toBool()||s.value("vesc_maintenance_active").toBool())return "E-stop / maintenance aktif";
+    const QString muxSource=s.value("nav_cmd_mux").toObject().value("raw").toString().toUpper();
+    if(muxSource.startsWith("TELEOP"))return "Teleop aktif / release hold — lepaskan joystick sebelum ARMED";
+    if(requireActuation){
+      for(const QString &k:{QString("esc_odom"),QString("esc_drive_actual"),QString("esc_steer_actual")})
+        if(!finalFresh(s,k,1000))return k+" stale";
+    }
+    if(!finalFresh(s,"trajectory_safety_state",1000))return "trajectory_safety_state stale";
+    if(!finalFresh(s,"perception_performance",2500))return "perception_performance stale";
+    const bool laneNav2Handoff=mode=="lane"&&!starting&&finalTrial_.value("lane_nav2_handoff").toBool(false);
+    if(mode=="lane"&&!laneNav2Handoff&&!finalFresh(s,"lane_state",1500))return "lane_state stale";
+    const auto ts=s.value("trajectory_safety_state").toObject();
+    if(mode=="lane"){
+      const bool nav2Handoff=laneNav2Handoff;
+      const QString goal=s.value("goal_state").toObject().value("state").toString().toUpper();
+      if(!nav2Handoff){
+        if(s.value("system.autonomy_motion_allowed").toBool(false))
+          return "Autonomy gate aktif sebelum Lane Safety menyerahkan kontrol ke Nav2";
+        if(goal=="ACTIVE"||goal=="RUNNING"||goal=="EXECUTING"||goal=="SENDING"||goal=="QUEUED")
+          return "Goal Nav2 aktif sebelum Lane Safety selesai recenter";
+      }else{
+        if(!s.value("system.planning_localization_ready").toBool(false))
+          return "Planning localization hilang setelah Lane Safety handoff";
+        if(!s.value("system.nav2_ready").toBool(false))
+          return "Nav2 lifecycle tidak READY setelah Lane Safety handoff";
+      }
+      if(starting){
+        if(!s.value("system.planning_localization_ready").toBool(false))
+          return "Planning localization belum READY untuk Lane Safety -> Nav2";
+        if(!s.value("system.nav2_ready").toBool(false))
+          return "Nav2 lifecycle belum READY untuk Lane Safety -> Nav2";
+        if(!s.value("system.autonomy_ready").toBool(false))
+          return "Autonomy start gate belum READY untuk Lane Safety -> Nav2";
+        if(!finalFresh(s,"ekf_global",1200))
+          return "ekf_global stale";
+      }
+      if(condition!="gray"){
+        if(s.value("perception_emergency").toBool(false)||ts.value("emergency").toBool(false))
+          return "Perception emergency aktif — Lane Safety trial wajib STOP";
+        // finalInitialLane() validates the actual RED/GREEN admission state.
+        // Brief segmentation dropouts while running are handled fail-safe in
+        // finalTick(): command zero and wait for evidence to recover.
+      }
+    }
+    // Semantic detector is commissioned at ~2 Hz actual. Fail closed quickly
+    // if fresh human evidence stops arriving; 1.5 s still tolerates >2 normal
+    // inference periods while avoiding multi-second stale obstacle decisions.
+    if(mode=="obstacle"&&starting&&!finalFresh(s,"semantic_detections",1200))
+      return "semantic_detections stale";
+    if(mode=="obstacle"&&condition!="none"&&starting){
+      // Human evidence is mandatory at trial admission/countdown. Once the
+      // vehicle has passed the obstacle, the person may naturally leave the
+      // camera FOV; running success is then decided by the latched
+      // cloud/costmap/MPPI/avoidance/recovery evidence plus goal completion.
+      if(!finalHumanDetected(s))return "Human belum terdeteksi dengan confidence >= 20%";
+      const QJsonObject human=finalHumanCandidate(s);
+      double bboxH=finalNumber(human,"stable_bbox_height_fraction");
+      if(!std::isfinite(bboxH))bboxH=finalNumber(human,"bbox_height_fraction");
+      if(condition.startsWith("trial")&&
+         (human.value("bottom_clipped").toBool(false)||(std::isfinite(bboxH)&&bboxH>=0.90))){
+        return QStringLiteral("Human terlalu dekat / bbox saturasi untuk trial avoidance — mundurkan obstacle hingga seluruh bbox masuk frame");
+      }
+      const QString refErr=finalHumanReferenceError(s,condition);
+      if(!refErr.isEmpty())return refErr;
+    }
+    if(!ts.value("final_trial_supported").toBool(false)||ts.value("commissioning_bypass").toBool(false))
+      return "Safety runtime / trial watchdog belum siap";
+    const bool obstacleNav=mode=="obstacle"&&condition!="1";
+    if(obstacleNav){
+      if(!s.value("system.planning_localization_ready").toBool(false))
+        return "Planning localization belum READY — set Initial Pose / map anchor terlebih dahulu";
+      if(!s.value("system.nav2_ready").toBool(false))
+        return "Nav2 lifecycle planner/controller belum READY";
+      if(starting&&!s.value("system.autonomy_ready").toBool(false))
+        return "Autonomy start gate belum READY — motion localization / sensor admission belum lengkap";
+      // MPPI trajectory is required as trial evidence after the goal is published;
+      // do not require an active trajectory before a goal exists.
+      if(!finalFresh(s,"ekf_global",1200))return "ekf_global stale";
+      const auto mp=s.value("ekf_global").toObject();
+      for(const auto k:{"x","y","yaw"})if(!std::isfinite(finalNumber(mp,k)))return "Pose map EKF tidak finite";
+      if(condition!="none"&&!ts.value("metric_obstacle_safety").toBool(false))
+        return "Metric obstacle safety belum aktif";
+      // Strict planning-point vs local-costmap alignment is an admission check.
+      // During motion the obstacle may be passed/cleared and the two asynchronous
+      // streams can legitimately transition at different instants. Runtime safety
+      // still fail-closes on stale obstacle/costmap data, while trial success
+      // requires latched planning/costmap/MPPI/avoidance evidence.
+      if(condition!="none"&&starting){
+        if(!finalFresh(s,"local_costmap_meta",1200))return "local_costmap_meta stale";
+        const auto cm=s.value("local_costmap_meta").toObject();
+        if(!cm.value("planning_alignment_pass").toBool(false)){
+          const double delta=cm.value("planning_alignment_max_m").toDouble(
+            std::numeric_limits<double>::quiet_NaN());
+          return std::isfinite(delta)?
+            QString("Costmap tidak sinkron dengan planning points — Δ %1 m").arg(delta,0,'f',2):
+            QString("Costmap sync belum tervalidasi");
+        }
+      }
+    }
+    if(requireActuation){
+      if(!std::isfinite(finalNumber(s,"esc_drive_actual")))return "Feedback speed tidak finite";
+      if(!std::isfinite(finalNumber(s,"esc_steer_actual")))return "Feedback steering tidak finite";
+      if(starting&&std::abs(finalNumber(s,"esc_drive_actual"))>0.03)return "Kendaraan belum diam";
+      const auto od=s.value("esc_odom").toObject();
+      for(const auto k:{"x","y","yaw"})if(!std::isfinite(finalNumber(od,k)))return "Odometri tidak finite";
+    }
+    return {};
+  }
+  bool finalInitialLane(const QJsonObject &s,const QString &key) const {
+    const auto lane=s.value("lane_state").toObject();const auto c=lane.value("corridor").toObject();
+    // Canonical Final Dataset LEFT/RIGHT follows the physical/operator frame.
+    const QString l=c.value("left_status").toString().toUpper(),r=c.value("right_status").toString().toUpper();
+    const QString evidence=c.value("evidence_mode").toString().toUpper(),rec=c.value("recommendation").toString().toUpper();
+    const bool hasVisual=c.value("drivable_detected").toBool(false)||c.value("lane_mask_detected").toBool(false)||c.value("raw_lane_mask_detected").toBool(false);
+    const QString state=lane.value("state").toString("UNKNOWN").toUpper();
+    const bool gray=evidence.contains("NO_EVIDENCE")||rec=="NO_MASK_EVIDENCE"||
+      (!hasVisual&&(state=="UNKNOWN"||state=="LANE_LOST"))||
+      ((l=="GRAY"||l=="UNKNOWN")&&(r=="GRAY"||r=="UNKNOWN")&&!hasVisual);
+    if(key=="gray")return gray;
+    if(!finalDrivable(s))return false;
+    const bool leftLatched=c.value("left_recenter_latched").toBool(false);
+    const bool rightLatched=c.value("right_recenter_latched").toBool(false);
+    // Standalone YELLOW is warning-only and must not already be a latched RED recovery.
+    return (key=="center"&&l=="GREEN"&&r=="GREEN")||
+      (key=="left_yellow"&&l=="YELLOW"&&r=="GREEN"&&!leftLatched)||
+      (key=="right_yellow"&&l=="GREEN"&&r=="YELLOW"&&!rightLatched)||
+      (key=="left_red"&&l=="RED"&&r=="GREEN"&&leftLatched)||
+      (key=="right_red"&&l=="GREEN"&&r=="RED"&&rightLatched);
+  }
+  void finalStop(const QString &result,const QString &reason) {
+    if(!finalActive())return;
+    if(finalTrial_.value("phase").toString()!="stopping"){
+      finalTargetResult_=result;finalTrial_["reason"]=reason;finalTrial_["phase"]="stopping";finalStopAt_=nowMs();finalStillAt_=0;
+      bridge_->publishFinalGuard("STOP",finalCondition_);
+      QString msg;bridge_->publishFinalTrialVelocity(0.0,0.0,false,&msg);bridge_->cancelNavigation(&msg);
+    }
+  }
+  void finalPersist() {
+    const QString path=agvPath("data/perception_final_v2/trial_latest.json");QDir().mkpath(QFileInfo(path).absolutePath());QSaveFile f(path);if(f.open(QIODevice::WriteOnly)){f.write(QJsonDocument(finalTrial_).toJson());f.commit();}
+  }
+  QJsonObject finalRequest(const QString &action,const QJsonObject &j) {
+    if(bridge_->readOnly())return {{"ok",false},{"message","GUI read-only"}};
+    if(action=="preview-stop"){
+      bridge_->publishFinalGuard("STOP","");
+      QString msg;bridge_->publishFinalTrialVelocity(0.0,0.0,false,&msg);bridge_->cancelNavigation(&msg);
+      bridge_->publishFinalGuard("IDLE","");
+      finalPreviewActive_=false;finalPreviewExpire_=0;finalPreviewSession_.clear();
+      return {{"ok",true},{"message","DRY RUN Nav2 preview dihentikan dengan kendaraan tetap STOP"}};
+    }
+    if(action=="preview-start"){
+      if(finalActive())return {{"ok",false},{"message","ARMED trial masih aktif"}};
+      Bab4PerceptionSessionStore sessionStore(agvRootPath(), loadConfigSnapshot());
+      const QJsonObject sessionReply=sessionStore.state();
+      const QString activeSession=sessionReply.value("state").toObject().value("session_id").toString();
+      const QString clientSession=j.value("session_id").toString();
+      if(activeSession.isEmpty()||clientSession.isEmpty()||activeSession!=clientSession)
+        return {{"ok",false},{"code","SESSION_CHANGED"},{"message","Session Bab 4 berubah — refresh sebelum DRY RUN"},{"active_session_id",activeSession}};
+      const QString mode=j.value("mode").toString(),key=j.value("condition").toString();
+      if(mode!="obstacle"||!QSet<QString>{"none","1","2","3","4","5","trial1","trial2","trial3"}.contains(key))
+        return {{"ok",false},{"message","Preview Nav2 hanya untuk obstacle legacy atau trial 1–3"}};
+      // DRY RUN is planning-only and the final guard holds STOP. Require
+      // localization/Nav2/costmap/semantic readiness, but not the motion/autonomy
+      // start gate that is intentionally reserved for the later ARMED trial.
+      const auto st=bridge_->snapshot();const QString err=finalReady(st,false,mode,key,false);
+      if(!err.isEmpty())return {{"ok",false},{"message",err}};
+      if(key=="none"){
+        if(finalHumanDetected(st))return {{"ok",false},{"message","NO HUMAN ditolak: human masih terdeteksi"}};
+      }else{
+        const bool repeatTrial=QRegularExpression(QStringLiteral("^trial[1-3]$")).match(key).hasMatch();
+        // The 3-trial DRY RUN is planning-only and keeps the final guard at STOP.
+        // Allow preview admission before a human enters the path so the operator
+        // can start the recorder first. Human + metric + cloud + costmap + MPPI
+        // are still required by capture/integration PASS and by ARMED admission.
+        if(!repeatTrial){
+          if(!finalHumanDetected(st))
+            return {{"ok",false},{"message","Human belum terdeteksi dengan confidence >= 20%"}};
+          const QString refErr=finalHumanReferenceError(st,key);
+          if(!refErr.isEmpty())return {{"ok",false},{"message",refErr}};
+        }
+      }
+      QString msg;bridge_->publishFinalGuard("STOP",key);
+      bridge_->publishFinalTrialVelocity(0.0,0.0,false,&msg);bridge_->cancelNavigation(&msg);
+      QJsonObject out{{"ok",true},{"mode",mode},{"condition",key},{"goal_published",false}};
+      if(key!="1"){
+        const auto mp=st.value("ekf_global").toObject();
+        const double x=finalNumber(mp,"x"),y=finalNumber(mp,"y"),yaw=finalNumber(mp,"yaw");
+        const bool repeatTrial=QRegularExpression(QStringLiteral("^trial[1-3]$")).match(key).hasMatch();
+        const double target=repeatTrial?5.0:(key=="none"?2.0:key.toDouble()+1.5);
+        const double gx=x+std::cos(yaw)*target,gy=y+std::sin(yaw)*target;
+        if(!bridge_->publishGoal(gx,gy,yaw,&msg)){
+          bridge_->publishFinalGuard("IDLE","");
+          return {{"ok",false},{"message",msg}};
+        }
+        out["goal_published"]=true;out["goal_x_map"]=gx;out["goal_y_map"]=gy;out["target_distance_m"]=target;
+      }
+      finalPreviewActive_=true;finalPreviewExpire_=nowMs()+8000;finalPreviewSession_=activeSession;
+      out["expires_at_ms"]=static_cast<double>(finalPreviewExpire_);
+      out["message"]="DRY RUN preview aktif: Nav2/MPPI boleh planning, final guard memaksa kendaraan STOP";
+      return out;
+    }
+    if(action=="start"){
+      if(finalActive())return {{"ok",false},{"message","Trial lain masih aktif"}};
+      Bab4PerceptionSessionStore sessionStore(agvRootPath(), loadConfigSnapshot());
+      const QJsonObject sessionReply=sessionStore.state();
+      const QString activeSession=sessionReply.value("state").toObject().value("session_id").toString();
+      const QString clientSession=j.value("session_id").toString();
+      if(activeSession.isEmpty()||clientSession.isEmpty()||activeSession!=clientSession)
+        return {{"ok",false},{"code","SESSION_CHANGED"},{"message","Session Bab 4 berubah — refresh sebelum ARMED"},{"active_session_id",activeSession}};
+      const QString mode=j.value("mode").toString(),key=j.value("condition").toString(),token=j.value("token").toString();
+      const int laneTrialIndex=mode=="lane"?j.value("trial_index").toInt(0):0;
+      if(token.size()<20||token.size()>100||!(mode=="obstacle"||mode=="lane"))return {{"ok",false},{"message","Identitas trial tidak valid"}};
+      if(mode=="lane"&&(laneTrialIndex<1||laneTrialIndex>3))return {{"ok",false},{"message","Nomor lane trial harus 1..3"}};
+      QString storedCondition;
+      if(mode=="obstacle"){
+        const QRegularExpression trialRe(QStringLiteral("^trial([1-3])$"));const auto tm=trialRe.match(key);
+        storedCondition=tm.hasMatch()?QStringLiteral("obstacle_trial_")+tm.captured(1):
+          (key=="none"?QStringLiteral("obstacle_no_human"):QStringLiteral("obstacle_")+key+QStringLiteral("m"));
+      } else {
+        storedCondition=QStringLiteral("lane_trial_")+QString::number(laneTrialIndex);
+      }
+      const QJsonObject activeState=sessionReply.value("state").toObject();
+      const QJsonObject stored=activeState.value("subchapters").toObject().value("4.5").toObject().value("conditions").toObject().value(storedCondition).toObject();
+      bool storedArmedComplete=stored.value("armed_complete").toBool(false);
+      if(!storedArmedComplete){
+        for(const QJsonValue &v:stored.value("rows").toArray()){const QJsonObject rr=v.toObject();
+          if(rr.value("mode").toString()=="ARMED_VEHICLE_TEST"&&rr.value("result").toString().toLower()=="complete"&&rr.value("final_vehicle_state").toString()=="STOPPED"&&rr.value("integration_pass").toBool(false)){storedArmedComplete=true;break;}
+        }
+      }
+      if(storedArmedComplete)
+        return {{"ok",false},{"message","Kondisi 4.5 sudah SELESAI — reset kondisi untuk mengulang ARMED"}};
+      if(!stored.value("dry_run_complete").toBool(false)||!stored.value("dry_run_pass").toBool(false))
+        return {{"ok",false},{"message","ARMED diblok: DRY RUN kondisi ini belum PASS"}};
+      if(finalPreviewActive_)return {{"ok",false},{"message","DRY RUN Nav2 preview masih aktif — tunggu preview dihentikan"}};
+      const auto s=bridge_->snapshot();const QString err=finalReady(s,true,mode,key);if(!err.isEmpty())return {{"ok",false},{"message",err}};
+      // Bab 4.5 is itself the response qualification test. Runtime safety gates
+      // above replace circular dependencies on previously reviewed qualification cards.
+      const QString goal=s.value("goal_state").toObject().value("state").toString();
+      if(goal.contains("ACTIVE")||goal.contains("RUNNING")||goal.contains("EXECUT"))
+        return {{"ok",false},{"message","Batalkan goal navigasi yang aktif dahulu"}};
+      if(mode=="lane"&&key!="left_red"&&key!="right_red")
+        return {{"ok",false},{"message","4.5B recenter trial hanya menerima RED pada salah satu sisi"}};
+      if(mode=="lane"&&!finalInitialLane(s,key)){
+        // If the exact RED/GREEN sample disappeared between the browser click
+        // and this request, admit the trial only when evidence is currently
+        // unavailable. Countdown stays STOP and waits for the requested RED
+        // side to become valid again. A valid-but-wrong lane state is rejected.
+        if(finalDrivable(s))return {{"ok",false},{"message","Kondisi lane awal tidak sesuai"}};
+      }
+      double obstacleReference=std::numeric_limits<double>::infinity();
+      if(mode=="obstacle"){
+        if(key=="none"){
+          if(finalHumanDetected(s))return {{"ok",false},{"message","NO HUMAN ditolak: human masih terdeteksi"}};
+        }else{
+          const bool repeatTrial=QRegularExpression(QStringLiteral("^trial[1-3]$")).match(key).hasMatch();
+          if(!repeatTrial&&!QSet<QString>{"1","2","3","4","5"}.contains(key))
+            return {{"ok",false},{"message","Kondisi obstacle tidak valid"}};
+          if(!finalHumanDetected(s))return {{"ok",false},{"message","Human belum terdeteksi dengan confidence >= 20%"}};
+          if(!repeatTrial){
+            const QString refErr=finalHumanReferenceError(s,key);
+            if(!refErr.isEmpty())return {{"ok",false},{"message",refErr}};
+            obstacleReference=key.toDouble();
+          }
+        }
+      }
+      QString msg;if(!bridge_->cancelNavigation(&msg))return {{"ok",false},{"message",msg}};
+      bridge_->publishFinalTrialVelocity(0.0,0.0,false,&msg);
+      finalToken_=token;finalMode_=mode;finalCondition_=key;finalSessionId_=activeSession;finalStart_=finalHeartbeat_=nowMs();finalGo_=0;finalTravel_=0;finalAvoid_=finalTurn_=false;finalAvoidSign_=0.0;finalGreenAt_=0;finalObstacleDistance_=obstacleReference;finalHeartbeatCount_=0;
+      const bool obstacleRepeat=mode=="obstacle"&&QRegularExpression(QStringLiteral("^trial[1-3]$")).match(key).hasMatch();
+      const double target=(mode=="lane")?5.0:(mode=="obstacle"?(obstacleRepeat?5.0:(key=="none"?2.0:(key=="1"?0.0:key.toDouble()+1.5))):0.0);
+      finalTrial_={{"phase","countdown"},{"countdown",3},{"mode",mode},{"condition",key},{"trial_index",mode=="lane"?QJsonValue(laneTrialIndex):QJsonValue()},{"reference_distance_m",std::isfinite(obstacleReference)?QJsonValue(obstacleReference):QJsonValue()},{"target_distance_m",target},{"started_at_ms",finalStart_},{"travel_m",0.0},{"response_ms",QJsonValue()},{"recovery_ms",QJsonValue()},
+        {"metric_position_valid",mode!="obstacle"||key=="none"},{"object_cloud_seen",false},{"planning_cloud_seen",false},{"costmap_marking_seen",false},
+        {"mppi_seen",false},{"avoidance_seen",false},{"recovery_seen",false},{"web_trial_authority_seen",false},{"web_trial_authority_at_ms",QJsonValue()},
+        {"lane_nav2_handoff",false},{"lane_nav2_handoff_at_ms",QJsonValue()},{"lane_nav2_authority_seen",false},
+        {"steering_response_seen",false},{"steering_direction_match",false},{"steering_response_ms",QJsonValue()},
+        {"steering_neutral_maintained",true},{"peak_steering_actual_rad",QJsonValue()},{"integration_pass",false},
+        {"obstacle_motion_released",false},{"planner_gate_pass",false},{"planner_gate_started_ms",QJsonValue()},
+        {"planner_gate_passed_ms",QJsonValue()},{"planner_gate_reason",QStringLiteral("NOT_APPLICABLE")},
+        {"planner_hold_active",false},{"planner_hold_started_ms",QJsonValue()},{"planner_hold_count",0},
+        {"planner_hold_recovery_count",0},{"planner_path_age_ms",QJsonValue()},
+        {"planner_path_count",0},{"planner_path_length_m",QJsonValue()},
+        {"planner_path_heading_variation_rad",QJsonValue()},{"planner_path_quality_ok",false}};
+      finalTrial_["heartbeat_count"]=0;
+      finalTrial_["heartbeat_last_ms"]=finalHeartbeat_;
+      finalTrial_["heartbeat_age_ms"]=0;
+      finalTrial_["heartbeat_transport"]=QStringLiteral("start_request");
+      finalTrial_["heartbeat_sequence"]=0;
+      if(mode=="lane"){
+        const QString dir=key=="left_red"?QStringLiteral("RIGHT_POSITIVE_PHYSICAL"):
+          key=="right_red"?QStringLiteral("LEFT_NEGATIVE_PHYSICAL"):QStringLiteral("NEUTRAL_OR_WARNING_ONLY");
+        finalTrial_["expected_steering_direction"]=dir;
+      }
+      bridge_->publishFinalGuard("STOP",key);finalPersist();return {{"ok",true},{"trial",finalTrial_}};
+    }
+    if(j.value("token").toString()!=finalToken_||finalToken_.isEmpty())return {{"ok",false},{"message","Token trial tidak cocok"}};
+    if(j.value("session_id").toString()!=finalSessionId_||finalSessionId_.isEmpty())
+      return {{"ok",false},{"code","SESSION_CHANGED"},{"message","Session ARMED tidak cocok"}};
+    if(action=="heartbeat"){
+      finalHeartbeat_=nowMs();
+      ++finalHeartbeatCount_;
+      finalTrial_["heartbeat_count"]=finalHeartbeatCount_;
+      finalTrial_["heartbeat_last_ms"]=finalHeartbeat_;
+      finalTrial_["heartbeat_age_ms"]=0;
+      finalTrial_["heartbeat_transport"]=j.value("transport").toString(QStringLiteral("browser"));
+      finalTrial_["heartbeat_sequence"]=j.value("sequence");
+    }
+    else if(action=="stop")finalStop("aborted",j.value("reason").toString("Operator abort"));
+    else return {{"ok",false},{"message","Aksi tidak dikenal"}};
+    return {{"ok",true},{"trial",finalTrial_}};
+  }
+  void finalTick(){
+    const qint64 tickNow=nowMs();
+    if(finalPreviewActive_&&tickNow>finalPreviewExpire_){
+      bridge_->publishFinalGuard("STOP","");
+      QString msg;bridge_->publishFinalTrialVelocity(0.0,0.0,false,&msg);bridge_->cancelNavigation(&msg);
+      bridge_->publishFinalGuard("IDLE","");
+      finalPreviewActive_=false;finalPreviewExpire_=0;finalPreviewSession_.clear();
+    }
+    if(!finalActive())return;
+    const auto s=bridge_->snapshot();const qint64 t=tickNow;QString phase=finalTrial_.value("phase").toString();
+    finalTrial_["heartbeat_age_ms"]=std::max<qint64>(0,t-finalHeartbeat_);
+    if(phase!="stopping"){
+      const QString err=finalReady(s,phase=="countdown",finalMode_,finalCondition_);
+      // 4.5 browser watchdog: beri margin untuk scheduling UI/SSE/canvas tanpa
+      // menghilangkan fail-safe. Pada mode final kecepatan tetap dibatasi supervisor.
+      // Browser/UI rendering may occasionally stall for a few seconds under
+      // camera/costmap load. Keep fail-safe supervision, but do not invalidate
+      // a physical trial on a single short scheduling/network hiccup.
+      if(t-finalHeartbeat_>6000)finalStop("invalid","Heartbeat browser terputus");
+      else if(!err.isEmpty())finalStop("invalid",err);
+      else {
+        const qint64 maxTrialMs=(finalMode_=="obstacle"&&finalCondition_!="none")?75000:(finalMode_=="lane"?110000:45000);
+        if(t-finalStart_>maxTrialMs)finalStop("failed","Batas waktu trial tercapai");
+      }
+    }
+    phase=finalTrial_.value("phase").toString();
+    if(phase=="countdown"){
+      bridge_->publishFinalGuard("STOP",finalCondition_);
+      QString stopMsg;bridge_->publishFinalTrialVelocity(0.0,0.0,false,&stopMsg);
+      finalTrial_["countdown"]=std::max(0,3-static_cast<int>((t-finalStart_)/1000));
+      if(t-finalStart_<3000)return;
+      if(finalMode_=="lane"&&!finalInitialLane(s,finalCondition_)){
+        if(!finalDrivable(s)&&t-finalStart_<6500){
+          finalTrial_["countdown"]=0;
+          finalTrial_["countdown_wait_lane_evidence"]=true;
+          return;
+        }
+        finalStop("invalid","Kondisi lane berubah saat countdown");return;
+      }
+      if(finalMode_=="lane"){
+        finalTrial_["countdown_wait_lane_evidence"]=false;
+        const auto lane0=s.value("lane_state").toObject(),c0=lane0.value("corridor").toObject();
+        finalTrial_["initial_lane_status"]=c0.value("left_status").toString().toUpper()+QStringLiteral("|")+c0.value("right_status").toString().toUpper();
+        finalTrial_["initial_lane_state"]=lane0.value("state").toString().toUpper();
+        finalTrial_["initial_lane_recommendation"]=c0.value("recommendation").toString().toUpper();
+        finalTrial_["initial_left_latched"]=c0.value("left_recenter_latched").toBool(false);
+        finalTrial_["initial_right_latched"]=c0.value("right_recenter_latched").toBool(false);
+        finalTrial_["initial_condition_match"]=true;
+        const double steer0=finalNumber(s,"esc_steer_actual");
+        if((finalCondition_=="center"||finalCondition_=="left_yellow"||finalCondition_=="right_yellow")&&
+           std::isfinite(steer0)&&std::abs(steer0)>5.0*kPi/180.0){
+          finalStop("invalid",QString("Steering belum center untuk trial warning/straight (%1 deg)").arg(steer0*180.0/kPi,0,'f',1));return;
+        }
+      }
+      if(finalMode_=="obstacle"){
+        if(finalCondition_=="none"){
+          if(finalHumanDetected(s)){finalStop("invalid","NO HUMAN berubah: human terdeteksi saat countdown");return;}
+        }else{
+          const QJsonObject h=finalHumanCandidate(s);
+          if(h.isEmpty()){finalStop("invalid","Human hilang saat countdown");return;}
+          double cx=h.value("center_x_fraction").toDouble(std::numeric_limits<double>::quiet_NaN());
+          if(!std::isfinite(cx)){
+            const double x1=h.value("x1").toDouble(std::numeric_limits<double>::quiet_NaN());
+            const double x2=h.value("x2").toDouble(std::numeric_limits<double>::quiet_NaN());
+            const double iw=s.value("semantic_detections").toObject().value("image_width").toDouble(0.0);
+            if(std::isfinite(x1)&&std::isfinite(x2)&&iw>1.0)cx=((x1+x2)*0.5)/iw;
+          }
+          if(!std::isfinite(cx))cx=0.5;
+          const double displayCx=1.0-cx;
+          const double calibrated=finalHumanMetricDistance(s);
+          const bool metricValid=std::isfinite(calibrated)&&calibrated>0.0;
+          finalTrial_["human_start_confidence"]=h.value("score");
+          finalTrial_["human_start_source_x_fraction"]=cx;
+          finalTrial_["human_start_display_x_fraction"]=displayCx;
+          finalTrial_["human_start_calibrated_distance_m"]=std::isfinite(calibrated)?QJsonValue(calibrated):QJsonValue();
+          finalTrial_["metric_position_valid"]=metricValid;
+          if(finalCondition_!="1"&&!metricValid){finalStop("invalid","Estimasi metrik human tidak valid");return;}
+          const QString refErr=finalHumanReferenceError(s,finalCondition_);
+          if(!refErr.isEmpty()){finalStop("invalid",refErr);return;}
+        }
+      }
+      if(finalMode_=="obstacle"&&finalCondition_=="1"){
+        const auto ts=s.value("trajectory_safety_state").toObject();
+        const bool nearFieldStop=s.value("perception_emergency").toBool(false)||
+          ts.value("decision").toString().toUpper().contains("EMERGENCY");
+        finalGo_=t;finalTrial_["go_at_ms"]=t;finalTrial_["response_ms"]=0;
+        finalTrial_["response"]="HUMAN 1M -> STOP";
+        finalTrial_["command_v_mps"]=0.0;finalTrial_["command_w_rad_s"]=0.0;
+        finalTrial_["forward_progress_m"]=0.0;finalTrial_["lateral_displacement_m"]=0.0;
+        finalTrial_["near_field_stop_active"]=nearFieldStop;
+        finalTrial_["integration_pass"]=nearFieldStop;
+        finalStop(nearFieldStop?"complete":"failed",
+          nearFieldStop?"Human referensi 1 m: near-field emergency aktif dan kendaraan tetap STOP":
+          "Human referensi 1 m terdeteksi tetapi near-field emergency tidak aktif");return;
+      }
+      if(finalMode_=="lane"&&finalCondition_=="gray"){
+        const double v0=finalNumber(s,"esc_drive_actual");
+        const bool stopped=finalFresh(s,"esc_drive_actual",500)&&std::isfinite(v0)&&std::abs(v0)<0.03;
+        finalGo_=t;finalTrial_["go_at_ms"]=t;finalTrial_["response_ms"]=0;
+        finalTrial_["response"]="GRAY/GRAY -> STOP";finalTrial_["command_v_mps"]=0.0;finalTrial_["command_w_rad_s"]=0.0;
+        finalTrial_["steering_neutral_maintained"]=true;finalTrial_["integration_pass"]=stopped;
+        finalStop(stopped?"complete":"failed",stopped?
+          "GRAY/GRAY: fail-closed tervalidasi dan kendaraan tetap STOP":
+          "GRAY/GRAY terdeteksi tetapi feedback kendaraan belum STOP");return;
+      }
+      const auto od=s.value("esc_odom").toObject();
+      finalX_=finalPrevX_=finalNumber(od,"x");finalY_=finalPrevY_=finalNumber(od,"y");
+      finalYaw_=finalNumber(od,"yaw");
+      if(!std::isfinite(finalYaw_)){finalStop("invalid","Heading awal odometri tidak valid");return;}
+      finalGo_=t;finalTravel_=0.0;finalGreenAt_=0;
+      finalTrial_["phase"]="running";finalTrial_["go_at_ms"]=t;finalTrial_["countdown"]=0;
+      finalTrial_["initial_heading_rad"]=finalYaw_;finalTrial_["lane_phase"]=finalMode_=="lane"?QStringLiteral("RECENTER"):QStringLiteral("NAV2");
+      if(finalMode_=="lane"){
+        finalTrial_["lane_last_valid_ms"]=t;finalTrial_["lane_dropout_hold_count"]=0;
+        finalTrial_["lane_dropout_max_ms"]=0;
+        const auto mp0=s.value("ekf_global").toObject();
+        const double mx0=finalNumber(mp0,"x"),my0=finalNumber(mp0,"y"),myaw0=finalNumber(mp0,"yaw");
+        if(!std::isfinite(mx0)||!std::isfinite(my0)||!std::isfinite(myaw0)){
+          finalStop("invalid","Pose map awal Lane Safety tidak valid");return;
+        }
+        const double target=finalTrial_.value("target_distance_m").toDouble(5.0);
+        const double gx=mx0+std::cos(myaw0)*target,gy=my0+std::sin(myaw0)*target;
+        finalTrial_["initial_map_x"]=mx0;finalTrial_["initial_map_y"]=my0;finalTrial_["initial_map_heading_rad"]=myaw0;
+        finalTrial_["goal_x_map"]=gx;finalTrial_["goal_y_map"]=gy;finalTrial_["goal_yaw_map"]=myaw0;
+        finalTrial_["goal_state"]="WAIT_RECENTER";
+      }
+      if(finalMode_=="obstacle"){
+        const auto mp=s.value("ekf_global").toObject();
+        const double mx=finalNumber(mp,"x"),my=finalNumber(mp,"y"),myaw=finalNumber(mp,"yaw");
+        const double target=finalTrial_.value("target_distance_m").toDouble(0.0);
+        const double gx=mx+std::cos(myaw)*target,gy=my+std::sin(myaw)*target;
+        const bool humanPlannerTrial=finalCondition_!="none"&&finalCondition_!="1";
+        QString msg;bridge_->publishFinalTrialVelocity(0.0,0.0,false,&msg);
+        // HUMAN 4.5A: arm world-memory and let Nav2 compute while the safety
+        // supervisor keeps actuator output at zero. Motion is released only
+        // after a post-latch global path reaches MPPI.
+        bridge_->publishFinalGuard(humanPlannerTrial?"OBSTACLE_GATE":"OBSTACLE",finalCondition_);
+        if(!bridge_->publishGoal(gx,gy,myaw,&msg)){finalStop("invalid",msg);return;}
+        finalTrial_["goal_x_map"]=gx;finalTrial_["goal_y_map"]=gy;finalTrial_["goal_yaw_map"]=myaw;
+        finalTrial_["planner_goal_sent_ms"]=t;
+        if(humanPlannerTrial){
+          finalTrial_["planner_gate_started_ms"]=t;
+          finalTrial_["planner_gate_reason"]="WAIT_HUMAN_WORLD_MEMORY";
+          finalTrial_["obstacle_motion_released"]=false;
+          finalTrial_["response"]="HOLD STOP -> WAIT HUMAN LATCH + COSTMAP + NEW PATH + MPPI";
+        }else{
+          finalTrial_["planner_gate_pass"]=true;
+          finalTrial_["planner_gate_reason"]="NOT_REQUIRED";
+          finalTrial_["obstacle_motion_released"]=true;
+          finalTrial_["response"]="NAV2 GOAL ACTIVE";
+        }
+      }else{
+        bridge_->publishFinalGuard("LANE",finalCondition_);
+      }
+      return;
+    }
+    if(phase=="running"){
+      const bool laneNav2GuardReleased=finalMode_=="lane"&&
+        finalTrial_.value("lane_nav2_handoff").toBool(false);
+      const bool humanObstacleTrial=finalMode_=="obstacle"&&finalCondition_!="none"&&finalCondition_!="1";
+      const bool obstacleMotionReleased=finalTrial_.value("obstacle_motion_released").toBool(false);
+      const bool plannerHoldActive=finalTrial_.value("planner_hold_active").toBool(false);
+      const bool obstaclePlannerGate=humanObstacleTrial&&(!obstacleMotionReleased||plannerHoldActive);
+      const QString finalGuardMode=laneNav2GuardReleased?QStringLiteral("IDLE"):
+        (finalMode_=="lane"?QStringLiteral("LANE"):
+          (obstaclePlannerGate?QStringLiteral("OBSTACLE_GATE"):QStringLiteral("OBSTACLE")));
+      bridge_->publishFinalGuard(finalGuardMode,laneNav2GuardReleased?QString():finalCondition_);
+      const auto od=s.value("esc_odom").toObject();
+      const double x=finalNumber(od,"x"),y=finalNumber(od,"y");
+      const double step=std::hypot(x-finalPrevX_,y-finalPrevY_);
+      if(!std::isfinite(step)||step>.30){finalStop("invalid","Lompatan odometri");return;}
+      finalTravel_+=step;finalPrevX_=x;finalPrevY_=y;
+      const double dx=x-finalX_,dy=y-finalY_;
+      const double forwardProgress=std::cos(finalYaw_)*dx+std::sin(finalYaw_)*dy;
+      const double lateralDisplacement=-std::sin(finalYaw_)*dx+std::cos(finalYaw_)*dy;
+      if(!std::isfinite(forwardProgress)||!std::isfinite(lateralDisplacement)){finalStop("invalid","Progres odometri tidak finite");return;}
+      finalTrial_["travel_m"]=finalTravel_;
+      finalTrial_["forward_progress_m"]=forwardProgress;
+      finalTrial_["lateral_displacement_m"]=lateralDisplacement;
+      finalTrial_["duration_s"]=(t-finalGo_)/1000.0;
+
+      const auto laneObj=s.value("lane_state").toObject(),lane=laneObj.value("corridor").toObject();
+      const QString left=lane.value("left_status").toString("UNKNOWN").toUpper();
+      const QString right=lane.value("right_status").toString("UNKNOWN").toUpper();
+      const bool gg=left=="GREEN"&&right=="GREEN";
+      const bool yg=left=="YELLOW"&&right=="GREEN";
+      const bool rg=left=="RED"&&right=="GREEN";
+      const bool gy=left=="GREEN"&&right=="YELLOW";
+      const bool gr=left=="GREEN"&&right=="RED";
+      const double actualSpeed=finalNumber(s,"esc_drive_actual");
+      double cmdV=0.0,cmdW=0.0;QString response;bool commandValid=true;
+
+      if(finalMode_=="lane"){
+        const double laneTarget=std::max(0.5,finalTrial_.value("target_distance_m").toDouble(5.0));
+        const bool nav2Handoff=finalTrial_.value("lane_nav2_handoff").toBool(false);
+        const bool laneNowValid=finalDrivable(s);
+        finalTrial_["lane_post_handoff_valid"]=laneNowValid;
+        if(!nav2Handoff){
+          if(laneNowValid){
+            finalTrial_["lane_last_valid_ms"]=t;
+            finalTrial_["lane_dropout_hold_active"]=false;
+          }else{
+            const qint64 lastValid=static_cast<qint64>(finalTrial_.value("lane_last_valid_ms").toDouble(finalGo_));
+            const qint64 dropoutAge=std::max<qint64>(0,t-lastValid);
+            finalTrial_["lane_dropout_hold_active"]=true;
+            finalTrial_["lane_dropout_age_ms"]=dropoutAge;
+            finalTrial_["lane_dropout_hold_count"]=finalTrial_.value("lane_dropout_hold_count").toInt(0)+1;
+            const qint64 prevMax=static_cast<qint64>(finalTrial_.value("lane_dropout_max_ms").toDouble(0));
+            finalTrial_["lane_dropout_max_ms"]=std::max(prevMax,dropoutAge);
+            QString holdMsg;
+            if(!bridge_->publishFinalTrialVelocity(0.0,0.0,true,&holdMsg)){finalStop("invalid",holdMsg);return;}
+            finalTrial_["response"]="LANE EVIDENCE DROPOUT -> HOLD STOP, WAIT RECOVERY";
+            finalTrial_["command_v_mps"]=0.0;finalTrial_["command_w_rad_s"]=0.0;
+            if(dropoutAge>1800){
+              finalStop("invalid",QString("Lane/drivable hilang > 1.8 s saat recenter (%1 ms)").arg(dropoutAge));return;
+            }
+            return;
+          }
+        }
+        const QString muxSource=s.value("nav_cmd_mux").toObject().value("raw").toString().toUpper();
+        finalTrial_["cmd_mux_source_last"]=muxSource;
+        if(!nav2Handoff&&muxSource=="WEB_TRIAL"){
+          if(!finalTrial_.value("web_trial_authority_seen").toBool(false))
+            finalTrial_["web_trial_authority_at_ms"]=t;
+          finalTrial_["web_trial_authority_seen"]=true;
+        }
+        if(nav2Handoff&&muxSource=="AUTONOMY")
+          finalTrial_["lane_nav2_authority_seen"]=true;
+        if(!nav2Handoff&&t-finalGo_>1200&&!finalTrial_.value("web_trial_authority_seen").toBool(false)){
+          finalStop("invalid","WEB_TRIAL tidak memperoleh actuator authority dari cmd_vel_router");return;
+        }
+        const qint64 handoffAt=static_cast<qint64>(finalTrial_.value("lane_nav2_handoff_at_ms").toDouble(0));
+        if(nav2Handoff&&handoffAt>0&&t-handoffAt>2500&&!finalTrial_.value("lane_nav2_authority_seen").toBool(false)){
+          finalStop("invalid","Nav2 goal aktif tetapi AUTONOMY belum memperoleh actuator authority");return;
+        }
+        const double speedUpper=nav2Handoff?1.35:0.35;
+        if(std::isfinite(actualSpeed)&&(actualSpeed>speedUpper||actualSpeed<-0.05)){
+          finalStop("invalid",QString("Feedback speed di luar envelope 4.5B (%1 m/s)").arg(actualSpeed,0,'f',3));return;
+        }
+        if(std::abs(lateralDisplacement)>0.75){
+          finalStop("failed",QString("Lateral displacement melewati batas trial (%1 m)").arg(lateralDisplacement,0,'f',2));return;
+        }
+        if(finalTravel_>laneTarget+1.5&&forwardProgress<laneTarget){
+          finalStop("failed",QString("Travel > target+1.5 m tetapi forward progress belum %1 m").arg(laneTarget,0,'f',1));return;
+        }
+        const bool leftLatched=lane.value("left_recenter_latched").toBool(false);
+        const bool rightLatched=lane.value("right_recenter_latched").toBool(false);
+        const bool warningTrial=finalCondition_=="left_yellow"||finalCondition_=="right_yellow";
+        const bool redTrial=finalCondition_=="left_red"||finalCondition_=="right_red";
+        const bool straightTrial=finalCondition_=="center"||warningTrial;
+        const double steerActual=finalNumber(s,"esc_steer_actual");
+        const double steerTarget=finalNumber(s,"esc_steer_target");
+        const double currentYaw=finalNumber(od,"yaw");
+        if(!std::isfinite(currentYaw)){finalStop("invalid","Heading odometri tidak valid saat lane trial");return;}
+        const double headingError=std::atan2(std::sin(finalYaw_-currentYaw),std::cos(finalYaw_-currentYaw));
+        const double headingErrorDeg=headingError*180.0/kPi;
+        const double headingDeadband=1.5*kPi/180.0;
+        const double headingRestoreTolerance=3.0*kPi/180.0;
+        const bool headingRestored=std::abs(headingError)<=headingRestoreTolerance;
+        const double headingCmd=std::abs(headingError)<=headingDeadband?0.0:
+          std::clamp(0.65*headingError,-0.040,0.040);
+        finalTrial_["current_heading_rad"]=currentYaw;
+        finalTrial_["heading_error_rad"]=headingError;
+        finalTrial_["heading_error_deg"]=headingErrorDeg;
+        finalTrial_["heading_restored"]=headingRestored;
+        finalTrial_["steering_actual_rad"]=std::isfinite(steerActual)?QJsonValue(steerActual):QJsonValue();
+        finalTrial_["steering_target_rad"]=std::isfinite(steerTarget)?QJsonValue(steerTarget):QJsonValue();
+        if(std::isfinite(steerActual)){
+          const QJsonValue peakV=finalTrial_.value("peak_steering_actual_rad");
+          double peak=peakV.isDouble()?peakV.toDouble():0.0;
+          if(!peakV.isDouble()||std::abs(steerActual)>std::abs(peak))peak=steerActual;
+          finalTrial_["peak_steering_actual_rad"]=peak;
+        }
+
+        if(redTrial&&gg&&finalGreenAt_==0){
+          finalGreenAt_=t;finalTrial_["recovery_ms"]=t-finalGo_;finalTrial_["recovery_seen"]=true;
+          finalTrial_["lane_phase"]="HEADING_RECOVERY";
+        }
+        if(redTrial&&gg&&headingRestored){
+          finalTrial_["heading_restored_once"]=true;
+          if(!nav2Handoff)finalTrial_["lane_phase"]="READY_NAV2_HANDOFF";
+        }else if(redTrial&&gg){
+          if(!nav2Handoff)finalTrial_["lane_phase"]="HEADING_RECOVERY";
+        }else if(redTrial){
+          if(!nav2Handoff)finalTrial_["lane_phase"]="RECENTER";
+        }
+
+        // Once the lane is centered and the original heading is restored,
+        // hand the remaining motion to Nav2/MPPI. The goal was frozen at trial
+        // start: 5 m forward along the original map heading.
+        if(redTrial&&nav2Handoff){
+          const QString goalState=s.value("goal_state").toObject().value("state").toString().toUpper();
+          finalTrial_["goal_state"]=goalState;
+          finalTrial_["lane_phase"]="NAV2_TO_GOAL";
+          const QJsonObject mppi=s.value("mppi_trajectories").toObject();
+          const bool mppiFresh=finalFresh(s,"mppi_trajectories",1800)&&mppi.value("count").toDouble(0)>0;
+          if(mppiFresh)finalTrial_["mppi_seen"]=true;
+          if(goalState.contains("ABORT")||goalState.contains("REJECT")||goalState.contains("FAIL")){
+            finalStop("failed","Nav2 lane goal gagal: "+goalState);return;
+          }
+          const bool reached=goalState.contains("SUCCEEDED")||forwardProgress>=std::max(0.0,laneTarget-0.25);
+          if(reached){
+            const bool success=finalTrial_.value("recovery_seen").toBool(false)&&
+              finalTrial_.value("heading_restored_once").toBool(false)&&
+              finalTrial_.value("steering_response_seen").toBool(false)&&
+              finalTrial_.value("steering_direction_match").toBool(false)&&
+              finalTrial_.value("web_trial_authority_seen").toBool(false)&&
+              finalTrial_.value("lane_nav2_authority_seen").toBool(false)&&
+              finalTrial_.value("mppi_seen").toBool(false);
+            finalTrial_["integration_pass"]=success;
+            finalStop(success?"complete":"failed",success?
+              QString("Lane Safety: RED->GREEN/GREEN, heading awal pulih, Nav2/MPPI mencapai goal %1 m").arg(laneTarget,0,'f',1):
+              QString("Goal %1 m tercapai tetapi bukti recenter/heading/authority/MPPI belum lengkap").arg(laneTarget,0,'f',1));
+          }
+          return;
+        }
+
+        if(finalCondition_=="center"){
+          if(!gg){finalStop("invalid","GREEN/GREEN berubah sebelum target 2 m");return;}
+          cmdV=0.20;cmdW=0.0;response="GREEN/GREEN -> straight 2 m";
+        }else if(finalCondition_=="left_yellow"){
+          if(yg&&!leftLatched){cmdV=0.20;cmdW=0.0;response="YELLOW LEFT warning-only -> straight";}
+          else if(gg){cmdV=0.20;cmdW=0.0;response="YELLOW LEFT cleared -> continue straight";}
+          else commandValid=false;
+        }else if(finalCondition_=="left_red"){
+          if(rg&&leftLatched){cmdV=0.10;cmdW=-0.040;response="RED LEFT -> recenter RIGHT";}
+          else if(yg&&leftLatched){cmdV=0.10;cmdW=-0.020;response="RED LEFT latched recovery through YELLOW";}
+          else if(gg){cmdV=headingRestored?0.20:0.12;cmdW=headingCmd;response=headingRestored?"RED LEFT recovered GREEN -> initial heading restored -> straight 5 m":"RED LEFT recovered GREEN -> restoring initial heading";}
+          else commandValid=false;
+        }else if(finalCondition_=="right_yellow"){
+          if(gy&&!rightLatched){cmdV=0.20;cmdW=0.0;response="YELLOW RIGHT warning-only -> straight";}
+          else if(gg){cmdV=0.20;cmdW=0.0;response="YELLOW RIGHT cleared -> continue straight";}
+          else commandValid=false;
+        }else if(finalCondition_=="right_red"){
+          if(gr&&rightLatched){cmdV=0.10;cmdW=0.040;response="RED RIGHT -> recenter LEFT";}
+          else if(gy&&rightLatched){cmdV=0.10;cmdW=0.020;response="RED RIGHT latched recovery through YELLOW";}
+          else if(gg){cmdV=headingRestored?0.20:0.12;cmdW=headingCmd;response=headingRestored?"RED RIGHT recovered GREEN -> initial heading restored -> straight 5 m":"RED RIGHT recovered GREEN -> restoring initial heading";}
+          else commandValid=false;
+        }else commandValid=false;
+
+        if(redTrial&&gg&&headingRestored&&!nav2Handoff){
+          QString msg;
+          // Release manual WEB_TRIAL authority first, then publish the fixed
+          // map-frame goal. cmd_vel_router gives AUTONOMY precedence once the
+          // navigation core opens its motion gate.
+          bridge_->publishFinalTrialVelocity(0.0,0.0,false,&msg);
+          const double gx=finalTrial_.value("goal_x_map").toDouble(std::numeric_limits<double>::quiet_NaN());
+          const double gy=finalTrial_.value("goal_y_map").toDouble(std::numeric_limits<double>::quiet_NaN());
+          const double gyaw=finalTrial_.value("goal_yaw_map").toDouble(std::numeric_limits<double>::quiet_NaN());
+          if(!bridge_->publishGoal(gx,gy,gyaw,&msg)){finalStop("invalid",msg);return;}
+          finalTrial_["lane_nav2_handoff"]=true;
+          finalTrial_["lane_nav2_handoff_at_ms"]=t;
+          // Manual Lane Safety commissioning is complete. From this point the
+          // normal Nav2 safety chain owns motion; do not keep the special LANE
+          // final-trial stream watchdog latched over the autonomous mission.
+          bridge_->publishFinalGuard("IDLE","");
+          finalTrial_["lane_phase"]="NAV2_GOAL_SENT";
+          finalTrial_["goal_state"]="SENT";
+          finalTrial_["response"]=QString("GREEN/GREEN + heading awal pulih -> Nav2 goal %1 m").arg(laneTarget,0,'f',1);
+          return;
+        }
+
+        if(!commandValid){finalStop("invalid","Transisi lane tidak sesuai state/latch produksi");return;}
+        if(straightTrial&&std::isfinite(steerActual)&&std::abs(steerActual)>5.0*kPi/180.0){
+          finalTrial_["steering_neutral_maintained"]=false;
+          finalStop("failed",QString("Trial warning/straight menghasilkan steering tak terduga %1 deg").arg(steerActual*180.0/kPi,0,'f',1));return;
+        }
+
+        if(std::abs(cmdW)>.005 && !(redTrial&&finalGreenAt_>0)){
+          finalTurn_=true;
+          const double expectedPhysicalSign=cmdW<0.0?1.0:-1.0; // ROS yaw sign -> physical steering sign
+          if(std::isfinite(steerActual)){
+            const double directional=expectedPhysicalSign*steerActual;
+            if(directional>=2.0*kPi/180.0){
+              if(!finalTrial_.value("steering_response_seen").toBool(false))
+                finalTrial_["steering_response_ms"]=t-finalGo_;
+              finalTrial_["steering_response_seen"]=true;
+              finalTrial_["steering_direction_match"]=true;
+            }else if(t-finalGo_>750&&steerActual*expectedPhysicalSign<=-2.0*kPi/180.0){
+              finalTrial_["steering_direction_match"]=false;
+              finalStop("failed",QString("Feedback steering bergerak ke arah salah (%1 deg)").arg(steerActual*180.0/kPi,0,'f',1));return;
+            }
+          }
+          const qint64 authorityAt=static_cast<qint64>(finalTrial_.value("web_trial_authority_at_ms").toDouble(0));
+          if(authorityAt>0&&t-authorityAt>1500&&!finalTrial_.value("steering_response_seen").toBool(false)){
+            finalStop("failed","Command RED aktif tetapi feedback steering tidak merespons >=2 deg dalam 1.5 s");return;
+          }
+        }
+        if(redTrial&&gg&&!finalTrial_.value("steering_response_seen").toBool(false)){
+          finalStop("failed","Lane kembali GREEN/GREEN tanpa bukti respons steering RED");return;
+        }
+
+        QString msg;if(!bridge_->publishFinalTrialVelocity(cmdV,cmdW,true,&msg)){finalStop("invalid",msg);return;}
+        if(finalTrial_.value("response_ms").isNull()&&std::isfinite(actualSpeed)&&std::abs(actualSpeed)>.03)
+          finalTrial_["response_ms"]=t-finalGo_;
+        finalTrial_["response"]=response;
+        finalTrial_["lane_actual"]=left+QStringLiteral("|")+right;
+        finalTrial_["lane_left_latched"]=leftLatched;finalTrial_["lane_right_latched"]=rightLatched;
+        finalTrial_["command_v_mps"]=cmdV;finalTrial_["command_w_rad_s"]=cmdW;
+
+        if(!redTrial&&forwardProgress>=laneTarget){
+          bool success=false;QString successReason,failReason;
+          if(finalCondition_=="center"){
+            success=gg&&finalTrial_.value("steering_neutral_maintained").toBool(true)&&
+              finalTrial_.value("web_trial_authority_seen").toBool(false);
+            successReason="GREEN/GREEN: straight 2 m, steering tetap netral, lalu STOP";
+            failReason="GREEN/GREEN mencapai 2 m tetapi steering/lane tidak tetap valid";
+          }else if(warningTrial){
+            const bool stateOk=finalCondition_=="left_yellow"?(yg||gg):(gy||gg);
+            const bool latchOk=finalCondition_=="left_yellow"?!leftLatched:!rightLatched;
+            success=stateOk&&latchOk&&finalTrial_.value("steering_neutral_maintained").toBool(true)&&
+              finalTrial_.value("web_trial_authority_seen").toBool(false);
+            successReason="YELLOW warning-only: 2 m tercapai tanpa steering aktif, lalu STOP";
+            failReason="YELLOW mencapai 2 m tetapi warning berubah menjadi latched/steering aktif";
+          }else if(redTrial){
+            success=gg&&headingRestored&&finalTrial_.value("heading_restored_once").toBool(false)&&
+              finalGreenAt_>0&&finalTurn_&&finalTrial_.value("steering_response_seen").toBool(false)&&
+              finalTrial_.value("steering_direction_match").toBool(false)&&
+              finalTrial_.value("web_trial_authority_seen").toBool(false);
+            successReason=QString("RED: steering koreksi valid, recovery GREEN/GREEN, heading awal dipulihkan, target %1 m tercapai, lalu STOP").arg(laneTarget,0,'f',1);
+            failReason=QString("Target %1 m tercapai tetapi heading awal / bukti steering / recovery GREEN belum lengkap").arg(laneTarget,0,'f',1);
+          }
+          finalTrial_["integration_pass"]=success;
+          finalStop(success?"complete":"failed",success?successReason:failReason);
+        }
+      }else{
+        // Obstacle response is Nav2-owned. Web trial never synthesizes steering here.
+        QString msg;bridge_->publishFinalTrialVelocity(0.0,0.0,false,&msg);
+        const bool noHuman=finalCondition_=="none";
+        const QJsonObject h=finalHumanCandidate(s);
+        const bool seen=!h.isEmpty();
+        if(noHuman&&seen){finalStop("invalid","Human muncul pada trial NO HUMAN");return;}
+
+        const QJsonObject ts=s.value("trajectory_safety_state").toObject();
+        const QJsonObject sem=s.value("semantic_detections").toObject();
+        const QJsonObject objCloud=s.value("object_points").toObject();
+        const QJsonObject planningCloud=s.value("planning_relevant_points").toObject();
+        const QJsonObject costmap=s.value("local_costmap_meta").toObject();
+        const QJsonObject globalCostmap=s.value("global_costmap_meta").toObject();
+        const QJsonObject navPath=s.value("nav_path").toObject();
+        const QJsonObject mppi=s.value("mppi_trajectories").toObject();
+        const QJsonObject navCmd=s.value("cmd_nav").toObject();
+        const QJsonObject updated=s.value("__updated").toObject();
+        const int candidateCount=static_cast<int>(std::max(ts.value("candidate_points").toDouble(0),objCloud.value("count").toDouble(0)));
+        const int planningCount=static_cast<int>(std::max(ts.value("planning_relevant_points").toDouble(0),planningCloud.value("count").toDouble(0)));
+        const bool costmapFresh=finalFresh(s,"local_costmap_meta",2200)&&!costmap.isEmpty();
+        const bool globalCostmapFresh=finalFresh(s,"global_costmap_meta",2200)&&!globalCostmap.isEmpty();
+        const bool mppiFresh=finalFresh(s,"mppi_trajectories",1800)&&mppi.value("count").toDouble(0)>0;
+        const QString decision=ts.value("decision").toString().toUpper();
+        const double navV=navCmd.value("linear_x").toDouble(0.0),navW=navCmd.value("angular_z").toDouble(0.0);
+        const QString goalState=s.value("goal_state").toObject().value("state").toString().toUpper();
+        const double target=finalTrial_.value("target_distance_m").toDouble(0.0);
+        const bool reached=goalState.contains("SUCCEEDED")||(target>0&&forwardProgress>=std::max(0.0,target-0.25));
+
+        const qint64 navPathUpdated=static_cast<qint64>(updated.value("nav_path").toDouble(0));
+        const qint64 mppiUpdated=static_cast<qint64>(updated.value("mppi_trajectories").toDouble(0));
+        const qint64 globalCostmapUpdated=static_cast<qint64>(updated.value("global_costmap_meta").toDouble(0));
+        const qint64 navPathAge=navPathUpdated>0&&t>=navPathUpdated?t-navPathUpdated:std::numeric_limits<qint64>::max();
+        const int navPathCount=static_cast<int>(navPath.value("count").toDouble(0));
+        const double navPathLength=navPath.value("length_m").toDouble(std::numeric_limits<double>::quiet_NaN());
+        const double navPathHeadingVar=navPath.value("heading_variation_rad").toDouble(std::numeric_limits<double>::quiet_NaN());
+        const double maxReasonablePath=std::max(4.0,target+3.0);
+        const bool navPathFresh=navPathUpdated>0&&navPathAge>=0&&navPathAge<4000;
+        const bool navPathQuality=navPathCount>1&&std::isfinite(navPathLength)&&navPathLength>0.05&&
+          navPathLength<=maxReasonablePath&&
+          (!std::isfinite(navPathHeadingVar)||navPathHeadingVar<=3.50);
+        const bool localCostmapMarked=costmap.value("nonzero_cells").toDouble(0)>0&&costmap.value("max_cost").toDouble(0)>0;
+        const bool localCostmapAligned=planningCount>0&&costmapFresh&&localCostmapMarked&&
+          costmap.value("planning_alignment_pass").toBool(false);
+        const bool obstacleObject=finalTrial_.value("object_cloud_seen").toBool(false)||candidateCount>0;
+        const bool planningSeen=finalTrial_.value("planning_cloud_seen").toBool(false)||planningCount>0;
+        const bool costmapSeen=finalTrial_.value("costmap_marking_seen").toBool(false)||localCostmapAligned;
+        const bool mppiSeen=finalTrial_.value("mppi_seen").toBool(false)||mppiFresh;
+
+        finalTrial_["planner_path_age_ms"]=navPathUpdated>0?QJsonValue(static_cast<double>(navPathAge)):QJsonValue();
+        finalTrial_["planner_path_count"]=navPathCount;
+        finalTrial_["planner_path_length_m"]=std::isfinite(navPathLength)?QJsonValue(navPathLength):QJsonValue();
+        finalTrial_["planner_path_heading_variation_rad"]=std::isfinite(navPathHeadingVar)?QJsonValue(navPathHeadingVar):QJsonValue();
+        finalTrial_["planner_path_quality_ok"]=navPathQuality;
+        finalTrial_["trial_person_only_planning_filter"]=sem.value("trial_person_only_planning_filter");
+        finalTrial_["goal_state"]=goalState;
+
+        const bool humanPlannerTrial=!noHuman&&finalCondition_!="1";
+        const bool memoryLatched=sem.value("obstacle_memory_latched").toBool(false);
+        const bool memoryReleased=sem.value("obstacle_memory_released").toBool(false);
+        qint64 latchGateAt=static_cast<qint64>(finalTrial_.value("obstacle_memory_latched_gate_at_ms").toDouble(0));
+        if(humanPlannerTrial&&memoryLatched&&latchGateAt<=0){
+          latchGateAt=t;
+          finalTrial_["obstacle_memory_latched_gate_at_ms"]=t;
+        }
+
+        // PRE-MOTION PLANNER GATE:
+        // 1) HUMAN must be world-fixed, 2) only HUMAN may feed planning during
+        // formal 4.5A, 3) local/global costmaps must update after the latch,
+        // 4) a NEW non-looping global path must be published after that update,
+        // 5) MPPI must consume that new path. Until all are true, actuator
+        // output stays zero through OBSTACLE_GATE.
+        if(humanPlannerTrial&&!finalTrial_.value("obstacle_motion_released").toBool(false)){
+          const qint64 gateStart=static_cast<qint64>(finalTrial_.value("planner_gate_started_ms").toDouble(finalGo_));
+          const bool personOnly=sem.value("trial_person_only_planning_filter").toBool(false);
+          const bool globalAfterLatch=latchGateAt>0&&globalCostmapFresh&&globalCostmapUpdated>latchGateAt;
+          const bool pathAfterGlobal=globalAfterLatch&&navPathFresh&&navPathUpdated>globalCostmapUpdated&&navPathQuality;
+          const bool mppiAfterPath=pathAfterGlobal&&mppiFresh&&mppiUpdated>=navPathUpdated;
+          const bool gateReady=memoryLatched&&personOnly&&localCostmapAligned&&globalAfterLatch&&pathAfterGlobal&&mppiAfterPath;
+
+          QString gateReason;
+          if(!memoryLatched)gateReason="WAIT_HUMAN_WORLD_MEMORY";
+          else if(!personOnly)gateReason="WAIT_PERSON_ONLY_PLANNING_FILTER";
+          else if(planningCount<=0)gateReason="WAIT_HUMAN_PLANNING_POINTS";
+          else if(!localCostmapAligned)gateReason="WAIT_LOCAL_COSTMAP_ALIGNMENT";
+          else if(!globalAfterLatch)gateReason="WAIT_GLOBAL_COSTMAP_POST_LATCH";
+          else if(!navPathFresh)gateReason="WAIT_NEW_GLOBAL_PATH";
+          else if(!navPathQuality)gateReason="REJECT_LOOP_OR_EXCESSIVE_GLOBAL_PATH";
+          else if(!pathAfterGlobal)gateReason="WAIT_POST_COSTMAP_GLOBAL_PATH";
+          else if(!mppiAfterPath)gateReason="WAIT_MPPI_POST_PATH";
+          else gateReason="READY";
+
+          finalTrial_["planner_gate_reason"]=gateReason;
+          finalTrial_["planner_gate_elapsed_ms"]=std::max<qint64>(0,t-gateStart);
+          finalTrial_["planner_gate_planning_points"]=planningCount;
+          finalTrial_["planner_gate_local_costmap_aligned"]=localCostmapAligned;
+          finalTrial_["planner_gate_global_costmap_post_latch"]=globalAfterLatch;
+          finalTrial_["planner_gate_path_post_costmap"]=pathAfterGlobal;
+          finalTrial_["planner_gate_mppi_post_path"]=mppiAfterPath;
+          finalTrial_["command_v_mps"]=0.0;finalTrial_["command_w_rad_s"]=0.0;
+
+          if(!gateReady){
+            bridge_->publishFinalGuard("OBSTACLE_GATE",finalCondition_);
+            finalTrial_["response"]="HOLD STOP -> "+gateReason;
+            if(gateStart>0&&t-gateStart>15000){
+              finalStop("failed","Planner gate timeout: "+gateReason+
+                QString(" | path=%1 m headingVar=%2 rad").arg(navPathLength,0,'f',2).arg(navPathHeadingVar,0,'f',2));
+            }
+            return;
+          }
+
+          finalTrial_["planner_gate_pass"]=true;
+          finalTrial_["planner_gate_passed_ms"]=t;
+          finalTrial_["planner_gate_reason"]="PASS";
+          finalTrial_["obstacle_motion_released"]=true;
+          finalTrial_["obstacle_motion_released_at_ms"]=t;
+          finalTrial_["planner_gate_path_length_m"]=navPathLength;
+          finalTrial_["planner_gate_path_heading_variation_rad"]=navPathHeadingVar;
+          // Rebase physical-travel evidence at the instant motion authority is
+          // released. Planning time while STOP must not look like response time.
+          finalGo_=t;finalTrial_["go_at_ms"]=t;finalTravel_=0.0;
+          const auto gateOd=s.value("esc_odom").toObject();
+          const double gateX=finalNumber(gateOd,"x"),gateY=finalNumber(gateOd,"y");
+          if(std::isfinite(gateX)&&std::isfinite(gateY)){
+            finalX_=finalPrevX_=gateX;finalY_=finalPrevY_=gateY;
+          }
+          bridge_->publishFinalGuard("OBSTACLE",finalCondition_);
+          finalTrial_["response"]="PLANNER GATE PASS -> MOTION RELEASED";
+          return;
+        }
+
+        // RUN-TIME PLANNER FAIL-SAFE:
+        // If the planner stops publishing or produces an implausible looping
+        // path, immediately HOLD motion but keep the Nav2 goal alive so a fresh
+        // replan can recover. A new path must reach MPPI before motion resumes.
+        if(humanPlannerTrial&&finalTrial_.value("obstacle_motion_released").toBool(false)&&!reached){
+          const bool holdActive=finalTrial_.value("planner_hold_active").toBool(false);
+          if(holdActive){
+            const qint64 holdStart=static_cast<qint64>(finalTrial_.value("planner_hold_started_ms").toDouble(t));
+            const bool obstacleStillProtected=memoryLatched&&!memoryReleased;
+            const bool costmapReadyForResume=!obstacleStillProtected||localCostmapAligned;
+            const bool newPath=navPathFresh&&navPathQuality&&navPathUpdated>holdStart;
+            const bool newMppi=newPath&&mppiFresh&&mppiUpdated>=navPathUpdated;
+            finalTrial_["planner_hold_age_ms"]=std::max<qint64>(0,t-holdStart);
+            finalTrial_["response"]="PLANNER HOLD STOP -> WAIT FRESH PATH";
+            bridge_->publishFinalGuard("OBSTACLE_GATE",finalCondition_);
+            if(costmapReadyForResume&&newPath&&newMppi){
+              finalTrial_["planner_hold_active"]=false;
+              finalTrial_["planner_hold_recovery_count"]=finalTrial_.value("planner_hold_recovery_count").toInt(0)+1;
+              finalTrial_["planner_hold_recovered_ms"]=t;
+              finalTrial_["planner_hold_reason"]="RECOVERED";
+              bridge_->publishFinalGuard("OBSTACLE",finalCondition_);
+              finalTrial_["response"]="PLANNER RECOVERED -> MOTION RESUMED";
+              return;
+            }
+            if(t-holdStart>12000){
+              finalStop("failed","Planner tidak pulih dalam 12 s setelah HOLD");return;
+            }
+            return;
+          }
+
+          if(!navPathFresh||!navPathQuality){
+            const QString holdReason=!navPathFresh?QStringLiteral("GLOBAL_PATH_STALE"):
+              QStringLiteral("LOOP_OR_EXCESSIVE_GLOBAL_PATH");
+            finalTrial_["planner_hold_active"]=true;
+            finalTrial_["planner_hold_started_ms"]=t;
+            finalTrial_["planner_hold_count"]=finalTrial_.value("planner_hold_count").toInt(0)+1;
+            finalTrial_["planner_hold_reason"]=holdReason;
+            finalTrial_["response"]="PLANNER FAIL-SAFE HOLD -> "+holdReason;
+            bridge_->publishFinalGuard("OBSTACLE_GATE",finalCondition_);
+            return;
+          }
+        }
+
+        const bool avoidNow=planningCount>0&&(std::abs(navW)>0.02||decision.startsWith("AVOID_")||decision.startsWith("SEARCH_AVOIDANCE_"));
+        const bool avoidSeen=finalTrial_.value("avoidance_seen").toBool(false)||avoidNow;
+        if(avoidNow){
+          finalTurn_=true;finalAvoid_=true;
+          if(decision=="AVOID_LEFT"||navW>0.02)finalTrial_["avoid_direction"]="LEFT";
+          else if(decision=="AVOID_RIGHT"||navW<-0.02)finalTrial_["avoid_direction"]="RIGHT";
+        }
+        const double reference=finalObstacleDistance_;
+        const bool repeatTrial=QRegularExpression(QStringLiteral("^trial[1-3]$")).match(finalCondition_).hasMatch();
+        const bool recoveryProgressOk=repeatTrial?forwardProgress>1.0:forwardProgress>reference+0.5;
+        const bool recoveryNow=!noHuman&&avoidSeen&&planningCount==0&&recoveryProgressOk&&std::abs(navW)<0.03;
+        const bool recoverySeen=finalTrial_.value("recovery_seen").toBool(false)||recoveryNow;
+        if(recoveryNow&&finalTrial_.value("recovery_ms").isNull())finalTrial_["recovery_ms"]=t-finalGo_;
+
+        finalTrial_["object_cloud_seen"]=obstacleObject;
+        finalTrial_["obstacle_memory_latched_seen"]=
+          finalTrial_.value("obstacle_memory_latched_seen").toBool(false)||
+          sem.value("obstacle_memory_latched").toBool(false);
+        finalTrial_["obstacle_memory_released_seen"]=
+          finalTrial_.value("obstacle_memory_released_seen").toBool(false)||
+          sem.value("obstacle_memory_released").toBool(false);
+        finalTrial_["obstacle_memory_latched"]=sem.value("obstacle_memory_latched");
+        finalTrial_["obstacle_memory_released"]=sem.value("obstacle_memory_released");
+        finalTrial_["obstacle_memory_base_forward_m"]=sem.value("obstacle_memory_base_forward_m");
+        finalTrial_["obstacle_memory_odom_x"]=sem.value("obstacle_memory_odom_x");
+        finalTrial_["obstacle_memory_odom_y"]=sem.value("obstacle_memory_odom_y");
+        finalTrial_["planning_cloud_seen"]=planningSeen;
+        finalTrial_["costmap_marking_seen"]=costmapSeen;
+        finalTrial_["mppi_seen"]=mppiSeen;
+        finalTrial_["avoidance_seen"]=avoidSeen;
+        finalTrial_["recovery_seen"]=recoverySeen;
+        finalTrial_["safety_decision_last"]=decision;
+        finalTrial_["command_v_mps"]=navV;finalTrial_["command_w_rad_s"]=navW;
+        finalTrial_["human_visible"]=seen;
+        if(seen)finalTrial_["human_last_confidence"]=h.value("score");
+        if(finalTrial_.value("response_ms").isNull()&&std::isfinite(actualSpeed)&&std::abs(actualSpeed)>.03)
+          finalTrial_["response_ms"]=t-finalGo_;
+
+        if(goalState.contains("ABORT")||goalState.contains("REJECT")||goalState.contains("FAIL")){
+          finalStop("failed","Nav2 goal gagal: "+goalState);return;
+        }
+        if(noHuman){
+          finalTrial_["response"]="NO HUMAN -> NAV2 STRAIGHT 2M";
+          if(reached){
+            finalTrial_["integration_pass"]=mppiSeen;
+            finalStop(mppiSeen?"complete":"failed",mppiSeen?"NO HUMAN: Nav2 mencapai target 2 m dan MPPI aktif":"NO HUMAN: target tercapai tetapi bukti MPPI tidak tersedia");
+          }
+        }else{
+          finalTrial_["response"]=planningCount>0?QStringLiteral("NAV2/MPPI AVOIDANCE ACTIVE"):QStringLiteral("NAV2 FOLLOW/RECOVERY");
+          const bool pass=finalTrial_.value("metric_position_valid").toBool(false)&&obstacleObject&&planningSeen&&costmapSeen&&mppiSeen&&avoidSeen&&recoverySeen;
+          finalTrial_["integration_pass"]=pass;
+          if(reached){
+            finalStop(pass?"complete":"failed",pass?
+              QStringLiteral("Human masuk planning costmap, MPPI menghindar, recovery tervalidasi, target tercapai"):
+              QStringLiteral("Target tercapai tetapi rantai obstacle->costmap->MPPI->avoidance->recovery belum lengkap"));
+          }
+        }
+        const double hardLimit=target+1.5;
+        if(target>0&&forwardProgress>hardLimit)finalStop("failed",QString("Batas aman trial terlewati (%1 m)").arg(hardLimit,0,'f',1));
+      }
+      return;
+    }
+    if(phase=="stopping"){
+      bridge_->publishFinalGuard("STOP",finalCondition_);
+      QString stopMsg;bridge_->publishFinalTrialVelocity(0.0,0.0,false,&stopMsg);
+      const double v=finalNumber(s,"esc_drive_actual");
+      const bool stopped=finalFresh(s,"esc_drive_actual",500)&&std::isfinite(v)&&std::abs(v)<.03;
+      if(stopped){if(!finalStillAt_)finalStillAt_=t;}else finalStillAt_=0;
+      if((finalStillAt_&&t-finalStillAt_>=600)||t-finalStopAt_>4000){
+        finalTrial_["stopped"]=stopped;finalTrial_["phase"]=stopped?finalTargetResult_:QString("invalid");
+        if(!stopped)finalTrial_["reason"]="Tidak dapat memverifikasi kendaraan berhenti";
+        finalTrial_["duration_s"]=finalGo_?(t-finalGo_)/1000.0:0;finalTrial_["travel_m"]=finalTravel_;finalPersist();
+        Bab4PerceptionSessionStore store(agvRootPath(), loadConfigSnapshot());
+        const QJsonObject activeReply=store.state();
+        const QString activeSession=activeReply.value("state").toObject().value("session_id").toString();
+        if(activeSession==finalSessionId_){
+          const QJsonObject saved=store.recordArmed(finalMode_, finalCondition_, finalTrial_, s, bridge_->cameraJpeg());
+          if(!saved.value("ok").toBool(false)){
+            const QString m=saved.value("message").toString(QStringLiteral("Gagal menyimpan hasil ARMED"));
+            finalTrial_["persistence_error"]=m;finalTrial_["phase"]="invalid";
+            finalTrial_["reason"]=QStringLiteral("Research persistence failed: ")+m;finalPersist();
+          }
+        }else{
+          finalTrial_["persistence_error"]="SESSION_CHANGED_BEFORE_RECORD";finalTrial_["phase"]="invalid";
+          finalTrial_["reason"]="Research persistence failed: session berubah sebelum record";finalPersist();
+        }
+        // STOP hanya diperlukan selama kendaraan benar-benar berhenti. Setelah
+        // terminal state tersimpan, lepaskan guard ke IDLE agar STOP transient-local
+        // tidak meracuni trial berikutnya atau command Nav2 setelah abort/complete.
+        bridge_->publishFinalGuard("IDLE","");
+      }
+    }
+  }
+
   WebRosBridge *bridge_{nullptr};
   QTcpServer server_;
   QTimer eventTimer_;
@@ -3047,7 +4681,8 @@ class LocalHttpServer : public QObject {
     for (const QString &folder : folders) {
       const QFileInfo info(folder); const QString canonical = info.canonicalFilePath();
       if (canonical.isEmpty() || !info.isDir() || !canonical.startsWith(rootPath + QDir::separator())) continue;
-      names << QFileInfo(canonical).fileName();
+      const QString relative = QDir(rootPath).relativeFilePath(canonical);
+      if (!relative.startsWith(QStringLiteral(".."))) names << relative;
     }
     names.removeDuplicates();
     if (names.isEmpty()) { if (message) *message = QStringLiteral("Belum ada folder hasil Persepsi untuk di-ZIP"); return false; }
@@ -3073,11 +4708,172 @@ class LocalHttpServer : public QObject {
   QStringList latestPerceptionFinalFolders() const {
     const QDir root(agvPath(QStringLiteral("data/presepsi"))); QStringList out;
     for (int i=1;i<=5;++i) {
-      const QString prefix = QStringLiteral("BAB4_F4_%1_").arg(i);
+      const QString prefix = QStringLiteral("BAB4_F4.%1_").arg(i);
       const QFileInfoList entries = root.entryInfoList(QStringList{prefix + QStringLiteral("*")}, QDir::Dirs | QDir::NoDotAndDotDot, QDir::Time);
       if (!entries.isEmpty()) out << entries.first().absoluteFilePath();
     }
     return out;
+  }
+
+  QString navigationDataPackageRoot() const {
+    return agvPath(QStringLiteral("data/navigasi/packages"));
+  }
+
+  static QJsonObject readJsonObjectFile(const QString &path) {
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) return {};
+    QJsonParseError pe{};
+    const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &pe);
+    return pe.error == QJsonParseError::NoError && doc.isObject() ? doc.object() : QJsonObject{};
+  }
+
+  QJsonArray navigationDataPackages() const {
+    const QDir root(navigationDataPackageRoot());
+    QJsonArray out;
+    if (!root.exists()) return out;
+    const QFileInfoList dirs = root.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Time);
+    for (const QFileInfo &dirInfo : dirs) {
+      QJsonObject one = readJsonObjectFile(QDir(dirInfo.absoluteFilePath()).filePath(QStringLiteral("package.json")));
+      if (one.isEmpty()) continue;
+      const QString zip = one.value(QStringLiteral("zip_path")).toString();
+      const QFileInfo zi(zip);
+      one[QStringLiteral("zip_exists")] = zi.isFile();
+      one[QStringLiteral("bytes")] = zi.isFile() ? static_cast<double>(zi.size()) : 0.0;
+      out.append(one);
+    }
+    return out;
+  }
+
+  bool buildNavigationBab4Package(const QJsonObject &trialSummary, const QJsonObject &clientArtifacts,
+                                  QJsonObject *recordResult, QString *message) const {
+    if (!recordResult || recordingSubsystem_ != QStringLiteral("navigation") ||
+        recordingSourceExperimentId_ != QStringLiteral("R4.4.5")) return true;
+    const QString sourceFolder = recordResult->value(QStringLiteral("report_folder")).toString();
+    const QString primaryCsv = recordResult->value(QStringLiteral("primary_csv")).toString();
+    const QString masterXlsx = recordResult->value(QStringLiteral("xlsx_path")).toString();
+    const QString manifest = recordResult->value(QStringLiteral("manifest_path")).toString();
+    const QJsonObject analysis = clientArtifacts.value(QStringLiteral("analysis_summary")).toObject();
+    if (sourceFolder.isEmpty() || primaryCsv.isEmpty() || masterXlsx.isEmpty()) {
+      if (message) *message = QStringLiteral("Package 4.2–4.4 gagal: artifact utama belum lengkap");
+      return false;
+    }
+    if (!QDir().mkpath(navigationDataPackageRoot())) {
+      if (message) *message = QStringLiteral("Package root tidak dapat dibuat");
+      return false;
+    }
+    QJsonObject descriptor{
+      {QStringLiteral("source_folder"), sourceFolder},
+      {QStringLiteral("packages_root"), navigationDataPackageRoot()},
+      {QStringLiteral("primary_csv"), primaryCsv},
+      {QStringLiteral("master_xlsx"), masterXlsx},
+      {QStringLiteral("session_manifest"), manifest},
+      {QStringLiteral("table_csv_paths"), clientArtifacts.value(QStringLiteral("table_csv_paths"))},
+      {QStringLiteral("table_entries"), clientArtifacts.value(QStringLiteral("table_entries"))},
+      {QStringLiteral("graph_png_paths"), recordResult->value(QStringLiteral("graph_png_paths"))},
+      {QStringLiteral("graph_png_titles"), recordResult->value(QStringLiteral("graph_png_titles"))},
+      {QStringLiteral("browser_graph_png_count"), recordResult->value(QStringLiteral("browser_graph_png_count"))},
+      {QStringLiteral("browser_graph_png_indices"), recordResult->value(QStringLiteral("browser_graph_png_indices"))},
+      {QStringLiteral("expected_graph_count"), recordResult->value(QStringLiteral("expected_graph_count"))},
+      {QStringLiteral("strict_real_field"), analysis.value(QStringLiteral("strict_real_field"))},
+      {QStringLiteral("table_origin"), analysis.value(QStringLiteral("table_origin"))},
+      {QStringLiteral("graph_origin"), analysis.value(QStringLiteral("graph_origin"))},
+      {QStringLiteral("synthetic_fill"), analysis.value(QStringLiteral("synthetic_fill"))},
+      {QStringLiteral("mission_id"), analysis.value(QStringLiteral("mission_id"))},
+      {QStringLiteral("mission_result"), analysis.value(QStringLiteral("mission_result"))},
+      {QStringLiteral("table_continuity"), analysis.value(QStringLiteral("table_continuity"))},
+      {QStringLiteral("candidate"), trialSummary.value(QStringLiteral("candidate"))},
+      {QStringLiteral("cycle"), analysis.value(QStringLiteral("cycle"))},
+      {QStringLiteral("trial_id"), trialSummary.value(QStringLiteral("trial_id"))},
+      {QStringLiteral("source_experiment_id"), recordingSourceExperimentId_}
+    };
+    const QString token = QString::number(QCoreApplication::applicationPid()) + QStringLiteral("_") +
+                          QString::number(QDateTime::currentMSecsSinceEpoch());
+    const QString tmp = QDir(QStringLiteral("/tmp")).filePath(QStringLiteral("agv_bab4_package_") + token + QStringLiteral(".json"));
+    QSaveFile df(tmp);
+    if (!df.open(QIODevice::WriteOnly) ||
+        df.write(QJsonDocument(descriptor).toJson(QJsonDocument::Compact)) < 0 || !df.commit()) {
+      if (message) *message = QStringLiteral("Descriptor package gagal ditulis");
+      return false;
+    }
+    QProcess proc;
+    proc.setProgram(agvPythonPath());
+    proc.setArguments({agvPath(QStringLiteral("src/navigation/tools/package_bab4_navigation.py")),
+                       QStringLiteral("--descriptor"), tmp});
+    proc.start();
+    const bool started = proc.waitForStarted(3000);
+    const bool done = started && proc.waitForFinished(120000);
+    const QByteArray stdoutBytes = proc.readAllStandardOutput();
+    const QByteArray stderrBytes = proc.readAllStandardError();
+    QFile::remove(tmp);
+    if (!done || proc.exitStatus() != QProcess::NormalExit || proc.exitCode() != 0) {
+      if (message) *message = QStringLiteral("Package builder gagal: ") + QString::fromUtf8(stderrBytes).left(700);
+      return false;
+    }
+    QJsonParseError pe{};
+    const QJsonDocument doc = QJsonDocument::fromJson(stdoutBytes.trimmed(), &pe);
+    if (pe.error != QJsonParseError::NoError || !doc.isObject()) {
+      if (message) *message = QStringLiteral("Output package builder tidak valid");
+      return false;
+    }
+    const QJsonObject package = doc.object();
+    (*recordResult)[QStringLiteral("data_package")] = package;
+    (*recordResult)[QStringLiteral("package_ready")] = package.value(QStringLiteral("status")).toString() == QStringLiteral("READY");
+    (*recordResult)[QStringLiteral("package_download_url")] = package.value(QStringLiteral("download_url"));
+    if (message) *message = QStringLiteral("BAB4 package ") + package.value(QStringLiteral("status")).toString() +
+                            QStringLiteral(" • ") + package.value(QStringLiteral("package_id")).toString();
+    return true;
+  }
+
+  bool deleteNavigationDataPackage(const QJsonObject &json, QString *message, QJsonObject *result) {
+    QString id = json.value(QStringLiteral("package_id")).toString().trimmed();
+    if (!QRegularExpression(QStringLiteral("^BAB4_[A-Za-z0-9_.-]+$")).match(id).hasMatch()) {
+      if (message) *message = QStringLiteral("Package ID tidak valid");
+      return false;
+    }
+    const QString root = QFileInfo(navigationDataPackageRoot()).absoluteFilePath();
+    const QString packageDir = QDir(root).filePath(id);
+    const QFileInfo pi(packageDir);
+    const QString canonical = pi.canonicalFilePath();
+    if (canonical.isEmpty() || !pi.isDir() || !canonical.startsWith(root + QDir::separator())) {
+      if (message) *message = QStringLiteral("Package tidak ditemukan");
+      return false;
+    }
+    const QJsonObject meta = readJsonObjectFile(QDir(canonical).filePath(QStringLiteral("package.json")));
+    bool sourceDeleted = false, trialDeleted = false;
+    QString trialDeleteMessage;
+    if (json.value(QStringLiteral("delete_source")).toBool(true)) {
+      const QString source = meta.value(QStringLiteral("source_folder")).toString();
+      const QString navRoot = QFileInfo(agvPath(QStringLiteral("data/navigasi"))).absoluteFilePath();
+      const QFileInfo si(source);
+      const QString sourceCanonical = si.canonicalFilePath();
+      if (!sourceCanonical.isEmpty() && si.isDir() &&
+          sourceCanonical.startsWith(navRoot + QDir::separator()) &&
+          QFileInfo(sourceCanonical).fileName().startsWith(QStringLiteral("BAB4_MISSION_4_2_4_4_"))) {
+        sourceDeleted = QDir(sourceCanonical).removeRecursively();
+      }
+      const QString trialId = meta.value(QStringLiteral("trial_id")).toString();
+      const QString sourceId = meta.value(QStringLiteral("source_experiment_id")).toString(QStringLiteral("R4.4.5"));
+      if (!trialId.isEmpty()) {
+        QJsonObject ignored;
+        trialDeleted = deleteTrial(QJsonObject{{QStringLiteral("subsystem"), QStringLiteral("navigation")},
+                                               {QStringLiteral("id"), sourceId},
+                                               {QStringLiteral("trial_id"), trialId}},
+                                   &trialDeleteMessage, &ignored);
+      }
+    }
+    const bool packageDeleted = QDir(canonical).removeRecursively();
+    if (!packageDeleted) {
+      if (message) *message = QStringLiteral("Folder package gagal dihapus");
+      return false;
+    }
+    if (result) *result = QJsonObject{{QStringLiteral("package_id"), id},
+                                      {QStringLiteral("package_deleted"), true},
+                                      {QStringLiteral("source_deleted"), sourceDeleted},
+                                      {QStringLiteral("trial_deleted"), trialDeleted}};
+    if (message) *message = QStringLiteral("Package dihapus") +
+      (sourceDeleted ? QStringLiteral(" + raw mission") : QString()) +
+      (trialDeleted ? QStringLiteral(" + trial metadata") : QString());
+    return true;
   }
 
   void handle(QTcpSocket *socket, const Request &request) {
@@ -3087,7 +4883,140 @@ class LocalHttpServer : public QObject {
       return sendJson(socket, 200, QJsonObject{{"ok", true}, {"ros", true}, {"read_only", bridge_->readOnly()},
                                                {"server_time_ms", nowMs()}});
     }
+    if (request.method == "GET" && request.path == "/api/perception/bab4/state") {
+      Bab4PerceptionSessionStore store(agvRootPath(), loadConfigSnapshot());
+      return sendJson(socket, 200, store.state());
+    }
+    if (request.method == "GET" && request.path.startsWith("/api/perception/bab4/export/")) {
+      Bab4PerceptionSessionStore store(agvRootPath(), loadConfigSnapshot());
+      const QJsonObject stateReply = store.state();
+      if (!stateReply.value("ok").toBool()) return sendJson(socket, 409, stateReply);
+      const QString folder = store.activeSessionPath();
+      if (folder.isEmpty() || !QDir(folder).exists()) return sendText(socket,404,"text/plain; charset=utf-8","Session Bab 4 tidak tersedia");
+      const QString target = request.path.mid(QString("/api/perception/bab4/export/").size());
+      const QJsonObject state=stateReply.value("state").toObject();
+      const QJsonObject subs=state.value("subchapters").toObject();
+      auto count=[&](const QString &sub,const QString &cond)->int{
+        return subs.value(sub).toObject().value("conditions").toObject().value(cond).toObject().value("sample_count").toInt(0);
+      };
+      auto status=[&](const QString &sub,const QString &cond)->QString{
+        return subs.value(sub).toObject().value("conditions").toObject().value(cond).toObject().value("status").toString();
+      };
+      auto ready=[&](const QString &sub)->bool{
+        if(sub=="4.1"){
+          const QJsonArray rows=subs.value("4.1").toObject().value("conditions").toObject().value("validation").toObject().value("rows").toArray();
+          if(rows.isEmpty()) return false;
+          const QJsonObject r=rows.last().toObject();
+          return r.value("stream_status").toString()=="LIVE"&&r.value("semantic_stream").toString()=="LIVE"&&r.value("lane_stream").toString()=="LIVE"&&
+                 r.value("yolop_active").toBool(false)&&r.value("orientation_left_ok").toBool(false)&&r.value("orientation_right_ok").toBool(false);
+        }
+        if(sub=="4.2"){
+          const QJsonObject c42=subs.value("4.2").toObject().value("conditions").toObject();
+          for(const QString &light:{QStringLiteral("night"),QStringLiteral("day")}){
+            for(int d=1;d<=5;++d){
+              const QString key=QString("human_%1_%2m").arg(light).arg(d);
+              int n=count("4.2",key);
+              // Backward compatibility: historical human_1m..5m captures were
+              // recorded at night before lighting became an explicit factor.
+              if(light=="night"&&!c42.contains(key))n=count("4.2",QString("human_%1m").arg(d));
+              if(n!=10)return false;
+            }
+          }
+          return true;
+        }
+        if(sub=="4.3"){for(int i=1;i<=6;++i)if(count("4.3",QString("condition_%1").arg(i,2,10,QChar('0')))!=10)return false;return true;}
+        if(sub=="4.4"){for(const QString &c:{QString("condition_A"),QString("condition_B"),QString("condition_C")})if(status("4.4",c)!="SELESAI")return false;return true;}
+        if(sub=="4.5"){
+          auto complete45=[&](const QString &c)->bool{
+            const QJsonObject co=subs.value("4.5").toObject().value("conditions").toObject().value(c).toObject();
+            const QJsonArray rows=co.value("rows").toArray();
+            bool dryPass=co.value("dry_run_pass").toBool(false),armedComplete=co.value("armed_complete").toBool(false);
+            bool dryVisual=false,armedVisual=false;const bool needVisual=c.startsWith(QStringLiteral("obstacle_"));
+            for(const QJsonValue &v:rows){const QJsonObject r=v.toObject();const QString mode=r.value("mode").toString();
+              const bool visual=!r.value("map_filename").toString().isEmpty()&&!r.value("combined_filename").toString().isEmpty();
+              if(mode=="DRY_RUN"&&(r.value("integration_pass").toBool(false)||r.value("result").toString()=="DRY_RUN_PASS"))dryPass=true;
+              if(mode=="DRY_RUN"&&visual)dryVisual=true;
+              if(mode=="ARMED_VEHICLE_TEST"&&r.value("result").toString().toLower()=="complete"&&r.value("final_vehicle_state").toString()=="STOPPED"&&r.value("integration_pass").toBool(false))armedComplete=true;
+              if(mode=="ARMED_VEHICLE_TEST"&&visual)armedVisual=true;
+            }
+            return dryPass&&armedComplete&&(!needVisual||(dryVisual&&armedVisual));
+          };
+          for(int i=1;i<=3;++i)if(!complete45(QString("obstacle_trial_%1").arg(i)))return false;
+          for(int i=1;i<=3;++i)if(!complete45(QString("lane_trial_%1").arg(i)))return false;
+          return true;
+        }
+        return false;
+      };
+      QString requestedSub;
+      if(target=="4.1.zip")requestedSub="4.1";else if(target=="4.2.zip")requestedSub="4.2";else if(target=="4.3.zip")requestedSub="4.3";else if(target=="4.4.zip")requestedSub="4.4";else if(target=="4.5.zip")requestedSub="4.5";
+      else if(target!="full.zip")return sendText(socket,400,"text/plain; charset=utf-8","Target export tidak valid");
+      if(!requestedSub.isEmpty()&&!ready(requestedSub))
+        return sendText(socket,409,"text/plain; charset=utf-8",QString("EXPORT DITOLAK: %1 belum DATA_VALID/lengkap").arg(requestedSub).toUtf8());
+      if(target=="full.zip"&&!(ready("4.1")&&ready("4.2")&&ready("4.3")&&ready("4.4")&&ready("4.5")))
+        return sendText(socket,409,"text/plain; charset=utf-8","EXPORT DITOLAK: Full Bab 4 belum lengkap");
+      QProcess prep; prep.setProgram(agvPythonPath());
+      prep.setArguments(QStringList{agvPath(QStringLiteral("src/navigation/tools/export_perception_bab4.py")),
+                                    QStringLiteral("--session"), folder});
+      prep.start();
+      const bool prepDone=prep.waitForStarted(3000)&&prep.waitForFinished(120000)&&
+        prep.exitStatus()==QProcess::NormalExit&&prep.exitCode()==0;
+      if(!prepDone) return sendText(socket,500,"text/plain; charset=utf-8",
+        QByteArray("Gagal menyiapkan summary/grafik/manifest: ")+prep.readAllStandardError().left(500));
+      QString exportFolder = folder;
+      if (target != QStringLiteral("full.zip")) {
+        const QMap<QString,QString> map{{"4.1.zip","4.1_VALIDASI_SISTEM"},{"4.2.zip","4.2_HUMAN_DETECTION"},
+          {"4.3.zip","4.3_LANE_SAFETY"},{"4.4.zip","4.4_REALTIME_PERFORMANCE"},{"4.5.zip","4.5_VEHICLE_RESPONSE"}};
+        if (!map.contains(target)) return sendText(socket,400,"text/plain; charset=utf-8","Target export tidak valid");
+        exportFolder = QDir(folder).filePath(map.value(target));
+      }
+      QByteArray bytes; QString zipMessage;
+      const QString name = QFileInfo(folder).fileName()+QStringLiteral("_")+
+        QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss_zzz"))+QStringLiteral("_")+target;
+      if (!buildPerceptionZip(QStringList{exportFolder}, name, &bytes, &zipMessage))
+        return sendText(socket,409,"text/plain; charset=utf-8",zipMessage.toUtf8());
+      const QByteArray disposition=QByteArray("attachment; filename=\"")+name.toUtf8()+"\"";
+      return sendBytes(socket,200,"application/zip",bytes,{{"Cache-Control","no-store"},{"Content-Disposition",disposition}});
+    }
+    if (request.method == "GET" && request.path == "/api/perception/f43/evidence-bank") {
+      const QString root = agvPath(QStringLiteral("data/presepsi/F4.3_EVIDENCE_BANK"));
+      const QStringList keys{QStringLiteral("center"), QStringLiteral("left_yellow"), QStringLiteral("left_red"),
+                             QStringLiteral("right_yellow"), QStringLiteral("right_red"), QStringLiteral("gray")};
+      QJsonArray images;
+      for (const QString &key : keys) {
+        QFile f(QDir(root).filePath(key + QStringLiteral(".jpg")));
+        if (!f.open(QIODevice::ReadOnly)) continue;
+        const QByteArray bytes = f.readAll();
+        images.append(QJsonObject{{"key", key},
+                                  {"data_url", QStringLiteral("data:image/jpeg;base64,") + QString::fromLatin1(bytes.toBase64())},
+                                  {"bytes", bytes.size()}});
+      }
+      return sendJson(socket, 200, QJsonObject{{"ok", true}, {"images", images}, {"count", images.size()},
+                                               {"source", QStringLiteral("F4.3_EVIDENCE_BANK")}, {"at_ms", nowMs()}});
+    }
     if (request.method == "GET" && request.path == "/api/experiments") return sendJson(socket, 200, experimentCatalogJson());
+    if (request.method == "GET" && request.path == "/api/navigation/data-packages") {
+      const QJsonArray packages = navigationDataPackages();
+      return sendJson(socket, 200, QJsonObject{{"ok", true}, {"packages", packages}, {"count", packages.size()}, {"at_ms", nowMs()}});
+    }
+    if (request.method == "GET" && request.path.startsWith("/api/navigation/data-package/") && request.path.endsWith(".zip")) {
+      QString name = request.path.mid(QString("/api/navigation/data-package/").size());
+      name.chop(4);
+      if (!QRegularExpression(QStringLiteral("^BAB4_[A-Za-z0-9_.-]+$")).match(name).hasMatch())
+        return sendText(socket, 400, "text/plain; charset=utf-8", "Package ID tidak valid");
+      const QString root = QFileInfo(navigationDataPackageRoot()).absoluteFilePath();
+      const QString dirPath = QDir(root).filePath(name);
+      const QFileInfo di(dirPath);
+      const QString canonicalDir = di.canonicalFilePath();
+      if (canonicalDir.isEmpty() || !di.isDir() || !canonicalDir.startsWith(root + QDir::separator()))
+        return sendText(socket, 404, "text/plain; charset=utf-8", "Package tidak ditemukan");
+      const QJsonObject meta = readJsonObjectFile(QDir(canonicalDir).filePath(QStringLiteral("package.json")));
+      const QString zipPath = meta.value(QStringLiteral("zip_path")).toString();
+      QFile zf(zipPath);
+      if (!zf.open(QIODevice::ReadOnly))
+        return sendText(socket, 404, "text/plain; charset=utf-8", "ZIP package tidak ditemukan");
+      const QByteArray disposition = QByteArray("attachment; filename=\"") + QFileInfo(zipPath).fileName().toUtf8() + "\"";
+      return sendBytes(socket, 200, "application/zip", zf.readAll(), {{"Cache-Control","no-store"},{"Content-Disposition",disposition}});
+    }
     if (request.method == "GET" && request.path == "/api/config") return sendJson(socket, 200, loadConfigSnapshot());
     if (request.method == "GET" && request.path == "/api/config/state") {
       const QJsonObject snap = loadConfigSnapshot();
@@ -3158,8 +5087,28 @@ class LocalHttpServer : public QObject {
       return sendBytes(socket,200,"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",f.readAll(),{{"Cache-Control","no-store"},{"Content-Disposition",disposition}});
     }
     if (request.method == "GET" && request.path == "/api/experiment/record/last.zip") {
-      if (lastXlsxPath_.isEmpty()) return sendText(socket,404,"text/plain; charset=utf-8","Belum ada hasil FINISH + SAVE pada sesi server ini");
-      const QString folder = QFileInfo(lastXlsxPath_).absolutePath(); QByteArray bytes; QString message;
+      QString folder;
+      if (!lastXlsxPath_.isEmpty()) folder = QFileInfo(lastXlsxPath_).absolutePath();
+      if (folder.isEmpty() || !QDir(folder).exists()) {
+        const QStringList candidates = latestPerceptionFinalFolders();
+        QDateTime newest;
+        for (const QString &candidate : candidates) {
+          const QFileInfo fi(candidate);
+          if (folder.isEmpty() || fi.lastModified() > newest) { folder = candidate; newest = fi.lastModified(); }
+        }
+      }
+      if (folder.isEmpty() || !QDir(folder).exists()) return sendText(socket,404,"text/plain; charset=utf-8","Belum ada folder hasil Persepsi yang dapat di-ZIP");
+      QByteArray bytes; QString message;
+      const QString name = QFileInfo(folder).fileName() + QStringLiteral(".zip");
+      if (!buildPerceptionZip(QStringList{folder}, name, &bytes, &message)) return sendText(socket,404,"text/plain; charset=utf-8",message.toUtf8());
+      const QByteArray disposition=QByteArray("attachment; filename=\"")+name.toUtf8()+"\"";
+      return sendBytes(socket,200,"application/zip",bytes,{{"Cache-Control","no-store"},{"Content-Disposition",disposition}});
+    }
+    if (request.method == "GET" && request.path == "/api/perception/f43/latest.zip") {
+      const QDir root(agvPath(QStringLiteral("data/presepsi")));
+      const QFileInfoList entries = root.entryInfoList(QStringList{QStringLiteral("BAB4_F4.3_*")}, QDir::Dirs | QDir::NoDotAndDotDot, QDir::Time);
+      if (entries.isEmpty()) return sendText(socket,404,"text/plain; charset=utf-8","Belum ada folder hasil F4.3");
+      const QString folder = entries.first().absoluteFilePath(); QByteArray bytes; QString message;
       const QString name = QFileInfo(folder).fileName() + QStringLiteral(".zip");
       if (!buildPerceptionZip(QStringList{folder}, name, &bytes, &message)) return sendText(socket,404,"text/plain; charset=utf-8",message.toUtf8());
       const QByteArray disposition=QByteArray("attachment; filename=\"")+name.toUtf8()+"\"";
@@ -3193,11 +5142,107 @@ class LocalHttpServer : public QObject {
     const QJsonObject json = doc.isObject() ? doc.object() : QJsonObject();
     QString message;
     bool ok = false;
-    if (request.path == "/api/navigation/tuning/entry") {
+    auto bab4SessionGuard = [&](Bab4PerceptionSessionStore &store)->QJsonObject {
+      const QJsonObject currentReply=store.state();
+      if(!currentReply.value("ok").toBool(false)) return currentReply;
+      const QString active=currentReply.value("state").toObject().value("session_id").toString();
+      const QString client=json.value("session_id").toString();
+      if(client.isEmpty()||active.isEmpty()||client!=active)
+        return QJsonObject{{"ok",false},{"code","SESSION_CHANGED"},
+          {"message","Session Bab 4 berubah — refresh state sebelum melanjutkan"},
+          {"active_session_id",active}};
+      return QJsonObject();
+    };
+    if (request.path == "/api/perception/bab4/session") {
+      Bab4PerceptionSessionStore store(agvRootPath(), loadConfigSnapshot());
+      const QString action=json.value("action").toString(QStringLiteral("ensure"));
+      QJsonObject result;
+      if(action=="ensure") result=store.ensure();
+      else if(action=="new"){
+        if(finalActive())return sendJson(socket,409,QJsonObject{{"ok",false},{"message","Session baru ditolak: ARMED trial masih aktif"}});
+        result=store.create();
+      }
+      else if(action=="reset"){
+        if(finalActive())return sendJson(socket,409,QJsonObject{{"ok",false},{"message","Reset session ditolak: ARMED trial masih aktif"}});
+        if(json.value("confirm").toString()!=QStringLiteral("RESET"))
+          return sendJson(socket,400,QJsonObject{{"ok",false},{"message","Ketik RESET untuk menghapus seluruh session Bab 4"}});
+        const QJsonObject guard=bab4SessionGuard(store);if(!guard.isEmpty())return sendJson(socket,409,guard);
+        const QString folder=store.activeSessionPath();
+        if(!folder.isEmpty()&&QDir(folder).exists()&&!QDir(folder).removeRecursively())
+          return sendJson(socket,500,QJsonObject{{"ok",false},{"message","Gagal menghapus session aktif"}});
+        result=store.create();
+      } else return sendJson(socket,400,QJsonObject{{"ok",false},{"message","Action session tidak valid"}});
+      return sendJson(socket,result.value("ok").toBool()?200:409,result);
+    } else if (request.path == "/api/perception/bab4/start") {
+      Bab4PerceptionSessionStore store(agvRootPath(), loadConfigSnapshot());
+      const QJsonObject guard=bab4SessionGuard(store);if(!guard.isEmpty())return sendJson(socket,409,guard);
+      const QJsonObject result=store.startCondition(json.value("subchapter").toString(),json.value("condition").toString());
+      return sendJson(socket,result.value("ok").toBool()?200:409,result);
+    } else if (request.path == "/api/perception/bab4/capture") {
+      Bab4PerceptionSessionStore store(agvRootPath(), loadConfigSnapshot());
+      const QJsonObject guard=bab4SessionGuard(store);if(!guard.isEmpty())return sendJson(socket,409,guard);
+      const QString sub=json.value("subchapter").toString(),condition=json.value("condition").toString();
+      const QJsonObject result=store.capture(sub,condition,json,bridge_->snapshot(),bridge_->cameraJpeg());
+      return sendJson(socket,result.value("ok").toBool()?200:409,result);
+    } else if (request.path == "/api/perception/bab4/visual-evidence") {
+      Bab4PerceptionSessionStore store(agvRootPath(), loadConfigSnapshot());
+      const QJsonObject guard=bab4SessionGuard(store);if(!guard.isEmpty())return sendJson(socket,409,guard);
+      const QJsonObject stateReply=store.state();const QString activeSession=stateReply.value("state").toObject().value("session_id").toString();
+      if(json.value("session_id").toString()!=activeSession)
+        return sendJson(socket,409,QJsonObject{{"ok",false},{"code","SESSION_CHANGED"},{"message","Session visual evidence berubah"}});
+      auto pngData=[&](const QString &key)->QByteArray{
+        const QString u=json.value(key).toString();const QString prefix=QStringLiteral("data:image/png;base64,");
+        return u.startsWith(prefix)?QByteArray::fromBase64(u.mid(prefix.size()).toLatin1()):QByteArray();
+      };
+      const QByteArray mapPng=pngData(QStringLiteral("map_data_url")),combinedPng=pngData(QStringLiteral("combined_data_url"));
+      const QJsonObject result=store.save45VisualEvidence(json.value("condition").toString(),json.value("mode").toString(),
+        json.value("capture_id").toInt(0),mapPng,combinedPng);
+      return sendJson(socket,result.value("ok").toBool()?200:409,result);
+    } else if (request.path == "/api/perception/bab4/reset") {
+      if(finalActive())return sendJson(socket,409,QJsonObject{{"ok",false},{"message","Reset ditolak: ARMED trial masih aktif"}});
+      Bab4PerceptionSessionStore store(agvRootPath(), loadConfigSnapshot());
+      const QJsonObject guard=bab4SessionGuard(store);if(!guard.isEmpty())return sendJson(socket,409,guard);
+      const QString scope=json.value("scope").toString(),sub=json.value("subchapter").toString(),condition=json.value("condition").toString();
+      if(scope=="group"){
+        if(sub!="4.5")return sendJson(socket,400,QJsonObject{{"ok",false},{"message","Group reset hanya tersedia untuk 4.5"}});
+        const QJsonObject result=store.reset45Group(json.value("group").toString());
+        return sendJson(socket,result.value("ok").toBool()?200:409,result);
+      }
+      if(scope!="condition"&&scope!="subchapter") return sendJson(socket,400,QJsonObject{{"ok",false},{"message","Scope reset tidak valid"}});
+      const QJsonObject result=store.reset(sub,condition,scope=="subchapter");
+      return sendJson(socket,result.value("ok").toBool()?200:409,result);
+    } else if (request.path == "/api/perception/f43/evidence-bank") {
+      const QString root = agvPath(QStringLiteral("data/presepsi/F4.3_EVIDENCE_BANK"));
+      const QSet<QString> allowed{QStringLiteral("center"),QStringLiteral("left_yellow"),QStringLiteral("left_red"),
+                                  QStringLiteral("right_yellow"),QStringLiteral("right_red"),QStringLiteral("gray")};
+      if (json.value("action").toString().trimmed().toLower() == QStringLiteral("clear")) {
+        int removed = 0; for (const QString &k : allowed) if (QFile::remove(QDir(root).filePath(k + QStringLiteral(".jpg")))) ++removed;
+        return sendJson(socket,200,QJsonObject{{"ok",true},{"removed",removed},{"at_ms",nowMs()}});
+      }
+      const QString key = json.value("key").toString().trimmed();
+      if (!allowed.contains(key)) return sendJson(socket,400,QJsonObject{{"ok",false},{"message","Kondisi F4.3 tidak valid"}});
+      const QString dataUrl = json.value("data_url").toString();
+      const int comma = dataUrl.indexOf(',');
+      if (!dataUrl.startsWith(QStringLiteral("data:image/jpeg;base64,")) || comma < 0)
+        return sendJson(socket,400,QJsonObject{{"ok",false},{"message","Format citra F4.3 harus JPEG data URL"}});
+      const QByteArray bytes = QByteArray::fromBase64(dataUrl.mid(comma + 1).toLatin1());
+      if (bytes.isEmpty() || bytes.size() > 2 * 1024 * 1024)
+        return sendJson(socket,400,QJsonObject{{"ok",false},{"message","Ukuran citra F4.3 tidak valid"}});
+      if (!QDir().mkpath(root)) return sendJson(socket,500,QJsonObject{{"ok",false},{"message","Gagal membuat folder bank citra F4.3"}});
+      const QString path = QDir(root).filePath(key + QStringLiteral(".jpg"));
+      QFile f(path);
+      if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate) || f.write(bytes) != bytes.size())
+        return sendJson(socket,500,QJsonObject{{"ok",false},{"message","Gagal menyimpan citra representatif F4.3"}});
+      f.close();
+      return sendJson(socket,200,QJsonObject{{"ok",true},{"key",key},{"bytes",bytes.size()},{"path",path},{"at_ms",nowMs()}});
+    } else if (request.path == "/api/navigation/tuning/entry") {
       if (bridge_->readOnly()) return sendJson(socket,403,QJsonObject{{"ok",false},{"code","READ_ONLY"},{"message","Read-only; tuning state persistence ditolak"}});
       const QString id=json.value("id").toString().trimmed(),action=json.value("action").toString(QStringLiteral("ensure")).trimmed().toLower();
       QJsonObject result;
-      if(action==QStringLiteral("ensure")) ok=ensureNavigationTuningEntry(id,&message,&result);
+      if(action==QStringLiteral("ensure")) {
+        const bool reportId=QRegularExpression(QStringLiteral(R"(^R4\.[234]\.[1-5]$)")).match(id).hasMatch();
+        ok=reportId?ensureNavigationReportBaseline(id,json.value("items").toArray(),&message,&result):ensureNavigationTuningEntry(id,&message,&result);
+      }
       else if(action==QStringLiteral("restore")) ok=buildNavigationStepEntryProposal(id,&message,&result);
       else return sendJson(socket,400,QJsonObject{{"ok",false},{"message","action harus ensure atau restore"},{"at_ms",nowMs()}});
       result["ok"]=ok;result["message"]=message;result["commissioning"]=commissioningState();result["at_ms"]=nowMs();
@@ -3233,6 +5278,34 @@ class LocalHttpServer : public QObject {
       QJsonObject result;
       ok = savePerceptionEvidence(json.value("label").toString(), &result, &message);
       return sendJson(socket, ok ? 200 : 409, QJsonObject{{"ok", ok}, {"message", message}, {"evidence", result}, {"at_ms", nowMs()}});
+    } else if (request.path == "/api/config/runtime-check") {
+      const QJsonArray items = json.value("items").toArray();
+      if (items.isEmpty() || items.size() > 64)
+        return sendJson(socket,400,QJsonObject{{"ok",false},{"message","items harus berisi 1..64 parameter"}});
+      QSet<QString> seen; QJsonArray rows; bool checkedAny=false, allMatch=true; int checkedCount=0;
+      for (const QJsonValue &v : items) {
+        if (!v.isObject()) continue;
+        const QJsonObject item=v.toObject();
+        const QString fk=item.value("file_key").toString().trimmed(), path=item.value("path").toString().trimmed(), identity=fk+":"+path;
+        if (fk.isEmpty() || path.isEmpty() || seen.contains(identity)) continue;
+        seen.insert(identity);
+        const QJsonObject runtime=bridge_->configRuntimeState(fk,path);
+        const bool hasTarget=runtime.value("has_runtime_target").toBool(false);
+        const bool readbackCapable=runtime.value("readback_capable").toBool(false);
+        bool itemMatch=hasTarget && readbackCapable;
+        if (hasTarget) {
+          checkedAny=true; ++checkedCount;
+          const QJsonArray readback=runtime.value("readback").toArray();
+          if (readback.isEmpty()) itemMatch=false;
+          for (const QJsonValue &rv : readback) itemMatch=itemMatch && rv.toObject().value("match").toBool(false);
+          allMatch=allMatch && itemMatch;
+        }
+        rows.append(QJsonObject{{"identity",identity},{"file_key",fk},{"path",path},
+          {"status",hasTarget?(itemMatch?QStringLiteral("ACTIVE_MATCH"):QStringLiteral("RUNTIME_MISMATCH")):QStringLiteral("NO_RUNTIME_TARGET")},
+          {"match",itemMatch},{"runtime",runtime}});
+      }
+      return sendJson(socket,200,QJsonObject{{"ok",true},{"runtime_match",checkedAny&&allMatch},{"checked_count",checkedCount},
+        {"items",rows},{"at_ms",nowMs()}});
     } else if (request.path == "/api/config/validate") {
       const QJsonArray items = json.value("items").toArray();
       const QJsonObject result = validateConfigBatch(items, true);
@@ -3334,6 +5407,10 @@ class LocalHttpServer : public QObject {
       if (bridge_->readOnly()) return sendJson(socket,403,QJsonObject{{"ok",false},{"message","Web GUI read-only; hapus trial ditolak"}});
       QJsonObject result; ok=deleteTrial(json,&message,&result);result["ok"]=ok;result["message"]=message;result["at_ms"]=nowMs();
       return sendJson(socket,ok?200:409,result);
+    } else if (request.path == "/api/navigation/data-package/delete") {
+      if (bridge_->readOnly()) return sendJson(socket,403,QJsonObject{{"ok",false},{"message","Web GUI read-only; hapus package ditolak"}});
+      QJsonObject result; ok=deleteNavigationDataPackage(json,&message,&result);result["ok"]=ok;result["message"]=message;result["at_ms"]=nowMs();
+      return sendJson(socket,ok?200:409,result);
     } else if (request.path == "/api/experiment/trial/optimal-scale") {
       if (json.value("apply").toBool(false)) return sendJson(socket,409,QJsonObject{{"ok",false},{"code","USE_CONFIG_TRANSACTION"},{"message","Direct optimal-scale apply dinonaktifkan; gunakan proposal_items → Validate → Diff Review → Apply"}});
       QJsonObject result;ok=calculateOptimalErpmPerMpsProposal(&message,&result);
@@ -3381,7 +5458,24 @@ class LocalHttpServer : public QObject {
         json.value("right_top_x").toDouble(nan), json.value("right_top_y").toDouble(nan),
         json.value("right_bottom_x").toDouble(nan), json.value("right_bottom_y").toDouble(nan),
         &message);
+    } else if (request.path.startsWith("/api/perception/final-trial/")) {
+      const auto result=finalRequest(request.path.mid(QString("/api/perception/final-trial/").size()),json);
+      return sendJson(socket,result.value("ok").toBool()?200:409,result);
     } else if (request.path == "/api/navigation/goal") {
+      if(finalActive())return sendJson(socket,409,QJsonObject{{"ok",false},{"message","Final Dataset trial masih aktif"}});
+      const bool missionRecorderReady = recording_ &&
+        recordingSubsystem_ == QStringLiteral("navigation") &&
+        recordingId_ == QStringLiteral("BAB4_MISSION_4.2_4.4") &&
+        recordingSourceExperimentId_ == QStringLiteral("R4.4.5");
+      if (!missionRecorderReady) {
+        return sendJson(socket, 409, QJsonObject{{"ok", false},
+          {"message", "SEND GOAL diblok: master recorder BAB4 4.2-4.4 belum aktif. Start recorder harus sukses sebelum goal."},
+          {"recorder_active", recording_},
+          {"recorder_id", recordingId_},
+          {"source_experiment_id", recordingSourceExperimentId_},
+          {"at_ms", nowMs()}});
+      }
+      bridge_->publishFinalGuard("IDLE", "");
       ok = bridge_->publishGoal(json.value("x").toDouble(std::numeric_limits<double>::quiet_NaN()),
                                 json.value("y").toDouble(std::numeric_limits<double>::quiet_NaN()),
                                 json.contains("yaw_rad") ? json.value("yaw_rad").toDouble() : json.value("yaw_deg").toDouble() * kPi / 180.0,
@@ -3687,6 +5781,10 @@ class LocalHttpServer : public QObject {
     row["variation"] = recordingVariation_;
     row["condition"] = recordingCondition_;
     for (auto it = recordingTuningConfig_.cbegin(); it != recordingTuningConfig_.cend(); ++it) row[it.key()] = it.value();
+    QMap<QString, QString> flatTrialInputs;
+    for (auto it = recordingTrialInputs_.constBegin(); it != recordingTrialInputs_.constEnd(); ++it)
+      flattenJson(QStringLiteral("trial_input.") + it.key(), it.value(), flatTrialInputs);
+    for (auto it = flatTrialInputs.cbegin(); it != flatTrialInputs.cend(); ++it) row[it.key()] = it.value();
     const QJsonObject snap = bridge_->snapshot();
     QMap<QString, QString> flatSnapshot;
     for (auto it = snap.constBegin(); it != snap.constEnd(); ++it) {
@@ -3733,7 +5831,7 @@ class LocalHttpServer : public QObject {
       outputRoot = QDir(dataRoot).filePath(runName);
     } else if (subsystem == QStringLiteral("navigation") && recordingSubsystem_ == QStringLiteral("navigation") &&
                recordingSourceExperimentId_ == QStringLiteral("R4.4.5") && recordingStartedMs_ > 0) {
-      const QString runName = QStringLiteral("BAB4_GOAL_MASTER_4_4_5_") +
+      const QString runName = QStringLiteral("BAB4_MISSION_4_2_4_4_") +
         QDateTime::fromMSecsSinceEpoch(recordingStartedMs_).toString(QStringLiteral("yyyyMMdd_HHmmss"));
       outputRoot = QDir(dataRoot).filePath(runName);
     }
@@ -3851,11 +5949,97 @@ class LocalHttpServer : public QObject {
       row["qualification"] = effectiveQualification(QStringLiteral("navigation"),spec.id);
       out[spec.id] = row;
     }
+    for (const QString &id : persisted.keys()) {
+      if (!QRegularExpression(QStringLiteral(R"(^R4\.[234]\.[1-5]$)")).match(id).hasMatch()) continue;
+      QJsonObject row=persisted.value(id).toObject();
+      if(row.isEmpty())continue;
+      const QJsonObject entry=row.value("entry_snapshot").toObject();
+      const QJsonObject entryValues=entry.value("values").toObject();
+      QJsonObject currentValues;QJsonArray currentItems;
+      for(const QJsonValue &v:entry.value("items").toArray()){
+        QJsonObject item=v.toObject();const QString fk=item.value("file_key").toString(),path=item.value("path").toString(),identity=fk+QStringLiteral(":")+path;
+        QJsonValue current;QString why;
+        if(!currentYamlValue(fk,path,&current,&why))continue;
+        currentValues[identity]=current;item["value"]=current;currentItems.append(item);
+      }
+      const QJsonObject current{{"subsystem","navigation"},{"task_id",id},{"values",currentValues},{"items",currentItems},
+        {"captured_at",QDateTime::currentDateTime().toString(Qt::ISODateWithMs)},{"config_revision",configRevisionState().value("config_revision")}};
+      QJsonArray changed;
+      for(const QString &identity:entryValues.keys())
+        if(currentValues.contains(identity)&&!jsonRuntimeEquivalent(entryValues.value(identity),currentValues.value(identity)))changed.append(identity);
+      row["current_snapshot"]=current;row["changed_identities"]=changed;row["candidate_changed"]=!changed.isEmpty();
+      row["qualification"]=effectiveQualification(QStringLiteral("navigation"),id);out[id]=row;
+    }
     return out;
   }
 
+  bool ensureNavigationReportBaseline(const QString &id, const QJsonArray &requestedItems, QString *message, QJsonObject *result) {
+    if (!QRegularExpression(QStringLiteral(R"(^R4\.[234]\.[1-5]$)")).match(id).hasMatch()) {
+      if (message) *message = QStringLiteral("BAB4 navigation report id tidak valid");
+      return false;
+    }
+    QJsonObject store=loadTrialStore(),tuning=store.value("navigation_tuning").toObject(),row=tuning.value(id).toObject();
+    if (requestedItems.isEmpty() || requestedItems.size()>64) {
+      if (!row.contains("entry_snapshot")) {
+        if (message) *message = QStringLiteral("Baseline sesi BAB4 memerlukan daftar parameter 1..64");
+        return false;
+      }
+    } else {
+      const QJsonObject metadata=loadUiParameterMetadata().value("parameters").toObject();
+      QJsonObject entry=row.value("entry_snapshot").toObject();
+      QJsonObject values=entry.value("values").toObject();
+      QJsonArray items=entry.value("items").toArray();
+      QSet<QString> seen;
+      for (const QJsonValue &v : items) {
+        const QString identity=v.toObject().value("identity").toString();
+        if(!identity.isEmpty())seen.insert(identity);
+      }
+      int added=0;
+      for (const QJsonValue &v : requestedItems) {
+        const QJsonObject req=v.toObject();
+        const QString fk=req.value("file_key").toString().trimmed(),path=req.value("path").toString().trimmed(),identity=fk+QStringLiteral(":")+path;
+        if (fk.isEmpty()||path.isEmpty()||seen.contains(identity)) continue;
+        const QJsonObject meta=metadata.value(identity).toObject();
+        if (!meta.value("metadata_complete").toBool(false) || meta.value("write_authority").toString()!=QStringLiteral("ros_yaml")) continue;
+        QJsonValue current; QString why;
+        if (!currentYamlValue(fk,path,&current,&why) || current.isUndefined() || current.isNull()) continue;
+        seen.insert(identity); values[identity]=current;
+        QString kind=QStringLiteral("string");
+        if (current.isBool()) kind=QStringLiteral("bool");
+        else if (current.isDouble()) kind=QStringLiteral("float");
+        else if (current.isArray()) kind=QStringLiteral("list");
+        items.append(QJsonObject{{"identity",identity},{"file_key",fk},{"path",path},{"label",meta.value("label").toString(path)},
+                                 {"kind",kind},{"locked",false},{"value",current}});
+        ++added;
+      }
+      if (items.isEmpty()) {
+        if (message) *message = QStringLiteral("Tidak ada parameter ros_yaml valid untuk baseline sesi BAB4");
+        return false;
+      }
+      entry["subsystem"]=QStringLiteral("navigation");
+      entry["task_id"]=id;
+      entry["values"]=values;
+      entry["items"]=items;
+      if(!entry.contains("captured_at"))entry["captured_at"]=QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
+      if(!entry.contains("config_revision"))entry["config_revision"]=configRevisionState().value("config_revision");
+      if(added>0)entry["augmented_at"]=QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
+      row["entry_snapshot"]=entry;
+      if(!row.contains("entry_created_at"))row["entry_created_at"]=QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
+      row["source"]=QStringLiteral("server_persistent_session_baseline");
+      tuning[id]=row;store["navigation_tuning"]=tuning;store["version"]=3;
+      store["updated_at"]=QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
+      if(added>0 && !saveTrialStore(store,message))return false;
+    }
+    const QJsonObject state=navigationTuningState().value(id).toObject();
+    if(result)*result=state;
+    if(message)*message=QStringLiteral("Baseline sesi persisten tersedia untuk ")+id;
+    return true;
+  }
+
   bool ensureNavigationTuningEntry(const QString &id, QString *message, QJsonObject *result) {
-    if (!QRegularExpression(QStringLiteral(R"(^N\d+\.\d+$)")).match(id).hasMatch() || !catalogTaskExists(QStringLiteral("navigation"),id)) {
+    const bool normalId=QRegularExpression(QStringLiteral(R"(^N\d+\.\d+$)")).match(id).hasMatch();
+    const bool reportId=QRegularExpression(QStringLiteral(R"(^R4\.[234]\.[1-5]$)")).match(id).hasMatch();
+    if ((!normalId&&!reportId) || (normalId&&!catalogTaskExists(QStringLiteral("navigation"),id))) {
       if (message) *message = QStringLiteral("Navigation tuning id tidak valid");
       return false;
     }
@@ -3863,6 +6047,10 @@ class LocalHttpServer : public QObject {
     QJsonObject tuning = store.value("navigation_tuning").toObject();
     QJsonObject row = tuning.value(id).toObject();
     if (!row.contains("entry_snapshot")) {
+      if (reportId) {
+        if (message) *message=QStringLiteral("Baseline sesi BAB4 belum dibuat; buka subbab terlebih dahulu sebelum Restore");
+        return false;
+      }
       row["entry_snapshot"] = taskConfigSnapshot(QStringLiteral("navigation"),id);
       row["entry_created_at"] = QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
       row["source"] = QStringLiteral("server_persistent_step_entry");
@@ -3872,7 +6060,7 @@ class LocalHttpServer : public QObject {
     }
     const QJsonObject state = navigationTuningState().value(id).toObject();
     if (result) *result = state;
-    if (message) *message = QStringLiteral("Step Entry persisten tersedia untuk ") + id;
+    if (message) *message = (id.startsWith(QStringLiteral("R4.")) ? QStringLiteral("Baseline sesi persisten tersedia untuk ") : QStringLiteral("Step Entry persisten tersedia untuk ")) + id;
     return true;
   }
 
@@ -4079,9 +6267,12 @@ class LocalHttpServer : public QObject {
   }
 
   QJsonObject buildTrialSummary(int trialNo,const QJsonObject &clientAnalysis=QJsonObject()) const {
+    const QString analysisCandidate=clientAnalysis.value("candidate").toString().trimmed();
+    const QString analysisVariation=clientAnalysis.value("variation").toString().trimmed();
+    const QString analysisCondition=clientAnalysis.value("condition").toString().trimmed();
     QJsonObject o{{"trial_no",trialNo},{"trial_id",QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz")},
-      {"subsystem",recordingSubsystem_},{"experiment_id",recordingSourceExperimentId_},{"candidate",recordingCandidate_},{"variation",recordingVariation_},
-      {"condition",recordingCondition_},{"started_at",recordingStartedIso_},{"stopped_at",QDateTime::currentDateTime().toString(Qt::ISODateWithMs)},
+      {"subsystem",recordingSubsystem_},{"experiment_id",recordingSourceExperimentId_},{"candidate",analysisCandidate.isEmpty()?recordingCandidate_:analysisCandidate},{"variation",analysisVariation.isEmpty()?recordingVariation_:analysisVariation},
+      {"condition",analysisCondition.isEmpty()?recordingCondition_:analysisCondition},{"started_at",recordingStartedIso_},{"stopped_at",QDateTime::currentDateTime().toString(Qt::ISODateWithMs)},
       {"samples",recordingRows_.size()},{"sample_rate_hz",recordingRateHz_},{"inputs",recordingTrialInputs_},
       {"config_revision",configRevisionState().value("config_revision")},
       {"task_config_fingerprint",taskConfigFingerprint(recordingSubsystem_,recordingSourceExperimentId_)}};
@@ -4244,10 +6435,13 @@ class LocalHttpServer : public QObject {
     for(const auto&v:artifacts.value("png_titles").toArray())lastGraphTitles_<<v.toString();
     while(lastGraphTitles_.size()<lastGraphPaths_.size())lastGraphTitles_<<QStringLiteral("Grafik %1").arg(lastGraphTitles_.size()+1);
     int browserPngCount = 0;
+    QJsonArray browserPngIndices;
+    const int clientExpectedGraphs = clientArtifacts.value("analysis_summary").toObject().value("expected_browser_graphs").toInt(0);
+    const int graphSlotCount = std::clamp(std::max(static_cast<int>(recordingGraphs_.size()), clientExpectedGraphs), 0, 32);
     const auto browserPngs = clientArtifacts.value("browser_graph_pngs").toArray();
     for (const auto &v : browserPngs) {
       const QJsonObject one = v.toObject(); const int idx = one.value("index").toInt();
-      if (idx < 1 || idx > recordingGraphs_.size() || idx > 32) continue;
+      if (idx < 1 || idx > graphSlotCount || idx > 32) continue;
       QString dataUrl = one.value("data_url").toString();
       const QString prefix = QStringLiteral("data:image/png;base64,");
       if (!dataUrl.startsWith(prefix) || dataUrl.size() > 6 * 1024 * 1024) continue;
@@ -4256,9 +6450,10 @@ class LocalHttpServer : public QObject {
       const QString path = QStringLiteral("%1_G%2.png").arg(base).arg(idx, 2, 10, QChar('0'));
       QSaveFile f(path); if (!f.open(QIODevice::WriteOnly) || f.write(bytes) != bytes.size() || !f.commit()) continue;
       const int pos = idx - 1; if (pos < lastGraphPaths_.size()) lastGraphPaths_[pos] = path; else if (QFileInfo::exists(path)) lastGraphPaths_ << path;
+      browserPngIndices.append(idx);
       ++browserPngCount;
     }
-    if(result){(*result)["xlsx_path"]=lastXlsxPath_;(*result)["xlsx_download_url"]="/api/experiment/record/last.xlsx";(*result)["table_sheet_count"]=tableSheetCount;(*result)["browser_graph_png_count"]=browserPngCount;QJsonArray urls,paths;for(int i=0;i<lastGraphPaths_.size();++i){urls.append(QString("/api/experiment/record/last-graph-%1.png").arg(i+1));paths.append(lastGraphPaths_[i]);}(*result)["graph_download_urls"]=urls;(*result)["graph_png_paths"]=paths;QJsonArray titles;for(const auto&t:lastGraphTitles_)titles.append(t);(*result)["graph_png_titles"]=titles;}
+    if(result){(*result)["xlsx_path"]=lastXlsxPath_;(*result)["xlsx_download_url"]="/api/experiment/record/last.xlsx";(*result)["table_sheet_count"]=tableSheetCount;(*result)["browser_graph_png_count"]=browserPngCount;(*result)["browser_graph_png_indices"]=browserPngIndices;(*result)["expected_graph_count"]=graphSlotCount;QJsonArray urls,paths;for(int i=0;i<lastGraphPaths_.size();++i){urls.append(QString("/api/experiment/record/last-graph-%1.png").arg(i+1));paths.append(lastGraphPaths_[i]);}(*result)["graph_download_urls"]=urls;(*result)["graph_png_paths"]=paths;QJsonArray titles;for(const auto&t:lastGraphTitles_)titles.append(t);(*result)["graph_png_titles"]=titles;}
     if (message) *message = QStringLiteral("XLSX + %1 sheet tabel + %2 PNG browser (%3 fallback PNG) berhasil dibuat").arg(tableSheetCount).arg(browserPngCount).arg(lastGraphPaths_.size()-browserPngCount);
     return true;
   }
@@ -4280,7 +6475,7 @@ class LocalHttpServer : public QObject {
       outputRoot = QDir(dataRoot).filePath(runName);
     } else if (recordingSubsystem_ == QStringLiteral("navigation") &&
                recordingSourceExperimentId_ == QStringLiteral("R4.4.5") && recordingStartedMs_ > 0) {
-      const QString runName = QStringLiteral("BAB4_GOAL_MASTER_4_4_5_") +
+      const QString runName = QStringLiteral("BAB4_MISSION_4_2_4_4_") +
         QDateTime::fromMSecsSinceEpoch(recordingStartedMs_).toString(QStringLiteral("yyyyMMdd_HHmmss"));
       outputRoot = QDir(dataRoot).filePath(runName);
     }
@@ -4373,6 +6568,7 @@ class LocalHttpServer : public QObject {
     const bool trialSaved = appendCurrentTrial(clientArtifacts.value("analysis_summary").toObject(),&summary, &trials, &trialMessage);
     bool artifactsSaved = false; QString artifactMessage;
     bool manifestSaved = false; QString manifestMessage;
+    bool packageSaved = true; QString packageMessage;
     if (csvSaved && result) {
       const QString csvPath = result->value("primary_csv").toString();
       artifactsSaved = exportTrialArtifacts(csvPath, summary, trials, clientArtifacts, result, &artifactMessage);
@@ -4384,11 +6580,20 @@ class LocalHttpServer : public QObject {
       (*result)["artifacts_saved"] = artifactsSaved;
       (*result)["zip_download_url"] = QStringLiteral("/api/experiment/record/last.zip");
       (*result)["final_dataset_zip_download_url"] = QStringLiteral("/api/perception/final-dataset/latest.zip");
+      if (artifactsSaved && manifestSaved && recordingSubsystem_ == QStringLiteral("navigation") &&
+          recordingSourceExperimentId_ == QStringLiteral("R4.4.5")) {
+        packageSaved = buildNavigationBab4Package(summary, clientArtifacts, result, &packageMessage);
+      }
+      (*result)["package_saved"] = packageSaved;
     }
-    if (message) *message = csvMessage + QStringLiteral(" | ") + trialMessage + QStringLiteral(" | ") + artifactMessage + QStringLiteral(" | ") + manifestMessage;
+    if (message) *message = csvMessage + QStringLiteral(" | ") + trialMessage + QStringLiteral(" | ") +
+      artifactMessage + QStringLiteral(" | ") + manifestMessage + (packageMessage.isEmpty() ? QString() : QStringLiteral(" | ") + packageMessage);
     recordingRows_.clear(); recordingTuningConfig_.clear(); recordingPaths_.clear();
     recordingCandidate_.clear(); recordingTrialInputs_=QJsonObject(); recordingLiveSeries_=QJsonObject(); recordingGraphs_=QJsonArray();
-    return csvSaved && trialSaved && artifactsSaved && manifestSaved;
+    recordingSubsystem_.clear(); recordingId_.clear(); recordingSourceExperimentId_.clear(); recordingLabel_.clear();
+    recordingSectionLabel_.clear(); recordingVariation_.clear(); recordingCondition_.clear(); recordingStartedIso_.clear();
+    recordingStartedMs_=0; recordingRateHz_=5.0;
+    return csvSaved && trialSaved && artifactsSaved && manifestSaved && packageSaved;
   }
 
   void openSse(QTcpSocket *socket) {
@@ -4408,11 +6613,56 @@ class LocalHttpServer : public QObject {
     socket->flush();
   }
 
+  void ensureBab4RecorderForObservedGoal(const QJsonObject &delta) {
+    if (!delta.contains(QStringLiteral("goal_request_event")) || recording_) return;
+    const QJsonObject goal = delta.value(QStringLiteral("goal_request_event")).toObject();
+    QJsonObject trialInputs{
+      {QStringLiteral("capture_mode"), QStringLiteral("AUTO_OBSERVED_GOAL_MASTER_4.2_4.4")},
+      {QStringLiteral("master_sections"), QJsonArray{
+        QStringLiteral("R4.2.1"),QStringLiteral("R4.2.2"),QStringLiteral("R4.2.3"),QStringLiteral("R4.2.4"),QStringLiteral("R4.2.5"),
+        QStringLiteral("R4.3.1"),QStringLiteral("R4.3.2"),QStringLiteral("R4.3.3"),QStringLiteral("R4.3.4"),QStringLiteral("R4.3.5"),
+        QStringLiteral("R4.4.1"),QStringLiteral("R4.4.2"),QStringLiteral("R4.4.3"),QStringLiteral("R4.4.4"),QStringLiteral("R4.4.5")}},
+      {QStringLiteral("goal_x_m"), goal.value(QStringLiteral("x"))},
+      {QStringLiteral("goal_y_m"), goal.value(QStringLiteral("y"))},
+      {QStringLiteral("goal_yaw_rad"), goal.value(QStringLiteral("yaw"))},
+      {QStringLiteral("observed_goal_at_ms"), goal.value(QStringLiteral("at_ms"))}
+    };
+    QJsonObject payload{
+      {QStringLiteral("subsystem"), QStringLiteral("navigation")},
+      {QStringLiteral("id"), QStringLiteral("BAB4_MISSION_4.2_4.4")},
+      {QStringLiteral("source_experiment_id"), QStringLiteral("R4.4.5")},
+      {QStringLiteral("label"), QStringLiteral("BAB4_MISSION_4.2_4.4_AUTO")},
+      {QStringLiteral("section_label"), QStringLiteral("BAB4 SEND GOAL MASTER 4.2-4.4")},
+      {QStringLiteral("candidate"), QStringLiteral("external-auto")},
+      {QStringLiteral("variation"), QStringLiteral("AUTO-OBSERVED-GOAL")},
+      {QStringLiteral("condition"), QStringLiteral("FIELD-GOAL")},
+      {QStringLiteral("sample_rate_hz"), 20.0},
+      {QStringLiteral("trial_inputs"), trialInputs},
+      // Empty allow-list intentionally records the complete backend snapshot.
+      // This is the strongest raw evidence source for an externally-originated goal.
+      {QStringLiteral("record_paths"), QJsonArray{}},
+      {QStringLiteral("live_series"), QJsonObject{}},
+      {QStringLiteral("graphs"), QJsonArray{}},
+      {QStringLiteral("tuning_config"), QJsonObject{}}
+    };
+    QString why;
+    if (startRecording(payload, &why)) {
+      RCLCPP_INFO(rclcpp::get_logger("agv_web_gui"),
+        "BAB4 AUTO RECORDER armed from observed /navigation/goal_request: x=%.3f y=%.3f",
+        goal.value(QStringLiteral("x")).toDouble(), goal.value(QStringLiteral("y")).toDouble());
+    } else {
+      RCLCPP_ERROR(rclcpp::get_logger("agv_web_gui"),
+        "BAB4 AUTO RECORDER failed on observed goal: %s", why.toUtf8().constData());
+    }
+  }
+
   void broadcastEvents() {
+    finalTick();
     for (int i = sseClients_.size() - 1; i >= 0; --i) {
       if (sseClients_[i].isNull() || sseClients_[i]->state() != QAbstractSocket::ConnectedState) sseClients_.removeAt(i);
     }
     QJsonObject delta = bridge_->takeDelta();
+    if(!finalActive())ensureBab4RecorderForObservedGoal(delta);
     QByteArray payload;
     if (!delta.isEmpty()) {
       ++sseSequence_;

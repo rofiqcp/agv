@@ -52,3 +52,62 @@ tools/records/**/raw.jsonl
 .ui_audit/
 backup/
 backups/
+
+
+# Local toolchains / virtual environments / compiled ML models
+/.local-intel-opencl*/
+/.venv*/
+/.venv-*/
+/models/*.bin
+/models/*.xml
+*.deb
+*.so
+*.so.*
+
+# Backups and pre-change copies are not source code
+/.backup*/
+/backup/
+/backups/
+/BACKUP*/
+**/backup/
+**/backups/
+**/backups_*/
+**/*.bak
+**/*.bak.*
+**/*.bak_*
+*.backup
+*.backup_*
+*.pre_*
+
+# Experimental measurements, screenshots, log and transferred archives
+*.csv
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+*.b64
+*.xwd
+*.zip
+*.log
+*.jsonl
+*.mcap
+*.db3
+*.bag
+*.pcd
+# Keep legitimate application images
+!/src/navigation/gui/assets/*.png
+!/src/navigation/gui/assets/*.jpg
+!/src/navigation/gui/assets/*.svg
+# Local generated previews/reports
+/manualbook_gui_*/
+/validasi_*/
+*.tmp
+*.temp
+.env
+.env.*
+!.env.example
+
+# Temporary browser / UI probe scripts remain local
+/tmp_*.js
+/tmp_*.mjs

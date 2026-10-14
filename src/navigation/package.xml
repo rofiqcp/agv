@@ -19,6 +19,7 @@
   <depend>builtin_interfaces</depend>
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
+  <depend>map_msgs</depend>
   <depend>nav2_msgs</depend>
   <depend>lifecycle_msgs</depend>
   <depend>visualization_msgs</depend>

@@ -100,6 +100,19 @@ find_package(
   OpenCV REQUIRED
   COMPONENTS core imgproc imgcodecs highgui videoio)
 
+# Optional OpenVINO runtime from the isolated Mini-PC environment.
+set(PERCEPTION_OPENVINO_ROOT
+  "/home/sirobo/agv/.venv-openvino/lib/python3.10/site-packages/openvino"
+  CACHE PATH "OpenVINO package root")
+set(PERCEPTION_OPENVINO_AVAILABLE OFF)
+if(EXISTS "${PERCEPTION_OPENVINO_ROOT}/cmake/OpenVINOConfig.cmake")
+  set(OpenVINO_DIR "${PERCEPTION_OPENVINO_ROOT}/cmake" CACHE PATH "OpenVINO CMake dir" FORCE)
+  find_package(OpenVINO QUIET COMPONENTS Runtime)
+  if(OpenVINO_FOUND)
+    set(PERCEPTION_OPENVINO_AVAILABLE ON)
+  endif()
+endif()
+
 # CPU backend: direct .pt via LibTorch. ament tetap memakai /usr/bin/python3,
 # tetapi lokasi LibTorch boleh berasal dari interpreter PyTorch lain yang valid.
 # Ini menghindari kasus Torch ada di user/venv tetapi target CPU diam-diam dilewati.
@@ -196,6 +209,10 @@ target_link_libraries(camera_only_node ${OpenCV_LIBS} Threads::Threads)
 
 set(PERCEPTION_RUNTIME_TARGETS camera_only_node)
 if(PERCEPTION_CPU_AVAILABLE)
+  find_library(TURBOJPEG_LIBRARY NAMES turbojpeg)
+  if(NOT TURBOJPEG_LIBRARY)
+    message(FATAL_ERROR "libturbojpeg diperlukan untuk decode MJPEG CPU yang robust")
+  endif()
   add_executable(perception_cpu_node src/astra_yolop_cpu_pt_node.cpp)
   target_include_directories(
     perception_cpu_node PRIVATE
@@ -205,8 +222,12 @@ if(PERCEPTION_CPU_AVAILABLE)
   ament_target_dependencies(
     perception_cpu_node
     rclcpp sensor_msgs std_msgs geometry_msgs nav_msgs visualization_msgs vision_msgs)
-  target_link_libraries(perception_cpu_node ${TORCH_LIBRARIES} ${OpenCV_LIBS} Threads::Threads)
+  target_link_libraries(perception_cpu_node ${TORCH_LIBRARIES} ${OpenCV_LIBS} Threads::Threads ${TURBOJPEG_LIBRARY})
   target_compile_options(perception_cpu_node PRIVATE ${TORCH_CXX_FLAGS_LIST})
+  if(PERCEPTION_OPENVINO_AVAILABLE)
+    target_link_libraries(perception_cpu_node openvino::runtime)
+    target_compile_definitions(perception_cpu_node PRIVATE PERCEPTION_HAVE_OPENVINO=1)
+  endif()
 
   # Embed the actual LibTorch runtime directories into the ELF.  This makes the
   # installed ROS executable self-contained with respect to the Python wheel
@@ -227,6 +248,9 @@ if(PERCEPTION_CPU_AVAILABLE)
       list(APPEND TORCH_RUNTIME_DIRS "${_TORCH_LIB_DIR}")
     endif()
   endforeach()
+  if(PERCEPTION_OPENVINO_AVAILABLE)
+    list(APPEND TORCH_RUNTIME_DIRS "${PERCEPTION_OPENVINO_ROOT}/libs")
+  endif()
   list(REMOVE_DUPLICATES TORCH_RUNTIME_DIRS)
   set_target_properties(perception_cpu_node PROPERTIES
     BUILD_RPATH "${TORCH_RUNTIME_DIRS}"

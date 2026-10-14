@@ -960,13 +960,6 @@ private:
       if (!prerequisites) return;
     }
 
-    if (nav_client_ && nav_client_->wait_for_action_server(0s)) {
-      std::lock_guard<std::mutex> lock(mutex_);
-      nav2_lifecycle_started_ = true;
-      nav2_startup_requested_ = false;
-      return;
-    }
-
     {
       std::lock_guard<std::mutex> lock(mutex_);
       const bool prerequisites = mapStartupSettledUnlocked(now()) &&
@@ -1385,7 +1378,12 @@ private:
     const bool esc_drive_actual_fresh = isTimeFresh(esc_drive_actual_time, 0.5);
     const bool esc_steering_target_fresh = isTimeFresh(esc_steering_target_time, 0.5);
     const bool raw_detection_fresh = isTimeFresh(raw_detection_time, 1.0);
-    const bool nav2_ready = map_ready && planning_loc && nav2_action;
+    bool nav2_lifecycle_started = false;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      nav2_lifecycle_started = nav2_lifecycle_started_;
+    }
+    const bool nav2_ready = map_ready && planning_loc && nav2_lifecycle_started && nav2_action;
 
     std_msgs::msg::Bool b;
     b.data = nav2_ready;

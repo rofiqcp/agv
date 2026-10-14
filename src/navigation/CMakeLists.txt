@@ -41,6 +41,7 @@ find_package(std_msgs REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(map_msgs REQUIRED)
 find_package(nav2_msgs REQUIRED)
 find_package(lifecycle_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
@@ -67,7 +68,7 @@ add_executable(agv_web_gui web/web_server.cpp)
 target_include_directories(agv_web_gui PRIVATE gui include)
 ament_target_dependencies(
   agv_web_gui
-  rclcpp rcl_interfaces action_msgs sensor_msgs std_msgs geometry_msgs nav_msgs visualization_msgs
+  rclcpp rcl_interfaces action_msgs sensor_msgs std_msgs geometry_msgs nav_msgs map_msgs visualization_msgs
   std_srvs ament_index_cpp tf2_ros)
 target_link_libraries(agv_web_gui Qt5::Core Qt5::Gui Qt5::Network yaml-cpp)
 
@@ -179,6 +180,7 @@ if(BUILD_TESTING)
     gui_qt_signal_slot_self_check
     gui_nav2_embed_self_check
     web_gui_self_check
+    perception_bab4_45_self_check
     web_vesc_robustness_self_check
     web_config_stage1_self_check
     web_stage2_ui_self_check
